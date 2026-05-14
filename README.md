@@ -8,6 +8,29 @@ A small ESP32 dashboard I made for my desk to keep an eye on Claude Code usage. 
 >
 > See [`apple/README.md`](apple/README.md) for the Apple port.
 
+## Download for Mac (Apple Silicon)
+
+**[➜ Download the latest Clawdmeter.dmg from Releases](https://github.com/darshanbathija/Clawdmeter/releases/latest)**
+
+1. Open the DMG.
+2. Drag **Clawdmeter.app** into the **Applications** folder.
+3. First launch: **right-click → Open** in Applications, then **Open** in the Gatekeeper dialog.
+
+macOS asks once because the build is signed with a personal Apple Developer team (notarization needs a paid Apple Developer Program account). After the first Open, Gatekeeper trusts it forever.
+
+The Mac app reads Claude Code's OAuth token from your local Keychain, polls Anthropic's rate-limit headers every 60s, and shows live Claude + Codex gauges in the menu bar plus a dashboard with historical `$/token` analytics — the same numbers `ccusage` shows on the terminal.
+
+### Building the DMG yourself
+
+```bash
+git clone https://github.com/darshanbathija/Clawdmeter
+cd Clawdmeter
+./tools/build-mac-dmg.sh
+# → ./dist/Clawdmeter-<version>-arm64.dmg
+```
+
+Requires macOS + Xcode CLT. `hdiutil`, `xcodebuild`, and `codesign` are all built into the OS. `xcodegen` (`brew install xcodegen`) is used to regenerate the `.xcodeproj` if you've changed `apple/project.yml`.
+
 It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-2.16) and pairs with my laptop over Bluetooth, and the splash screen plays pixel-art Clawd animations that get
 busier when your usage rate climbs. The two side buttons send Space and
 Shift+Tab over BLE HID for Claude Code's voice mode and mode-toggle shortcuts.

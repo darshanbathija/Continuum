@@ -18,3 +18,7 @@ apple/Clawdmeter.xcodeproj/project.xcworkspace/xcuserdata/
 apple/**/.build/
 apple/**/DerivedData/
 apple/**/*.xcuserstate
+
+# Mac DMG build artifacts (tools/build-mac-dmg.sh)
+dist/
+.build/
