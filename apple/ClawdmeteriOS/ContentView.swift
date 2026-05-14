@@ -9,6 +9,23 @@ struct ContentView: View {
     @State private var showingSettings: Bool = false
 
     var body: some View {
+        TabView {
+            liveTab
+                .tabItem {
+                    Label("Live", systemImage: "gauge.with.dots.needle.67percent")
+                }
+
+            iOSAnalyticsView(model: model)
+                .tabItem {
+                    Label("Analytics", systemImage: "chart.bar")
+                }
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(model: model)
+        }
+    }
+
+    private var liveTab: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
@@ -47,9 +64,6 @@ struct ContentView: View {
                 }
             }
             .refreshable { model.forcePoll() }
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(model: model)
         }
     }
 }

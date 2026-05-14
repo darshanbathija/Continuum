@@ -19,6 +19,7 @@ final class AppRuntime: ObservableObject {
 
     let claudeModel: AppModel
     let codexModel: AppModel
+    let usageHistoryStore: UsageHistoryStore
 
     private var cancellables = Set<AnyCancellable>()
     private var usageQueryService: UsageQueryService?
@@ -53,6 +54,18 @@ final class AppRuntime: ObservableObject {
         // Start both pollers immediately. AppModel.start() is idempotent.
         claudeModel.start()
         codexModel.start()
+
+        // Analytics history: walks the on-disk JSONL caches, computes
+        // calendar-day-aligned totals, mirrors the snapshot into iCloud KV
+        // for the iOS analytics tab. Plan A8 + A19.
+        self.usageHistoryStore = UsageHistoryStore()
+        self.usageHistoryStore.$snapshot
+            .compactMap { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { snapshot in
+                UsageCloudMirror.shared.writeAnalyticsSnapshot(snapshot)
+            }
+            .store(in: &cancellables)
 
         // Vend the Mach service the widget extension queries. Created here
         // (after the models) so the service can hand back live in-memory

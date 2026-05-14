@@ -32,6 +32,11 @@ public final class UsageModel: ObservableObject {
     /// propagated yet.
     @Published public private(set) var codexSnapshot: UsageStore.Snapshot?
 
+    /// Aggregated token-analytics snapshot mirrored from the Mac via iCloud
+    /// KV. `nil` until the Mac has run with the iCloud entitlement live.
+    /// Drives the iOS Analytics tab. Plan A19.
+    @Published public private(set) var analyticsSnapshot: UsageHistorySnapshot?
+
     private var poller: UsagePoller?
     private var clockTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
@@ -68,19 +73,28 @@ public final class UsageModel: ObservableObject {
     /// `didChangeExternallyNotification` fires when a remote write lands.
     private func observeCloudMirror() {
         codexSnapshot = UsageCloudMirror.shared.readSnapshot(providerID: "codex")
+        analyticsSnapshot = UsageCloudMirror.shared.readAnalyticsSnapshot()
         UsageCloudMirror.shared.didUpdate
-            .filter { $0 == "codex" }
-            .sink { [weak self] _ in
+            .sink { [weak self] providerID in
                 guard let self else { return }
-                let snap = UsageCloudMirror.shared.readSnapshot(providerID: "codex")
-                Task { @MainActor in
-                    self.codexSnapshot = snap
-                    // Also mirror into the local App Group store so the
-                    // iOS widget extension can render Codex on the Lock
-                    // Screen / Home Screen.
-                    if let snap {
-                        UsageStore.write(snap.usage, providerID: "codex", displayName: snap.displayName)
-                        UsageStore.reloadWidgets(providerID: "codex")
+                if providerID == "codex" {
+                    let snap = UsageCloudMirror.shared.readSnapshot(providerID: "codex")
+                    Task { @MainActor in
+                        self.codexSnapshot = snap
+                        if let snap {
+                            UsageStore.write(snap.usage, providerID: "codex", displayName: snap.displayName)
+                            UsageStore.reloadWidgets(providerID: "codex")
+                        }
+                    }
+                } else if providerID == "analytics" {
+                    let snap = UsageCloudMirror.shared.readAnalyticsSnapshot()
+                    Task { @MainActor in
+                        // Plan A19: monotonic ordering. Only accept newer
+                        // snapshots so out-of-order iCloud delivery can't
+                        // clobber a fresh value with a stale one.
+                        if let snap, snap.computedAt > (self.analyticsSnapshot?.computedAt ?? .distantPast) {
+                            self.analyticsSnapshot = snap
+                        }
                     }
                 }
             }

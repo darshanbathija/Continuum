@@ -10,6 +10,7 @@ import ClawdmeterShared
 struct DashboardView: View {
     @ObservedObject var claudeModel: AppModel
     @ObservedObject var codexModel: AppModel
+    @ObservedObject var usageHistoryStore: UsageHistoryStore
 
     @AppStorage(AppTheme.storageKey) private var themeRaw: String = AppTheme.system.rawValue
 
@@ -24,16 +25,24 @@ struct DashboardView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        ScrollView {
+            VStack(spacing: 0) {
+                header
 
-            HStack(spacing: 0) {
-                ProviderColumn(model: claudeModel)
+                HStack(spacing: 0) {
+                    ProviderColumn(model: claudeModel)
+                    Divider()
+                    ProviderColumn(model: codexModel)
+                }
+
                 Divider()
-                ProviderColumn(model: codexModel)
-            }
 
-            menuBarTogglesRow
+                if #available(macOS 13, *) {
+                    AnalyticsView(store: usageHistoryStore)
+                }
+
+                menuBarTogglesRow
+            }
         }
         .frame(minWidth: 820, minHeight: 580)
         .background(backgroundColor)

@@ -24,13 +24,21 @@ let package = Package(
     targets: [
         .target(
             name: "ClawdmeterShared",
-            dependencies: []
+            dependencies: [],
+            resources: [
+                // Embedded LiteLLM pricing snapshot (A3 + A20). Refreshed via
+                // `tools/refresh-pricing.sh`; loaded at runtime by `Pricing`.
+                .process("Analytics/pricing.json"),
+            ]
         ),
         .testTarget(
             name: "ClawdmeterSharedTests",
             dependencies: [
                 "ClawdmeterShared",
                 .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
+            ],
+            resources: [
+                .process("Fixtures"),
             ]
         ),
     ]

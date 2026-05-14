@@ -33,7 +33,8 @@ struct ClawdmeterMacApp: App {
         Window("Clawdmeter", id: "dashboard") {
             DashboardView(
                 claudeModel: runtime.claudeModel,
-                codexModel: runtime.codexModel
+                codexModel: runtime.codexModel,
+                usageHistoryStore: runtime.usageHistoryStore
             )
             .background(DashboardOpener())   // bridges AppDelegate → openWindow
             .onAppear {

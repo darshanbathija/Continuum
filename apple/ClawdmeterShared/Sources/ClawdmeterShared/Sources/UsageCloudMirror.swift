@@ -62,6 +62,17 @@ public final class UsageCloudMirror: @unchecked Sendable {
 
     private static let providerIDsKey = "cloud.usage.providerIDs"
 
+    /// Analytics snapshot mirror — plan A19. Distinct key from the live-data
+    /// mirrors so iOS reads them independently.
+    private static let analyticsKey = "cloud.analytics.v1"
+
+    /// Plan A18: detect whether iCloud is actually wired up on this build /
+    /// device. Returns `false` for personal-team dev accounts (no iCloud
+    /// entitlement) and for users not signed into iCloud.
+    public var isICloudAvailable: Bool {
+        FileManager.default.url(forUbiquityContainerIdentifier: nil) != nil
+    }
+
     // MARK: - Write
 
     /// Persist a snapshot under `cloud.usage.<providerID>`. Encodes via the
@@ -119,12 +130,66 @@ public final class UsageCloudMirror: @unchecked Sendable {
         // re-publish a coarse "something changed for some provider" event.
         // Callers (iOS) re-read all providers they care about.
         let changedKeys = note.userInfo?[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String] ?? []
-        for key in changedKeys where key.hasPrefix("cloud.usage.") {
-            let providerID = String(key.dropFirst("cloud.usage.".count))
-            if providerID != "providerIDs" {
-                didUpdate.send(providerID)
+        for key in changedKeys {
+            if key.hasPrefix("cloud.usage.") {
+                let providerID = String(key.dropFirst("cloud.usage.".count))
+                if providerID != "providerIDs" {
+                    didUpdate.send(providerID)
+                }
+            } else if key == Self.analyticsKey {
+                didUpdate.send("analytics")
             }
         }
+    }
+
+    // MARK: - Analytics snapshot mirror (plan A19)
+
+    /// Persist the aggregated analytics snapshot. Plan A19: enforces the
+    /// KVS total-store budget by summing all of our keys before writing;
+    /// rejects writes that would push past ~900 KB headroom. Monotonic
+    /// ordering is preserved because the snapshot itself carries
+    /// `(computedAt, sequenceNumber)` and readers compare those.
+    @discardableResult
+    public func writeAnalyticsSnapshot(_ snapshot: UsageHistorySnapshot) -> Bool {
+        guard let data = try? JSONEncoder().encode(snapshot) else {
+            logger.error("UsageCloudMirror.writeAnalyticsSnapshot: encode failed")
+            return false
+        }
+        let ourKeys = currentKeyByteUsage()
+        let withoutAnalytics = ourKeys - (store.data(forKey: Self.analyticsKey)?.count ?? 0)
+        let projected = withoutAnalytics + data.count
+        let budget = 900 * 1024
+        if projected > budget {
+            logger.error("UsageCloudMirror.writeAnalyticsSnapshot: \(projected, privacy: .public)B would exceed \(budget, privacy: .public)B budget; skipping")
+            return false
+        }
+        store.set(data, forKey: Self.analyticsKey)
+        store.synchronize()
+        didUpdate.send("analytics")
+        return true
+    }
+
+    public func readAnalyticsSnapshot() -> UsageHistorySnapshot? {
+        guard let data = store.data(forKey: Self.analyticsKey),
+              let snap = try? JSONDecoder().decode(UsageHistorySnapshot.self, from: data)
+        else { return nil }
+        return snap
+    }
+
+    /// Sum of byte-length of all keys we own (analytics + live mirrors).
+    /// Used to enforce the KVS total-store budget.
+    private func currentKeyByteUsage() -> Int {
+        var sum = 0
+        if let analytics = store.data(forKey: Self.analyticsKey) {
+            sum += analytics.count
+        }
+        let ids = (store.array(forKey: Self.providerIDsKey) as? [String]) ?? []
+        for id in ids {
+            if let blob = store.data(forKey: Self.key(for: id)) {
+                sum += blob.count
+            }
+        }
+        return sum
     }
 }
 #endif
