@@ -25,6 +25,13 @@ final class AppRuntime: ObservableObject {
 
     init() {
         let claudeTokenProvider = KeychainTokenProvider()
+        // Mirror Claude Code's local OAuth token into our shared, iCloud-synced
+        // Keychain entry so the iPhone and Watch apps can read the same token
+        // with zero manual setup. Best-effort — no token, no mirror.
+        if let token = claudeTokenProvider.currentAccessToken {
+            PastedAnthropicTokenProvider.shared().setToken(token)
+            runtimeLogger.info("Mirrored Claude token (\(token.count, privacy: .public) chars) into iCloud Keychain")
+        }
         self.claudeModel = AppModel(
             config: .claude,
             source: AnthropicSource(tokenProvider: claudeTokenProvider),

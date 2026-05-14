@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import OSLog
 
@@ -212,3 +213,4 @@ public final class CodexSource: AISource {
         )
     }
 }
+#endif // os(macOS)

@@ -56,6 +56,35 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
 
   # ───────────────────────────────────────────────────────────────
+  # iPhone companion app — Plan D6: iOS app with Lock Screen widgets,
+  # StandBy widget, Live Activity. V1 of this target: polling + token
+  # paste UI; widgets come next.
+  # ───────────────────────────────────────────────────────────────
+  ClawdmeteriOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: ClawdmeteriOS
+        excludes:
+          - "Info.plist"
+          - "ClawdmeteriOS.entitlements"
+    dependencies:
+      - package: ClawdmeterShared
+        product: ClawdmeterShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.ios
+        PRODUCT_NAME: Clawdmeter
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "76S62SDSD3"
+        INFOPLIST_FILE: ClawdmeteriOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ClawdmeteriOS/ClawdmeteriOS.entitlements
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_PREVIEWS: YES
+
+  # ───────────────────────────────────────────────────────────────
   # Mac widget extension — surfaces Claude/Codex gauges on the Desktop,
   # Notification Center, and Stage Manager. Reads the App Group cache
   # that `ClawdmeterMac` writes on every poll (see UsageStore).
@@ -89,6 +118,19 @@ schemes:
       targets:
         ClawdmeterMac: all
         ClawdmeterMacWidgets: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+
+  Clawdmeter (iOS):
+    build:
+      targets:
+        ClawdmeteriOS: all
     run:
       config: Debug
     archive:

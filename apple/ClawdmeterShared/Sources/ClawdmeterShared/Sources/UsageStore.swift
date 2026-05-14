@@ -99,19 +99,28 @@ public struct UsageStore: Sendable {
         usageDirectory?.appendingPathComponent("\(providerID).json")
     }
 
-    // MARK: - Storage: Mach service vended by the Mac app
-    //
-    // The Mac app vends `UsageWriterProtocol` over an XPC Mach service
-    // named `UsageWriterMachServiceName`. The widget extension connects via
-    // `NSXPCConnection(machServiceName:)` and queries the Mac app's
-    // in-memory state directly — no files, no cfprefsd, no sandbox-EPERM
-    // wall. See `UsageWriterProtocol.swift` for the rationale.
-    //
-    // `UsageStore.write` is a no-op: the Mac app already holds the latest
-    // state in `AppModel.usage`, so there's nothing to persist. We keep the
-    // method for API stability and call-site compatibility.
+    // MARK: - Storage
 
-    // MARK: - Write (no-op)
+    private static func decodeSnapshot(_ data: Data) -> Snapshot? {
+        guard let env = try? JSONDecoder().decode(Envelope.self, from: data) else {
+            return nil
+        }
+        return Snapshot(
+            providerID: env.providerID,
+            displayName: env.displayName,
+            usage: env.usage,
+            writtenAt: Date(timeIntervalSince1970: TimeInterval(env.writtenAt))
+        )
+    }
+
+#if os(macOS)
+    // On macOS the Mac app vends `UsageWriterProtocol` over an XPC Mach
+    // service. The widget extension connects via NSXPCConnection and queries
+    // the Mac app's in-memory state directly — no files, no cfprefsd, no
+    // sandbox-EPERM wall. See `UsageWriterProtocol.swift` for rationale.
+    //
+    // `UsageStore.write` is a no-op here: the Mac app's `AppModel` is the
+    // source of truth, snapshots are pulled live on widget refresh.
 
     @discardableResult
     public static func write(
@@ -119,17 +128,9 @@ public struct UsageStore: Sendable {
         providerID: String,
         displayName: String
     ) -> Bool {
-        // The Mac app's AppModel is the source of truth. Snapshots are
-        // pulled live via XPC on widget refresh. No file is written.
         true
     }
 
-    // MARK: - Read (XPC roundtrip)
-
-    /// Synchronously fetch the latest snapshot for `providerID`. Blocks the
-    /// calling thread on a semaphore for up to 2s waiting for the XPC reply.
-    /// Safe to call from `TimelineProvider` callbacks (they run on a
-    /// background queue).
     public static func read(providerID: String) -> Snapshot? {
         guard let data = querySync({ proxy, completion in
             proxy.readSnapshot(forProviderID: providerID) { data in
@@ -148,18 +149,6 @@ public struct UsageStore: Sendable {
         return blobs
             .compactMap { decodeSnapshot($0) }
             .sorted { $0.providerID < $1.providerID }
-    }
-
-    private static func decodeSnapshot(_ data: Data) -> Snapshot? {
-        guard let env = try? JSONDecoder().decode(Envelope.self, from: data) else {
-            return nil
-        }
-        return Snapshot(
-            providerID: env.providerID,
-            displayName: env.displayName,
-            usage: env.usage,
-            writtenAt: Date(timeIntervalSince1970: TimeInterval(env.writtenAt))
-        )
     }
 
     private static func querySync<T>(
@@ -190,6 +179,64 @@ public struct UsageStore: Sendable {
         }
         return result
     }
+#else
+    // iOS / watchOS: everything is sandboxed uniformly, so the standard
+    // App Group `UserDefaults` flow works directly. Writes from the host
+    // app are visible to the widget extension because both sides are
+    // sandboxed members of the same App Group.
+
+    private static let providerIDsKey = "UsageStore.providerIDs"
+
+    private static func key(for providerID: String) -> String {
+        "UsageStore.provider.\(providerID)"
+    }
+
+    private static var sharedDefaults: UserDefaults? {
+        for group in appGroups {
+            if let defaults = UserDefaults(suiteName: group) {
+                return defaults
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
+    public static func write(
+        _ usage: UsageData,
+        providerID: String,
+        displayName: String
+    ) -> Bool {
+        guard let defaults = sharedDefaults else { return false }
+        let envelope = Envelope(
+            version: 1,
+            providerID: providerID,
+            displayName: displayName,
+            usage: usage,
+            writtenAt: Int(Date().timeIntervalSince1970)
+        )
+        guard let data = try? JSONEncoder().encode(envelope) else { return false }
+        defaults.set(data, forKey: key(for: providerID))
+        var index = Set(defaults.stringArray(forKey: providerIDsKey) ?? [])
+        index.insert(providerID)
+        defaults.set(Array(index).sorted(), forKey: providerIDsKey)
+        return true
+    }
+
+    public static func read(providerID: String) -> Snapshot? {
+        guard let defaults = sharedDefaults,
+              let data = defaults.data(forKey: key(for: providerID))
+        else { return nil }
+        return decodeSnapshot(data)
+    }
+
+    public static func readAll() -> [Snapshot] {
+        guard let defaults = sharedDefaults else { return [] }
+        let ids = defaults.stringArray(forKey: providerIDsKey) ?? []
+        return ids
+            .compactMap { read(providerID: $0) }
+            .sorted { $0.providerID < $1.providerID }
+    }
+#endif
 
     /// Read-side view of a single provider's last snapshot.
     public struct Snapshot: Sendable, Equatable {

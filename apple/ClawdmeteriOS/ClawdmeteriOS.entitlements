@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Shared with the future ClawdmeteriOSWidgets extension so the widget
+	     can read the latest poll snapshots from UserDefaults under this
+	     suite name. iOS sandboxes everything uniformly, so a normal
+	     App Group works here (unlike on macOS where we needed XPC). -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.76S62SDSD3.com.clawdmeter</string>
+	</array>
+	<!-- Shared Keychain access group: iCloud Keychain syncs the Anthropic
+	     OAuth token written by the Mac app into this entry, and the iPhone
+	     reads it on first launch — no manual paste required as long as the
+	     user has iCloud Keychain on with the same Apple ID. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.clawdmeter</string>
+	</array>
+</dict>
+</plist>

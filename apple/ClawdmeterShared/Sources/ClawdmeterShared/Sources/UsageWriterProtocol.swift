@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Cross-process query API. The Mac app vends an `NSXPCListener` against a
@@ -30,3 +31,4 @@ import Foundation
 /// `group.<team>.<bundle>.` prefix is required for sandboxed callers (e.g.
 /// the widget extension) to be entitled to look it up via App Group access.
 public let UsageWriterMachServiceName = "group.76S62SDSD3.com.clawdmeter.UsageQuery"
+#endif // os(macOS)

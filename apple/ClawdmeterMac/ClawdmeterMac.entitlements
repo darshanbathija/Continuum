@@ -21,6 +21,13 @@
 	<array>
 		<string>group.76S62SDSD3.com.clawdmeter</string>
 	</array>
-
+	<!-- Shared Keychain access group: the Mac mirrors Claude Code's OAuth
+	     token into an iCloud-synced entry here, the iPhone and Watch read
+	     from it with zero user setup. `$(AppIdentifierPrefix)` expands to
+	     "<team-id>." at sign time. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.clawdmeter</string>
+	</array>
 </dict>
 </plist>
