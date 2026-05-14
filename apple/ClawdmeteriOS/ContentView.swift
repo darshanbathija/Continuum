@@ -1,37 +1,38 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// Mirrors the macOS dashboard's `ProviderColumn`: provider title + logo,
-/// Current session, Weekly limits, Advanced (collapsible), Last updated +
-/// refresh. iPhone-specific styling — `Form`-like sections on a grouped
-/// background.
+/// Two stacked provider sections: Claude (live-polled on iOS via the synced
+/// Keychain token) and Codex (cloud-mirrored from the Mac via iCloud KV).
+/// Each section mirrors the macOS dashboard's `ProviderColumn` shape.
 struct ContentView: View {
     @ObservedObject var model: UsageModel
     @State private var showingSettings: Bool = false
-    @AppStorage("clawdmeter.claude.advancedExpanded") private var advancedExpanded: Bool = false
-    @AppStorage("clawdmeter.claude.autoRevive") private var autoReviveEnabled: Bool = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 14) {
-                    providerHeader
-
+                VStack(spacing: 24) {
                     if !model.tokenProvider.hasToken {
-                        unauthenticatedCard
+                        VStack(spacing: 14) {
+                            ClaudeProviderHeader()
+                            UnauthenticatedCard(showingSettings: $showingSettings, model: model)
+                        }
                     } else if model.needsReauth {
-                        reauthCard
-                    } else if let usage = model.usage {
-                        currentSessionCard(usage: usage)
-                        weeklyLimitsCard(usage: usage)
-                        advancedCard
-                        footerRow(usage: usage)
+                        VStack(spacing: 14) {
+                            ClaudeProviderHeader()
+                            ReauthCard(showingSettings: $showingSettings)
+                        }
                     } else {
-                        loadingCard
+                        ClaudeSection(model: model)
                     }
+
+                    Divider()
+                        .padding(.horizontal, 4)
+
+                    CodexSection(snapshot: model.codexSnapshot)
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 4)
+                .padding(.top, 8)
                 .padding(.bottom, 32)
             }
             .background(Color(.systemGroupedBackground))
@@ -50,6 +51,38 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView(model: model)
         }
+    }
+}
+
+// MARK: - Claude (live-polled)
+
+private struct ClaudeSection: View {
+    @ObservedObject var model: UsageModel
+    @AppStorage("clawdmeter.claude.advancedExpanded") private var advancedExpanded: Bool = false
+    @AppStorage("clawdmeter.claude.autoRevive") private var autoReviveEnabled: Bool = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ClaudeProviderHeader()
+
+            if let usage = model.usage {
+                SessionCard(
+                    title: "Current session",
+                    percent: usage.sessionPct,
+                    resetDate: Date(timeIntervalSince1970: TimeInterval(usage.sessionEpoch)),
+                    notStarted: false,
+                    tint: ClaudeBrand.color
+                )
+                WeeklyCard(
+                    percent: usage.weeklyPct,
+                    resetDate: Date(timeIntervalSince1970: TimeInterval(usage.weeklyEpoch))
+                )
+                advancedCard
+                FooterRow(updatedAt: usage.updatedAt, onRefresh: { model.forcePoll() })
+            } else {
+                LoadingCard()
+            }
+        }
         .onChange(of: autoReviveEnabled) { _, newValue in
             model.setAutoReviveEnabled(newValue)
         }
@@ -57,70 +90,6 @@ struct ContentView: View {
             model.setAutoReviveEnabled(autoReviveEnabled)
         }
     }
-
-    // MARK: - Provider header
-
-    private var providerHeader: some View {
-        HStack(spacing: 10) {
-            providerLogo(size: 28)
-            Text("Claude")
-                .font(.system(size: 22, weight: .bold))
-            Spacer()
-        }
-        .padding(.top, 4)
-    }
-
-    // MARK: - Cards
-
-    private func currentSessionCard(usage: UsageData) -> some View {
-        let resetDate = Date(timeIntervalSince1970: TimeInterval(usage.sessionEpoch))
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Current session")
-                .font(.title3.bold())
-            ProgressView(value: progressValue(usage.sessionPct))
-                .tint(brand)
-            HStack {
-                Text("\(usage.sessionPct)% used")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                (Text("Resets ") + Text(resetDate, style: .relative))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-    }
-
-    private func weeklyLimitsCard(usage: UsageData) -> some View {
-        let resetDate = Date(timeIntervalSince1970: TimeInterval(usage.weeklyEpoch))
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Weekly limits")
-                .font(.title3.bold())
-            Text("All models")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            ProgressView(value: progressValue(usage.weeklyPct))
-            HStack {
-                Text("\(usage.weeklyPct)% used")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                (Text("Resets ") + Text(resetDate, style: .relative))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-    }
-
-    // MARK: - Advanced
 
     private var advancedCard: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -198,17 +167,141 @@ struct ContentView: View {
             Text("Armed. Will fire when the next 5h window ends.")
         }
     }
+}
 
-    // MARK: - Footer (Last updated + refresh)
+// MARK: - Codex (cloud-mirrored)
 
-    private func footerRow(usage: UsageData) -> some View {
+private struct CodexSection: View {
+    let snapshot: UsageStore.Snapshot?
+
+    var body: some View {
+        VStack(spacing: 14) {
+            providerHeader
+
+            if let snap = snapshot {
+                let notStarted = snap.usage.status == .notStarted
+                let usage = snap.usage
+                SessionCard(
+                    title: "Current session",
+                    percent: notStarted ? 0 : usage.sessionPct,
+                    resetDate: Date(timeIntervalSince1970: TimeInterval(usage.sessionEpoch)),
+                    notStarted: notStarted,
+                    tint: CodexBrand.color
+                )
+                WeeklyCard(
+                    percent: usage.weeklyPct,
+                    resetDate: Date(timeIntervalSince1970: TimeInterval(usage.weeklyEpoch))
+                )
+                HStack {
+                    (Text("Synced from Mac ") + Text(snap.writtenAt, style: .relative) + Text(" ago"))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+            } else {
+                WaitingForMacCard()
+            }
+        }
+    }
+
+    private var providerHeader: some View {
+        HStack(spacing: 10) {
+            ProviderLogo(asset: "CodexLogo", size: 28)
+            Text("Codex")
+                .font(.system(size: 22, weight: .bold))
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Shared cards
+
+private struct SessionCard: View {
+    let title: String
+    let percent: Int
+    let resetDate: Date
+    let notStarted: Bool
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.title3.bold())
+            if notStarted {
+                ProgressView(value: 0)
+                HStack {
+                    Text("Not started")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("Starts on next use")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                ProgressView(value: max(0, min(1, Double(percent) / 100)))
+                    .tint(tint)
+                HStack {
+                    Text("\(percent)% used")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    (Text("Resets ") + Text(resetDate, style: .relative))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct WeeklyCard: View {
+    let percent: Int
+    let resetDate: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Weekly limits")
+                .font(.title3.bold())
+            Text("All models")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            ProgressView(value: max(0, min(1, Double(percent) / 100)))
+            HStack {
+                Text("\(percent)% used")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                (Text("Resets ") + Text(resetDate, style: .relative))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct FooterRow: View {
+    let updatedAt: Date
+    let onRefresh: () -> Void
+
+    var body: some View {
         HStack {
-            (Text("Last updated ") + Text(usage.updatedAt, style: .relative) + Text(" ago"))
+            (Text("Last updated ") + Text(updatedAt, style: .relative) + Text(" ago"))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             Spacer()
-            Button(action: { model.forcePoll() }) {
+            Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 14, weight: .semibold))
                     .frame(width: 32, height: 32)
@@ -220,10 +313,41 @@ struct ContentView: View {
         .padding(.horizontal, 4)
         .padding(.top, 4)
     }
+}
 
-    // MARK: - Empty states
+private struct LoadingCard: View {
+    var body: some View {
+        HStack {
+            ProgressView()
+            Text("Connecting…").foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
 
-    private var unauthenticatedCard: some View {
+private struct WaitingForMacCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Waiting for the Mac app")
+                .font(.headline)
+            Text("Codex usage syncs via iCloud once you run Clawdmeter on a Mac with `~/.codex/sessions/` available.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct UnauthenticatedCard: View {
+    @Binding var showingSettings: Bool
+    let model: UsageModel
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Waiting for your Mac")
                 .font(.title2.bold())
@@ -244,8 +368,12 @@ struct ContentView: View {
         .padding(16)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
     }
+}
 
-    private var reauthCard: some View {
+private struct ReauthCard: View {
+    @Binding var showingSettings: Bool
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Reconnect")
                 .font(.title2.bold())
@@ -261,38 +389,44 @@ struct ContentView: View {
         .padding(16)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
     }
+}
 
-    private var loadingCard: some View {
-        HStack {
-            ProgressView()
-            Text("Connecting…").foregroundStyle(.secondary)
+// MARK: - Header + logo
+
+private struct ClaudeProviderHeader: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            ProviderLogo(asset: "ClaudeLogo", size: 28)
+            Text("Claude")
+                .font(.system(size: 22, weight: .bold))
+            Spacer()
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .padding(.top, 4)
     }
+}
 
-    // MARK: - Helpers
+private struct ProviderLogo: View {
+    let asset: String
+    let size: CGFloat
 
-    private func progressValue(_ pct: Int) -> Double {
-        max(0, min(1, Double(pct) / 100))
-    }
-
-    @ViewBuilder
-    private func providerLogo(size: CGFloat) -> some View {
-        if let img = UIImage(named: "ClaudeLogo") {
+    var body: some View {
+        if let img = UIImage(named: asset) {
             Image(uiImage: img)
                 .resizable()
                 .scaledToFit()
                 .frame(width: size, height: size)
         } else {
             RoundedRectangle(cornerRadius: 6)
-                .fill(brand.opacity(0.2))
+                .fill(.secondary.opacity(0.2))
                 .frame(width: size, height: size)
         }
     }
+}
 
-    private var brand: Color {
-        Color(red: 0xd9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+private enum ClaudeBrand {
+    static let color = Color(red: 0xd9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
+}
+
+private enum CodexBrand {
+    static let color = Color.primary.opacity(0.85)
 }

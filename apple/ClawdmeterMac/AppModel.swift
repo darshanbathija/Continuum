@@ -158,6 +158,18 @@ public final class AppModel: ObservableObject {
             logger.info("UsageStore.write returned \(didWrite) for \(self.config.id)")
             UsageStore.reloadWidgets(providerID: config.id)
 
+            // Mirror Codex snapshots to iCloud KV so the iPhone — which
+            // can't read `~/.codex/sessions/` itself — picks them up.
+            // Claude is already polled directly on iOS via the shared
+            // Keychain token, no mirror needed.
+            if config.id == "codex" {
+                UsageCloudMirror.shared.writeSnapshot(
+                    u,
+                    providerID: config.id,
+                    displayName: config.displayName
+                )
+            }
+
             if config.hasBLEHardware, hardwareLinkEnabled, hardwareState == .connected {
                 bleDriver?.writeUsage(u)
             }

@@ -27,6 +27,11 @@ public final class UsageModel: ObservableObject {
     @Published public private(set) var isPolling: Bool = false
     @Published public private(set) var now: Date = Date()
 
+    /// Codex snapshot mirrored from the Mac via iCloud Key-Value store.
+    /// `nil` if the user hasn't run the Mac app or iCloud sync hasn't
+    /// propagated yet.
+    @Published public private(set) var codexSnapshot: UsageStore.Snapshot?
+
     private var poller: UsagePoller?
     private var clockTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
@@ -55,6 +60,31 @@ public final class UsageModel: ObservableObject {
         configurePollerIfTokenPresent()
         observeAppLifecycle()
         startClock()
+        observeCloudMirror()
+    }
+
+    /// Pull whatever Codex snapshot iCloud currently has, then subscribe
+    /// for live updates pushed from the Mac. iCloud KV's
+    /// `didChangeExternallyNotification` fires when a remote write lands.
+    private func observeCloudMirror() {
+        codexSnapshot = UsageCloudMirror.shared.readSnapshot(providerID: "codex")
+        UsageCloudMirror.shared.didUpdate
+            .filter { $0 == "codex" }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let snap = UsageCloudMirror.shared.readSnapshot(providerID: "codex")
+                Task { @MainActor in
+                    self.codexSnapshot = snap
+                    // Also mirror into the local App Group store so the
+                    // iOS widget extension can render Codex on the Lock
+                    // Screen / Home Screen.
+                    if let snap {
+                        UsageStore.write(snap.usage, providerID: "codex", displayName: snap.displayName)
+                        UsageStore.reloadWidgets(providerID: "codex")
+                    }
+                }
+            }
+            .store(in: &cancellables)
     }
 
     public func setAutoReviveEnabled(_ enabled: Bool) {
