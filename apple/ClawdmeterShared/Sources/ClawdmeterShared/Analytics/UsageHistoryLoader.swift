@@ -480,11 +480,11 @@ public actor UsageHistoryLoader {
 /// `byDay + singleRepo` shape, because a single Claude JSONL can contain
 /// records for multiple repos.
 struct AnalyticsCache: Codable, Sendable {
-    // v6 (2026-05-15): Conductor + .claude/worktrees path-pattern fallbacks
-    // in RepoIdentity. Deleted Conductor branches now collapse into the
-    // underlying main repo (via a live-branch's .git pointer) instead of
-    // surfacing each branch separately. Old v5 caches re-parse on first load.
-    static let currentVersion: Int = 6
+    // v7 (2026-05-15): RepoIdentity now descends one level when no `.git`
+    // is found walking up — paths like `~/Downloads/CC Watch` (which wraps
+    // a sole `Clawdmeter/` git repo) now collapse into the underlying repo
+    // bucket. Old v6 caches re-parse on first load.
+    static let currentVersion: Int = 7
 
     let version: Int
     var files: [String: FileEntry]

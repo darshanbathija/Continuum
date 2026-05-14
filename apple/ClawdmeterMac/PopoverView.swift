@@ -55,11 +55,12 @@ struct PopoverView: View {
             .scrollIndicators(.never)
             footer
         }
-        // Tall enough that the "Advanced" disclosure row is always visible
-        // above the footer when collapsed. Expanding adds room for the
-        // toggle + revive-now controls. Earlier 480pt sometimes cut the
-        // Advanced row off entirely because of the Open-dashboard button.
-        .frame(width: 380, height: advancedExpanded ? 640 : 560)
+        // Width is fixed; height is intrinsic — the popover's
+        // NSHostingController has `sizingOptions = [.preferredContentSize]`,
+        // so it re-sizes to whatever this VStack reports. Earlier hand-tuned
+        // heights either cut Advanced off (480) or cut top/bottom (560/640).
+        .frame(width: 380)
+        .fixedSize(horizontal: false, vertical: true)
         .background(backgroundColor)
         .preferredColorScheme(theme.colorScheme)
         .onChange(of: autoReviveEnabled) { _, newValue in

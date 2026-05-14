@@ -209,11 +209,14 @@ final class ProviderStatusController: NSObject {
         // Eagerly build the popover so the first click renders without delay.
         let pop = NSPopover()
         pop.behavior = .transient
-        pop.contentSize = NSSize(width: 380, height: 480)
-        pop.contentViewController = NSHostingController(
-            rootView: PopoverView(model: model)
-                .frame(width: 380, height: 480)
-        )
+        // Initial size — NSHostingController.sizingOptions = .preferredContentSize
+        // (macOS 13+) makes the popover re-size to whatever SwiftUI's intrinsic
+        // content height ends up being. The collapsed/expanded Advanced section
+        // (and any future surface tweaks) no longer need hand-tuned heights.
+        pop.contentSize = NSSize(width: 380, height: 600)
+        let host = NSHostingController(rootView: PopoverView(model: model).frame(width: 380))
+        host.sizingOptions = [.preferredContentSize]
+        pop.contentViewController = host
         popover = pop
     }
 

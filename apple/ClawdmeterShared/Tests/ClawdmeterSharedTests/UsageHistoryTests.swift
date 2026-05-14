@@ -246,6 +246,41 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertEqual(RepoIdentity.normalize(b), "/Users/fake/work/myrepo")
     }
 
+    func test_canonicalRepo_descendsToSoleGitChild() throws {
+        // `wrapper/` has no `.git`, but contains exactly one git child
+        // (`Clawdmeter/`). cwd=wrapper/ should bucket as `wrapper/Clawdmeter`
+        // so sessions started from the parent and from the repo itself
+        // collapse to the same bucket.
+        RepoIdentity._resetCacheForTesting()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let wrapper = temp.appendingPathComponent("CC Watch")
+        let inner = wrapper.appendingPathComponent("Clawdmeter")
+        try FileManager.default.createDirectory(at: inner.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        // From the wrapper → descends to the inner git child.
+        XCTAssertEqual(RepoIdentity.normalize(wrapper.path), inner.path)
+        // From inside the inner repo → walks up to the same git root.
+        XCTAssertEqual(RepoIdentity.normalize(inner.path), inner.path)
+        // Display name → the repo's basename, not the wrapper's.
+        XCTAssertEqual(RepoIdentity.displayName(for: RepoIdentity.normalize(wrapper.path)), "Clawdmeter")
+    }
+
+    func test_canonicalRepo_descendOnlyWhenSoleGitChild() throws {
+        // A wrapper containing TWO git children should NOT descend (ambiguous).
+        RepoIdentity._resetCacheForTesting()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let wrapper = temp.appendingPathComponent("downloads")
+        let a = wrapper.appendingPathComponent("repo-a")
+        let b = wrapper.appendingPathComponent("repo-b")
+        try FileManager.default.createDirectory(at: a.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: b.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        // Ambiguous → fall back to the wrapper path itself.
+        XCTAssertEqual(RepoIdentity.normalize(wrapper.path), wrapper.path)
+    }
+
     // MARK: - Adaptive currency formatting
 
     func test_adaptivePrecisionFormatting() {

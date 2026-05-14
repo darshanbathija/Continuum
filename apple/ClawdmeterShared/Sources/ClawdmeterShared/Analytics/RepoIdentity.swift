@@ -91,12 +91,8 @@ public enum RepoIdentity {
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: gitPath, isDirectory: &isDir) {
                 if isDir.boolValue {
-                    // Regular git repo: `.git` is a directory; this `current`
-                    // IS the repo root.
                     return current
                 } else {
-                    // Worktree: `.git` is a file → read `gitdir:` → resolve
-                    // to the main worktree.
                     if let main = resolveWorktreeMain(gitFile: gitPath) {
                         return main
                     }
@@ -107,7 +103,37 @@ public enum RepoIdentity {
             if parent == current { break }
             current = parent
         }
+        // No `.git` walking up. Try walking DOWN one level — if `path` has
+        // exactly ONE child that IS a git repo, collapse to that child.
+        // Catches the common case where the user started Claude from the
+        // parent of a single-repo directory (e.g. `~/Downloads/CC Watch`
+        // wraps `Clawdmeter/`; both cwds should bucket as `Clawdmeter`).
+        if let descended = tryDescendToSoleGitChild(path) {
+            return descended
+        }
         return path
+    }
+
+    /// If `dir` has exactly one subdirectory that contains a `.git`, return
+    /// that subdirectory. Multiple git children (or none) → nil.
+    private static func tryDescendToSoleGitChild(_ dir: String) -> String? {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else {
+            return nil
+        }
+        guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { return nil }
+        var gitChildren: [String] = []
+        for entry in entries {
+            if entry.hasPrefix(".") { continue }
+            let childPath = (dir as NSString).appendingPathComponent(entry)
+            let childGit = (childPath as NSString).appendingPathComponent(".git")
+            if fm.fileExists(atPath: childGit, isDirectory: nil) {
+                gitChildren.append(childPath)
+                if gitChildren.count > 1 { return nil }  // ambiguous
+            }
+        }
+        return gitChildren.first
     }
 
     /// Conductor pattern: `<...>/conductor/workspaces/<repo>/<branch>/...`
