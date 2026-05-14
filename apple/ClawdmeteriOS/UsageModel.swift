@@ -18,14 +18,17 @@ import ClawdmeterShared
 public final class UsageModel: ObservableObject {
 
     public let tokenProvider: PastedAnthropicTokenProvider
+    public let autoReviver: AutoReviver
     private let logger = Logger(subsystem: "com.clawdmeter.ios", category: "UsageModel")
 
     @Published public private(set) var usage: UsageData?
     @Published public private(set) var lastError: AISourceError?
     @Published public private(set) var needsReauth: Bool = false
     @Published public private(set) var isPolling: Bool = false
+    @Published public private(set) var now: Date = Date()
 
     private var poller: UsagePoller?
+    private var clockTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
 
     public init() {
@@ -34,7 +37,9 @@ public final class UsageModel: ObservableObject {
         // with iCloud Keychain on (the default), this is already populated.
         // Falls through to manual paste if the user hasn't run the Mac app
         // or doesn't have iCloud Keychain.
-        self.tokenProvider = PastedAnthropicTokenProvider.shared()
+        let provider = PastedAnthropicTokenProvider.shared()
+        self.tokenProvider = provider
+        self.autoReviver = AutoReviver(tokenProvider: provider)
         // Auto-clear bogus stored tokens (e.g. garbage left over from a
         // failed paste before we hardened the extraction code). Real Claude
         // Code OAuth tokens always start with `sk-ant-oat01-` and are
@@ -49,6 +54,30 @@ public final class UsageModel: ObservableObject {
         logger.info("UsageModel init: hasToken=\(initialToken != nil, privacy: .public) len=\(initialToken?.count ?? 0, privacy: .public)")
         configurePollerIfTokenPresent()
         observeAppLifecycle()
+        startClock()
+    }
+
+    public func setAutoReviveEnabled(_ enabled: Bool) {
+        autoReviver.isEnabled = enabled
+    }
+
+    public func reviveNow() {
+        Task { @MainActor in
+            await autoReviver.fireNow()
+            forcePoll()
+        }
+    }
+
+    private func startClock() {
+        clockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.now = Date()
+                if let usage = self.usage {
+                    await self.autoReviver.tick(usage: usage, now: self.now)
+                }
+            }
+        }
     }
 
     /// Sanity-check on what we're about to save / what we just read. Tokens

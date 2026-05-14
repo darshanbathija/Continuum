@@ -1,6 +1,5 @@
 import Foundation
 import OSLog
-import ClawdmeterShared
 
 /// Auto-revive: when the 5-hour session window expires, fire a 1-token "Hi" to
 /// Claude Haiku 4.5 so a new window immediately starts ticking. Keeps the
