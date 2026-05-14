@@ -9,6 +9,10 @@ struct AnalyticsView: View {
     @ObservedObject var store: UsageHistoryStore
     @Environment(\.colorScheme) private var colorScheme
 
+    /// Per-section window for the by-repo list. Independent of `store.activeWindow`
+    /// (which drives the totals grid + chart) per user feedback after V1 ship.
+    @State private var repoWindow: UsageHistorySnapshot.Window = .past30d
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             header
@@ -25,11 +29,7 @@ struct AnalyticsView: View {
                     )
                 }
 
-                AnalyticsRepoList(
-                    snapshot: snapshot,
-                    window: store.activeWindow,
-                    providerFilter: store.providerFilter
-                )
+                repoSection(snapshot: snapshot)
 
                 footer(snapshot: snapshot)
             } else {
@@ -86,6 +86,33 @@ struct AnalyticsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Refresh analytics")
+        }
+    }
+
+    // MARK: - By-repo section (window picker scoped to this section)
+
+    private func repoSection(snapshot: UsageHistorySnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("By repo")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(primaryText)
+                Spacer()
+                Picker("Window", selection: $repoWindow) {
+                    ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { w in
+                        Text(w.label).tag(w)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .frame(maxWidth: 280)
+                .labelsHidden()
+            }
+            AnalyticsRepoList(
+                snapshot: snapshot,
+                window: repoWindow,
+                providerFilter: store.providerFilter
+            )
         }
     }
 

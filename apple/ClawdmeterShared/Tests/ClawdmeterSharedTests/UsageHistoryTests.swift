@@ -129,6 +129,76 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertEqual(RepoIdentity.displayName(for: RepoKey.unknown), "(unknown)")
     }
 
+    // MARK: - Canonical repo resolution
+
+    func test_canonicalRepo_regularGitDirectory() throws {
+        RepoIdentity._resetCacheForTesting()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let repo = temp.appendingPathComponent("MyRepo")
+        let subdir = repo.appendingPathComponent("apple").appendingPathComponent("ClawdmeterMac")
+        try FileManager.default.createDirectory(at: subdir, withIntermediateDirectories: true)
+        // Make `.git` a directory (regular non-worktree checkout).
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        // Deep subdir → walks up to repo root.
+        XCTAssertEqual(RepoIdentity.normalize(subdir.path), repo.path)
+        // The repo root itself → returns itself.
+        XCTAssertEqual(RepoIdentity.normalize(repo.path), repo.path)
+        // Display name → last component.
+        XCTAssertEqual(RepoIdentity.displayName(for: repo.path), "MyRepo")
+    }
+
+    func test_canonicalRepo_worktreeBucketsUnderMainRepo() throws {
+        RepoIdentity._resetCacheForTesting()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let mainRepo = temp.appendingPathComponent("Defx V3")
+        let worktree = mainRepo.appendingPathComponent(".claude/worktrees/beautiful-cori")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: mainRepo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+
+        // Simulate a worktree: `.git` is a FILE pointing to the main worktree's gitdir.
+        let mainGitWorktreesDir = mainRepo.appendingPathComponent(".git/worktrees/beautiful-cori")
+        try FileManager.default.createDirectory(at: mainGitWorktreesDir, withIntermediateDirectories: true)
+        let gitFilePath = worktree.appendingPathComponent(".git")
+        let gitFileContents = "gitdir: \(mainGitWorktreesDir.path)\n"
+        try gitFileContents.write(to: gitFilePath, atomically: true, encoding: .utf8)
+
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        // Worktree path → resolves back to main repo.
+        XCTAssertEqual(RepoIdentity.normalize(worktree.path), mainRepo.path)
+        // Display name comes from the main repo's basename, NOT the branch.
+        XCTAssertEqual(RepoIdentity.displayName(for: RepoIdentity.normalize(worktree.path)), "Defx V3")
+    }
+
+    func test_canonicalRepo_conductorWorkspacesPattern() throws {
+        RepoIdentity._resetCacheForTesting()
+        // Mimics ~/conductor/repos/<Repo>/.git + ~/conductor/workspaces/<Repo>/<branch>
+        // with a worktree .git pointing back.
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let repoRoot = temp.appendingPathComponent("repos/nautilus-ui")
+        let workspace = temp.appendingPathComponent("workspaces/nautilus-ui/honolulu")
+        try FileManager.default.createDirectory(at: repoRoot.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let worktreesDir = repoRoot.appendingPathComponent(".git/worktrees/honolulu")
+        try FileManager.default.createDirectory(at: worktreesDir, withIntermediateDirectories: true)
+        try "gitdir: \(worktreesDir.path)\n".write(to: workspace.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        XCTAssertEqual(RepoIdentity.displayName(for: RepoIdentity.normalize(workspace.path)), "nautilus-ui")
+    }
+
+    func test_canonicalRepo_noGitFallsBackToCwd() {
+        RepoIdentity._resetCacheForTesting()
+        // No `.git` anywhere — we fall back to using the trimmed cwd. Useful
+        // for paths like `~/Desktop/Claude` that were Codex sessions before
+        // git init.
+        let nonRepo = "/private/var/folders/no-such-path/\(UUID().uuidString)"
+        let normalized = RepoIdentity.normalize(nonRepo)
+        XCTAssertEqual(normalized, nonRepo)
+    }
+
     // MARK: - Adaptive currency formatting
 
     func test_adaptivePrecisionFormatting() {

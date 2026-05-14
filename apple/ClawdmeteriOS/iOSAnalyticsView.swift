@@ -10,6 +10,8 @@ struct iOSAnalyticsView: View {
 
     @State private var activeWindow: UsageHistorySnapshot.Window = .past30d
     @State private var providerFilter: UsageHistoryStore.ProviderFilter = .both
+    /// Per-section window for the by-repo list. Independent of `activeWindow`.
+    @State private var repoWindow: UsageHistorySnapshot.Window = .past30d
 
     private var iCloudAvailable: Bool {
         UsageCloudMirror.shared.isICloudAvailable
@@ -34,11 +36,24 @@ struct iOSAnalyticsView: View {
                             .padding(.horizontal, 4)
                         }
 
-                        AnalyticsRepoList(
-                            snapshot: snap,
-                            window: activeWindow,
-                            providerFilter: providerFilter
-                        )
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("By repo")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Spacer()
+                                Picker("Window", selection: $repoWindow) {
+                                    ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { w in
+                                        Text(w.label).tag(w)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                            }
+                            AnalyticsRepoList(
+                                snapshot: snap,
+                                window: repoWindow,
+                                providerFilter: providerFilter
+                            )
+                        }
                         .padding(.horizontal, 4)
 
                         (Text("Updated ") + Text(snap.computedAt, style: .relative))

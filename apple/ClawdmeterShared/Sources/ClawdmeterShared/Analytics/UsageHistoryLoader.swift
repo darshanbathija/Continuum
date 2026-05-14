@@ -480,7 +480,10 @@ public actor UsageHistoryLoader {
 /// `byDay + singleRepo` shape, because a single Claude JSONL can contain
 /// records for multiple repos.
 struct AnalyticsCache: Codable, Sendable {
-    static let currentVersion: Int = 4
+    // v5 (2026-05-15): canonical-repo bucketing — RepoIdentity now walks up
+    // for .git and groups all branches/worktrees of a repo together. Old v4
+    // caches with per-cwd repo keys re-parse on first load.
+    static let currentVersion: Int = 5
 
     let version: Int
     var files: [String: FileEntry]

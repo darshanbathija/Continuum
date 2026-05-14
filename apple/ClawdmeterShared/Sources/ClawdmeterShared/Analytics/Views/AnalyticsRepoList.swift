@@ -76,7 +76,7 @@ public struct AnalyticsRepoList: View {
         let data = rows
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("By repo · \(window.label)")
+                Text("By repo")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
