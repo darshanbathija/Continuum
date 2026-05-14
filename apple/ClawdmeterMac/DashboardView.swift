@@ -409,10 +409,24 @@ private struct ProviderColumn: View {
 @ViewBuilder
 private func providerBadge(assetName: String, size: CGFloat) -> some View {
     if let nsImage = NSImage(named: assetName) {
-        Image(nsImage: nsImage)
+        // The Codex asset is a black silhouette on a transparent canvas;
+        // rendering it directly makes the glyph disappear on the dark Mac
+        // dashboard background. Mark it template so SwiftUI tints it with
+        // the surrounding foreground style (which adapts to color scheme).
+        // Claude's burst stays full-color.
+        let templated = (assetName == "CodexLogo")
+        let img: NSImage = {
+            if templated, let copy = nsImage.copy() as? NSImage {
+                copy.isTemplate = true
+                return copy
+            }
+            return nsImage
+        }()
+        Image(nsImage: img)
             .resizable()
             .scaledToFit()
             .frame(width: size, height: size)
+            .foregroundStyle(.primary)
     } else {
         Rectangle()
             .fill(.secondary.opacity(0.2))

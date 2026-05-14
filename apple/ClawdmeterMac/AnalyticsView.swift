@@ -25,7 +25,7 @@ struct AnalyticsView: View {
                     AnalyticsDailyChart(
                         snapshot: snapshot,
                         window: store.activeWindow,
-                        providerFilter: store.providerFilter
+                        providerFilter: .both
                     )
                 }
 
@@ -44,30 +44,24 @@ struct AnalyticsView: View {
     // MARK: - Header (title + filter chips + refresh)
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Text("Token usage")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(primaryText)
 
             Spacer()
 
-            Picker("Provider", selection: $store.providerFilter) {
-                ForEach(UsageHistoryStore.ProviderFilter.allCases, id: \.self) { f in
-                    Text(f.label).tag(f)
-                }
-            }
-            .pickerStyle(.menu)
-            .controlSize(.small)
-            .frame(maxWidth: 110)
-
+            // Segmented window picker, same shape as the by-repo section
+            // below — visually consistent across the whole analytics row.
             Picker("Window", selection: $store.activeWindow) {
                 ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { w in
                     Text(w.label).tag(w)
                 }
             }
-            .pickerStyle(.menu)
+            .pickerStyle(.segmented)
             .controlSize(.small)
-            .frame(maxWidth: 130)
+            .frame(maxWidth: 320)
+            .labelsHidden()
 
             if let updatedAt = store.snapshot?.computedAt {
                 (Text("Updated ") + Text(updatedAt, style: .relative))
@@ -111,7 +105,7 @@ struct AnalyticsView: View {
             AnalyticsRepoList(
                 snapshot: snapshot,
                 window: repoWindow,
-                providerFilter: store.providerFilter
+                providerFilter: .both
             )
         }
     }

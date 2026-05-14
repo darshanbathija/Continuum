@@ -9,7 +9,6 @@ struct iOSAnalyticsView: View {
     @ObservedObject var model: UsageModel
 
     @State private var activeWindow: UsageHistorySnapshot.Window = .past30d
-    @State private var providerFilter: UsageHistoryStore.ProviderFilter = .both
     /// Per-section window for the by-repo list. Independent of `activeWindow`.
     @State private var repoWindow: UsageHistorySnapshot.Window = .past30d
 
@@ -22,7 +21,16 @@ struct iOSAnalyticsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if let snap = model.analyticsSnapshot {
-                        controls
+                        // Segmented window picker — same shape as the
+                        // by-repo section below.
+                        Picker("Window", selection: $activeWindow) {
+                            ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { w in
+                                Text(w.label).tag(w)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 4)
+
                         AnalyticsTotalsGrid(snapshot: snap)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 4)
@@ -31,7 +39,7 @@ struct iOSAnalyticsView: View {
                             AnalyticsDailyChart(
                                 snapshot: snap,
                                 window: activeWindow,
-                                providerFilter: providerFilter
+                                providerFilter: .both
                             )
                             .padding(.horizontal, 4)
                         }
@@ -41,17 +49,17 @@ struct iOSAnalyticsView: View {
                                 Text("By repo")
                                     .font(.system(size: 15, weight: .semibold))
                                 Spacer()
-                                Picker("Window", selection: $repoWindow) {
-                                    ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { w in
-                                        Text(w.label).tag(w)
-                                    }
-                                }
-                                .pickerStyle(.menu)
                             }
+                            Picker("Window", selection: $repoWindow) {
+                                ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { w in
+                                    Text(w.label).tag(w)
+                                }
+                            }
+                            .pickerStyle(.segmented)
                             AnalyticsRepoList(
                                 snapshot: snap,
                                 window: repoWindow,
-                                providerFilter: providerFilter
+                                providerFilter: .both
                             )
                         }
                         .padding(.horizontal, 4)
@@ -74,26 +82,6 @@ struct iOSAnalyticsView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Analytics")
             .navigationBarTitleDisplayMode(.large)
-        }
-    }
-
-    // MARK: - Controls
-
-    private var controls: some View {
-        HStack {
-            Picker("Provider", selection: $providerFilter) {
-                ForEach(UsageHistoryStore.ProviderFilter.allCases, id: \.self) { f in
-                    Text(f.label).tag(f)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            Picker("Window", selection: $activeWindow) {
-                ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { w in
-                    Text(w.label).tag(w)
-                }
-            }
-            .pickerStyle(.menu)
         }
     }
 

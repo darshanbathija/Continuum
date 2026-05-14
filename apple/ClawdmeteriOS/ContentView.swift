@@ -425,10 +425,18 @@ private struct ProviderLogo: View {
 
     var body: some View {
         if let img = UIImage(named: asset) {
-            Image(uiImage: img)
+            // Codex's asset is a black silhouette on transparent — switch
+            // it to template rendering so SwiftUI tints it with the
+            // current foreground style (adapts to light/dark mode).
+            // Claude's burst keeps its terra-cotta color.
+            let rendered = (asset == "CodexLogo")
+                ? img.withRenderingMode(.alwaysTemplate)
+                : img
+            Image(uiImage: rendered)
                 .resizable()
                 .scaledToFit()
                 .frame(width: size, height: size)
+                .foregroundStyle(.primary)
         } else {
             RoundedRectangle(cornerRadius: 6)
                 .fill(.secondary.opacity(0.2))
