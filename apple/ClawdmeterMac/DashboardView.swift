@@ -40,8 +40,6 @@ struct DashboardView: View {
                 if #available(macOS 13, *) {
                     AnalyticsView(store: usageHistoryStore)
                 }
-
-                menuBarTogglesRow
             }
         }
         // Min size keeps the window usable when the user shrinks it; the
@@ -52,38 +50,31 @@ struct DashboardView: View {
         .preferredColorScheme(theme.colorScheme)
     }
 
-    // MARK: - Menu bar toggles
-
-    private var menuBarTogglesRow: some View {
-        HStack(spacing: 24) {
-            Text("Menu bar")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(secondaryText)
-
-            Toggle("Claude", isOn: $claudeMenuBarShown)
-                .toggleStyle(.checkbox)
-                .foregroundStyle(primaryText)
-
-            Toggle("Codex", isOn: $codexMenuBarShown)
-                .toggleStyle(.checkbox)
-                .foregroundStyle(primaryText)
-
-            Spacer()
-        }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 14)
-        .background(footerBackground)
-    }
-
-    // MARK: - Header (title + theme pill)
+    // MARK: - Header (title + menu bar toggles + theme pill)
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 18) {
             Text("Clawdmeter")
                 .font(.system(size: 26, weight: .bold))
                 .foregroundStyle(primaryText)
 
             Spacer()
+
+            // Menu bar toggles — promoted from the bottom of the window
+            // so they sit alongside the theme selector at the top.
+            HStack(spacing: 14) {
+                Text("Menu bar")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(secondaryText)
+
+                Toggle("Claude", isOn: $claudeMenuBarShown)
+                    .toggleStyle(.checkbox)
+                    .foregroundStyle(primaryText)
+
+                Toggle("Codex", isOn: $codexMenuBarShown)
+                    .toggleStyle(.checkbox)
+                    .foregroundStyle(primaryText)
+            }
 
             ThemePill(themeRaw: $themeRaw, scheme: effectiveScheme)
         }
@@ -104,12 +95,6 @@ struct DashboardView: View {
         effectiveScheme == .dark
             ? Color(red: 0.10, green: 0.10, blue: 0.10)
             : Color(red: 0.96, green: 0.96, blue: 0.96)
-    }
-
-    private var footerBackground: Color {
-        effectiveScheme == .dark
-            ? Color(red: 0.07, green: 0.07, blue: 0.07)
-            : Color(red: 0.92, green: 0.92, blue: 0.92)
     }
 
     private var primaryText: Color {
