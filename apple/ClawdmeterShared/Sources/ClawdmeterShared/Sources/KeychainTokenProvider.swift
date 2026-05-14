@@ -5,7 +5,7 @@ import Security
 /// Reads the Claude Code OAuth token from the system Keychain.
 ///
 /// Service name `Claude Code-credentials` matches the empirically-observed Keychain
-/// entry on macOS (see `apple/Phase0/DATA_SOURCE_CONTRACT.md`). On iOS the same
+/// entry on macOS . On iOS the same
 /// service name is used; cross-device share via iCloud Keychain controlled by
 /// `synchronizable` (defaults to false in V1 per plan; flip per E12 once the
 /// iOS app's Apple ID and entitlements are settled).

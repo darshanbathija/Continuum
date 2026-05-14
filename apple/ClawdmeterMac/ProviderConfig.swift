@@ -11,7 +11,6 @@ public struct ProviderConfig: Identifiable, Sendable {
     public let reviveEndpoint: URL              // POST target for AutoReviver
     public let reviveAuthVersion: String?       // e.g. "anthropic-version: 2023-06-01" (nil for OpenAI)
     public let storageKeyPrefix: String         // Namespacing for @AppStorage
-    public let hasBLEHardware: Bool             // True only for Claude (ESP32 Clawdmeter)
 
     public static let claude = ProviderConfig(
         id: "claude",
@@ -20,8 +19,7 @@ public struct ProviderConfig: Identifiable, Sendable {
         reviveModel: "claude-haiku-4-5",
         reviveEndpoint: URL(string: "https://api.anthropic.com/v1/messages")!,
         reviveAuthVersion: "2023-06-01",
-        storageKeyPrefix: "clawdmeter.claude",
-        hasBLEHardware: true
+        storageKeyPrefix: "clawdmeter.claude"
     )
 
     public static let codex = ProviderConfig(
@@ -31,7 +29,6 @@ public struct ProviderConfig: Identifiable, Sendable {
         reviveModel: "gpt-5.5-mini",
         reviveEndpoint: URL(string: "https://chatgpt.com/backend-api/conversation")!,
         reviveAuthVersion: nil,
-        storageKeyPrefix: "clawdmeter.codex",
-        hasBLEHardware: false
+        storageKeyPrefix: "clawdmeter.codex"
     )
 }

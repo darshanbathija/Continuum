@@ -3,10 +3,9 @@ import Combine
 import ClawdmeterShared
 import OSLog
 
-/// Per-provider view-model that ties UsagePoller + AutoReviver (+ ESP32BLEDriver
-/// for Claude) together. The Mac app instantiates one of these per source so
-/// each menu bar item has its own independent poller, countdown, and revive
-/// loop.
+/// Per-provider view-model. The Mac app instantiates one of these per source
+/// (Claude + Codex) so each menu bar item has its own independent poller,
+/// countdown, and auto-revive loop.
 @MainActor
 public final class AppModel: ObservableObject {
 
@@ -15,8 +14,6 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var usage: UsageData?
     @Published public private(set) var lastError: AISourceError?
     @Published public private(set) var needsReauth: Bool = false
-    @Published public private(set) var hardwareState: BLEState = .idle
-    @Published public private(set) var hardwareLinkEnabled: Bool = false
 
     /// Wall-clock — intentionally NOT `@Published`. Ticking a clock at 1 Hz on
     /// an ObservableObject observed by a `MenuBarExtra` label caused
@@ -27,11 +24,9 @@ public final class AppModel: ObservableObject {
     public var now: Date { Date() }
 
     private let poller: UsagePoller
-    private let bleDriver: ESP32BLEDriver?
     public let autoReviver: AutoReviver
     private let logger: Logger
     private var listenTask: Task<Void, Never>?
-    private var bleTask: Task<Void, Never>?
     private var clockTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     private var isStarted = false
@@ -44,7 +39,6 @@ public final class AppModel: ObservableObject {
     ) {
         self.config = config
         self.poller = UsagePoller(source: source)
-        self.bleDriver = config.hasBLEHardware ? ESP32BLEDriver() : nil
         self.autoReviver = AutoReviver(
             tokenProvider: tokenProvider,
             session: urlSession,
@@ -65,16 +59,6 @@ public final class AppModel: ObservableObject {
         guard !isStarted else { return }
         isStarted = true
 
-        // Async callback path. `publish()` in UsagePoller awaits this handler
-        // inline; `MainActor.run` hops to main, sets `usage`, and returns
-        // before the poller task continues. No GCD dispatch — that path was
-        // dropping closures on Tahoe per codex's analysis.
-        // Hop to MainActor via Task instead of DispatchQueue.main.async.
-        // Observed on macOS Tahoe: GCD's main-queue async from a cooperative
-        // task silently drops closures for one poller in a two-poller setup
-        // (verified with diagnostics — Codex's dispatch ran, Claude's never
-        // did, with no error). Task @MainActor uses Swift Concurrency's
-        // executor scheduling which doesn't have this bug.
         // RunLoop.main.perform — every other main-queue mechanism silently
         // drops closures for Claude's poller on Tahoe (verified for GCD,
         // Task @MainActor, Task.detached @MainActor, OperationQueue.main).
@@ -89,18 +73,6 @@ public final class AppModel: ObservableObject {
             // Wake the runloop in case it's idle.
             CFRunLoopWakeUp(CFRunLoopGetMain())
         }
-        if let bleDriver {
-            bleTask = Task { [weak self] in
-                guard let self else { return }
-                for await state in bleDriver.stateUpdates {
-                    await MainActor.run { self.hardwareState = state }
-                }
-            }
-            if hardwareLinkEnabled {
-                bleDriver.start()
-                _ = bleDriver.stateMachine.handle(.startScanRequested)
-            }
-        }
         poller.start()
 
         // AutoReviver only needs second-precision triggering near the reset
@@ -113,17 +85,6 @@ public final class AppModel: ObservableObject {
                     await self.autoReviver.tick(usage: usage, now: Date())
                 }
             }
-        }
-    }
-
-    public func toggleHardwareLink(_ enabled: Bool) {
-        guard let bleDriver else { return }
-        hardwareLinkEnabled = enabled
-        if enabled {
-            bleDriver.start()
-            _ = bleDriver.stateMachine.handle(.startScanRequested)
-        } else {
-            bleDriver.reset()
         }
     }
 
@@ -153,7 +114,6 @@ public final class AppModel: ObservableObject {
 
             // Mirror to the shared App Group cache so widgets (Mac/iOS/watch)
             // pick up the new snapshot on their next refresh.
-            logger.info("calling UsageStore.write for \(self.config.id)")
             let didWrite = UsageStore.write(u, providerID: config.id, displayName: config.displayName)
             logger.info("UsageStore.write returned \(didWrite) for \(self.config.id)")
             UsageStore.reloadWidgets(providerID: config.id)
@@ -169,16 +129,12 @@ public final class AppModel: ObservableObject {
                     displayName: config.displayName
                 )
             }
-
-            if config.hasBLEHardware, hardwareLinkEnabled, hardwareState == .connected {
-                bleDriver?.writeUsage(u)
-            }
         case .error(let err):
             lastError = err
             logger.error("Poller error: \(String(describing: err))")
         case .unauthenticatedNeedsReauth:
             needsReauth = true
-            logger.warning("Re-auth required (E7 bound).")
+            logger.warning("Re-auth required.")
         case .predictorWarning(let level):
             logger.notice("Predictor warning level: \(level.rawValue) min")
         }

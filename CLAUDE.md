@@ -1,176 +1,201 @@
 # Project context
 
-ESP32-S3 firmware for a desk-side Claude Code usage monitor on a **Waveshare ESP32-S3-Touch-AMOLED-2.16** board (480×480 square AMOLED). Connects to a host daemon over BLE; daemon polls Anthropic API for usage data.
+Native Mac / iOS / watchOS apps that surface live Claude Code + Codex CLI
+rate-limit gauges and historical `$/token` analytics. Read this first; this
+file exists so a fresh Claude Code session can bootstrap without re-reading
+the whole repo.
 
-This file is for future Claude Code sessions to bootstrap quickly. Read this first.
+This codebase has TWO upstream sources you must credit and respect:
 
-## Hardware (critical pins)
+1. **The original Clawdmeter ESP32 firmware** (separate repo). The Apple
+   port replays its design language — same gauges, same color tokens
+   (`#d97757` terra-cotta on `#000`), the same `UsageData` JSON shape, the
+   same auto-revive idea, the same rate-limit-header polling math.
+   `ClawdmeterShared/Model/UsageData.swift` is a Codable Swift port of the
+   firmware's `data.h`.
 
-- Display: **CO5300** AMOLED via QSPI (CS=12, SCLK=38, SDIO0..3=4..7, RST=2)
-- Touch: **CST9220** via I2C (SDA=15, SCL=14, INT=11, addr=0x5A)
-- PMU: **AXP2101** on same I2C bus (addr=0x34) — battery, USB VBUS, PWR button IRQ
-- IMU: **QMI8658** on same I2C bus (addr=0x6B) — accelerometer for auto-rotation
-- Buttons: GPIO 0 (left → Space/voice-mode), GPIO 18 (right → Shift+Tab/mode-toggle), AXP PKEY (middle → cycle screens; on splash → cycle animations)
+2. **[ccusage](https://github.com/ryoppippi/ccusage)** by
+   [@ryoppippi](https://github.com/ryoppippi). Everything under
+   `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/` is a Swift
+   re-implementation of ccusage's TypeScript token-aggregation logic. Same
+   JSONL files parsed, same `messageId:requestId` dedup, same LiteLLM
+   pricing snapshot. **`ccusage daily` is the ground truth** — if our
+   numbers diverge, ccusage is right.
 
-## Architecture
+## Repo layout
 
 ```
-main.cpp        — setup(), loop(), button polling (left→Space, right→Shift+Tab, mid→cycle), rotation flash
-display_cfg.h   — pin defines, extern object decls
-ui.{h,cpp}      — 3-screen UI (splash, usage, bluetooth); splash is touch-toggled, usage↔bluetooth via mid button
-splash.{h,cpp}  — 20×20 pixel-art animation engine, 24× upscale to 480×480
-imu.{h,cpp}     — accelerometer-driven rotation tracker (returns 0..3)
-power.{h,cpp}   — AXP2101 wrapper (battery %, charging, VBUS, PWR button)
-touch.{h,cpp}   — minimal tap detector → ui_toggle_splash() (Usage/Splash) or ble_clear_bonds() (BT reset zone)
-ble.{h,cpp}     — NimBLE peripheral: custom data service + HID keyboard
-data.h          — UsageData struct
-icons.h         — icon arrays. Battery (5×) are RGB565A8 with alpha; rest are raw RGB565.
-logo.h          — 80×80 RGB565 logo
-font_*.c        — pre-compiled LVGL 9 bitmap fonts (Tiempos 56, Styrene 48/28/24/20, Mono 32)
-splash_animations.h — generated, do not hand-edit
+Clawdmeter/
+├── README.md                          download + install + build instructions
+├── CLAUDE.md                          this file
+├── tools/
+│   ├── build-mac-dmg.sh               idempotent DMG packager — runs xcodegen
+│   │                                   + xcodebuild archive + hdiutil
+│   └── refresh-pricing.sh             curls LiteLLM pricing, filters to
+│                                       claude-* / gpt-* / o[0-9]+*, writes
+│                                       Analytics/pricing.json
+└── apple/                             Xcode workspace + Swift package
+    ├── project.yml                    xcodegen spec — regenerates .xcodeproj
+    ├── README.md                      apps engineering doc (architecture,
+    │                                   target layout, build matrix)
+    ├── ClawdmeterShared/              cross-platform Swift Package
+    │   ├── Package.swift
+    │   ├── Sources/ClawdmeterShared/
+    │   │   ├── Analytics/             ccusage-in-Swift
+    │   │   │   ├── TokenTotals.swift          Codable rollup; Decimal cost
+    │   │   │   ├── UsageRecord.swift           per-event normalized row
+    │   │   │   ├── RepoIdentity.swift          cwd → canonical-repo bucketing
+    │   │   │   ├── Pricing.swift               LiteLLM lookup; tiered Claude
+    │   │   │   ├── ClaudeUsageParser.swift     `~/.claude/projects/*.jsonl`
+    │   │   │   ├── CodexUsageParser.swift      `~/.codex/sessions/*.jsonl`
+    │   │   │   ├── UsageHistoryLoader.swift    actor; parallel TaskGroup
+    │   │   │   ├── UsageHistorySnapshot.swift  per-window byRepo + byDay
+    │   │   │   ├── UsageHistoryStore.swift     @MainActor ObservableObject
+    │   │   │   ├── pricing.json                embedded LiteLLM snapshot
+    │   │   │   └── Views/                      TotalsGrid, DailyChart, RepoList
+    │   │   ├── Model/UsageData.swift           rate-limit snapshot struct
+    │   │   ├── Predictor/BurnRatePredictor.swift
+    │   │   ├── Theme/Theme.swift               colors, fonts, layout tokens
+    │   │   └── Sources/
+    │   │       ├── AISource.swift              poll-source protocol
+    │   │       ├── AnthropicSource.swift       rate-limit header parser
+    │   │       ├── CodexSource.swift           Codex live rate-limit reader
+    │   │       ├── KeychainTokenProvider.swift    Mac: reads CC's OAuth token
+    │   │       ├── PastedAnthropicTokenProvider.swift iOS/Watch: iCloud-Keychain
+    │   │       ├── UsagePoller.swift
+    │   │       ├── UsageStore.swift                App Group cache for widgets
+    │   │       ├── UsageCloudMirror.swift          iCloud KV (Mac → iOS)
+    │   │       ├── WatchTokenBridge.swift          WCSession iPhone → Watch
+    │   │       └── AutoReviver.swift               "keep the 5h timer warm"
+    │   └── Tests/ClawdmeterSharedTests/            XCTest, 59 tests
+    ├── ClawdmeterMac/                     macOS app
+    │   ├── ClawdmeterMacApp.swift             @main, Window + Settings
+    │   ├── AppRuntime.swift                   owns AppModel × 2 + analytics
+    │   ├── AppModel.swift                     per-provider poller + reviver
+    │   ├── DashboardView.swift                provider columns + analytics row
+    │   ├── AnalyticsView.swift                totals + daily chart + by-repo
+    │   ├── PopoverView.swift                  menu-bar popover
+    │   ├── MenuBarGaugeView.swift             16pt status-bar gauge
+    │   ├── AppDelegate.swift                  NSStatusItem + NSPopover wiring
+    │   └── Assets.xcassets/AppIcon.appiconset/   10 sizes (16 → 1024@2x)
+    ├── ClawdmeteriOS/                     iPhone app
+    │   ├── ContentView.swift                  TabView: Live / Analytics
+    │   ├── iOSAnalyticsView.swift             iCloud-KV-mirrored analytics tab
+    │   ├── UsageModel.swift                   poller + cloud-mirror subscriber
+    │   └── SettingsView.swift                 paste-token UI
+    ├── ClawdmeteriOSWidgets/              Lock Screen / Home / StandBy widgets
+    ├── ClawdmeterWatch/                   watchOS app
+    │   ├── ContentView.swift                  wrist meter
+    │   └── WatchUsageModel.swift              keychain + WCSession ingress
+    ├── ClawdmeterWatchWidgets/            watchOS complications (4 families)
+    └── ClawdmeterMacWidgets/              Mac menu-bar widget extension
 ```
 
-## Build / flash
-
-```bash
-pio run -d firmware                                       # build
-pio run -d firmware -t upload --upload-port /dev/ttyACM0  # flash (binary path uses USB JTAG)
-```
-
-`/home/hermann/.platformio/penv/bin/pio` if `pio` isn't on PATH.
-
-Device shows up as `/dev/ttyACM0` (Espressif USB JTAG/serial debug unit). No boot-mode gymnastics needed — direct flash works.
-
-## QA your own UI changes — don't ask the user
-
-The firmware ships a `screenshot` serial command that dumps the LVGL framebuffer over `/dev/ttyACM0`. `./screenshot.sh out.png /dev/ttyACM0` captures a 480×480 PNG. **Use this on every UI iteration** — Read the PNG with the Read tool, verify the change visually, iterate.
-
-The boot screen is `SCREEN_SPLASH` and only advances on a physical button press, so a fresh flash will sit on the splash. To screenshot the screen you're actually editing without asking the user to press a button, **temporarily change the default boot screen** in `main.cpp` (search for `ui_show_screen(SCREEN_SPLASH);`) to `SCREEN_USAGE` / `SCREEN_CONTROLLER` / `SCREEN_BLUETOOTH`, do your iteration, then revert before committing.
-
-## Critical gotchas
-
-1. **CO5300 cannot rotate.** Its MADCTL only supports axis flips, not column/row exchange. Rotation is done by **CPU pixel remapping in `my_flush_cb`** in main.cpp. We use **PARTIAL render mode with strip rotation** (small 480×40 strips, fast). On rotation change → AMOLED brightness flash → force redraw.
-2. **OPI PSRAM** required: `board_build.arduino.memory_type = qio_opi` in platformio.ini. Without this, `MALLOC_CAP_SPIRAM` returns NULL and the screen is black.
-3. **pioarduino platform required.** GFX Library for Arduino needs Arduino Core 3.x (`esp32-hal-periman.h`), not the 2.x that standard `espressif32` ships. We pin `pioarduino/platform-espressif32` 55.03.38-1.
-4. **LVGL 9 font patching.** `lv_font_conv` outputs LVGL 8 format. Must remove `#if LVGL_VERSION_MAJOR >= 8` guards, drop `.cache` field, add `.release_glyph`, `.kerning`, `.static_bitmap`, `.fallback`, `.user_data`. Without patching, fonts render invisible.
-5. **Touch reading must be centralized.** CST9220's `getPoint()` does a full I2C transaction. Calling it from multiple places consumed each other's data and broke input. `touch_read()` is called once per loop in main.cpp; both LVGL `my_touch_cb` and `touch.cpp` read from shared `touch_pressed/touch_x/touch_y` state.
-6. **CO5300 needs even-aligned flush regions.** `rounder_cb` enforces this.
-7. **Touch `setSwapXY(true)` and `setMirrorXY(true, false)`** are the empirically-correct values for default rotation 0. IMU rotation logic doesn't change touch mapping (it does CPU-side rotation of the rendered pixels, so LVGL still thinks the display is portrait at 0°).
-8. **LVGL RGB565A8 is planar.** `w*h` RGB565 pixels followed by `w*h` alpha bytes; `data_size = w*h*3`, `stride = w*2`. Use `init_icon_dsc_rgb565a8()` for icons that overlap non-uniform backgrounds (e.g. battery over splash). Lucide source PNGs are black-on-transparent — converter must tint to white or icons render invisible. See `tools/png_to_lvgl.js`.
-
-## Icons
-
-`tools/png_to_lvgl.js <input.png> <symbol> [W_MACRO] [H_MACRO] [--tint=RRGGBB | --no-tint]` converts an alpha PNG to RGB565A8. Default tint is white (`0xFFFFFF`) — necessary for Lucide PNGs. Splice output into `firmware/src/icons.h` and use `init_icon_dsc_rgb565a8()` in ui.cpp. Currently only the 5 battery icons use this format; the rest are still raw RGB565 baked over the panel background, fine because they live inside opaque zones.
-
-## Splash animations
-
-13 × 20×20 pixel-art creature animations sourced from
-[claudepix.vercel.app](https://claudepix.vercel.app). Pipeline:
-
-```bash
-node tools/scrape_claudepix.js  # → tools/claudepix_data/*.json
-node tools/convert_to_c.js      # → firmware/src/splash_animations.h
-```
-
-Each animation has a per-animation 10-color RGB565 palette. Cell values 0..9 index it. Default boot screen.
-
-## User profile / preferences
-
-See `~/.claude/projects/.../memory/` files for persistent context (user is an embedded-beginner senior dev, brand-conscious, prefers iterative UI refinement, dislikes me authoring my own art when third-party assets are intended). Always read those memory files at session start.
-
-## Recent session highlights
-
-- Migrated from Panlee SC01 Plus (480×320 IPS) to Waveshare 2.16" AMOLED (480×480 square). Full hardware/library swap.
-- Added IMU auto-rotation, battery indicator, USB-state-aware screen switching.
-- Added splash screen with scraped pixel-art animations and 3-button physical input layout.
-- Fonts and icons re-scaled ~1.9× for the higher-DPI panel.
-- All UI margins widened to 20px to clear the rounded display corners.
-- Battery icons converted to RGB565A8 alpha so they blend cleanly over the splash animations.
-
-## Daemon / host side
-
-Bash daemon (`daemon/claude-usage-daemon.sh`) reads OAuth token, polls Anthropic API, sends JSON over BLE GATT. Run with `systemctl --user start claude-usage-daemon`. The unit file's `ExecStart` is the absolute path to the script — repoint it when switching between the worktree and the main checkout.
-
-**Discovery & resilience:**
-- Connects by name (`"Claude Controller"`) on first run, caches resolved MAC at `~/.config/claude-usage-monitor/ble-address`. ESP32 BLE addresses are factory-burned per-chip, so swapping any board invalidates the cache.
-- On connect failure: cache is dropped AND device is removed from bluez (`bluetoothctl remove`) so the next scan won't re-pick a dead MAC. Multi-candidate scans pick `head -1` and let the failure cycle converge.
-- `POLL_INTERVAL=60`, `TICK=5`. Inner loop wakes every 5s to detect disconnects fast; polls Anthropic when 60s elapsed OR when ESP fires a refresh request.
-
-**GATT characteristics on service `4c41555a-...0001`:**
-- `...0002` RX — daemon writes JSON usage payload here.
-- `...0003` TX — firmware notifies ack/nack (daemon doesn't subscribe).
-- `...0004` REQ — firmware fires `0x01` notify in `onSubscribe` if `has_received_data` is false. Daemon subscribes via `setsid bash -c "stdbuf -oL dbus-monitor … | awk …"`; awk drops a flag file the inner loop picks up. See the `feedback_dbus_monitor_pipe` memory for the three subtle gotchas (pipe buffering, busctl-exits race, `wait` blocking on pipeline jobs).
-
-## Apple port — `apple/`
-
-The native Apple port (Mac menu bar app + iOS app + Apple Watch app) lives
-in `apple/`. It carries forward the firmware's gauge concept, color tokens
-(`#d97757` on `#000`), the BLE GATT JSON shape, and the rate-limit-header
-polling math — `apple/ClawdmeterShared/Sources/ClawdmeterShared/Model/UsageData.swift`
-is a Codable Swift port of `firmware/src/data.h`. Read [`apple/README.md`](apple/README.md)
-before touching anything in that subtree.
-
-### Heritage and credits the Apple port depends on
-
-Two upstream sources do most of the heavy lifting; recognize them when working
-in `apple/`:
-
-1. **The original ESP32 firmware in this repo** (the rest of CLAUDE.md). The
-   Apple port replays its design language — same gauges, same colors, same
-   `UsageData` JSON shape, same auto-revive "keep the 5h timer warm" idea, same
-   GATT service so the Mac app can drive an ESP32 hardware Clawdmeter from
-   `apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/ESP32BLEDriver.swift`.
-   Whenever you see a `ClawdmeterShared` type that mirrors the firmware, the
-   firmware is canonical.
-
-2. **[ccusage](https://github.com/ryoppippi/ccusage)** by [@ryoppippi](https://github.com/ryoppippi).
-   Everything under `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/`
-   is a Swift re-implementation of ccusage's TypeScript token-aggregation
-   logic. The Swift parsers (`ClaudeUsageParser`, `CodexUsageParser`) consume
-   the same on-disk JSONL files (`~/.claude/projects/<slug>/<uuid>.jsonl` and
-   `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) ccusage parses, dedup on
-   the same `messageId:requestId` tuple, and apply the same LiteLLM pricing
-   table (snapshotted into `Analytics/pricing.json` via
-   `tools/refresh-pricing.sh`). **ccusage's terminal output is the
-   ground-truth our numbers must match.** When debugging analytics
-   discrepancies, run `ccusage daily` in the user's terminal first and
-   reconcile from there.
-
-### Apple port quick build
+## Build / run
 
 ```bash
 cd apple
-xcodegen                                                           # regenerate .xcodeproj
-( cd ClawdmeterShared && swift test )                              # 71 tests
-xcodebuild -scheme "Clawdmeter (Mac)"   -destination 'platform=macOS,arch=arm64'    build
-xcodebuild -scheme "Clawdmeter (iOS)"   -destination 'generic/platform=iOS Simulator' build
+xcodegen                                                                # regen .xcodeproj
+( cd ClawdmeterShared && swift test )                                   # 59 tests, ~0.2s
+xcodebuild -scheme "Clawdmeter (Mac)"   -destination 'platform=macOS,arch=arm64'   build
+xcodebuild -scheme "Clawdmeter (iOS)"   -destination 'generic/platform=iOS Simulator'  build
 xcodebuild -scheme "Clawdmeter (Watch)" -destination 'generic/platform=watchOS Simulator' build
 ```
 
-### Analytics layer one-pager
+To produce a DMG for distribution: `./tools/build-mac-dmg.sh` → `dist/Clawdmeter-<version>-arm64.dmg`.
 
-- **Loader**: `UsageHistoryLoader` is an actor; `loadAll()` walks `~/.claude/projects/`
-  + `~/.codex/sessions/` in parallel via `withTaskGroup`, parsers are
-  `nonisolated static` so the task group genuinely runs in parallel; the
-  newest-mtime file per provider always bypasses the mtime cache (active
-  session may still be appending).
+## Analytics layer one-pager
+
+This is the part most likely to need editing in a future session, so it gets
+its own section.
+
+- **Loader**: `UsageHistoryLoader` is an `actor`. `loadAll()` walks
+  `~/.claude/projects/` and `~/.codex/sessions/` in parallel via
+  `withTaskGroup`. Parsers are `nonisolated static` so the task group
+  genuinely parallelizes. The newest-mtime file per provider always
+  bypasses the file-mtime cache because the active session may still be
+  appending mid-walk.
 - **Cache**: `~/Library/Application Support/Clawdmeter/analytics-cache.json`,
-  schema v8 stores per-file `byDayByRepo: [Date: [RepoKey: TokenTotals]]`.
-  Bump the version constant in `UsageHistoryLoader.swift` whenever the
-  schema changes.
-- **Repo canonicalization**: `RepoIdentity.normalize(cwd)` walks up for `.git`,
-  handles worktree pointer files, handles the Conductor pattern
-  (`~/conductor/workspaces/<repo>/<branch>` → looks at a live sibling to find
-  the underlying main repo), handles the `.claude/worktrees/<branch>` pattern,
-  and buckets non-git paths under `RepoKey.other` ("Other" in the UI).
+  schema v8. Per-file shape is
+  `byDayByRepo: [Date: [RepoKey: TokenTotals]] + dedupKeys: [String] +
+  unpricedModelTokens: [String: TokenTotals]`. Bump the version constant
+  in `UsageHistoryLoader.swift` whenever the schema changes — old caches
+  re-parse on first load.
+- **Repo canonicalization**: `RepoIdentity.normalize(cwd)` walks up for
+  `.git`. Handles three patterns:
+  1. Regular git directory → use it.
+  2. Worktree pointer file → read `gitdir:`, resolve to main worktree.
+  3. Conductor pattern (`~/conductor/workspaces/<repo>/<branch>`) →
+     introspect a live sibling's `.git` pointer to discover the underlying
+     main repo.
+
+  Non-git paths (UUIDs, home dirs) collapse to `RepoKey.other` ("Other" in
+  the UI).
 - **Windows**: `Today / Past 7d / Past 30d / All time`, calendar-day-aligned
-  in the user's local timezone (`Calendar.current.startOfDay(for:)`) — this
-  matches ccusage's `daily` default. UTC bucketing was tried and rejected
-  because it drifted vs. ccusage near midnight.
-- **iOS sync**: Mac writes `UsageHistorySnapshot` to iCloud KV under
-  `cloud.analytics.v1`; iOS reads on `didChangeExternallyNotification`.
-  Personal-team dev accounts can't sign the iCloud entitlement, so iOS shows
-  "iCloud not enabled" / "Waiting for Mac sync" until the user upgrades.
-- **Watch sync**: `WatchTokenBridge` uses `WCSession.updateApplicationContext`
-  (latest-wins) with a `transferUserInfo` queued-delivery fallback. iCloud
-  Keychain shared access group is the legacy fallback.
+  in the user's local timezone via `Calendar.current.startOfDay(for:)`.
+  This matches ccusage's `daily` default. UTC bucketing was tried, rejected,
+  diverged near midnight.
+- **Mac → iOS sync**: Mac writes `UsageHistorySnapshot` to iCloud KV under
+  key `cloud.analytics.v1`. iOS reads on `didChangeExternallyNotification`.
+  Personal-team Apple Developer accounts can't sign the iCloud entitlement
+  — iOS shows "iCloud not enabled" / "Waiting for Mac sync" until the user
+  upgrades to the paid Developer Program.
+- **iPhone → Watch sync**: `WatchTokenBridge` uses
+  `WCSession.updateApplicationContext` (latest-wins) with a
+  `transferUserInfo` queued-delivery fallback. iCloud Keychain shared
+  access group (`$(AppIdentifierPrefix)com.clawdmeter`) is the legacy
+  fallback when WCSession can't deliver.
+
+## Token sourcing
+
+| Surface | Source |
+| --- | --- |
+| **Mac (Claude)** | `KeychainTokenProvider` reads Claude Code's own OAuth token from `~/.claude/.credentials.json` / the local Keychain. |
+| **Mac (Codex)** | `CodexSource` reads cached rate-limit state from `~/.codex/sessions/*.jsonl` directly — no token needed. |
+| **iOS** | `PastedAnthropicTokenProvider.shared()` reads an iCloud-Keychain-synced entry the Mac mirrors on launch. Pasting a token in iOS Settings also works as a fallback. |
+| **Watch** | First tries `WatchTokenBridge.didReceiveToken` (iPhone pushes it over WCSession). Falls back to the same shared-Keychain provider iOS uses. |
+
+## App icon
+
+Source PNG: `~/Downloads/Clawd Logo.png` (user's design). Crop pipeline in
+`tools/build-mac-dmg.sh` and the asset catalogs:
+
+1. Find bounding box of pixels where HSV saturation > 50 (the colored
+   glows around the dual logos, excluding the white outer corners and the
+   dark interior).
+2. Tight square crop centered on that bbox with 4% padding.
+3. Resize to 1024×1024.
+4. Drop into iOS / watchOS `AppIcon.appiconset/AppIcon-1024.png`.
+5. For Mac, generate the 7 size variants via `sips -Z` and reference them
+   in the Mac asset catalog's `Contents.json` (16/32/64/128/256/512/1024
+   mapped to 1x/2x pairs).
+
+No flood-fill, no rim sweep, no pixel manipulation — the HSV crop alone
+removes the source's white outer area cleanly.
+
+## Style + voice
+
+- Code comments lead with **what + why**, not implementation play-by-play.
+- When fixing a bug, prefer a one-line root-cause comment over a
+  multi-paragraph explanation. The diff says the rest.
+- For Tahoe-specific workarounds (the Mac app has several around
+  `MenuBarExtra` and main-queue dispatch), KEEP the comment that explains
+  the bug — they're surprising and a future session will revert them
+  without knowing why.
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the
+Skill tool. When in doubt, invoke the skill.
+
+- Product / scope → `/plan-ceo-review`
+- Architecture → `/plan-eng-review`
+- Design plan review → `/plan-design-review`
+- Full review pipeline → `/autoplan`
+- Bugs / errors → `/investigate`
+- Site QA → `/qa` or `/qa-only`
+- Diff review → `/review`
+- Visual polish → `/design-review`
+- Ship / PR → `/ship` or `/land-and-deploy`
+- Doc sync after ship → `/document-release`
+- Save / restore session state → `/context-save` / `/context-restore`

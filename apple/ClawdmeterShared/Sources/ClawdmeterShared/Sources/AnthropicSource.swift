@@ -7,7 +7,7 @@ private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "Anthr
 ///
 /// Calls `POST https://api.anthropic.com/v1/messages` with a 1-token Haiku request
 /// and reads the `anthropic-ratelimit-unified-*` response headers. See
-/// `apple/Phase0/DATA_SOURCE_CONTRACT.md` for the full contract.
+/// The headers we depend on are documented in this file.
 public final class AnthropicSource: AISource, @unchecked Sendable {
 
     public let providerID = "anthropic"
@@ -159,7 +159,7 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
               let s7dReset = headerInt("anthropic-ratelimit-unified-7d-reset")
         else {
             throw AISourceError.dataSourceContractViolation(
-                detail: "Missing unified rate-limit headers (5h or 7d utilization/reset). See Phase0/DATA_SOURCE_CONTRACT.md."
+                detail: "Missing unified rate-limit headers (5h or 7d utilization/reset)."
             )
         }
 

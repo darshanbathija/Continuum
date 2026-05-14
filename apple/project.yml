@@ -28,7 +28,7 @@ packages:
 
 targets:
   # ───────────────────────────────────────────────────────────────
-  # Mac menu bar app — Plan D5: replaces Bash daemon AND drives ESP32 via BLE.
+  # Mac menu bar app + dashboard window.
   # Plan D2: one-composition popover (gauge + sparkline + status, no cards).
   # ───────────────────────────────────────────────────────────────
   ClawdmeterMac:

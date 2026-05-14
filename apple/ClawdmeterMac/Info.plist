@@ -20,11 +20,6 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
-	<!-- LSUIElement removed: the app now exposes a main "Dashboard" window
-	     in addition to its menu bar items, so it needs a Dock entry to be
-	     reachable when launched from /Applications or Spotlight. -->
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Connect to your hardware Clawdmeter device over BLE.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Clawdmeter contributors.</string>
 </dict>
