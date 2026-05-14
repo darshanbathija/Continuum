@@ -53,7 +53,10 @@ struct ClawdmeterMacApp: App {
                 NSApp.setActivationPolicy(.regular)
             }
         }
-        .defaultSize(width: 860, height: 600)
+        // Tall enough that the live cards + the analytics row (totals grid +
+        // daily chart + by-repo) are all visible on first open without
+        // scrolling on a typical Mac display.
+        .defaultSize(width: 980, height: 1100)
         .windowResizability(.contentMinSize)
 
         Settings {

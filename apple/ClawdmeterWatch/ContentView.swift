@@ -10,12 +10,12 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if !model.tokenProvider.hasToken {
-                    emptyState
+                if let usage = model.usage {
+                    meter(usage: usage)
                 } else if model.needsReauth {
                     reauthState
-                } else if let usage = model.usage {
-                    meter(usage: usage)
+                } else if !model.hasAnyToken {
+                    emptyState
                 } else {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -77,6 +77,13 @@ struct ContentView: View {
             }
             ProgressView(value: Double(min(max(usage.weeklyPct, 0), 100)) / 100.0)
         }
+
+        if model.receivingFromPhone {
+            Text("via iPhone")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+        }
     }
 
     @ViewBuilder
@@ -84,7 +91,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Waiting for iPhone")
                 .font(.headline)
-            Text("Open Clawdmeter on your iPhone or Mac to authenticate. The token syncs via iCloud Keychain.")
+            Text("Open Clawdmeter on your iPhone. Once it has a token, it pushes here automatically.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

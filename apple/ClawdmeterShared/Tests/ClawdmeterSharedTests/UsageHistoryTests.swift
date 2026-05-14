@@ -199,6 +199,53 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertEqual(normalized, nonRepo)
     }
 
+    func test_canonicalRepo_deadConductorBranchCollapsesByPattern() {
+        RepoIdentity._resetCacheForTesting()
+        // No `.git` anywhere on disk for these paths. Two dead branches of
+        // the same Conductor workspace should collapse to a single bucket.
+        let a = "/Users/fake/conductor/workspaces/my-repo/beijing"
+        let b = "/Users/fake/conductor/workspaces/my-repo/lisbon"
+        let na = RepoIdentity.normalize(a)
+        let nb = RepoIdentity.normalize(b)
+        XCTAssertEqual(na, nb)
+        XCTAssertEqual(RepoIdentity.displayName(for: na), "my-repo")
+    }
+
+    func test_canonicalRepo_liveConductorBranchResolvesToMainRepo() throws {
+        RepoIdentity._resetCacheForTesting()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let downloads = temp.appendingPathComponent("Downloads/my-repo")
+        let workspacesDir = temp.appendingPathComponent("conductor/workspaces/my-repo")
+        let aliveBranch = workspacesDir.appendingPathComponent("cambridge")
+        let deadBranch = workspacesDir.appendingPathComponent("dead-branch")
+        try FileManager.default.createDirectory(at: downloads.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: aliveBranch, withIntermediateDirectories: true)
+        // Make a live worktree pointer.
+        let worktreesDir = downloads.appendingPathComponent(".git/worktrees/cambridge")
+        try FileManager.default.createDirectory(at: worktreesDir, withIntermediateDirectories: true)
+        try "gitdir: \(worktreesDir.path)\n".write(to: aliveBranch.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        // Alive branch → resolves to the underlying main repo.
+        let aliveNormalized = RepoIdentity.normalize(aliveBranch.path)
+        XCTAssertEqual(aliveNormalized, downloads.path)
+        // Dead branch (path doesn't exist on disk) → ALSO resolves to the
+        // same underlying main repo because we walked an alive sibling's
+        // .git pointer to discover it.
+        let deadNormalized = RepoIdentity.normalize(deadBranch.path)
+        XCTAssertEqual(deadNormalized, downloads.path)
+    }
+
+    func test_canonicalRepo_claudeWorktreePatternCollapses() {
+        RepoIdentity._resetCacheForTesting()
+        // .claude/worktrees pattern, no .git on disk → falls back to the
+        // path prefix above .claude/worktrees so all worktrees share a bucket.
+        let a = "/Users/fake/work/myrepo/.claude/worktrees/branch-a"
+        let b = "/Users/fake/work/myrepo/.claude/worktrees/branch-b"
+        XCTAssertEqual(RepoIdentity.normalize(a), "/Users/fake/work/myrepo")
+        XCTAssertEqual(RepoIdentity.normalize(b), "/Users/fake/work/myrepo")
+    }
+
     // MARK: - Adaptive currency formatting
 
     func test_adaptivePrecisionFormatting() {

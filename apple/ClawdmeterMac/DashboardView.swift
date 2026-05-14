@@ -44,6 +44,9 @@ struct DashboardView: View {
                 menuBarTogglesRow
             }
         }
+        // Min size keeps the window usable when the user shrinks it; the
+        // default size (set on the Window scene) opens large enough for the
+        // analytics row to be visible without scrolling.
         .frame(minWidth: 820, minHeight: 580)
         .background(backgroundColor)
         .preferredColorScheme(theme.colorScheme)

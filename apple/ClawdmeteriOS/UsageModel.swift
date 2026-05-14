@@ -66,6 +66,10 @@ public final class UsageModel: ObservableObject {
         observeAppLifecycle()
         startClock()
         observeCloudMirror()
+        // Push whatever token we have to the paired Apple Watch so it can
+        // poll on its own. iCloud Keychain doesn't reliably reach watchOS
+        // (especially on simulators) so WatchConnectivity is the safety net.
+        WatchTokenBridge.shared.pushToken(tokenProvider.currentAccessToken)
     }
 
     /// Pull whatever Codex snapshot iCloud currently has, then subscribe
@@ -153,6 +157,7 @@ public final class UsageModel: ObservableObject {
             lastError = nil
             needsReauth = false
             isPolling = false
+            WatchTokenBridge.shared.pushToken(nil)
             return true
         }
         guard Self.looksLikeValidToken(trimmed) else {
@@ -164,6 +169,8 @@ public final class UsageModel: ObservableObject {
         guard ok else { return false }
         configurePollerIfTokenPresent()
         forcePoll()
+        // Push the newly-saved token to the paired watch immediately.
+        WatchTokenBridge.shared.pushToken(trimmed)
         return true
     }
 
@@ -244,6 +251,9 @@ public final class UsageModel: ObservableObject {
             // Mirror to App Group for the widget extension to pick up.
             UsageStore.write(u, providerID: "claude", displayName: "Claude")
             UsageStore.reloadWidgets(providerID: "claude")
+            // Forward to the paired Apple Watch so the watch app shows
+            // fresh data even if its own poller is starved for a token.
+            WatchTokenBridge.shared.pushUsage(u)
         case .error(let err):
             lastError = err
             logger.error("Poller error: \(String(describing: err))")

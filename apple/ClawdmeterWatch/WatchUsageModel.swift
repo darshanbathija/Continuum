@@ -9,21 +9,47 @@ import ClawdmeterShared
 ///     (we use `WKExtension.applicationDidBecomeActiveNotification` instead).
 ///   - No background polling for now — we rely on the user opening the app
 ///     or on widget complications timeline-refreshing.
+///
+/// Token sourcing (revised after V1):
+///   1. WatchConnectivity from the iPhone (preferred — works on simulator,
+///      no iCloud dependency).
+///   2. iCloud-Keychain shared access group (legacy fallback for cases
+///      where the iPhone app isn't running but iCloud Keychain happens to
+///      have populated the entry).
+///
+/// Usage fallback: if we never receive a token but the iPhone is forwarding
+/// its own polled `UsageData` via WatchConnectivity, we render that
+/// snapshot directly. The user sees fresh-ish numbers either way.
 @MainActor
 public final class WatchUsageModel: ObservableObject {
 
+    /// Local keychain — no iCloud sync, no access group. Tokens delivered
+    /// via WatchConnectivity land here.
     public let tokenProvider: PastedAnthropicTokenProvider
+    /// iCloud-synced shared keychain — read-only fallback for the case
+    /// where the bridge hasn't delivered yet but iCloud Keychain happens
+    /// to have the entry.
+    private let sharedTokenProvider: PastedAnthropicTokenProvider
     private let logger = Logger(subsystem: "com.clawdmeter.watch", category: "WatchUsageModel")
 
     @Published public private(set) var usage: UsageData?
     @Published public private(set) var lastError: AISourceError?
     @Published public private(set) var needsReauth: Bool = false
+    /// `true` when the iPhone has forwarded its polled usage data via
+    /// WatchConnectivity. Surfaces in the UI as a small "via iPhone" hint
+    /// so the user knows where the number is coming from.
+    @Published public private(set) var receivingFromPhone: Bool = false
 
     private var poller: UsagePoller?
     private var cancellables = Set<AnyCancellable>()
 
     public init() {
-        self.tokenProvider = PastedAnthropicTokenProvider.shared()
+        // Local-only keychain for tokens the iPhone pushes.
+        self.tokenProvider = PastedAnthropicTokenProvider()
+        // iCloud-synced shared keychain — legacy fallback.
+        self.sharedTokenProvider = PastedAnthropicTokenProvider.shared()
+        observeWatchConnectivity()
+        seedFromSharedKeychainIfNeeded()
         configurePollerIfTokenPresent()
         observeLifecycle()
     }
@@ -33,15 +59,24 @@ public final class WatchUsageModel: ObservableObject {
         Task { _ = await poller.forcePoll() }
     }
 
+    public var hasAnyToken: Bool {
+        tokenProvider.hasToken || sharedTokenProvider.hasToken
+    }
+
     private func configurePollerIfTokenPresent() {
-        guard tokenProvider.hasToken else {
+        let activeProvider: TokenProvider? = {
+            if tokenProvider.hasToken { return tokenProvider }
+            if sharedTokenProvider.hasToken { return sharedTokenProvider }
+            return nil
+        }()
+        guard let provider = activeProvider else {
             poller?.stop()
             poller = nil
             return
         }
         if poller != nil { return }
 
-        let source = AnthropicSource(tokenProvider: tokenProvider)
+        let source = AnthropicSource(tokenProvider: provider)
         let p = UsagePoller(source: source)
         p.onEvent = { [weak self] event in
             DispatchQueue.main.async { self?.consume(event) }
@@ -57,6 +92,7 @@ public final class WatchUsageModel: ObservableObject {
             usage = u
             lastError = nil
             needsReauth = false
+            receivingFromPhone = false
             UsageStore.write(u, providerID: "claude", displayName: "Claude")
             UsageStore.reloadWidgets(providerID: "claude")
         case .error(let err):
@@ -74,9 +110,69 @@ public final class WatchUsageModel: ObservableObject {
             .sink { [weak self] _ in
                 // Re-check Keychain (iCloud Keychain may have synced) and
                 // poll fresh data when the watch face is brought back.
+                self?.seedFromSharedKeychainIfNeeded()
                 self?.configurePollerIfTokenPresent()
                 self?.forcePoll()
             }
             .store(in: &cancellables)
+    }
+
+    // MARK: - WatchConnectivity ingress
+
+    private func observeWatchConnectivity() {
+        WatchTokenBridge.shared.didReceiveToken
+            .sink { [weak self] token in
+                guard let self else { return }
+                Task { @MainActor in
+                    if let token, !token.isEmpty {
+                        self.tokenProvider.setToken(token)
+                        self.configurePollerIfTokenPresent()
+                        self.forcePoll()
+                    } else {
+                        self.tokenProvider.clear()
+                        self.poller?.stop()
+                        self.poller = nil
+                        self.usage = nil
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
+        WatchTokenBridge.shared.didReceiveUsage
+            .sink { [weak self] usage in
+                guard let self else { return }
+                Task { @MainActor in
+                    // Phone-forwarded snapshot trumps our (possibly stale)
+                    // local poller result when we don't have our own token.
+                    if self.tokenProvider.hasToken == false {
+                        self.usage = usage
+                        self.receivingFromPhone = true
+                    } else {
+                        // We have our own token; only adopt the phone's
+                        // snapshot if it's newer than ours.
+                        if let mine = self.usage {
+                            if usage.updatedAt > mine.updatedAt {
+                                self.usage = usage
+                                self.receivingFromPhone = false
+                            }
+                        } else {
+                            self.usage = usage
+                            self.receivingFromPhone = true
+                        }
+                    }
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    /// One-shot copy of the shared-keychain token (if any) into the local
+    /// keychain. Saves us a round-trip when iCloud Keychain DOES happen to
+    /// have the entry.
+    private func seedFromSharedKeychainIfNeeded() {
+        guard !tokenProvider.hasToken,
+              let shared = sharedTokenProvider.currentAccessToken,
+              !shared.isEmpty
+        else { return }
+        tokenProvider.setToken(shared)
     }
 }

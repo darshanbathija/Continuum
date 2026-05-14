@@ -76,6 +76,12 @@ public enum RepoIdentity {
     }
 
     private static func resolveCanonical(_ path: String) -> String {
+        // Pattern fallbacks first — these handle the common case where the
+        // .git walker can't reach a repo root because the worktree was
+        // deleted from disk (e.g. abandoned Conductor branches).
+        if let conductor = matchConductorWorkspace(path) { return conductor }
+        if let claude = matchClaudeWorktree(path) { return claude }
+
         let fm = FileManager.default
         var current = path
         var hops = 0
@@ -94,8 +100,6 @@ public enum RepoIdentity {
                     if let main = resolveWorktreeMain(gitFile: gitPath) {
                         return main
                     }
-                    // Couldn't parse the worktree pointer; treat this dir
-                    // as the repo anyway.
                     return current
                 }
             }
@@ -104,6 +108,63 @@ public enum RepoIdentity {
             current = parent
         }
         return path
+    }
+
+    /// Conductor pattern: `<...>/conductor/workspaces/<repo>/<branch>/...`
+    /// We try to resolve to the UNDERLYING main repo by reading a live
+    /// branch's `.git` pointer (typically points to `~/Downloads/<repo>` or
+    /// similar). That way Conductor branches and the user's own checkout of
+    /// the same repo share one bucket. Falls back to a stable
+    /// `<...>/conductor/workspaces/<repo>` key when no live branch exists.
+    private static func matchConductorWorkspace(_ path: String) -> String? {
+        let marker = "/conductor/workspaces/"
+        guard let range = path.range(of: marker) else { return nil }
+        let prefix = String(path[..<range.lowerBound])
+        let suffix = String(path[range.upperBound...])
+        let firstSlash = suffix.firstIndex(of: "/") ?? suffix.endIndex
+        let repo = String(suffix[..<firstSlash])
+        guard !repo.isEmpty else { return nil }
+
+        let workspacesDir = prefix + marker + repo
+
+        // Try to find an alive branch under this workspaces dir and read its
+        // `.git` pointer to discover the main worktree.
+        if let main = discoverConductorMainRepo(workspacesDir: workspacesDir) {
+            return main
+        }
+        // Fallback: stable Conductor bucket. All branches of the same repo
+        // (dead and alive) share this key, so they at least collapse together.
+        return workspacesDir
+    }
+
+    private static func discoverConductorMainRepo(workspacesDir: String) -> String? {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: workspacesDir) else {
+            return nil
+        }
+        for entry in entries {
+            // Skip hidden / non-branch entries (`.DS_Store`).
+            if entry.hasPrefix(".") { continue }
+            let gitFile = workspacesDir + "/" + entry + "/.git"
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: gitFile, isDirectory: &isDir), !isDir.boolValue {
+                if let main = resolveWorktreeMain(gitFile: gitFile) {
+                    return main
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Claude-Code worktree pattern: `<repo>/.claude/worktrees/<branch>/...`
+    /// Collapses everything below `<repo>/.claude/worktrees/` so all of one
+    /// repo's worktrees share a bucket. The .git walker handles this when
+    /// `<repo>/.git` exists; this fallback covers the case where the worktree
+    /// was deleted.
+    private static func matchClaudeWorktree(_ path: String) -> String? {
+        let marker = "/.claude/worktrees/"
+        guard let range = path.range(of: marker) else { return nil }
+        return String(path[..<range.lowerBound])
     }
 
     /// Parse a worktree's `.git` file (format: `gitdir: <abs-path>`) and

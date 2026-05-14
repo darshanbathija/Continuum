@@ -55,7 +55,11 @@ struct PopoverView: View {
             .scrollIndicators(.never)
             footer
         }
-        .frame(width: 380, height: advancedExpanded ? 580 : 480)
+        // Tall enough that the "Advanced" disclosure row is always visible
+        // above the footer when collapsed. Expanding adds room for the
+        // toggle + revive-now controls. Earlier 480pt sometimes cut the
+        // Advanced row off entirely because of the Open-dashboard button.
+        .frame(width: 380, height: advancedExpanded ? 640 : 560)
         .background(backgroundColor)
         .preferredColorScheme(theme.colorScheme)
         .onChange(of: autoReviveEnabled) { _, newValue in
