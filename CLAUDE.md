@@ -100,3 +100,77 @@ Bash daemon (`daemon/claude-usage-daemon.sh`) reads OAuth token, polls Anthropic
 - `...0002` RX — daemon writes JSON usage payload here.
 - `...0003` TX — firmware notifies ack/nack (daemon doesn't subscribe).
 - `...0004` REQ — firmware fires `0x01` notify in `onSubscribe` if `has_received_data` is false. Daemon subscribes via `setsid bash -c "stdbuf -oL dbus-monitor … | awk …"`; awk drops a flag file the inner loop picks up. See the `feedback_dbus_monitor_pipe` memory for the three subtle gotchas (pipe buffering, busctl-exits race, `wait` blocking on pipeline jobs).
+
+## Apple port — `apple/`
+
+The native Apple port (Mac menu bar app + iOS app + Apple Watch app) lives
+in `apple/`. It carries forward the firmware's gauge concept, color tokens
+(`#d97757` on `#000`), the BLE GATT JSON shape, and the rate-limit-header
+polling math — `apple/ClawdmeterShared/Sources/ClawdmeterShared/Model/UsageData.swift`
+is a Codable Swift port of `firmware/src/data.h`. Read [`apple/README.md`](apple/README.md)
+before touching anything in that subtree.
+
+### Heritage and credits the Apple port depends on
+
+Two upstream sources do most of the heavy lifting; recognize them when working
+in `apple/`:
+
+1. **The original ESP32 firmware in this repo** (the rest of CLAUDE.md). The
+   Apple port replays its design language — same gauges, same colors, same
+   `UsageData` JSON shape, same auto-revive "keep the 5h timer warm" idea, same
+   GATT service so the Mac app can drive an ESP32 hardware Clawdmeter from
+   `apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/ESP32BLEDriver.swift`.
+   Whenever you see a `ClawdmeterShared` type that mirrors the firmware, the
+   firmware is canonical.
+
+2. **[ccusage](https://github.com/ryoppippi/ccusage)** by [@ryoppippi](https://github.com/ryoppippi).
+   Everything under `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/`
+   is a Swift re-implementation of ccusage's TypeScript token-aggregation
+   logic. The Swift parsers (`ClaudeUsageParser`, `CodexUsageParser`) consume
+   the same on-disk JSONL files (`~/.claude/projects/<slug>/<uuid>.jsonl` and
+   `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) ccusage parses, dedup on
+   the same `messageId:requestId` tuple, and apply the same LiteLLM pricing
+   table (snapshotted into `Analytics/pricing.json` via
+   `tools/refresh-pricing.sh`). **ccusage's terminal output is the
+   ground-truth our numbers must match.** When debugging analytics
+   discrepancies, run `ccusage daily` in the user's terminal first and
+   reconcile from there.
+
+### Apple port quick build
+
+```bash
+cd apple
+xcodegen                                                           # regenerate .xcodeproj
+( cd ClawdmeterShared && swift test )                              # 71 tests
+xcodebuild -scheme "Clawdmeter (Mac)"   -destination 'platform=macOS,arch=arm64'    build
+xcodebuild -scheme "Clawdmeter (iOS)"   -destination 'generic/platform=iOS Simulator' build
+xcodebuild -scheme "Clawdmeter (Watch)" -destination 'generic/platform=watchOS Simulator' build
+```
+
+### Analytics layer one-pager
+
+- **Loader**: `UsageHistoryLoader` is an actor; `loadAll()` walks `~/.claude/projects/`
+  + `~/.codex/sessions/` in parallel via `withTaskGroup`, parsers are
+  `nonisolated static` so the task group genuinely runs in parallel; the
+  newest-mtime file per provider always bypasses the mtime cache (active
+  session may still be appending).
+- **Cache**: `~/Library/Application Support/Clawdmeter/analytics-cache.json`,
+  schema v8 stores per-file `byDayByRepo: [Date: [RepoKey: TokenTotals]]`.
+  Bump the version constant in `UsageHistoryLoader.swift` whenever the
+  schema changes.
+- **Repo canonicalization**: `RepoIdentity.normalize(cwd)` walks up for `.git`,
+  handles worktree pointer files, handles the Conductor pattern
+  (`~/conductor/workspaces/<repo>/<branch>` → looks at a live sibling to find
+  the underlying main repo), handles the `.claude/worktrees/<branch>` pattern,
+  and buckets non-git paths under `RepoKey.other` ("Other" in the UI).
+- **Windows**: `Today / Past 7d / Past 30d / All time`, calendar-day-aligned
+  in the user's local timezone (`Calendar.current.startOfDay(for:)`) — this
+  matches ccusage's `daily` default. UTC bucketing was tried and rejected
+  because it drifted vs. ccusage near midnight.
+- **iOS sync**: Mac writes `UsageHistorySnapshot` to iCloud KV under
+  `cloud.analytics.v1`; iOS reads on `didChangeExternallyNotification`.
+  Personal-team dev accounts can't sign the iCloud entitlement, so iOS shows
+  "iCloud not enabled" / "Waiting for Mac sync" until the user upgrades.
+- **Watch sync**: `WatchTokenBridge` uses `WCSession.updateApplicationContext`
+  (latest-wins) with a `transferUserInfo` queued-delivery fallback. iCloud
+  Keychain shared access group is the legacy fallback.

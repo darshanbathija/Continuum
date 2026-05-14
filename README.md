@@ -1,6 +1,12 @@
 # Clawdmeter
 
-A small ESP32 dashboard I made for my desk to keep an eye on Claude Code usage.
+A small ESP32 dashboard I made for my desk to keep an eye on Claude Code usage. Plus a native Apple port (Mac menu bar app + iOS app + Apple Watch app) that puts the same gauges on every screen you look at, with **historical $/token analytics across Claude Code AND Codex CLI** powered by a Swift reimplementation of [ccusage](https://github.com/ryoppippi/ccusage).
+
+> **What this repo is built on:**
+> - The **ESP32 firmware** below (the original Clawdmeter) — every gauge concept, design token, and the BLE GATT shape comes from here.
+> - **[ccusage](https://github.com/ryoppippi/ccusage)** by [@ryoppippi](https://github.com/ryoppippi) — the Apple analytics layer (`apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/`) is a direct Swift re-implementation of ccusage's TypeScript aggregation logic and uses the same LiteLLM pricing snapshot ccusage reads. Without ccusage there would be no $/token math in this repo.
+>
+> See [`apple/README.md`](apple/README.md) for the Apple port.
 
 It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-2.16) and pairs with my laptop over Bluetooth, and the splash screen plays pixel-art Clawd animations that get
 busier when your usage rate climbs. The two side buttons send Space and
@@ -189,6 +195,8 @@ See `tools/README.md` for details.
 
 ## Credits
 
+- **[ccusage](https://github.com/ryoppippi/ccusage)** by [@ryoppippi](https://github.com/ryoppippi) — the Apple port's entire token-analytics layer (`apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/`) is a Swift re-implementation of ccusage's TypeScript aggregation, parsing the same `~/.claude/projects/*.jsonl` + `~/.codex/sessions/*.jsonl` files ccusage reads and applying the same LiteLLM pricing table. ccusage on the terminal is the ground-truth our numbers are calibrated against.
+- The **original Clawdmeter ESP32 firmware** (this repo's `firmware/` directory and `daemon/`) — the source of every gauge concept, design token (`#000` background, `#d97757` terra-cotta), BLE GATT shape, and the original Claude rate-limit-header polling logic that the Apple port carries forward.
 - Pixel-art Clawd animation by [@amaanbuilds](https://x.com/amaanbuilds), sourced from [claudepix.vercel.app](https://claudepix.vercel.app). Frame data and palettes scraped + converted by the tooling in `tools/`.
 - Lucide icon set ([lucide.dev](https://lucide.dev), MIT) for bluetooth and battery UI glyphs.
 - Anthropic brand fonts (Tiempos Text, Styrene B) — see licensing warning below.
