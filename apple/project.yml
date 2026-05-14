@@ -131,6 +131,8 @@ targets:
     dependencies:
       - package: ClawdmeterShared
         product: ClawdmeterShared
+      - target: ClawdmeterWatchWidgets
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.watch
@@ -142,6 +144,35 @@ targets:
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
         TARGETED_DEVICE_FAMILY: "4"
         GENERATE_INFOPLIST_FILE: NO
+
+  # ───────────────────────────────────────────────────────────────
+  # watchOS complications — Lock-Screen-style accessory widgets for
+  # the watch face. Four families: circular, corner, rectangular,
+  # inline. Same App-Group-`UserDefaults` read path as the iOS widgets.
+  # ───────────────────────────────────────────────────────────────
+  ClawdmeterWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    sources:
+      - path: ClawdmeterWatchWidgets
+        excludes:
+          - "Info.plist"
+          - "ClawdmeterWatchWidgets.entitlements"
+    dependencies:
+      - package: ClawdmeterShared
+        product: ClawdmeterShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.watch.widgets
+        PRODUCT_NAME: ClawdmeterWatchWidgets
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "76S62SDSD3"
+        INFOPLIST_FILE: ClawdmeterWatchWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ClawdmeterWatchWidgets/ClawdmeterWatchWidgets.entitlements
+        WATCHOS_DEPLOYMENT_TARGET: "10.0"
+        TARGETED_DEVICE_FAMILY: "4"
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
 
   # ───────────────────────────────────────────────────────────────
   # Mac widget extension — surfaces Claude/Codex gauges on the Desktop,
@@ -198,6 +229,7 @@ schemes:
     build:
       targets:
         ClawdmeterWatch: all
+        ClawdmeterWatchWidgets: all
     run:
       config: Debug
     archive:
