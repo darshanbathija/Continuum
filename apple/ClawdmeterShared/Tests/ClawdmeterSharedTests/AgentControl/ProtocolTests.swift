@@ -61,12 +61,14 @@ final class AgentControlProtocolTests: XCTestCase {
         let challenge = PairingChallenge(
             host: "darshans-macbook-pro.tail87a721.ts.net",
             port: 21731,
+            wsPort: 21732,
             token: "abcd1234ABCD-_=="
         )
         let data = try JSONEncoder().encode(challenge)
         let decoded = try JSONDecoder().decode(PairingChallenge.self, from: data)
         XCTAssertEqual(challenge.host, decoded.host)
         XCTAssertEqual(challenge.port, decoded.port)
+        XCTAssertEqual(challenge.wsPort, decoded.wsPort)
         XCTAssertEqual(challenge.token, decoded.token)
     }
 

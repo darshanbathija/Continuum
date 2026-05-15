@@ -162,19 +162,24 @@ public struct NewSessionRequest: Codable, Sendable {
 
 /// QR-encoded pairing payload. Mac displays this; iPhone scans + parses.
 ///
-/// Wire format: `clawdmeter://<host>:<port>?token=<base64url>` where the
-/// path is empty. iPhone reconstructs this struct from the URL components.
+/// Wire format: `clawdmeter://<host>:<httpPort>?token=<base64url>&ws=<wsPort>`
+/// where the WebSocket port is the next free port after the HTTP one.
+/// iPhone reconstructs this struct from the URL components.
 public struct PairingChallenge: Codable, Sendable {
     /// MagicDNS host name (e.g. `darshans-macbook-pro.tail87a721.ts.net`).
     public let host: String
     /// HTTP port the daemon bound to (default 21731, may be 21732+ on conflict).
     public let port: Int
+    /// WebSocket port for terminal + event streams. Typically `port + 1`,
+    /// may differ on conflict — the daemon publishes both.
+    public let wsPort: Int
     /// 32-byte high-entropy bearer token, base64url-encoded.
     public let token: String
 
-    public init(host: String, port: Int, token: String) {
+    public init(host: String, port: Int, wsPort: Int, token: String) {
         self.host = host
         self.port = port
+        self.wsPort = wsPort
         self.token = token
     }
 }

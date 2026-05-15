@@ -61,10 +61,16 @@ struct ClawdmeterMacApp: App {
         .windowResizability(.contentMinSize)
 
         Settings {
-            PreferencesView(
-                claudeModel: runtime.claudeModel,
-                codexModel: runtime.codexModel
-            )
+            TabView {
+                PreferencesView(
+                    claudeModel: runtime.claudeModel,
+                    codexModel: runtime.codexModel
+                )
+                .tabItem { Label("General", systemImage: "gearshape") }
+
+                PairingSettingsView(runtime: runtime)
+                    .tabItem { Label("Sessions", systemImage: "rectangle.connected.to.line.below") }
+            }
         }
     }
 }

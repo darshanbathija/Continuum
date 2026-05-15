@@ -21,10 +21,11 @@ final class AppRuntime: ObservableObject {
     let codexModel: AppModel
     let usageHistoryStore: UsageHistoryStore
 
-    // Sessions feature (Phase 1 + 2):
+    // Sessions feature (Phase 1 + 2 + supervisor):
     let repoIndex: RepoIndex
     let agentSessionRegistry: AgentSessionRegistry
     let tmuxClient: TmuxControlClient
+    let tmuxSupervisor: TmuxSupervisor
     let agentControlServer: AgentControlServer
     let notificationDispatcher: NotificationDispatcher
     let sessionsModel: SessionsModel
@@ -86,6 +87,10 @@ final class AppRuntime: ObservableObject {
         self.repoIndex = RepoIndex()
         self.agentSessionRegistry = AgentSessionRegistry()
         self.tmuxClient = TmuxControlClient()
+        self.tmuxSupervisor = TmuxSupervisor(
+            tmux: self.tmuxClient,
+            registry: self.agentSessionRegistry
+        )
         self.notificationDispatcher = NotificationDispatcher()
         self.agentControlServer = AgentControlServer(
             repoIndex: self.repoIndex,
@@ -93,7 +98,11 @@ final class AppRuntime: ObservableObject {
             tmux: self.tmuxClient,
             notifications: self.notificationDispatcher
         )
-        self.sessionsModel = SessionsModel(repoIndex: self.repoIndex)
+        self.sessionsModel = SessionsModel(
+            repoIndex: self.repoIndex,
+            registry: self.agentSessionRegistry,
+            supervisor: self.tmuxSupervisor
+        )
 
         // Vend the Mach service the widget extension queries. Created here
         // (after all stored properties are initialized) so the service can
@@ -102,6 +111,7 @@ final class AppRuntime: ObservableObject {
 
         let sessionsEnabled = UserDefaults.standard.object(forKey: "clawdmeter.sessions.enabled") as? Bool ?? true
         if sessionsEnabled {
+            self.tmuxSupervisor.start()
             self.agentControlServer.start()
             self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
             runtimeLogger.info("Sessions daemon started on port \(self.agentControlServer.boundPort ?? 0)")

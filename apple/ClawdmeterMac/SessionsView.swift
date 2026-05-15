@@ -185,17 +185,35 @@ public final class SessionsModel: ObservableObject {
     @Published public var repos: [AgentRepo] = []
     @Published public var selectedRepoKey: String?
     @Published public var isRefreshing: Bool = false
+    @Published public var selectedSessionId: UUID?
 
     public var selectedRepo: AgentRepo? {
         guard let key = selectedRepoKey else { return nil }
         return repos.first { $0.key == key }
     }
 
-    private let repoIndex: RepoIndex
+    public let repoIndex: RepoIndex
+    public let registry: AgentSessionRegistry
+    public let supervisor: TmuxSupervisor
     private var refreshTask: Task<Void, Never>?
 
-    public init(repoIndex: RepoIndex) {
+    public init(
+        repoIndex: RepoIndex,
+        registry: AgentSessionRegistry,
+        supervisor: TmuxSupervisor
+    ) {
         self.repoIndex = repoIndex
+        self.registry = registry
+        self.supervisor = supervisor
+    }
+
+    public var selectedSession: AgentSession? {
+        guard let id = selectedSessionId else { return nil }
+        return registry.sessions.first { $0.id == id }
+    }
+
+    public func sessions(for repoKey: String) -> [AgentSession] {
+        registry.sessions.filter { $0.repoKey == repoKey }
     }
 
     /// Trigger a refresh of the repo list. Idempotent.

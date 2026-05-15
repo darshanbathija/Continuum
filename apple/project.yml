@@ -25,6 +25,12 @@ settings:
 packages:
   ClawdmeterShared:
     path: ClawdmeterShared
+  # SwiftTerm — Miguel de Icaza's pure-Swift xterm-compatible terminal
+  # emulator. Used in both the Mac and iOS Sessions tabs to render the
+  # tmux pane bytes streamed over WebSocket.
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: "1.2.0"
 
 targets:
   # ───────────────────────────────────────────────────────────────
@@ -42,6 +48,8 @@ targets:
     dependencies:
       - package: ClawdmeterShared
         product: ClawdmeterShared
+      - package: SwiftTerm
+        product: SwiftTerm
       - target: ClawdmeterMacWidgets
         embed: true
     settings:
@@ -71,6 +79,8 @@ targets:
     dependencies:
       - package: ClawdmeterShared
         product: ClawdmeterShared
+      - package: SwiftTerm
+        product: SwiftTerm
       - target: ClawdmeteriOSWidgets
         embed: true
     settings:

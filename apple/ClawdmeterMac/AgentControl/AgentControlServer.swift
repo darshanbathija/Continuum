@@ -46,14 +46,26 @@ public final class AgentControlServer {
     private let notifications: NotificationDispatcher
 
     private var listener: NWListener?
+    private var wsListener: NWListener?
     private var listenerQueue: DispatchQueue?
 
-    /// The port the listener actually bound to. Written to `server.json`
+    /// The port the HTTP listener actually bound to. Written to `server.json`
     /// for the Settings UI to display in the pairing QR.
     public private(set) var boundPort: UInt16?
 
+    /// The port the WebSocket listener bound to (typically `boundPort + 1`,
+    /// may differ on conflict). Encoded into the pairing QR.
+    public private(set) var boundWsPort: UInt16?
+
     /// Tracks live connections so we can drain on shutdown.
     private var connections: [ObjectIdentifier: NWConnection] = [:]
+
+    /// Active WebSocket channels keyed by connection. Both terminal +
+    /// event streams conform to `WSChannel`.
+    private var wsChannels: [ObjectIdentifier: any WSChannel] = [:]
+
+    /// JSONL tail + done-detector + plan-watcher wired per active session.
+    private var sessionWiring: [UUID: SessionEventWiring] = [:]
 
     public init(
         pairingTokens: PairingTokenStore = .shared,
@@ -84,21 +96,39 @@ public final class AgentControlServer {
         for port in AgentControlServer.portFallbackRange {
             if startListening(on: port, queue: queue) {
                 boundPort = port
-                writeServerJSON(port: port)
-                serverLogger.info("Listening on 0.0.0.0:\(port)")
-                return
+                serverLogger.info("HTTP listening on 0.0.0.0:\(port)")
+                break
             }
         }
-        serverLogger.error("Could not bind to any port in \(AgentControlServer.portFallbackRange.lowerBound)–\(AgentControlServer.portFallbackRange.upperBound)")
+        guard let httpPort = boundPort else {
+            serverLogger.error("Could not bind HTTP listener to any port in \(AgentControlServer.portFallbackRange.lowerBound)–\(AgentControlServer.portFallbackRange.upperBound)")
+            return
+        }
+        // Start the WS listener on httpPort + 1 (with fallback).
+        for offset in 1...10 {
+            let wsPort = UInt16(Int(httpPort) + offset)
+            if startWSListening(on: wsPort, queue: queue) {
+                boundWsPort = wsPort
+                serverLogger.info("WS listening on 0.0.0.0:\(wsPort)")
+                break
+            }
+        }
+        writeServerJSON(port: httpPort, wsPort: boundWsPort ?? 0)
     }
 
     public func stop() {
         listener?.cancel()
         listener = nil
+        wsListener?.cancel()
+        wsListener = nil
         for (_, conn) in connections {
             conn.cancel()
         }
         connections.removeAll()
+        for (_, channel) in wsChannels {
+            channel.stop()
+        }
+        self.wsChannels.removeAll()
         serverLogger.info("Server stopped")
     }
 
@@ -130,9 +160,9 @@ public final class AgentControlServer {
         }
     }
 
-    /// Write the bound port to disk so Mac Settings UI can render the
-    /// pairing QR with the right port. Phase 1d uses this.
-    private func writeServerJSON(port: UInt16) {
+    /// Write the bound ports to disk so Mac Settings UI can render the
+    /// pairing QR with the right ports.
+    private func writeServerJSON(port: UInt16, wsPort: UInt16) {
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first?.appendingPathComponent("Clawdmeter", isDirectory: true)
@@ -143,11 +173,159 @@ public final class AgentControlServer {
         let file = appSupport.appendingPathComponent("server.json")
         let payload: [String: Any] = [
             "port": Int(port),
+            "wsPort": Int(wsPort),
             "writtenAt": ISO8601DateFormatter().string(from: Date()),
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) {
             try? data.write(to: file)
         }
+    }
+
+    /// Spin up a WebSocket-enabled listener. The first message from the
+    /// client must be a JSON subscription envelope identifying the channel
+    /// (terminal vs events) + bearer token.
+    private func startWSListening(on port: UInt16, queue: DispatchQueue) -> Bool {
+        do {
+            let nwPort = NWEndpoint.Port(rawValue: port)!
+            let wsOptions = NWProtocolWebSocket.Options()
+            wsOptions.autoReplyPing = true
+            let params = NWParameters.tcp
+            params.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
+            params.allowLocalEndpointReuse = true
+
+            let listener = try NWListener(using: params, on: nwPort)
+            self.wsListener = listener
+            listener.newConnectionHandler = { [weak self] connection in
+                Task { @MainActor in
+                    self?.handleNewWSConnection(connection)
+                }
+            }
+            listener.start(queue: queue)
+            return true
+        } catch {
+            serverLogger.debug("WS bind \(port) failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Accept a WebSocket connection. Apply the same peer filter as HTTP;
+    /// the first WS message authenticates and subscribes to a channel.
+    private func handleNewWSConnection(_ connection: NWConnection) {
+        guard Self.isAllowedPeer(connection.endpoint) else {
+            serverLogger.warning("WS: rejecting non-tailnet peer \(String(describing: connection.endpoint))")
+            connection.cancel()
+            return
+        }
+        let id = ObjectIdentifier(connection)
+        connections[id] = connection
+
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let connection else { return }
+            switch state {
+            case .ready:
+                Task { @MainActor in
+                    await self?.routeWSSubscription(on: connection)
+                }
+            case .failed, .cancelled:
+                Task { @MainActor in
+                    self?.connections.removeValue(forKey: ObjectIdentifier(connection))
+                    if let channel = self?.wsChannels.removeValue(forKey: ObjectIdentifier(connection)) {
+                        channel.stop()
+                    }
+                }
+            default: break
+            }
+        }
+        connection.start(queue: listenerQueue ?? .global())
+    }
+
+    private func routeWSSubscription(on connection: NWConnection) async {
+        // Read the first WebSocket message: a JSON envelope with op, token,
+        // and channel-specific params.
+        let firstMessage: Data
+        do {
+            firstMessage = try await receiveOne(on: connection)
+        } catch {
+            serverLogger.debug("WS: failed to receive subscription envelope: \(error.localizedDescription)")
+            connection.cancel()
+            return
+        }
+        guard let envelope = try? JSONDecoder().decode(WSSubscription.self, from: firstMessage) else {
+            serverLogger.debug("WS: malformed subscription envelope")
+            sendWSClose(on: connection, code: .protocolCode(.protocolError))
+            return
+        }
+        // Auth.
+        guard pairingTokens.validate(envelope.token) else {
+            serverLogger.warning("WS: bad bearer token")
+            sendWSClose(on: connection, code: .protocolCode(.policyViolation))
+            return
+        }
+        // Tailscale whois for non-loopback.
+        if !isLoopback(connection.endpoint) {
+            let peerString = Self.endpointString(connection.endpoint)
+            if await whois.userLoginName(for: peerString) == nil {
+                serverLogger.warning("WS: whois rejected \(peerString, privacy: .public)")
+                sendWSClose(on: connection, code: .protocolCode(.policyViolation))
+                return
+            }
+        }
+
+        switch envelope.op {
+        case "terminal":
+            guard let sessionIdString = envelope.sessionId,
+                  let sessionId = UUID(uuidString: sessionIdString),
+                  let session = registry.session(id: sessionId),
+                  let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+                return
+            }
+            let channel = TerminalWebSocketChannel(
+                connection: connection,
+                tmux: tmux,
+                paneId: paneId,
+                registry: registry,
+                sessionId: sessionId
+            )
+            wsChannels[ObjectIdentifier(connection)] = channel
+            channel.start()
+        case "events":
+            let since = envelope.since ?? 0
+            let stream = AgentEventStream(
+                connection: connection,
+                registry: registry,
+                sinceSeq: since
+            )
+            wsChannels[ObjectIdentifier(connection)] = stream
+            stream.start()
+        default:
+            sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+        }
+    }
+
+    private func sendWSClose(on connection: NWConnection, code: NWProtocolWebSocket.CloseCode) {
+        let meta = NWProtocolWebSocket.Metadata(opcode: .close)
+        meta.closeCode = code
+        let ctx = NWConnection.ContentContext(identifier: "close", metadata: [meta])
+        connection.send(content: nil, contentContext: ctx, isComplete: true,
+                        completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    private func receiveOne(on connection: NWConnection) async throws -> Data {
+        try await withCheckedThrowingContinuation { cont in
+            connection.receiveMessage { data, _, _, error in
+                if let error { cont.resume(throwing: error); return }
+                cont.resume(returning: data ?? Data())
+            }
+        }
+    }
+
+    /// Subscription envelope for WS connections.
+    private struct WSSubscription: Codable {
+        let op: String           // "terminal" | "events"
+        let token: String
+        let sessionId: String?   // required for "terminal"
+        let since: UInt64?       // optional for "events"
     }
 
     // MARK: - Accept handling
@@ -304,6 +482,11 @@ public final class AgentControlServer {
         case ("DELETE", let path) where path.hasPrefix("/sessions/"):
             let sessionId = String(path.dropFirst("/sessions/".count))
             await handleDeleteSession(sessionId: sessionId, connection: connection)
+        case ("POST", let path) where path.hasSuffix("/approve-plan") && path.hasPrefix("/sessions/"):
+            // /sessions/<uuid>/approve-plan
+            let withoutPrefix = String(path.dropFirst("/sessions/".count))
+            let sessionIdRaw = String(withoutPrefix.dropLast("/approve-plan".count))
+            await handleApprovePlan(sessionId: sessionIdRaw, connection: connection)
         case ("GET", "/sessions/needs-attention"):
             await handleGetNeedsAttention(connection: connection)
         case ("GET", "/health"):
@@ -343,6 +526,7 @@ public final class AgentControlServer {
 
     private func handlePostSession(request: HTTPRequest, connection: NWConnection) async {
         let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
         guard let req = try? decoder.decode(NewSessionRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection)
             return
@@ -377,7 +561,7 @@ public final class AgentControlServer {
             // Phase 2 simplification: pane id = first pane of the new window.
             // tmux's `list-windows -F '#{pane_id}'` would tell us, but we
             // derive it lazily for now.
-            let session = await registry.create(
+            let session = registry.create(
                 repoKey: req.repoKey,
                 repoDisplayName: (req.repoKey as NSString).lastPathComponent,
                 agent: req.agent,
@@ -388,6 +572,17 @@ public final class AgentControlServer {
                 tmuxPaneId: nil,
                 planMode: req.planMode
             )
+            // Wire up JSONL tail + done-detector + plan-watcher for this
+            // session (Phase 4). Best-effort: find the agent's JSONL file
+            // under ~/.claude/projects/<encoded-cwd>/.
+            if req.agent == .claude {
+                attachClaudeWiring(for: session, cwd: cwd)
+            }
+            AgentEventStream.recordEvent(
+                sessionId: session.id,
+                kind: .sessionCreated,
+                payload: ["repo": req.repoKey, "agent": req.agent.rawValue]
+            )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             if let body = try? encoder.encode(session) {
@@ -397,6 +592,80 @@ public final class AgentControlServer {
             }
         } catch {
             serverLogger.error("Failed to spawn session: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func attachClaudeWiring(for session: AgentSession, cwd: String) {
+        // Claude encodes the cwd as a directory name with `/` → `-`.
+        let encoded = cwd.replacingOccurrences(of: "/", with: "-")
+        let projectDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects/\(encoded)")
+        // The actual session JSONL is named with a fresh UUID. We watch
+        // the parent dir and pick up the newest `.jsonl` once it appears.
+        // For Phase 4, point the tail at the directory; the JSONLTail's
+        // delayed-creation path handles "find the file when it lands".
+        // Pragmatic v1: re-scan in 5s for the newest file.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard let self else { return }
+            if let url = self.newestClaudeJSONL(in: projectDir) {
+                let wiring = SessionEventWiring(
+                    sessionId: session.id,
+                    sessionFileURL: url,
+                    goal: session.goal,
+                    registry: self.registry
+                )
+                wiring.start()
+                self.sessionWiring[session.id] = wiring
+                serverLogger.info("Attached JSONL wiring for session \(session.id.uuidString, privacy: .public) at \(url.path, privacy: .public)")
+            } else {
+                serverLogger.debug("No JSONL yet under \(projectDir.path, privacy: .public); skipping wiring")
+            }
+        }
+    }
+
+    private nonisolated func newestClaudeJSONL(in dir: URL) -> URL? {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return nil }
+        let jsonl = contents.filter { $0.pathExtension == "jsonl" }
+        return jsonl.max { a, b in
+            let ad = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let bd = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return ad < bd
+        }
+    }
+
+    private func handleApprovePlan(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid),
+              let windowId = session.tmuxWindowId else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        // Per D13: kill the plan-mode pane, spawn a fresh acceptEdits pane
+        // in the same window. Overlay covers the swap UI-side.
+        do {
+            try await tmux.killWindow(windowId)
+            // Spawn replacement.
+            let argv = [
+                "/Users/darshanbathija_1/.local/bin/claude",
+                "--permission-mode", "acceptEdits",
+            ]
+            let cwd = session.worktreePath ?? session.repoKey
+            let newWindow = try await tmux.newWindow(cwd: cwd, child: argv)
+            // Update registry.
+            registry.updateStatus(id: uuid, status: .running)
+            // (Plan card no longer applies; clear if needed in future.)
+            AgentEventStream.recordEvent(
+                sessionId: uuid,
+                kind: .statusChanged,
+                payload: ["status": "running", "newWindowId": newWindow]
+            )
+            sendResponse(.ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)), on: connection)
+        } catch {
+            serverLogger.error("approve-plan failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
     }
@@ -430,7 +699,12 @@ public final class AgentControlServer {
                 serverLogger.warning("Worktree delete failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+        // Stop the JSONL wiring for this session.
+        if let wiring = sessionWiring.removeValue(forKey: uuid) {
+            wiring.stop()
+        }
         registry.delete(id: uuid)
+        AgentEventStream.recordEvent(sessionId: uuid, kind: .sessionDeleted, payload: [:])
         sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
     }
 
