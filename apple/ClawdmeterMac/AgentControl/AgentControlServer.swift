@@ -41,6 +41,9 @@ public final class AgentControlServer {
     private let pairingTokens: PairingTokenStore
     private let repoIndex: RepoIndex
     private let whois: TailscaleWhois
+    private let registry: AgentSessionRegistry
+    private let tmux: TmuxControlClient
+    private let notifications: NotificationDispatcher
 
     private var listener: NWListener?
     private var listenerQueue: DispatchQueue?
@@ -55,10 +58,16 @@ public final class AgentControlServer {
     public init(
         pairingTokens: PairingTokenStore = .shared,
         repoIndex: RepoIndex,
+        registry: AgentSessionRegistry,
+        tmux: TmuxControlClient,
+        notifications: NotificationDispatcher,
         whois: TailscaleWhois = .shared
     ) {
         self.pairingTokens = pairingTokens
         self.repoIndex = repoIndex
+        self.registry = registry
+        self.tmux = tmux
+        self.notifications = notifications
         self.whois = whois
     }
 
@@ -284,6 +293,17 @@ public final class AgentControlServer {
         switch (request.method, request.path) {
         case ("GET", "/repos"):
             await handleGetRepos(connection: connection)
+        case ("GET", "/sessions"):
+            handleGetSessions(connection: connection)
+        case ("POST", "/sessions"):
+            await handlePostSession(request: request, connection: connection)
+        case ("GET", let path) where path.hasPrefix("/sessions/") && !path.hasSuffix("/needs-attention"):
+            // GET /sessions/<uuid>
+            let sessionId = String(path.dropFirst("/sessions/".count))
+            handleGetOneSession(sessionId: sessionId, connection: connection)
+        case ("DELETE", let path) where path.hasPrefix("/sessions/"):
+            let sessionId = String(path.dropFirst("/sessions/".count))
+            await handleDeleteSession(sessionId: sessionId, connection: connection)
         case ("GET", "/sessions/needs-attention"):
             await handleGetNeedsAttention(connection: connection)
         case ("GET", "/health"):
@@ -291,6 +311,127 @@ public final class AgentControlServer {
         default:
             sendResponse(.notFound, on: connection)
         }
+    }
+
+    // MARK: - Session endpoints (Phase 2)
+
+    private func handleGetSessions(connection: NWConnection) {
+        let sessions = registry.sessions
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(sessions) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleGetOneSession(sessionId: String, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(session) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handlePostSession(request: HTTPRequest, connection: NWConnection) async {
+        let decoder = JSONDecoder()
+        guard let req = try? decoder.decode(NewSessionRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+
+        // Determine the cwd: repo root, or new worktree path if useWorktree.
+        var cwd = req.repoKey  // assume repoKey is an absolute path
+        var worktreePath: String? = nil
+        if req.useWorktree {
+            let slug = WorktreeManager.slug(goal: req.goal, sessionId: UUID())
+            do {
+                worktreePath = try await WorktreeManager.shared.add(
+                    repoRoot: req.repoKey,
+                    slug: slug,
+                    baseBranch: req.baseBranch
+                )
+                cwd = worktreePath!
+            } catch {
+                serverLogger.error("worktree add failed: \(error.localizedDescription, privacy: .public)")
+                sendResponse(.internalError, on: connection)
+                return
+            }
+        }
+
+        // Build agent argv per E4.
+        let argv = AgentSpawner.argv(for: req)
+
+        // Spawn into a new tmux window.
+        do {
+            try await tmux.start()  // idempotent
+            let windowId = try await tmux.newWindow(cwd: cwd, child: argv)
+            // Phase 2 simplification: pane id = first pane of the new window.
+            // tmux's `list-windows -F '#{pane_id}'` would tell us, but we
+            // derive it lazily for now.
+            let session = await registry.create(
+                repoKey: req.repoKey,
+                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                agent: req.agent,
+                model: req.model,
+                goal: req.goal,
+                worktreePath: worktreePath,
+                tmuxWindowId: windowId,
+                tmuxPaneId: nil,
+                planMode: req.planMode
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(session) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            serverLogger.error("Failed to spawn session: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleDeleteSession(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        // Kill the tmux window.
+        if let windowId = session.tmuxWindowId {
+            do {
+                try await tmux.killWindow(windowId)
+            } catch {
+                serverLogger.warning("kill-window \(windowId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        // Schedule worktree GC if applicable (24h grace per D12; for v1
+        // we synchronously attempt delete and surface skip-reasons).
+        if let worktreePath = session.worktreePath {
+            do {
+                let result = try await WorktreeManager.shared.delete(
+                    repoRoot: session.repoKey,
+                    worktreePath: worktreePath,
+                    registryOwned: true,
+                    attachedPanePaths: []
+                )
+                serverLogger.info("Worktree GC for session \(uuid.uuidString, privacy: .public): \(String(describing: result), privacy: .public)")
+            } catch {
+                serverLogger.warning("Worktree delete failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        registry.delete(id: uuid)
+        sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
     }
 
     private func isLoopback(_ endpoint: NWEndpoint) -> Bool {
@@ -341,6 +482,7 @@ public final class AgentControlServer {
 
     private enum HTTPResponse {
         case ok(contentType: String, body: Data)
+        case badRequest
         case notFound
         case unauthorized
         case internalError
@@ -352,6 +494,9 @@ public final class AgentControlServer {
         case .ok(let contentType, let body):
             bytes = httpResponseBytes(status: 200, statusText: "OK",
                                       contentType: contentType, body: body)
+        case .badRequest:
+            bytes = httpResponseBytes(status: 400, statusText: "Bad Request",
+                                      contentType: "text/plain", body: Data("Bad Request\n".utf8))
         case .notFound:
             bytes = httpResponseBytes(status: 404, statusText: "Not Found",
                                       contentType: "text/plain", body: Data("Not Found\n".utf8))

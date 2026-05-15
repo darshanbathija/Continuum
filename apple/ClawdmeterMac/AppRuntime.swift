@@ -21,8 +21,10 @@ final class AppRuntime: ObservableObject {
     let codexModel: AppModel
     let usageHistoryStore: UsageHistoryStore
 
-    // Sessions feature (Phase 1 scaffolding):
+    // Sessions feature (Phase 1 + 2):
     let repoIndex: RepoIndex
+    let agentSessionRegistry: AgentSessionRegistry
+    let tmuxClient: TmuxControlClient
     let agentControlServer: AgentControlServer
     let notificationDispatcher: NotificationDispatcher
     let sessionsModel: SessionsModel
@@ -82,8 +84,15 @@ final class AppRuntime: ObservableObject {
         // Per the feature flag plan (T18): gate the daemon start on
         // `UserDefaults.clawdmeter.sessions.enabled`. Default on in v1.
         self.repoIndex = RepoIndex()
+        self.agentSessionRegistry = AgentSessionRegistry()
+        self.tmuxClient = TmuxControlClient()
         self.notificationDispatcher = NotificationDispatcher()
-        self.agentControlServer = AgentControlServer(repoIndex: self.repoIndex)
+        self.agentControlServer = AgentControlServer(
+            repoIndex: self.repoIndex,
+            registry: self.agentSessionRegistry,
+            tmux: self.tmuxClient,
+            notifications: self.notificationDispatcher
+        )
         self.sessionsModel = SessionsModel(repoIndex: self.repoIndex)
 
         // Vend the Mach service the widget extension queries. Created here
