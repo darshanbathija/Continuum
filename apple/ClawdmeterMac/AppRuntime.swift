@@ -21,8 +21,15 @@ final class AppRuntime: ObservableObject {
     let codexModel: AppModel
     let usageHistoryStore: UsageHistoryStore
 
+    // Sessions feature (Phase 1 scaffolding):
+    let repoIndex: RepoIndex
+    let agentControlServer: AgentControlServer
+    let notificationDispatcher: NotificationDispatcher
+    let sessionsModel: SessionsModel
+
     private var cancellables = Set<AnyCancellable>()
     private var usageQueryService: UsageQueryService?
+    private var sessionsRefreshTask: Task<Void, Never>?
 
     init() {
         let claudeTokenProvider = KeychainTokenProvider()
@@ -67,15 +74,40 @@ final class AppRuntime: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Sessions feature: assemble the daemon + repo index + UI model
+        // BEFORE any `self`-capturing call so all stored properties are
+        // initialized before Swift lets us use `self`.
+        // Per E2: AgentControlServer is @MainActor, RepoIndex is an actor,
+        // NotificationDispatcher is an actor. SessionsModel bridges to UI.
+        // Per the feature flag plan (T18): gate the daemon start on
+        // `UserDefaults.clawdmeter.sessions.enabled`. Default on in v1.
+        self.repoIndex = RepoIndex()
+        self.notificationDispatcher = NotificationDispatcher()
+        self.agentControlServer = AgentControlServer(repoIndex: self.repoIndex)
+        self.sessionsModel = SessionsModel(repoIndex: self.repoIndex)
+
         // Vend the Mach service the widget extension queries. Created here
-        // (after the models) so the service can hand back live in-memory
-        // snapshots from the moment it accepts its first connection.
+        // (after all stored properties are initialized) so the service can
+        // hand back live in-memory snapshots from its first connection.
         self.usageQueryService = UsageQueryService(runtime: self)
+
+        let sessionsEnabled = UserDefaults.standard.object(forKey: "clawdmeter.sessions.enabled") as? Bool ?? true
+        if sessionsEnabled {
+            self.agentControlServer.start()
+            self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
+            runtimeLogger.info("Sessions daemon started on port \(self.agentControlServer.boundPort ?? 0)")
+        } else {
+            runtimeLogger.info("Sessions feature disabled via UserDefaults — daemon not started")
+        }
 
         runtimeLogger.info("AppRuntime.init COMPLETE instance=\(ObjectIdentifier(self).hashValue)")
     }
 
     deinit {
+        // sessionsRefreshTask is @MainActor-isolated; cancellation needs
+        // to hop. Best-effort.
+        let task = sessionsRefreshTask
+        Task { @MainActor in task?.cancel() }
         runtimeLogger.warning("AppRuntime.deinit")
     }
 }

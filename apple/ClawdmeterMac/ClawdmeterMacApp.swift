@@ -34,7 +34,8 @@ struct ClawdmeterMacApp: App {
             DashboardView(
                 claudeModel: runtime.claudeModel,
                 codexModel: runtime.codexModel,
-                usageHistoryStore: runtime.usageHistoryStore
+                usageHistoryStore: runtime.usageHistoryStore,
+                sessionsModel: runtime.sessionsModel
             )
             .background(DashboardOpener())   // bridges AppDelegate → openWindow
             .onAppear {

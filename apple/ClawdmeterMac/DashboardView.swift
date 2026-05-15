@@ -11,6 +11,7 @@ struct DashboardView: View {
     @ObservedObject var claudeModel: AppModel
     @ObservedObject var codexModel: AppModel
     @ObservedObject var usageHistoryStore: UsageHistoryStore
+    @ObservedObject var sessionsModel: SessionsModel
 
     @AppStorage(AppTheme.storageKey) private var themeRaw: String = AppTheme.system.rawValue
 
@@ -20,27 +21,24 @@ struct DashboardView: View {
     @AppStorage("clawdmeter.claude.menuBarShown") private var claudeMenuBarShown: Bool = true
     @AppStorage("clawdmeter.codex.menuBarShown") private var codexMenuBarShown: Bool = true
 
+    /// Sessions feature toggle (T18 feature flag). Default true — the
+    /// SwiftUI-side check; AppRuntime also gates daemon startup on it.
+    @AppStorage("clawdmeter.sessions.enabled") private var sessionsEnabled: Bool = true
+
+    /// Top-level tab selection. Sessions tab is hidden when the feature
+    /// flag is off (existing Usage view fills the whole window).
+    @State private var selectedTab: DashboardTab = .usage
+
     private var theme: AppTheme {
         AppTheme(rawValue: themeRaw) ?? .system
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                header
-
-                HStack(spacing: 0) {
-                    ProviderColumn(model: claudeModel)
-                    Divider()
-                    ProviderColumn(model: codexModel)
-                }
-
-                Divider()
-
-                if #available(macOS 13, *) {
-                    AnalyticsView(store: usageHistoryStore)
-                }
-            }
+        VStack(spacing: 0) {
+            header
+            tabStrip
+            Divider()
+            tabContent
         }
         // Min size keeps the window usable when the user shrinks it; the
         // default size (set on the Window scene) opens large enough for the
@@ -48,6 +46,67 @@ struct DashboardView: View {
         .frame(minWidth: 820, minHeight: 580)
         .background(backgroundColor)
         .preferredColorScheme(theme.colorScheme)
+    }
+
+    // MARK: - Tab strip + content
+
+    enum DashboardTab: String, CaseIterable {
+        case usage = "Usage"
+        case sessions = "Sessions"
+    }
+
+    private var tabStrip: some View {
+        HStack(spacing: 0) {
+            ForEach(visibleTabs, id: \.self) { tab in
+                Button(action: { selectedTab = tab }) {
+                    Text(tab.rawValue)
+                        .font(.system(size: 13, weight: selectedTab == tab ? .semibold : .regular))
+                        .foregroundStyle(selectedTab == tab ? primaryText : secondaryText)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(
+                            selectedTab == tab
+                                ? AnyShapeStyle(terraCotta.opacity(0.12))
+                                : AnyShapeStyle(Color.clear)
+                        )
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 6)
+    }
+
+    private var visibleTabs: [DashboardTab] {
+        sessionsEnabled ? DashboardTab.allCases : [.usage]
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .usage:
+            ScrollView {
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        ProviderColumn(model: claudeModel)
+                        Divider()
+                        ProviderColumn(model: codexModel)
+                    }
+                    Divider()
+                    if #available(macOS 13, *) {
+                        AnalyticsView(store: usageHistoryStore)
+                    }
+                }
+            }
+        case .sessions:
+            SessionsView(model: sessionsModel)
+        }
+    }
+
+    private var terraCotta: Color {
+        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
     }
 
     // MARK: - Header (title + menu bar toggles + theme pill)
