@@ -91,6 +91,9 @@ struct ClawdmeterMacApp: App {
 
                 DiagnosticsSettingsView()
                     .tabItem { Label("Diagnostics", systemImage: "stethoscope") }
+
+                LiveActivitySetupView()
+                    .tabItem { Label("Live Activities", systemImage: "bell.badge.waveform") }
             }
         }
     }

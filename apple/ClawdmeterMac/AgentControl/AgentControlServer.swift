@@ -655,6 +655,15 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions/:id/terminals") { [weak self] req, conn, params in
             await self?.handleAddTerminal(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
+        t.register(method: "POST", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
+            await self?.handleRegisterPushToken(request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/devices/ack-notifications") { [weak self] req, conn, _ in
+            await self?.handleAckNotifications(request: req, connection: conn)
+        }
+        t.register(method: "DELETE", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
+            await self?.handleUnregisterPushToken(request: req, connection: conn)
+        }
 
         // --- DELETEs ---
         // Specific delete first so /sessions/:id/terminals/:paneId beats /sessions/:id.
@@ -1260,6 +1269,35 @@ public final class AgentControlServer {
         }
     }
 
+    // MARK: - Phase 10: ActivityKit push-token registration
+
+    private struct RegisterPushTokenBody: Codable {
+        let token: String
+        let bundleId: String
+    }
+
+    private struct UnregisterPushTokenBody: Codable {
+        let token: String
+    }
+
+    private func handleRegisterPushToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(RegisterPushTokenBody.self, from: request.body),
+              !req.token.isEmpty, !req.bundleId.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        await MacAPNSPusher.shared.register(token: req.token, bundleId: req.bundleId)
+        sendJSON(["ok": true, "registered": true], on: connection)
+    }
+
+    private func handleUnregisterPushToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(UnregisterPushTokenBody.self, from: request.body),
+              !req.token.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        await MacAPNSPusher.shared.unregister(token: req.token)
+        sendJSON(["ok": true], on: connection)
+    }
+
     private func respondWithSession(uuid: UUID, connection: NWConnection) async {
         guard let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
@@ -1514,7 +1552,8 @@ public final class AgentControlServer {
                     sessionId: session.id,
                     sessionFileURL: url,
                     goal: session.goal,
-                    registry: self.registry
+                    registry: self.registry,
+                    notifications: self.notifications
                 )
                 wiring.start()
                 self.sessionWiring[session.id] = wiring
@@ -1750,8 +1789,7 @@ public final class AgentControlServer {
     }
 
     private func handleGetNeedsAttention(connection: NWConnection) async {
-        // Phase 1: empty queue. NotificationDispatcher (Phase 4) fills this in.
-        let response = NeedsAttentionResponse(events: [], serverTime: Date())
+        let response = NeedsAttentionResponse(events: await notifications.snapshotEvents(), serverTime: Date())
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(response) {
@@ -1759,6 +1797,14 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    private func handleAckNotifications(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(AckNotificationsRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        await notifications.ack(through: req.ackId)
+        sendResponse(.ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)), on: connection)
     }
 
     // MARK: - Response sending

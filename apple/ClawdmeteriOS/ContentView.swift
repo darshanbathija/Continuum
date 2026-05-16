@@ -22,6 +22,10 @@ struct ContentView: View {
         // paid Apple Developer entitlement (analytics + Codex tabs
         // previously showed "iCloud not enabled" stuck).
         model.wire(daemonClient: client)
+        // Phase 10: hand the client to LiveActivityCoordinator so it can
+        // POST per-activity push tokens to the paired Mac as ActivityKit
+        // produces them.
+        LiveActivityCoordinator.shared.client = client
     }
 
     var body: some View {

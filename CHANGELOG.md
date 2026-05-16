@@ -4,6 +4,57 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.2.0 build 15] - 2026-05-17
+
+### Added
+- **Phase 8: real cost banner.** The iOS new-session sheet now shows a
+  soft-warn cost estimate + projected weekly-cap consumption backed by
+  real numbers from `UsageHistorySnapshot`. `LiveCostCalculator.estimate`
+  reads per-repo past-7d `TokenTotals` from
+  `UsageHistorySnapshot.totals(for:).past7d.byRepo`, divides by the
+  count of active days in `ProviderTotals.byDay` to derive an average
+  per-session, scales by the effort multiplier
+  (minimal 0.4 / low 0.7 / medium 1.0 / high 1.8 / xhigh 3.0), adds
+  prompt tokens estimated from goal length, and prices via
+  `Pricing.shared.cost(for:tokens:)`. Returns nil for repos with no
+  history so the UI can show "No history yet" instead of misleading $0.
+  `wouldCap` triggers at 95% projected weekly usage; banner CTA flips
+  the model to `suggestedSwap`. Daemon `GET /sessions/preflight`
+  endpoint now parses every query param and returns the full response.
+- **Phase 10: APNS push for the aggregate Live Activity (D9 narrow
+  scope).** New "Live Activities" tab in Mac Settings hosts the
+  one-time setup wizard: pick a `.p8` auth-key file, enter Team ID +
+  Key ID + iOS bundle ID + environment (sandbox/production), Save
+  writes the PEM to Keychain (`com.clawdmeter.apns.p8`) and deletes
+  the source file from disk. `MacAPNSPusher` actor signs ES256 JWTs
+  using CryptoKit (`P256.Signing.PrivateKey(pemRepresentation:)` —
+  no third-party deps), caches them for 45 minutes, and POSTs
+  ActivityKit content-state updates to `api.push.apple.com` /
+  `api.sandbox.push.apple.com`. Handles 410 (BadDeviceToken) by
+  auto-unregistering tokens. iOS `LiveActivityCoordinator` observes
+  `Activity.pushTokenUpdates` (iOS 16.2+) and POSTs each new token to
+  `POST /live-activities/push-token` on the paired Mac. `AppRuntime`
+  subscribes to `agentSessionRegistry.$sessions`; whenever the
+  Live-Activity-relevant fingerprint changes (status, planText,
+  active-set), it hands a fresh `APNSContentStatePayload` to the
+  pusher.
+
+### Changed
+- **iOS NewSessionSheet** wires `.task(id: preflightInputs)` to refresh
+  the preflight estimate whenever repo / agent / model / effort / goal
+  length changes. Form-binding edits invalidate the task naturally,
+  giving free debouncing.
+- **Mac Settings** gets a new "Live Activities" tab next to
+  Diagnostics. The Sessions tab is unchanged.
+- **AgentControlClient** gains `fetchPreflight(query:)` returning
+  `PreflightResponse?` (nil on any failure path so the UI hides the
+  banner gracefully). New iOS `CostBannerView` component for the soft
+  warn UI.
+
+### Tests
+- ClawdmeterShared: 193 → 195 (+6 `PreflightTests`, +2 iOS-only
+  `LiveActivityWireTests`).
+
 ## [0.2.0 build 14] - 2026-05-17
 
 ### Added

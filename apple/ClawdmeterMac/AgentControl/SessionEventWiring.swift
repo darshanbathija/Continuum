@@ -20,17 +20,21 @@ public final class SessionEventWiring: @unchecked Sendable {
 
     /// The registry is @MainActor; we hop via Task when calling its mutators.
     private let registry: AgentSessionRegistry
+    private let notifications: NotificationDispatcher?
 
     public init(
         sessionId: UUID,
         sessionFileURL: URL,
         goal: String?,
-        registry: AgentSessionRegistry
+        registry: AgentSessionRegistry,
+        notifications: NotificationDispatcher? = nil
     ) {
         self.sessionId = sessionId
         self.registry = registry
+        self.notifications = notifications
 
         let captureSessionId = sessionId
+        let notificationQueue = notifications
         self.doneDetector = DoneDetector(sessionId: sessionId, goal: goal) { sid, trigger in
             wiringLogger.info("Done fired: session=\(sid.uuidString) trigger=\(trigger)")
             Task { @MainActor in
@@ -41,8 +45,17 @@ public final class SessionEventWiring: @unchecked Sendable {
                     payload: ["trigger": trigger]
                 )
             }
+            Task {
+                await notificationQueue?.enqueue(
+                    sessionId: sid,
+                    kind: "session-done",
+                    title: "Session done",
+                    body: trigger
+                )
+            }
         }
 
+        let planNotificationQueue = notifications
         self.planWatcher = PlanModeWatcher(sessionId: sessionId) { sid, planText, _ in
             Task { @MainActor in
                 registry.setPlanText(id: sid, planText: planText)
@@ -50,6 +63,14 @@ public final class SessionEventWiring: @unchecked Sendable {
                     sessionId: sid,
                     kind: .planReady,
                     payload: ["planText": planText]
+                )
+            }
+            Task {
+                await planNotificationQueue?.enqueue(
+                    sessionId: sid,
+                    kind: "plan-ready",
+                    title: "Plan ready",
+                    body: planText
                 )
             }
         }

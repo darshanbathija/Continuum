@@ -531,6 +531,18 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    public func ackNotifications(through ackId: UInt64) async {
+        let body = AckNotificationsRequest(ackId: ackId)
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(body),
+              let request = makeRequest(path: "/devices/ack-notifications", method: "POST", body: data) else { return }
+        do {
+            _ = try await sendChecked(request)
+        } catch {
+            clientLogger.debug("ack notifications failed: \(error.localizedDescription)")
+        }
+    }
+
     /// Fetch the latest live Claude + Codex usage gauges from the Mac.
     /// The daemon serves whatever its in-process pollers have — so the
     /// iPhone sees the same numbers the Mac dashboard does, no iCloud
