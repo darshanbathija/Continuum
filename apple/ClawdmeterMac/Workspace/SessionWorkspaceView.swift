@@ -19,29 +19,35 @@ struct SessionWorkspaceView: View {
     @ObservedObject var model: SessionsModel
 
     @State private var rightPaneTab: RightPaneTab = .plan
-    /// User's explicit toggle for the review pane (Cmd+W). Even when this is
-    /// true the pane is hidden if the window is too narrow to fit it
-    /// without crushing the chat — see `effectiveShowReviewPane`.
-    @State private var showingReviewPane: Bool = true
+    /// User's explicit toggle for the review pane. Default OFF so Sessions
+    /// + chat get the full window by default; the user opts into the
+    /// review pane via the right-edge gutter (CTA) or the toolbar button.
+    @State private var showingReviewPane: Bool = false
     @State private var showingModeSwitchOverlay: Bool = false
     @State private var modeSwitchLabel: String = ""
     /// Workspace-level width, measured via GeometryReader. Drives responsive
-    /// pane collapsing so Sessions + chat stay first-class at narrow widths.
+    /// pane collapsing so even when the user opens the review pane it only
+    /// renders if the window has room for it without clipping content.
     @State private var workspaceWidth: CGFloat = 1400
 
     @Environment(\.colorScheme) private var colorScheme
 
-    /// Below this width the review pane crowds the chat. We hide it
-    /// automatically so Sessions sidebar + chat get the room. Above the
-    /// threshold the user's `showingReviewPane` toggle takes over.
-    /// 220 (sidebar min) + 480 (center min) + 380 (review min) + chrome ≈ 1300.
-    /// Bumped above 1100 after observing the tab strip squeeze at narrower
-    /// widths — review pane needs ~380pt to render its 6-tab chip row
-    /// without the user having to swipe-scroll through them.
-    private static let reviewPaneThreshold: CGFloat = 1280
+    /// Minimum width required to render the review pane at its full
+    /// content-respecting width (≥440pt) without crushing sidebar + chat.
+    /// 220 (sidebar min) + 480 (center min) + 440 (review min) + chrome.
+    private static let reviewPaneThreshold: CGFloat = 1200
+
+    /// Minimum width required to render even the right-edge gutter CTA.
+    /// Below this, the workspace is just sidebar + chat — the user can
+    /// resize to summon the gutter back.
+    private static let gutterThreshold: CGFloat = 900
 
     private var effectiveShowReviewPane: Bool {
         showingReviewPane && workspaceWidth >= Self.reviewPaneThreshold
+    }
+
+    private var effectiveShowGutter: Bool {
+        !effectiveShowReviewPane && workspaceWidth >= Self.gutterThreshold
     }
 
     enum RightPaneTab: String, CaseIterable, Identifiable {
@@ -70,21 +76,41 @@ struct SessionWorkspaceView: View {
             SidebarPane(model: model)
                 .frame(minWidth: 220, idealWidth: 260, maxWidth: 380)
 
-            ZStack {
-                if let session = model.openSession {
-                    CenterThread(
-                        session: session,
-                        isReadOnly: model.openSessionIsReadOnly,
-                        model: model,
-                        onModeSwitch: { newMode in
-                            Task { await switchMode(session: session, to: newMode) }
+            // Center pane carries the chat AND, when the review pane is
+            // collapsed, a thin right-edge gutter that doubles as the
+            // expand CTA. Keeping the gutter inside the center column
+            // (instead of as its own HSplitView child) means the user
+            // can't accidentally drag-resize it.
+            HStack(spacing: 0) {
+                ZStack {
+                    if let session = model.openSession {
+                        CenterThread(
+                            session: session,
+                            isReadOnly: model.openSessionIsReadOnly,
+                            model: model,
+                            onModeSwitch: { newMode in
+                                Task { await switchMode(session: session, to: newMode) }
+                            }
+                        )
+                    } else {
+                        centerEmpty
+                    }
+                    if showingModeSwitchOverlay {
+                        modeSwitchOverlay
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                if effectiveShowGutter, model.openSession != nil {
+                    Divider()
+                    ReviewPaneGutter(
+                        selectedTab: $rightPaneTab,
+                        onExpand: { tab in
+                            rightPaneTab = tab
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                showingReviewPane = true
+                            }
                         }
                     )
-                } else {
-                    centerEmpty
-                }
-                if showingModeSwitchOverlay {
-                    modeSwitchOverlay
                 }
             }
             .frame(minWidth: 420, idealWidth: 600)
@@ -95,12 +121,17 @@ struct SessionWorkspaceView: View {
                     chatStore: model.chatStore(for: session),
                     model: model,
                     selectedTab: $rightPaneTab,
-                    onClose: { showingReviewPane = false },
+                    onClose: {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            showingReviewPane = false
+                        }
+                    },
                     onApprove: {
                         Task { await model.approvePlan(id: session.id) }
                     }
                 )
-                .frame(minWidth: 380, idealWidth: 440, maxWidth: 560)
+                .frame(minWidth: 440, idealWidth: 520, maxWidth: 620)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .background(backgroundColor)
@@ -118,8 +149,14 @@ struct SessionWorkspaceView: View {
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                Button(action: { showingReviewPane.toggle() }) {
-                    Image(systemName: "sidebar.right")
+                Button(action: {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        showingReviewPane.toggle()
+                    }
+                }) {
+                    Image(systemName: showingReviewPane
+                        ? "sidebar.right"
+                        : "sidebar.squares.right")
                         .help(effectiveShowReviewPane
                             ? "Hide review pane (⌘W)"
                             : workspaceWidth < Self.reviewPaneThreshold
@@ -1271,6 +1308,57 @@ private struct ChatThreadScroll: View {
 
     private var terraCotta: Color {
         Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
+    }
+}
+
+// MARK: - Review-pane gutter (collapsed CTA)
+
+/// Thin vertical strip on the right edge of the center pane shown when the
+/// review pane is collapsed. Each icon is a tap target that opens the
+/// review pane focused on that tab — the CTA the user asked for. When the
+/// pane is expanded the gutter hides; the pane's own × button collapses
+/// it back to this strip.
+private struct ReviewPaneGutter: View {
+    @Binding var selectedTab: SessionWorkspaceView.RightPaneTab
+    let onExpand: (SessionWorkspaceView.RightPaneTab) -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ForEach(SessionWorkspaceView.RightPaneTab.allCases) { tab in
+                Button(action: { onExpand(tab) }) {
+                    VStack(spacing: 2) {
+                        Image(systemName: tab.systemImage)
+                            .font(.system(size: 13))
+                        Text(tab.rawValue)
+                            .font(.system(size: 8, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        selectedTab == tab
+                            ? Color.secondary.opacity(0.12)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open \(tab.rawValue) pane")
+            }
+            Spacer()
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 4)
+        .frame(width: 52)
+        .background(gutterBg)
+    }
+
+    private var gutterBg: Color {
+        colorScheme == .dark
+            ? Color(red: 0.10, green: 0.10, blue: 0.10)
+            : Color(red: 0.95, green: 0.95, blue: 0.95)
     }
 }
 
