@@ -99,6 +99,36 @@ final class ChatItemBuilderTests: XCTestCase {
         XCTAssertEqual(delta, .orphanResult(toolUseId: "t1"))
         XCTAssertTrue(b.items.isEmpty, "orphan result alone produces no item")
     }
+
+    // MARK: - Duplicate-id guard (/review hardening)
+
+    func testDuplicateToolUseIdKeepsFirstAndDropsSecond() {
+        // The /review pass spotted that a second .toolCall for an
+        // already-pending tool_use_id would overwrite the prior
+        // ToolPair (including any in-progress result) AND duplicate
+        // the id in pendingOrder. After the guard, the first instance
+        // wins and the second is silently dropped.
+        var b = ChatItemBuilder()
+        let now = Date()
+        b.ingest(.toolCall(at: now, name: "Bash",
+                           body: "first call", toolUseId: "t1"))
+        b.ingest(.toolCall(at: now, name: "Bash",
+                           body: "DUPLICATE call", toolUseId: "t1"))
+        b.ingest(.toolResult(at: now, body: "ok", toolUseId: "t1"))
+        b.ingest(.assistantText(at: now, body: "Done.", id: "a1"))
+
+        // Expect ONE toolRun with ONE pair (the first call), result paired.
+        // Plus one prose message.
+        XCTAssertEqual(b.items.count, 2)
+        guard case .toolRun(_, let pairs) = b.items[0] else {
+            XCTFail("expected toolRun at index 0")
+            return
+        }
+        XCTAssertEqual(pairs.count, 1, "duplicate id should NOT add a second pair")
+        XCTAssertEqual(pairs[0].call.body, "first call",
+                       "first call wins; duplicate dropped")
+        XCTAssertNotNil(pairs[0].result, "result should still pair with the first call")
+    }
 }
 
 // MARK: - Test fixture helpers

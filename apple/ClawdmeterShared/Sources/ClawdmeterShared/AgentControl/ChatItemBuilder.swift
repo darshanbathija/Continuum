@@ -140,6 +140,63 @@ public struct ArtifactEntry: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
+// MARK: - Sort helpers (extracted from StagingParser for testability)
+
+/// Ordering rank for `ChatMessage.kind` — drives the `(at, kind, id)`
+/// sort tiebreak used by the staging parser. The interesting case: on
+/// the same timestamp, a `tool_use` MUST sort before its matching
+/// `tool_result` so that `ChatItemBuilder.ingest` pairs them correctly.
+/// The original implementation relied on `"call:" < "result:"`
+/// lexicographic ordering of ids; this is the typed form per the
+/// hardening sprint. Lives in Shared so unit tests can verify the
+/// invariant across both id-prefix conventions Anthropic might ship.
+public enum ChatMessageOrdering {
+    public static func kindRank(_ kind: ChatMessage.Kind) -> Int {
+        switch kind {
+        case .userText:      return 0
+        case .assistantText: return 1
+        case .toolCall:      return 2
+        case .toolResult:    return 3
+        case .meta:          return 4
+        }
+    }
+
+    /// Returns true if `a` should sort BEFORE `b`. Total order:
+    /// `(at, kindRank, id)`.
+    public static func precedes(_ a: ChatMessage, _ b: ChatMessage) -> Bool {
+        if a.at != b.at { return a.at < b.at }
+        let ra = kindRank(a.kind)
+        let rb = kindRank(b.kind)
+        if ra != rb { return ra < rb }
+        return a.id < b.id
+    }
+
+    /// Extract numbered (`1. foo`) or `Step N: foo` step candidates from
+    /// a body string. Returns them in order of first appearance. Used by
+    /// the staging parser's plan-step precompute; extracted here so
+    /// tests can verify the regex behavior without spinning up the
+    /// actor.
+    public static func extractStepCandidates(from body: String) -> [String] {
+        var out: [String] = []
+        for raw in body.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if let match = line.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
+                let content = String(line[match.upperBound...])
+                    .trimmingCharacters(in: .whitespaces)
+                if !content.isEmpty { out.append(content) }
+                continue
+            }
+            if let match = line.range(of: #"^Step\s+\d+:?\s+"#,
+                                       options: [.regularExpression, .caseInsensitive]) {
+                let content = String(line[match.upperBound...])
+                    .trimmingCharacters(in: .whitespaces)
+                if !content.isEmpty { out.append(content) }
+            }
+        }
+        return out
+    }
+}
+
 /// Incremental items builder. The staging parser pushes parsed
 /// `ChatMessage` values in arrival order; the builder maintains the
 /// `items` array such that consecutive tool_use + tool_result messages

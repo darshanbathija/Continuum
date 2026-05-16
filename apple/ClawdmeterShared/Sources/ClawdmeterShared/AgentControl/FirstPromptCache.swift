@@ -1,7 +1,12 @@
 import Foundation
 import OSLog
 
-private let cacheLogger = Logger(subsystem: "com.clawdmeter.mac", category: "FirstPromptCache")
+// Now lives in ClawdmeterShared so the unit tests can exercise it
+// (XCTest hits the Shared package; the Mac target is closed to it).
+// The subsystem stays Mac-flavored because the only caller today is on
+// Mac (`RepoIndex.cachedFirstUserPrompt`); if/when iOS pulls it in,
+// switch to `com.clawdmeter` for cross-platform attribution.
+private let cacheLogger = Logger(subsystem: "com.clawdmeter.shared", category: "FirstPromptCache")
 
 /// T12 (codex A1' override): on-disk + in-memory cache for the first
 /// user prompt extracted from a JSONL. Keyed by `(path, mtime, size)`.
@@ -24,6 +29,12 @@ public final class FirstPromptCache: @unchecked Sendable {
         public let mtime: TimeInterval  // seconds since 1970
         public let size: Int64
         public let prompt: String?
+
+        public init(mtime: TimeInterval, size: Int64, prompt: String?) {
+            self.mtime = mtime
+            self.size = size
+            self.prompt = prompt
+        }
     }
 
     private struct StoreFile: Codable {

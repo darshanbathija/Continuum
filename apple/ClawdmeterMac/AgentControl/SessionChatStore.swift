@@ -891,22 +891,11 @@ actor StagingParser {
         }
     }
 
+    /// Forwarder kept on StagingParser for call-site brevity; the
+    /// canonical implementation lives in `ChatMessageOrdering` in the
+    /// Shared module so unit tests can exercise it directly.
     private static func extractStepCandidates(from body: String) -> [String] {
-        var out: [String] = []
-        for raw in body.split(separator: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if let match = line.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
-                let content = String(line[match.upperBound...]).trimmingCharacters(in: .whitespaces)
-                if !content.isEmpty { out.append(content) }
-                continue
-            }
-            if let match = line.range(of: #"^Step\s+\d+:?\s+"#,
-                                       options: [.regularExpression, .caseInsensitive]) {
-                let content = String(line[match.upperBound...]).trimmingCharacters(in: .whitespaces)
-                if !content.isEmpty { out.append(content) }
-            }
-        }
-        return out
+        ChatMessageOrdering.extractStepCandidates(from: body)
     }
 
     private static let artifactExtensions: Set<String> = [
@@ -918,47 +907,21 @@ actor StagingParser {
     ]
 
     /// Binary-search insertion index keeping `sortedMessages` ordered by
-    /// `(at, kindRank, id)`. The kind-based tiebreak fixes the previous
-    /// `(at, id)` design that relied on `"call:" < "result:"` lexicographic
-    /// ordering — fragile against any future change to Anthropic's id
-    /// prefixes. With the kind rank, tool_use always sorts before its
-    /// matching tool_result on the same timestamp regardless of id form.
+    /// `(at, kindRank, id)` via the shared `ChatMessageOrdering`. The
+    /// kind-based tiebreak fixes the previous `(at, id)` design that
+    /// relied on `"call:" < "result:"` lexicographic ordering — fragile
+    /// against any future change to Anthropic's id prefixes.
     private func insertIndex(for msg: ChatMessage) -> Int {
         var lo = 0
         var hi = sortedMessages.count
         while lo < hi {
             let mid = (lo + hi) / 2
-            let m = sortedMessages[mid]
-            if Self.precedes(m, msg) {
+            if ChatMessageOrdering.precedes(sortedMessages[mid], msg) {
                 lo = mid + 1
             } else {
                 hi = mid
             }
         }
         return lo
-    }
-
-    /// Ordering rank for `ChatMessage.kind` — drives the `(at, kind, id)`
-    /// sort tiebreak. The interesting case: on the same timestamp, a
-    /// `tool_use` MUST sort before its matching `tool_result` so that
-    /// ChatItemBuilder pairs them correctly. The previous code relied on
-    /// `"call:" < "result:"` lexicographic ordering of ids; this is the
-    /// typed form per the hardening sprint.
-    private static func kindRank(_ kind: ChatMessage.Kind) -> Int {
-        switch kind {
-        case .userText:      return 0
-        case .assistantText: return 1
-        case .toolCall:      return 2
-        case .toolResult:    return 3
-        case .meta:          return 4
-        }
-    }
-
-    private static func precedes(_ a: ChatMessage, _ b: ChatMessage) -> Bool {
-        if a.at != b.at { return a.at < b.at }
-        let ra = kindRank(a.kind)
-        let rb = kindRank(b.kind)
-        if ra != rb { return ra < rb }
-        return a.id < b.id
     }
 }
