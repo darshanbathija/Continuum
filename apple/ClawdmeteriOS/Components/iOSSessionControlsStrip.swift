@@ -30,25 +30,27 @@ struct iOSSessionControlsStrip: View {
                 Spacer()
             }
 
-            if session.agent == .claude {
-                HStack(spacing: 8) {
-                    Button(action: { Task { await togglePlanMode() } }) {
-                        Label(session.status == .planning ? "Plan" : "Code",
-                              systemImage: session.status == .planning ? "doc.text.below.ecg" : "play.fill")
-                            .font(.caption.weight(.medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .tint(SessionsV2Theme.accent)
-
-                    Button(role: .destructive, action: { Task { await client.interruptSession(sessionId: session.id) } }) {
-                        Label("Interrupt", systemImage: "stop.fill")
-                            .font(.caption.weight(.medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    Spacer()
+            // Plan/Code toggle + Interrupt for both agents. Claude
+            // toggles between `--permission-mode plan` and
+            // `--permission-mode acceptEdits`; Codex toggles between
+            // `--sandbox read-only` and `--sandbox workspace-write`.
+            HStack(spacing: 8) {
+                Button(action: { Task { await togglePlanMode() } }) {
+                    Label(session.status == .planning ? "Plan" : "Code",
+                          systemImage: session.status == .planning ? "doc.text.below.ecg" : "play.fill")
+                        .font(.caption.weight(.medium))
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(SessionsV2Theme.accent)
+
+                Button(role: .destructive, action: { Task { await client.interruptSession(sessionId: session.id) } }) {
+                    Label("Interrupt", systemImage: "stop.fill")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Spacer()
             }
 
             if let banner = pendingSwapBanner {

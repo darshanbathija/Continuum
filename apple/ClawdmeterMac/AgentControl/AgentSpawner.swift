@@ -50,8 +50,16 @@ public enum AgentSpawner {
 
     /// Build argv for spawning Codex with the given options. Returns nil if
     /// the `codex` binary cannot be located.
+    ///
+    /// `planMode` maps to Codex's `--sandbox read-only` (verified via
+    /// `codex --help` 2026-05). Read-only sandbox prevents Codex from
+    /// writing or executing mutating commands — the agent reads + plans,
+    /// then the user reviews and switches to `workspace-write` to
+    /// execute. Same UX shape as Claude's `--permission-mode plan`,
+    /// just a different transport.
     public static func codexArgv(
         model: String? = nil,
+        planMode: Bool = false,
         effort: ReasoningEffort? = nil,
         autopilot: Bool = false,
         resumeSessionId: String? = nil,
@@ -70,7 +78,13 @@ public enum AgentSpawner {
         if let effort {
             argv += ["-c", "model_reasoning_effort=\"\(effort.codexConfigValue)\""]
         }
-        if autopilot {
+        if planMode {
+            // Read-only sandbox = Codex's plan mode. The agent can read
+            // and propose, but anything that would mutate the workspace
+            // (writes, network calls, non-trivial shell) is blocked.
+            // approve-plan flips this to workspace-write on user OK.
+            argv += ["-s", "read-only"]
+        } else if autopilot {
             argv += ["--dangerously-bypass-approvals-and-sandbox"]
         }
         argv.append(contentsOf: extraArgs)
@@ -91,6 +105,7 @@ public enum AgentSpawner {
         case .codex:
             return codexArgv(
                 model: request.model,
+                planMode: request.planMode,
                 effort: request.effort,
                 autopilot: autopilot
             ) ?? []
@@ -121,6 +136,7 @@ public enum AgentSpawner {
         case .codex:
             return codexArgv(
                 model: model,
+                planMode: planMode,
                 effort: effort,
                 autopilot: autopilot,
                 resumeSessionId: resumeSessionId

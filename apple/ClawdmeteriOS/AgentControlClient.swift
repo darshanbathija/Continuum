@@ -235,6 +235,9 @@ public final class AgentControlClient: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             self.sessions = try decoder.decode([AgentSession].self, from: data)
+            // Sessions v2 Phase 10: keep the aggregate Live Activity in
+            // sync with the latest session list.
+            LiveActivityCoordinator.shared.refresh(from: sessions)
         } catch {
             clientLogger.debug("refreshSessions failed: \(error.localizedDescription)")
         }

@@ -62,8 +62,15 @@ struct NewSessionMacSheet: View {
                 TextField("Goal", text: $goal,
                           prompt: Text("Optional. Used by done-detector + worktree slug."))
 
-                Toggle("Plan mode (Claude only)", isOn: $planMode)
-                    .disabled(agent != .claude)
+                // Plan mode applies to both agents. Claude maps it to
+                // `--permission-mode plan`; Codex maps it to
+                // `--sandbox read-only` (E&S verified against
+                // `codex --help` 2026-05). Approve & run swaps the
+                // sandbox/permission afterwards.
+                Toggle("Plan mode", isOn: $planMode)
+                    .help(agent == .claude
+                          ? "Claude runs in --permission-mode plan: reads + proposes, doesn't write until approved."
+                          : "Codex runs in --sandbox read-only: reads + proposes, doesn't write until approved.")
 
                 Picker("Mode", selection: $mode) {
                     Text("Local").tag(SessionMode.local)
@@ -111,7 +118,7 @@ struct NewSessionMacSheet: View {
             _ = try await model.spawnSession(
                 repoPath: repoPath,
                 agent: agent,
-                planMode: agent == .claude && planMode,
+                planMode: planMode,
                 goal: goal.isEmpty ? nil : goal,
                 mode: mode,
                 tmux: runtime.tmuxClient

@@ -689,7 +689,12 @@ public final class AgentControlServer {
             tmuxPaneId: session.tmuxPaneId,
             mode: req.mode
         )
-        if let planMode = req.planMode, session.agent == .claude {
+        if let planMode = req.planMode {
+            // Plan mode applies to both agents now. Claude maps it to
+            // `--permission-mode plan`; Codex maps it to
+            // `--sandbox read-only`. Mid-session toggle is handled by
+            // the same registry call — the actual respawn happens on
+            // `approve-plan` or via the mode picker.
             registry.setPlanMode(id: uuid, planMode: planMode)
         }
         await respondWithSession(uuid: uuid, connection: connection)
@@ -1188,6 +1193,23 @@ public final class AgentControlServer {
             if req.agent == .claude {
                 attachClaudeWiring(for: session, cwd: cwd)
             }
+            // Codex doesn't emit an `ExitPlanMode` tool call — its
+            // plan-mode shape is just "read-only sandbox until the
+            // user says go". Seed a synthetic planText so the chat's
+            // existing plan card (PlanCardView) renders an Approve &
+            // run button right away. The user reads the agent's
+            // proposal in the regular chat stream, then taps approve
+            // to flip the sandbox to workspace-write.
+            if req.agent == .codex && req.planMode {
+                registry.setPlanText(
+                    id: session.id,
+                    planText: """
+                    Codex is running in read-only plan mode. Review its messages in \
+                    the chat — when the proposal looks right, tap **Approve & run** \
+                    to restart with workspace-write access.
+                    """
+                )
+            }
             AgentEventStream.recordEvent(
                 sessionId: session.id,
                 kind: .sessionCreated,
@@ -1254,20 +1276,52 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection)
             return
         }
-        // Per D13: kill the plan-mode pane, spawn a fresh acceptEdits pane
+        // Per D13: kill the plan-mode pane, spawn a fresh execution pane
         // in the same window. Overlay covers the swap UI-side.
+        //
+        // Agent-specific replacement argv:
+        //   Claude → `claude --permission-mode acceptEdits` (the
+        //            user has approved the plan; switch to "agent can
+        //            edit without asking"). Resume via `--resume <id>`
+        //            isn't reliable on plan-mode → acceptEdits swaps
+        //            because Claude rotates the session id when plan
+        //            mode exits, so we spawn fresh.
+        //   Codex  → `codex -s workspace-write` (spawn fresh in the
+        //            same cwd; we don't track the Codex rollout id in
+        //            the registry yet, so resume isn't an option. The
+        //            new rollout writes its own JSONL alongside the
+        //            plan-mode one in `~/.codex/sessions/`; the
+        //            user-facing chat picks up the newest file).
+        let argv: [String]?
+        switch session.agent {
+        case .claude:
+            argv = AgentSpawner.claudeArgv(
+                model: session.model,
+                planMode: false,
+                effort: session.effort,
+                autopilot: false
+            )
+        case .codex:
+            argv = AgentSpawner.codexArgv(
+                model: session.model,
+                planMode: false,
+                effort: session.effort,
+                autopilot: false
+            )
+        }
+        guard let replacementArgv = argv else {
+            serverLogger.error("approve-plan: missing CLI binary for \(session.agent.rawValue, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+            return
+        }
         do {
             try await tmux.killWindow(windowId)
-            // Spawn replacement.
-            let argv = [
-                "/Users/darshanbathija_1/.local/bin/claude",
-                "--permission-mode", "acceptEdits",
-            ]
             let cwd = session.worktreePath ?? session.repoKey
-            let newWindow = try await tmux.newWindow(cwd: cwd, child: argv)
-            // Update registry.
+            let newWindow = try await tmux.newWindow(cwd: cwd, child: replacementArgv)
+            // Clear the plan card and flip status to running so the
+            // approve button disappears from the chat UI.
             registry.updateStatus(id: uuid, status: .running)
-            // (Plan card no longer applies; clear if needed in future.)
+            registry.setPlanText(id: uuid, planText: "")
             AgentEventStream.recordEvent(
                 sessionId: uuid,
                 kind: .statusChanged,

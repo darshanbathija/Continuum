@@ -706,8 +706,11 @@ private struct NewSessionSheet: View {
                     }
                     .pickerStyle(.segmented)
 
-                    Toggle("Plan mode (Claude only)", isOn: $planMode)
-                        .disabled(agent != .claude)
+                    // Plan mode applies to both agents. Claude maps it
+                    // to `--permission-mode plan`; Codex maps it to
+                    // `--sandbox read-only`. Approve & run flips the
+                    // sandbox afterwards.
+                    Toggle("Plan mode", isOn: $planMode)
 
                     Toggle("Run as A/B pair (Claude + Codex)", isOn: $runAsABPair)
                         .toggleStyle(.switch)
@@ -768,7 +771,7 @@ private struct NewSessionSheet: View {
                 repoKey: repoKey,
                 agent: agent,
                 model: modelId,
-                planMode: agent == .claude && planMode,
+                planMode: planMode,
                 goal: goal.isEmpty ? nil : goal,
                 useWorktree: mode == .worktree,
                 baseBranch: baseBranch.isEmpty ? nil : baseBranch,

@@ -54,6 +54,7 @@
 		5902D9B4BE8E0E4A9929A13E /* ShellRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D48BE3092D019C68CDF1B6D9 /* ShellRunner.swift */; };
 		5B7846A11606DFD0DFA9656E /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 8B73D594070D689DF9E8C5DF /* ClawdmeterShared */; };
 		5DE92C384076350BC6A8F25F /* SessionWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB6CC1AA9EB4821E16119827 /* SessionWorkspaceView.swift */; };
+		604846A327EC4EDB6CFD3529 /* LiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FE801BE3944A9DD21D9452C /* LiveActivityCoordinator.swift */; };
 		60A48BFCE0BBD51D03ADE378 /* RouteTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69F9BF1DB0AAF2EE4A463E7C /* RouteTable.swift */; };
 		61794D0EF2D8FF16588C087C /* ClawdmeteriOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCD9574C1A626280070D394 /* ClawdmeteriOSApp.swift */; };
 		62C7229BE15443B5FF6B2555 /* PlanModeWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDDB2A4C242F45EC4FCD4241 /* PlanModeWatcher.swift */; };
@@ -215,6 +216,7 @@
 		5B1DE3BECFAB2F957716D01F /* ModePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModePicker.swift; sourceTree = "<group>"; };
 		5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntime.swift; sourceTree = "<group>"; };
 		5F6A3D3787BAC8DC4404A911 /* SessionsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsListView.swift; sourceTree = "<group>"; };
+		5FE801BE3944A9DD21D9452C /* LiveActivityCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityCoordinator.swift; sourceTree = "<group>"; };
 		60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSpawner.swift; sourceTree = "<group>"; };
 		64C634F7C5D8CBEF39FAA084 /* SessionActivityStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionActivityStrip.swift; sourceTree = "<group>"; };
 		6576347309635291F6B4C01B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -514,6 +516,7 @@
 				0DC8BB0C1C1A62C078E0C226 /* iOSNotificationManager.swift */,
 				E6168C5A5642A5E8A8A0DC87 /* iOSSessionsView.swift */,
 				A27CA03750EC59D41E11FB18 /* iOSTerminalView.swift */,
+				5FE801BE3944A9DD21D9452C /* LiveActivityCoordinator.swift */,
 				EAB65AC597AEAFE555E05819 /* PairingCTAButtons.swift */,
 				49F781A75D25FE8478D4F1E4 /* PairingScannerView.swift */,
 				BE1C3B5FDF4AB46F3A7B4FC6 /* SettingsView.swift */,
@@ -868,6 +871,7 @@
 				FD9C682E80F548EAF56E6B16 /* AgentControlClient.swift in Sources */,
 				61794D0EF2D8FF16588C087C /* ClawdmeteriOSApp.swift in Sources */,
 				429198BE705AACE1B656260E /* ContentView.swift in Sources */,
+				604846A327EC4EDB6CFD3529 /* LiveActivityCoordinator.swift in Sources */,
 				1F57B15A40CE4503F7909A98 /* PairingCTAButtons.swift in Sources */,
 				21394E54DBC8130457573563 /* PairingScannerView.swift in Sources */,
 				3D153FBD1EF5FB96D68B6AA4 /* SettingsView.swift in Sources */,
