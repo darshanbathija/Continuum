@@ -189,12 +189,13 @@ public final class SessionChatStore: ObservableObject {
                 let toolUseId = (block["id"] as? String) ?? baseId
                 let name = (block["name"] as? String) ?? "tool"
                 let inputSummary = Self.summarizeInput(block["input"], for: name)
+                let inputDetail = Self.expandedDetail(block["input"], for: name)
                 append(ChatMessage(
                     id: "call:\(toolUseId)",
                     kind: .toolCall,
                     title: name,
                     body: inputSummary,
-                    detail: nil,
+                    detail: inputDetail,
                     at: at
                 ))
             default:
@@ -217,11 +218,21 @@ public final class SessionChatStore: ObservableObject {
         return "\(uuid):\(suffix)"
     }
 
-    /// Compact one-line summary of a tool_use `input` for the row body.
+    /// Compact one-line summary of a tool_use `input` for the row label. This
+    /// is what the user sees in the collapsed disclosure header — favors a
+    /// human-readable description over the raw command bytes.
     static func summarizeInput(_ input: Any?, for tool: String) -> String {
         guard let dict = input as? [String: Any] else { return "" }
         switch tool {
         case "Bash":
+            // Claude Code passes a one-liner `description` alongside the
+            // command; use that as the headline so "Ran Stop the old build"
+            // reads better than "Ran kill 3487 2>&1 …".
+            if let desc = (dict["description"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !desc.isEmpty {
+                return desc
+            }
             if let cmd = dict["command"] as? String {
                 return cmd.replacingOccurrences(of: "\n", with: " ")
             }
@@ -246,6 +257,30 @@ public final class SessionChatStore: ObservableObject {
             return nil
         }
         return stringFields.min(by: { $0.count < $1.count }) ?? ""
+    }
+
+    /// Verbose detail shown only when the user expands the tool row. For
+    /// Bash this is the full command (multi-line preserved); for file ops
+    /// `nil` — the path in the headline is already the full detail.
+    static func expandedDetail(_ input: Any?, for tool: String) -> String? {
+        guard let dict = input as? [String: Any] else { return nil }
+        switch tool {
+        case "Bash":
+            return dict["command"] as? String
+        case "Grep":
+            // Pattern is the headline; surface the optional path/include
+            // glob in the detail so the row can show full scope on expand.
+            var bits: [String] = []
+            if let path = dict["path"] as? String, !path.isEmpty { bits.append("path: \(path)") }
+            if let include = dict["include"] as? String, !include.isEmpty { bits.append("include: \(include)") }
+            return bits.isEmpty ? nil : bits.joined(separator: "\n")
+        case "Task":
+            return dict["prompt"] as? String
+        case "WebFetch":
+            return dict["prompt"] as? String
+        default:
+            return nil
+        }
     }
 
     /// tool_result `content` may be a string OR array of blocks. Flatten to

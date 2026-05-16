@@ -911,6 +911,11 @@ private struct ChatThreadScroll: View {
     let session: AgentSession
     let model: SessionsModel
 
+    /// IDs of expanded disclosure groups (tool-run groups + individual tool
+    /// rows). Held externally so LazyVStack can recycle subviews without
+    /// resetting expand state when the user scrolls.
+    @State private var expanded: Set<String> = []
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -918,9 +923,9 @@ private struct ChatThreadScroll: View {
                     if store.messages.isEmpty && !store.isLoading {
                         emptyState
                     } else {
-                        ForEach(store.messages) { msg in
-                            messageRow(msg)
-                                .id(msg.id)
+                        ForEach(items) { item in
+                            itemRow(item)
+                                .id(item.id)
                                 .padding(.horizontal, 16)
                         }
                     }
@@ -939,6 +944,68 @@ private struct ChatThreadScroll: View {
         }
     }
 
+    /// One row in the thread. Either a plain user/assistant/meta message, or
+    /// a "tool run" — a contiguous burst of tool_call + tool_result messages
+    /// that we collapse into a single disclosure group.
+    private enum ChatItem: Identifiable {
+        case message(SessionChatStore.ChatMessage)
+        case toolRun(id: String, pairs: [ToolPair])
+        var id: String {
+            switch self {
+            case .message(let m): return m.id
+            case .toolRun(let id, _): return "run:\(id)"
+            }
+        }
+    }
+
+    private struct ToolPair: Identifiable {
+        let id: String        // tool_use id, matches across call + result
+        let call: SessionChatStore.ChatMessage
+        let result: SessionChatStore.ChatMessage?
+    }
+
+    /// Walk `store.messages` once and bucket runs of tool_call / tool_result
+    /// into ToolRun items. Plain prose flushes whatever's pending.
+    private var items: [ChatItem] {
+        var out: [ChatItem] = []
+        var pendingPairs: [String: ToolPair] = [:]
+        var pendingOrder: [String] = []
+
+        func flushTools() {
+            guard !pendingOrder.isEmpty else { return }
+            let pairs = pendingOrder.compactMap { pendingPairs[$0] }
+            if let first = pairs.first {
+                out.append(.toolRun(id: first.id, pairs: pairs))
+            }
+            pendingPairs.removeAll()
+            pendingOrder.removeAll()
+        }
+
+        for msg in store.messages {
+            switch msg.kind {
+            case .toolCall:
+                let toolUseId = msg.id.replacingOccurrences(of: "call:", with: "")
+                pendingPairs[toolUseId] = ToolPair(id: toolUseId, call: msg, result: nil)
+                pendingOrder.append(toolUseId)
+            case .toolResult:
+                let toolUseId = msg.id.replacingOccurrences(of: "result:", with: "")
+                if let existing = pendingPairs[toolUseId] {
+                    pendingPairs[toolUseId] = ToolPair(
+                        id: toolUseId, call: existing.call, result: msg
+                    )
+                }
+                // Results that arrive without a matching call get dropped
+                // here; they're rare (only when JSONL parsing missed the
+                // earlier call) and the result alone isn't actionable.
+            case .userText, .assistantText, .meta:
+                flushTools()
+                out.append(.message(msg))
+            }
+        }
+        flushTools()
+        return out
+    }
+
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "ellipsis.bubble")
@@ -953,14 +1020,119 @@ private struct ChatThreadScroll: View {
     }
 
     @ViewBuilder
+    private func itemRow(_ item: ChatItem) -> some View {
+        switch item {
+        case .message(let m):
+            messageRow(m)
+        case .toolRun(let id, let pairs):
+            toolRunGroup(id: id, pairs: pairs)
+        }
+    }
+
+    @ViewBuilder
     private func messageRow(_ msg: SessionChatStore.ChatMessage) -> some View {
         switch msg.kind {
         case .userText:      userBubble(msg)
         case .assistantText: assistantBubble(msg)
-        case .toolCall:      toolCallCard(msg)
-        case .toolResult:    toolResultCard(msg)
+        case .toolCall, .toolResult:
+            // Should never hit: tool messages are folded into ChatItem.toolRun.
+            EmptyView()
         case .meta:          metaRow(msg)
         }
+    }
+
+    // MARK: - Tool run rendering
+
+    private func toolRunGroup(id: String, pairs: [ToolPair]) -> some View {
+        let runKey = "run:\(id)"
+        let isOpen = Binding<Bool>(
+            get: { expanded.contains(runKey) },
+            set: { if $0 { expanded.insert(runKey) } else { expanded.remove(runKey) } }
+        )
+        return DisclosureGroup(isExpanded: isOpen) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(pairs) { pair in
+                    toolPairRow(pair)
+                }
+            }
+            .padding(.leading, 16)
+            .padding(.top, 4)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Text("Ran \(pairs.count) command\(pairs.count == 1 ? "" : "s")")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .disclosureGroupStyle(QuietDisclosure())
+    }
+
+    private func toolPairRow(_ pair: ToolPair) -> some View {
+        let key = "pair:\(pair.id)"
+        let isOpen = Binding<Bool>(
+            get: { expanded.contains(key) },
+            set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } }
+        )
+        let isError = pair.result?.isError ?? false
+        return DisclosureGroup(isExpanded: isOpen) {
+            VStack(alignment: .leading, spacing: 6) {
+                if let detail = pair.call.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(Color.secondary.opacity(0.08),
+                                    in: RoundedRectangle(cornerRadius: 6))
+                }
+                if let result = pair.result, !result.body.isEmpty {
+                    Text(result.body)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(isError ? .red : .secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(40)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(Color.secondary.opacity(0.05),
+                                    in: RoundedRectangle(cornerRadius: 6))
+                } else if pair.result == nil {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Waiting for result…")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .padding(.leading, 16)
+            .padding(.top, 4)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: toolIcon(pair.call.title))
+                    .font(.system(size: 10))
+                    .foregroundStyle(toolTint(pair.call.title))
+                Text(pair.call.title)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(toolTint(pair.call.title))
+                Text(pair.call.body)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if isError {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.red)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .disclosureGroupStyle(QuietDisclosure())
     }
 
     private func userBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
@@ -995,45 +1167,9 @@ private struct ChatThreadScroll: View {
         }
     }
 
-    private func toolCallCard(_ msg: SessionChatStore.ChatMessage) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: toolIcon(msg.title))
-                .font(.system(size: 11))
-                .foregroundStyle(toolTint(msg.title))
-                .frame(width: 18, height: 18)
-            Text(msg.title)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(toolTint(msg.title))
-            Text(msg.body)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .truncationMode(.middle)
-            Spacer()
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(toolTint(msg.title).opacity(0.06),
-                    in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    private func toolResultCard(_ msg: SessionChatStore.ChatMessage) -> some View {
-        let trimmed = msg.body.split(whereSeparator: \.isNewline)
-            .prefix(3).joined(separator: "\n")
-        return HStack(alignment: .top, spacing: 8) {
-            Image(systemName: msg.isError ? "exclamationmark.triangle" : "arrow.turn.down.right")
-                .font(.system(size: 10))
-                .foregroundStyle(msg.isError ? .red : .secondary)
-                .frame(width: 18, height: 18)
-            Text(trimmed)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(msg.isError ? .red : .secondary)
-                .lineLimit(3)
-            Spacer()
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-    }
+    // toolCallCard / toolResultCard removed — replaced by toolRunGroup +
+    // toolPairRow above, which fold consecutive tool messages into a two-
+    // level DisclosureGroup ("Ran N commands" → per-tool → command/result).
 
     private func metaRow(_ msg: SessionChatStore.ChatMessage) -> some View {
         HStack {
@@ -1070,6 +1206,37 @@ private struct ChatThreadScroll: View {
 
     private var terraCotta: Color {
         Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
+    }
+}
+
+// MARK: - Quiet disclosure style
+
+/// Custom DisclosureGroup style with a tighter chevron + no default
+/// "Show more / Show less" hover chrome. Matches the Codex-desktop
+/// "Ran N commands ⌄" / "Ran <description> ⌄" look.
+private struct QuietDisclosure: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    configuration.isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                    configuration.label
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if configuration.isExpanded {
+                configuration.content
+            }
+        }
     }
 }
 
