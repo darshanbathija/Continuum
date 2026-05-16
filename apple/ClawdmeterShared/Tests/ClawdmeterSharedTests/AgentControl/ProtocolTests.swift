@@ -169,4 +169,74 @@ final class AgentControlProtocolTests: XCTestCase {
         XCTAssertEqual(TerminalFrameTag.input.rawValue, 0x03)
         XCTAssertEqual(TerminalFrameTag.title.rawValue, 0x04)
     }
+
+    // MARK: - SessionMode (G2) + AgentSession backward-compat
+
+    func testSessionModeWireValues() throws {
+        // Wire-stable: external clients depend on these strings.
+        XCTAssertEqual(SessionMode.local.rawValue, "local")
+        XCTAssertEqual(SessionMode.worktree.rawValue, "worktree")
+        XCTAssertEqual(SessionMode.cloud.rawValue, "cloud")
+    }
+
+    func testAgentSessionWithModeRoundTrip() throws {
+        let session = AgentSession(
+            id: UUID(),
+            repoKey: "/x", repoDisplayName: "x",
+            agent: .claude, model: nil, goal: nil,
+            worktreePath: "/x/.claude/worktrees/foo",
+            tmuxWindowId: nil, tmuxPaneId: nil,
+            status: .running, planText: nil,
+            createdAt: Date(), lastEventAt: Date(), lastEventSeq: 1,
+            mode: .worktree,
+            archivedAt: Date(timeIntervalSince1970: 1747100000)
+        )
+        let data = try JSONEncoder().encode(session)
+        let decoded = try JSONDecoder().decode(AgentSession.self, from: data)
+        XCTAssertEqual(decoded.mode, .worktree)
+        XCTAssertNotNil(decoded.archivedAt)
+        XCTAssertEqual(decoded, session)
+    }
+
+    /// Pre-G0 sessions.json has no `mode` or `archivedAt` keys. The decoder
+    /// must infer `mode` from `worktreePath` and default `archivedAt` to nil.
+    func testAgentSessionBackwardCompatDecode() throws {
+        let legacyJSON = """
+        {
+            "id": "\(UUID().uuidString)",
+            "repoKey": "/Users/d/code/Clawdmeter",
+            "repoDisplayName": "Clawdmeter",
+            "agent": "claude",
+            "status": "running",
+            "createdAt": "2026-05-16T12:00:00Z",
+            "lastEventAt": "2026-05-16T12:01:00Z",
+            "lastEventSeq": 1,
+            "worktreePath": "/Users/d/code/Clawdmeter/.claude/worktrees/foo"
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let session = try decoder.decode(AgentSession.self, from: legacyJSON)
+        XCTAssertEqual(session.mode, .worktree, "worktreePath != nil → infer .worktree")
+        XCTAssertNil(session.archivedAt)
+    }
+
+    func testAgentSessionBackwardCompatDecodeLocal() throws {
+        let legacyJSON = """
+        {
+            "id": "\(UUID().uuidString)",
+            "repoKey": "/Users/d/code/Clawdmeter",
+            "repoDisplayName": "Clawdmeter",
+            "agent": "claude",
+            "status": "running",
+            "createdAt": "2026-05-16T12:00:00Z",
+            "lastEventAt": "2026-05-16T12:01:00Z",
+            "lastEventSeq": 1
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let session = try decoder.decode(AgentSession.self, from: legacyJSON)
+        XCTAssertEqual(session.mode, .local, "no worktreePath → infer .local")
+    }
 }

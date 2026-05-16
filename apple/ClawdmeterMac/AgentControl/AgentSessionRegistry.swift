@@ -57,7 +57,8 @@ public final class AgentSessionRegistry: ObservableObject {
         worktreePath: String?,
         tmuxWindowId: String?,
         tmuxPaneId: String?,
-        planMode: Bool
+        planMode: Bool,
+        mode: SessionMode = .local
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -76,7 +77,8 @@ public final class AgentSessionRegistry: ObservableObject {
             planText: nil,
             createdAt: now,
             lastEventAt: now,
-            lastEventSeq: 1
+            lastEventSeq: 1,
+            mode: mode
         )
         sessions.append(session)
         save()
@@ -97,7 +99,8 @@ public final class AgentSessionRegistry: ObservableObject {
             tmuxWindowId: s.tmuxWindowId, tmuxPaneId: s.tmuxPaneId,
             status: status, planText: s.planText,
             createdAt: s.createdAt, lastEventAt: Date(),
-            lastEventSeq: s.lastEventSeq + 1
+            lastEventSeq: s.lastEventSeq + 1,
+            mode: s.mode, archivedAt: s.archivedAt
         )
         nextEventSeqBySession[id] = (nextEventSeqBySession[id] ?? 1) + 1
         save()
@@ -113,7 +116,66 @@ public final class AgentSessionRegistry: ObservableObject {
             tmuxWindowId: s.tmuxWindowId, tmuxPaneId: s.tmuxPaneId,
             status: s.status, planText: planText,
             createdAt: s.createdAt, lastEventAt: Date(),
-            lastEventSeq: s.lastEventSeq + 1
+            lastEventSeq: s.lastEventSeq + 1,
+            mode: s.mode, archivedAt: s.archivedAt
+        )
+        save()
+    }
+
+    /// Update the in-place cwd/worktree metadata (used when the user switches
+    /// the mode picker on a live session and we re-spawn the agent in a new
+    /// directory).
+    public func updateRuntime(
+        id: UUID,
+        worktreePath: String?,
+        tmuxWindowId: String?,
+        tmuxPaneId: String?,
+        mode: SessionMode
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let s = sessions[idx]
+        sessions[idx] = AgentSession(
+            id: s.id, repoKey: s.repoKey, repoDisplayName: s.repoDisplayName,
+            agent: s.agent, model: s.model, goal: s.goal,
+            worktreePath: worktreePath,
+            tmuxWindowId: tmuxWindowId, tmuxPaneId: tmuxPaneId,
+            status: s.status, planText: s.planText,
+            createdAt: s.createdAt, lastEventAt: Date(),
+            lastEventSeq: s.lastEventSeq + 1,
+            mode: mode, archivedAt: s.archivedAt
+        )
+        save()
+    }
+
+    /// Archive (hide from default sidebar). Reversible via `unarchive(id:)`.
+    public func archive(id: UUID, at date: Date = Date()) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let s = sessions[idx]
+        sessions[idx] = AgentSession(
+            id: s.id, repoKey: s.repoKey, repoDisplayName: s.repoDisplayName,
+            agent: s.agent, model: s.model, goal: s.goal,
+            worktreePath: s.worktreePath,
+            tmuxWindowId: s.tmuxWindowId, tmuxPaneId: s.tmuxPaneId,
+            status: s.status, planText: s.planText,
+            createdAt: s.createdAt, lastEventAt: Date(),
+            lastEventSeq: s.lastEventSeq + 1,
+            mode: s.mode, archivedAt: date
+        )
+        save()
+    }
+
+    public func unarchive(id: UUID) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let s = sessions[idx]
+        sessions[idx] = AgentSession(
+            id: s.id, repoKey: s.repoKey, repoDisplayName: s.repoDisplayName,
+            agent: s.agent, model: s.model, goal: s.goal,
+            worktreePath: s.worktreePath,
+            tmuxWindowId: s.tmuxWindowId, tmuxPaneId: s.tmuxPaneId,
+            status: s.status, planText: s.planText,
+            createdAt: s.createdAt, lastEventAt: Date(),
+            lastEventSeq: s.lastEventSeq + 1,
+            mode: s.mode, archivedAt: nil
         )
         save()
     }

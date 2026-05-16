@@ -61,6 +61,19 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
     case codex
 }
 
+/// Where the session executes — the Codex-desktop "mode picker" axis.
+/// Switching mode on a live session triggers a restart in the new cwd
+/// (D13 overlay flow). Wire-stable: new variants append.
+public enum SessionMode: String, Codable, Hashable, Sendable, CaseIterable {
+    /// Run in the repo's primary checkout. Edits land directly.
+    case local
+    /// Run inside `.claude/worktrees/<slug>` (git worktree branched off main).
+    /// Same repo, isolated working tree.
+    case worktree
+    /// Reserved for future remote-Mac federation (G20). Disabled in v1 UI.
+    case cloud
+}
+
 /// Lifecycle phase of a session as seen by the daemon.
 public enum AgentSessionStatus: String, Codable, Hashable, Sendable {
     /// Agent is in `--permission-mode plan` (Claude) or equivalent.
@@ -111,6 +124,14 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     public let lastEventAt: Date
     /// Highest `eventSeq` the registry has emitted for this session.
     public let lastEventSeq: UInt64
+    /// Where this session is running (Local vs Worktree). Optional in the
+    /// Codable for backward-compat: sessions persisted before G0 default
+    /// to `.worktree` if `worktreePath != nil`, otherwise `.local`.
+    public let mode: SessionMode
+    /// When the user archived this session. `nil` = active. Archived sessions
+    /// are hidden from the default sidebar but recoverable via "Show archived".
+    /// Done-detector auto-archives sessions older than the configured threshold.
+    public let archivedAt: Date?
 
     public init(
         id: UUID,
@@ -126,7 +147,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         planText: String?,
         createdAt: Date,
         lastEventAt: Date,
-        lastEventSeq: UInt64
+        lastEventSeq: UInt64,
+        mode: SessionMode = .local,
+        archivedAt: Date? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -142,6 +165,40 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.createdAt = createdAt
         self.lastEventAt = lastEventAt
         self.lastEventSeq = lastEventSeq
+        self.mode = mode
+        self.archivedAt = archivedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.repoKey = try c.decode(String.self, forKey: .repoKey)
+        self.repoDisplayName = try c.decode(String.self, forKey: .repoDisplayName)
+        self.agent = try c.decode(AgentKind.self, forKey: .agent)
+        self.model = try c.decodeIfPresent(String.self, forKey: .model)
+        self.goal = try c.decodeIfPresent(String.self, forKey: .goal)
+        self.worktreePath = try c.decodeIfPresent(String.self, forKey: .worktreePath)
+        self.tmuxWindowId = try c.decodeIfPresent(String.self, forKey: .tmuxWindowId)
+        self.tmuxPaneId = try c.decodeIfPresent(String.self, forKey: .tmuxPaneId)
+        self.status = try c.decode(AgentSessionStatus.self, forKey: .status)
+        self.planText = try c.decodeIfPresent(String.self, forKey: .planText)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.lastEventAt = try c.decode(Date.self, forKey: .lastEventAt)
+        self.lastEventSeq = try c.decode(UInt64.self, forKey: .lastEventSeq)
+        // mode: if absent, infer from worktreePath (back-compat).
+        if let decoded = try? c.decodeIfPresent(SessionMode.self, forKey: .mode) {
+            self.mode = decoded ?? (self.worktreePath != nil ? .worktree : .local)
+        } else {
+            self.mode = self.worktreePath != nil ? .worktree : .local
+        }
+        self.archivedAt = try c.decodeIfPresent(Date.self, forKey: .archivedAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, repoKey, repoDisplayName, agent, model, goal,
+             worktreePath, tmuxWindowId, tmuxPaneId,
+             status, planText, createdAt, lastEventAt, lastEventSeq,
+             mode, archivedAt
     }
 }
 
