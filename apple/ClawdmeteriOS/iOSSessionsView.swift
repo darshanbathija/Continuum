@@ -492,6 +492,14 @@ private struct SessionDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    NavigationLink {
+                        iOSArtifactsPane(client: client, session: session, chatStore: chatStore)
+                            .navigationTitle("Artifacts")
+                            .navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        Label("Artifacts (\(chatStore.snapshot.artifactEntries.count))", systemImage: "paperclip")
+                    }
+                    Divider()
                     if session.archivedAt == nil {
                         Button("Archive session") {
                             Task { await client.archiveSession(id: session.id) }

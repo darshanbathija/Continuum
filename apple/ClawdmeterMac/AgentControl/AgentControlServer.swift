@@ -565,6 +565,9 @@ public final class AgentControlServer {
         t.register(method: "GET", pattern: "/sessions/:id/terminals") { [weak self] _, conn, params in
             self?.handleGetTerminals(sessionId: params["id"] ?? "", connection: conn)
         }
+        t.register(method: "GET", pattern: "/sessions/:id/artifact") { [weak self] req, conn, params in
+            await self?.handleGetArtifact(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
         t.register(method: "GET", pattern: "/transcript") { [weak self] req, conn, _ in
             self?.handleGetTranscript(path: req.path, connection: conn)
         }
@@ -959,6 +962,69 @@ public final class AgentControlServer {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
             sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// GET /sessions/:id/artifact?path=<relative-or-abs>
+    ///
+    /// Streams an artifact file (PDF, image, doc) the agent wrote to the
+    /// session's worktree. Path is path-component validated so callers
+    /// can only read inside the session's worktree or repo. Cap at 50MB
+    /// to keep the daemon responsive when an agent writes a giant file.
+    private func handleGetArtifact(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let comps = URLComponents(string: request.path),
+              let pathArg = comps.queryItems?.first(where: { $0.name == "path" })?.value,
+              !pathArg.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let repoCwd = session.worktreePath ?? session.repoKey
+        let absolute: String = pathArg.hasPrefix("/")
+            ? pathArg
+            : (repoCwd as NSString).appendingPathComponent(pathArg)
+        // Resolve symlinks + canonicalize, then require the path to live
+        // under repoCwd. Prevents `?path=../../../etc/passwd` shenanigans.
+        let resolved = (absolute as NSString).standardizingPath
+        let repoStandard = (repoCwd as NSString).standardizingPath
+        guard resolved.hasPrefix(repoStandard + "/") || resolved == repoStandard else {
+            sendResponse(HTTPResponse(
+                status: 403, reason: "Forbidden",
+                contentType: "text/plain",
+                body: Data("path escapes session worktree\n".utf8)
+            ), on: connection)
+            return
+        }
+        let url = URL(fileURLWithPath: resolved)
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: resolved),
+              let size = attrs[.size] as? Int,
+              size <= 50_000_000 else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let data = try? Data(contentsOf: url) else {
+            sendResponse(.internalError, on: connection); return
+        }
+        sendResponse(.ok(contentType: contentType(for: url), body: data), on: connection)
+    }
+
+    private func contentType(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "pdf": return "application/pdf"
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "svg": return "image/svg+xml"
+        case "webp": return "image/webp"
+        case "heic": return "image/heic"
+        case "json": return "application/json"
+        case "txt", "log", "md": return "text/plain"
+        case "html": return "text/html"
+        case "csv": return "text/csv"
+        case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        default: return "application/octet-stream"
         }
     }
 
