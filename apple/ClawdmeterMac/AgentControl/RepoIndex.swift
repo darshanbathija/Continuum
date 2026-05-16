@@ -357,11 +357,67 @@ public actor RepoIndex {
             // always need the cwd, but very old ones don't need parsing past
             // the first hit, so just read on a wider net.
             guard mtime > recentCutoff else { continue }
-            if let cwd = readFirstCwd(from: entry) {
-                out.append(CodexSessionMeta(cwd: cwd, path: entry.path, mtime: mtime))
-            }
+            let info = readCodexSessionInfo(from: entry)
+            guard let cwd = info.cwd else { continue }
+            // Hide Codex sub-agents from the sidebar's Recent list. A
+            // single user-driven Codex turn can spawn 5-10 worker
+            // threads, each of which writes its own rollout JSONL —
+            // surfacing every one duplicates the parent thread visually
+            // and drowns out everything else. The parent thread (the
+            // one the user actually launched) still shows up; its
+            // worker children stay attached to it conceptually.
+            //
+            // Detection: Codex marks subagent rollouts with
+            // `payload.thread_source = "subagent"` (and a non-null
+            // `payload.agent_role`); top-level rollouts have
+            // `thread_source = "user"`.
+            if info.isSubagent { continue }
+            out.append(CodexSessionMeta(cwd: cwd, path: entry.path, mtime: mtime))
         }
         return out
+    }
+
+    /// Returns the cwd + a flag indicating whether this rollout is a
+    /// Codex sub-agent (worker thread spawned by a parent turn). Both
+    /// fields come from the `session_meta` line at the top of the
+    /// JSONL.
+    struct CodexSessionInfo {
+        let cwd: String?
+        let isSubagent: Bool
+    }
+    private nonisolated func readCodexSessionInfo(from url: URL) -> CodexSessionInfo {
+        guard let fh = try? FileHandle(forReadingFrom: url) else {
+            return CodexSessionInfo(cwd: nil, isSubagent: false)
+        }
+        defer { try? fh.close() }
+        guard let chunk = try? fh.read(upToCount: 256 * 1024), !chunk.isEmpty else {
+            return CodexSessionInfo(cwd: nil, isSubagent: false)
+        }
+        var lineStart = chunk.startIndex
+        while lineStart < chunk.endIndex {
+            let newlineIdx = chunk[lineStart...].firstIndex(of: 0x0A) ?? chunk.endIndex
+            let lineBytes = chunk[lineStart..<newlineIdx]
+            lineStart = (newlineIdx < chunk.endIndex)
+                ? chunk.index(after: newlineIdx)
+                : chunk.endIndex
+            guard !lineBytes.isEmpty,
+                  let json = try? JSONSerialization.jsonObject(with: lineBytes) as? [String: Any]
+            else { continue }
+            // Top-level cwd (Claude shape; rare for a file under
+            // ~/.codex/sessions but cheap to check).
+            if let cwd = json["cwd"] as? String, !cwd.isEmpty {
+                return CodexSessionInfo(cwd: cwd, isSubagent: false)
+            }
+            if let payload = json["payload"] as? [String: Any],
+               let cwd = payload["cwd"] as? String, !cwd.isEmpty {
+                let threadSource = payload["thread_source"] as? String
+                let agentRole = payload["agent_role"] as? String
+                let isSub = (threadSource == "subagent")
+                    || (agentRole != nil && !(agentRole?.isEmpty ?? true))
+                return CodexSessionInfo(cwd: cwd, isSubagent: isSub)
+            }
+        }
+        return CodexSessionInfo(cwd: nil, isSubagent: false)
     }
 
     /// Scan the first ~64KB of a JSONL file looking for the first line with

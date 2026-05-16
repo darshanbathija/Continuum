@@ -13,6 +13,7 @@
 		03A84A49FEA03B5FE83AAB9D /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7EDE305AE4E9350183F0920 /* AppDelegate.swift */; };
 		0524A1F795D299795862AA1B /* SpeechDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69F2E3291A6E0BEC1EE5ABEC /* SpeechDictation.swift */; };
 		07CF13F1F81B504018EC7775 /* ClawdmeterWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6A356416D72BB7ECCD6548 /* ClawdmeterWatchApp.swift */; };
+		0D21B3FEB719D90EBCEA7E04 /* SessionsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F6A3D3787BAC8DC4404A911 /* SessionsListView.swift */; };
 		10652EDE40F510A21A2E7FA1 /* WatchUsageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E81AA8A300E81E7510331C1B /* WatchUsageModel.swift */; };
 		11BA8BA021A2FF248DDE4965 /* ModePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1DE3BECFAB2F957716D01F /* ModePicker.swift */; };
 		16AAD267657983FF56851AD3 /* NotificationDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A4AA299B141BD4D1652F66B /* NotificationDispatcher.swift */; };
@@ -71,6 +72,7 @@
 		7F718BA6D2CE6F6DA93A2683 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = B81715D10D4B9BC96A61072C /* SwiftTerm */; };
 		81D97B8F91A09D98BDB6CB10 /* GitDiffPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53A23CB4E962050EF7971CB /* GitDiffPane.swift */; };
 		8355A4F7DE0095DD542880B4 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 289E3F086FDE9A532EFCEC2C /* SwiftTerm */; };
+		882A3D7032BBBDBD07777059 /* LiveCostCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09B39BC5A520970D7D673F5 /* LiveCostCalculator.swift */; };
 		8ABD7420F16C440E13AA36DF /* ControlModeFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23BA2D80741F5E8B24ACEA51 /* ControlModeFrame.swift */; };
 		8FA40B3A1BDFF8D2E6EA2746 /* AgentControlServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9DC6C356E49170FC1FE84C /* AgentControlServer.swift */; };
 		91F59FC843FCFADA8995B62C /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */; };
@@ -212,6 +214,7 @@
 		5A23F364449BE819FB2D8BA0 /* PairingQRPopoverContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingQRPopoverContent.swift; sourceTree = "<group>"; };
 		5B1DE3BECFAB2F957716D01F /* ModePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModePicker.swift; sourceTree = "<group>"; };
 		5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntime.swift; sourceTree = "<group>"; };
+		5F6A3D3787BAC8DC4404A911 /* SessionsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsListView.swift; sourceTree = "<group>"; };
 		60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSpawner.swift; sourceTree = "<group>"; };
 		64C634F7C5D8CBEF39FAA084 /* SessionActivityStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionActivityStrip.swift; sourceTree = "<group>"; };
 		6576347309635291F6B4C01B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -250,6 +253,7 @@
 		BC9DC6C356E49170FC1FE84C /* AgentControlServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlServer.swift; sourceTree = "<group>"; };
 		BE1C3B5FDF4AB46F3A7B4FC6 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C08ACE23C4B4D169F54F10A1 /* iOSPlanTrackerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSPlanTrackerView.swift; sourceTree = "<group>"; };
+		C09B39BC5A520970D7D673F5 /* LiveCostCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCostCalculator.swift; sourceTree = "<group>"; };
 		C18B42DBBC10D2B9E6B9C5BE /* ClawdmeterWatchWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeterWatchWidgets.swift; sourceTree = "<group>"; };
 		C36A898E076F41B5BA9001E2 /* iOSSessionControlsStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSSessionControlsStrip.swift; sourceTree = "<group>"; };
 		C3EF56B06A437691BE9EB4EC /* WatchPlanBridgeIOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPlanBridgeIOS.swift; sourceTree = "<group>"; };
@@ -344,6 +348,7 @@
 				A965446683135119981D9C40 /* ControlModeParser.swift */,
 				F53B364B4BB9E6F7F3F9C8DC /* DoneDetector.swift */,
 				3F1627364A3A4398D5A45B4A /* JSONLTail.swift */,
+				C09B39BC5A520970D7D673F5 /* LiveCostCalculator.swift */,
 				68EF91556CDC1149B2B2C480 /* MacTerminalView.swift */,
 				DDE036C3B197F45A234547AD /* MarkdownRenderer.swift */,
 				0A4AA299B141BD4D1652F66B /* NotificationDispatcher.swift */,
@@ -377,6 +382,7 @@
 				8B6A356416D72BB7ECCD6548 /* ClawdmeterWatchApp.swift */,
 				0654B9694B446225AC792A03 /* ContentView.swift */,
 				77FDB4429B0506B4FCAED27D /* PlanApprovalView.swift */,
+				5F6A3D3787BAC8DC4404A911 /* SessionsListView.swift */,
 				E37960317F2D69E2E52475CD /* WatchPlanBridge.swift */,
 				E81AA8A300E81E7510331C1B /* WatchUsageModel.swift */,
 			);
@@ -814,6 +820,7 @@
 				81D97B8F91A09D98BDB6CB10 /* GitDiffPane.swift in Sources */,
 				478FB511877975AA262E0C5E /* InAppBrowser.swift in Sources */,
 				FF59C31C32BC003A469696AE /* JSONLTail.swift in Sources */,
+				882A3D7032BBBDBD07777059 /* LiveCostCalculator.swift in Sources */,
 				FC09E87265C8C2DFEF77D40F /* MacTerminalView.swift in Sources */,
 				ECB0775FEF1BF8D1B9D4B339 /* MarkdownRenderer.swift in Sources */,
 				D64E0EA5E4866E7E56001DE4 /* MenuBarGaugeView.swift in Sources */,
@@ -906,6 +913,7 @@
 				07CF13F1F81B504018EC7775 /* ClawdmeterWatchApp.swift in Sources */,
 				787D54A82D9A5D7B64B19365 /* ContentView.swift in Sources */,
 				A13F0D46B10F8CAF93CD356E /* PlanApprovalView.swift in Sources */,
+				0D21B3FEB719D90EBCEA7E04 /* SessionsListView.swift in Sources */,
 				27C2A460552540D763364D8C /* WatchPlanBridge.swift in Sources */,
 				10652EDE40F510A21A2E7FA1 /* WatchUsageModel.swift in Sources */,
 			);
@@ -974,7 +982,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -1209,7 +1217,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
