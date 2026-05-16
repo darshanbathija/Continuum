@@ -191,8 +191,8 @@ Wire (v3): `Protocol.swift` carries `ReasoningEffort`, `ModelCatalog`
 sessions.json silently drop the new fields.
 
 Daemon (Mac): `AgentControlServer` uses a route-table dispatcher
-(`RouteTable.swift`) with 19 new endpoints (`/models`,
-`/sessions/:id/{chat-snapshot,diff,pr,terminals,model,effort,mode,send,
+(`RouteTable.swift`) with 20 new endpoints (`/models`,
+`/sessions/:id/{chat-snapshot,diff,pr,terminals,artifact,model,effort,mode,send,
 interrupt,autopilot,ab-pair/pick-winner,create-pr,merge}`,
 `/sessions/preflight`, `DELETE /sessions/:id/terminals/:paneId`).
 `AgentSpawner` uses `ShellRunner.locateBinary` (no hardcoded paths) and
@@ -202,8 +202,17 @@ single `with()` helper so v3 fields propagate across every mutation
 (T41 audit). `AutopilotState` persists per-repo trust to
 `~/.clawdmeter/autopilot-trusted-repos.json`. `AuditLog` writes
 hash-only JSONL to `~/.clawdmeter/audit/{sends,swaps,autopilot}.jsonl`,
-rotating at 1MB or 7 days. `RateLimiter` caps 1 send/sec + 1 swap/5sec
-per session.
+rotating at 1MB or 7 days; **wired into** the send/swap/autopilot
+handlers (T13). `RateLimiter` caps 1 send/sec + 1 swap/5sec per session;
+**wired into** the same handlers, returns 429 on deny (T12).
+`WireInspector` (T18) is an actor with an off-by-default rolling buffer
+of HTTP req/res bodies for debugging client/server skew.
+
+Mac Settings now has a "Diagnostics" tab
+(`DiagnosticsSettingsView.swift`) with a segmented Audit Log / Wire
+Inspector surface picker. Audit-log viewer (T17) reads the JSONL files
+with text + session-ID filter + tap-to-expand-raw. Wire-inspector pane
+(T18) toggles recording and shows a live tail polling every second.
 
 Mac UI: `SessionWorkspaceView` composer header now hosts `ModelPicker`
 + `EffortDial` chips next to the existing `ModePicker`.
@@ -213,9 +222,14 @@ helper. `SessionsModel.switchModel/Effort/PlanMode` wire it up.
 iOS Sessions tab: full picker rewrite. `iOSModelPicker` /
 `iOSEffortDial` / `iOSSessionControlsStrip` / `iOSSessionActivityStrip`.
 `SessionDetailView` is a 5-tab structure (Chat / Plan / Diff / PR /
-Terminal). `iOSDiffView`, `iOSPRPane`, `iOSPlanTrackerView` cover
-mobile review surfaces. `iOSChatStore` mirrors the daemon's chat
-snapshot; `iOSChatStoreCache` is LRU-2 with protected sessions.
+Terminal); the Terminal tab is now multi-pane via `iOSTerminalTabsView`
+(T33 — chip strip, tap-to-switch, `+` to spawn, long-press to delete
+non-primary panes). `iOSDiffView`, `iOSPRPane`, `iOSPlanTrackerView`
+cover mobile review surfaces. `iOSArtifactsPane` (overflow menu →
+"Artifacts (N)") downloads bytes via the daemon's `/artifact` endpoint
+into a temp dir and previews via `QLPreviewController`. `iOSChatStore`
+mirrors the daemon's chat snapshot; `iOSChatStoreCache` is LRU-2 with
+protected sessions.
 
 Watch: `SessionsListView` Crown-scrollable list. `WatchSessionDetailView`
 with Approve / Interrupt / Voice-reply buttons. `WatchPlanBridge` extended

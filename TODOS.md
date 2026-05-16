@@ -3,6 +3,12 @@
 Deferred work from Sessions v2 (2026-05-17). Each entry is a self-contained
 follow-up that didn't make the v2.0 ship but is worth picking up.
 
+> **2026-05-17 update**: T17 + T18 (Diagnostics: audit-log viewer + wire
+> inspector), T33 (iOS multi-pane terminal), and the iOS artifacts pane
+> all shipped in the autonomous-execution pass. Plus T12 + T13
+> (RateLimiter + AuditLog wired into daemon handlers — the
+> infrastructure was already in place; this pass closed the call sites).
+
 ## v2.0.1 — visible-polish follow-ups
 
 ### iOS Live Activity APNS push (D9 narrow scope)
@@ -23,33 +29,30 @@ follow-up that didn't make the v2.0 ship but is worth picking up.
   load-bearing mitigation.
 - **Effort**: ~6hr CC.
 
-### Multi-pane terminal tab strip on iOS (T33)
-- **What**: Wrap `iOSTerminalView` in a `TabView` so the user can spawn
-  additional tmux panes per session via the `POST /sessions/:id/terminals`
-  endpoint (already wired). Long-press a tab → Rename / Delete.
-- **Why**: The Mac has multi-pane via `TerminalTabContainer`. iOS
-  currently shows a single pane only.
-- **Status**: Daemon side wired. iOS UI single-pane today.
-- **Effort**: ~6hr CC.
+### Multi-pane terminal tab strip on iOS (T33) — SHIPPED 2026-05-17
+- **What**: iOSTerminalView now accepts an optional `paneId` parameter
+  passed in the WS envelope. `iOSTerminalTabsView` wraps it in a
+  horizontal chip strip with `+` to spawn (`POST /sessions/:id/terminals`)
+  and long-press → Delete on non-primary panes.
+- **Status**: SHIPPED. See `apple/ClawdmeteriOS/Workspace/iOSTerminalTabsView.swift`.
 
-### iOS artifacts pane (Phase 4 carryover)
-- **What**: Port `apple/ClawdmeterMac/Workspace/ArtifactsPane.swift` to
-  iOS — thumbnail grid + `QLPreviewController` for PDFs/images/etc.
-  Wire to a new `GET /sessions/:id/artifacts` endpoint.
-- **Why**: Phase 4 plan called for it; v2.0 ships diff/PR/plan but not
-  artifacts.
-- **Effort**: ~4hr CC.
+### iOS artifacts pane (Phase 4 carryover) — SHIPPED 2026-05-17
+- **What**: Daemon `GET /sessions/:id/artifact?path=…` streams artifact
+  bytes (path-canonicalized to prevent worktree escape, 50MB cap). iOS
+  `iOSArtifactsPane` lists `chatStore.snapshot.artifactEntries`,
+  downloads on tap to tmp dir, previews via `.quickLookPreview`.
+- **Status**: SHIPPED. See `apple/ClawdmeteriOS/Workspace/iOSArtifactsPane.swift`.
+- **Reached from**: SessionDetail overflow menu → "Artifacts (N)".
 
-### Settings → Diagnostics (T17 + T18)
-- **What**: Two new panels in Mac Settings:
-  1. **Session Event Timeline**: JSONL viewer reading from
-     `~/.clawdmeter/audit/*.jsonl`, filterable by session id + event kind.
-     Mirrors dmux's logs popup pattern.
-  2. **Wire Inspector**: toggle to log all HTTP/WS payloads to a rolling
-     buffer; off by default. Helpful when debugging client/server skew.
-- **Why**: Audit log is being written in v2.0; users need a viewer.
-- **Status**: `AuditLog` (write) + `appendix files` exist. Reader UI pending.
-- **Effort**: ~6hr CC (timeline) + ~4hr CC (wire inspector).
+### Settings → Diagnostics (T17 + T18) — SHIPPED 2026-05-17
+- **What**: New "Diagnostics" tab in Mac Settings hosting two surfaces:
+  1. **Audit Log viewer** (T17): segmented picker (sends / swaps /
+     autopilot), text + session-ID filter, expand-to-raw JSONL.
+  2. **Wire Inspector** (T18): toggleable rolling buffer of HTTP req/res
+     bodies; off by default; cap 500 entries (~5MB worst-case).
+- **Status**: SHIPPED. See
+  `apple/ClawdmeterMac/DiagnosticsSettingsView.swift` +
+  `apple/ClawdmeterMac/AgentControl/WireInspector.swift`.
 
 ### iOS UX polish (Phase 5)
 - **What**: Status groups in the sidebar (Backlog / In Progress / Review
