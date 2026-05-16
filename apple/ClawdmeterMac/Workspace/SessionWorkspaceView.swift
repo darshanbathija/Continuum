@@ -1036,12 +1036,13 @@ private struct ChatThreadScroll: View {
             // the snapshot's updateCounter. Replaces the four deferred
             // `.onAppear` scrolls + dual `.onChange` handlers.
             .onChange(of: store.snapshot.updateCounter) { _, _ in
-                stickToBottom(proxy)
+                stickToBottom(proxy, items: store.snapshot.items.count)
             }
             .onAppear {
                 // Initial mount: one immediate + one deferred scroll to
                 // cover LazyVStack's lay-out-then-layout-again pass.
                 proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                lastScrollItemCount = store.snapshot.items.count
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     proxy.scrollTo("bottom-anchor", anchor: .bottom)
                 }
@@ -1049,13 +1050,30 @@ private struct ChatThreadScroll: View {
         }
     }
 
-    private func stickToBottom(_ proxy: ScrollViewProxy) {
+    /// Last-seen `items.count` at the most-recent stick-to-bottom call.
+    /// Used to detect a backfill burst — when many items arrive in a
+    /// single 16ms snapshot tick, we want to jump-scroll without
+    /// animation rather than fire an animated scroll for every tick.
+    @State private var lastScrollItemCount: Int = 0
+
+    private func stickToBottom(_ proxy: ScrollViewProxy, items: Int) {
+        let delta = items - lastScrollItemCount
+        lastScrollItemCount = items
+        if delta > 5 || store.isLoading {
+            // Backfill burst (>5 items appeared in one snapshot tick) OR
+            // initial-load phase: skip animation so we don't queue up
+            // hundreds of overlapping `withAnimation` transactions
+            // during the head/reverse-tail parse spike.
+            proxy.scrollTo("bottom-anchor", anchor: .bottom)
+            return
+        }
         withAnimation(.easeOut(duration: 0.2)) {
             proxy.scrollTo("bottom-anchor", anchor: .bottom)
         }
         // Some message renders settle a frame after the count change
         // (markdown layout, disclosure-group height) — re-scroll once
-        // more after a short beat so we land at the new bottom.
+        // more after a short beat so we land at the new bottom. Only
+        // applies to steady-state ticks (delta ≤ 5).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             withAnimation(.easeOut(duration: 0.15)) {
                 proxy.scrollTo("bottom-anchor", anchor: .bottom)

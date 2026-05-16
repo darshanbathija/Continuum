@@ -121,6 +121,12 @@ struct PoppedOutSessionView: View {
         }
         .background(bg)
         .frame(minWidth: 480, minHeight: 360)
+        // Register this session as protected from LRU eviction while the
+        // pop-out window is on screen. Without this, navigating through
+        // three other sessions in the main workspace would evict and
+        // `stop()` this window's chat store underneath it (Codex M1).
+        .onAppear { model.protectSession(session.id) }
+        .onDisappear { model.unprotectSession(session.id) }
     }
 
     private var header: some View {

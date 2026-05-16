@@ -93,12 +93,17 @@ public final class PRMirror: ObservableObject {
         pollTask = nil
     }
 
-    /// Scan the current chat snapshot for a PR URL and, if found AND we're
-    /// in watching mode, start polling. No-op if we've already found a
-    /// URL or aren't watching.
+    /// Scan the current chat snapshot for a PR URL. The original
+    /// implementation latched the first URL found and never re-checked,
+    /// so a session that ran `gh pr create` twice (e.g., agent
+    /// re-created the PR on a different branch) would mirror the stale
+    /// one forever. We now re-scan on every snapshot update and replace
+    /// `watchedURL` if a NEWER URL appears later in the chat — the
+    /// scan walks messages in reverse so "newest URL wins" naturally.
     private func maybeDetectURL() {
-        guard watchedURL == nil, let store = chatStore else { return }
+        guard let store = chatStore else { return }
         guard let url = Self.findPRURL(in: store.messages) else { return }
+        if let existing = watchedURL, existing == url { return }
         watchedURL = url
         if isWatching {
             startPolling(url: url)

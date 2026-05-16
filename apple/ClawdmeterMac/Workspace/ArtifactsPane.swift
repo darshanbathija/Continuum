@@ -15,9 +15,17 @@ struct ArtifactsPane: View {
     let session: AgentSession
     @ObservedObject var chatStore: SessionChatStore
     @State private var previewURL: URL?
+    /// Verified-on-disk artifact set. The existence check used to run
+    /// synchronously inside `collect()` on every render; with many
+    /// artifacts and a slow FS (network mount, heavy disk load) this
+    /// hitched. The check now runs off-main via Task.detached and the
+    /// result lands here. The view re-runs the check when
+    /// `snapshot.artifactEntries` changes.
+    @State private var verifiedArtifacts: [Artifact] = []
+    @State private var lastVerifiedCounter: UInt64 = 0
 
     var body: some View {
-        let artifacts = collect()
+        let artifacts = verifiedArtifacts
         return ZStack {
             ScrollView {
                 if artifacts.isEmpty {
@@ -36,6 +44,40 @@ struct ArtifactsPane: View {
             if let url = previewURL {
                 QuickLookOverlay(url: url, onClose: { previewURL = nil })
                     .transition(.opacity)
+            }
+        }
+        .onAppear { refreshVerified() }
+        .onChange(of: chatStore.snapshot.updateCounter) { _, _ in
+            refreshVerified()
+        }
+    }
+
+    /// Resolve relative paths, stat each one off-main, and publish the
+    /// verified list back. Skips re-running for the same updateCounter
+    /// so tab switches don't trigger redundant stat() calls.
+    private func refreshVerified() {
+        let counter = chatStore.snapshot.updateCounter
+        guard counter != lastVerifiedCounter else { return }
+        lastVerifiedCounter = counter
+        let entries = chatStore.snapshot.artifactEntries
+        let repoCwd = session.worktreePath ?? session.repoKey
+        Task.detached(priority: .userInitiated) {
+            var out: [Artifact] = []
+            var seen: Set<String> = []
+            for entry in entries {
+                let absolute: String = entry.path.hasPrefix("/")
+                    ? entry.path
+                    : (repoCwd as NSString).appendingPathComponent(entry.path)
+                guard !seen.contains(absolute) else { continue }
+                seen.insert(absolute)
+                guard FileManager.default.fileExists(atPath: absolute) else { continue }
+                out.append(Artifact(
+                    path: absolute,
+                    url: URL(fileURLWithPath: absolute)
+                ))
+            }
+            await MainActor.run {
+                self.verifiedArtifacts = out
             }
         }
     }
@@ -90,29 +132,12 @@ struct ArtifactsPane: View {
         var filename: String { url.lastPathComponent }
     }
 
-    // The artifact-extension allowlist used to live here. After T9 the
-    // single source of truth is `StagingParser.artifactExtensions` —
-    // the pane reads pre-filtered entries from `snapshot.artifactEntries`.
-
-    /// T9: read precomputed artifact entries from the snapshot, resolve
-    /// relative paths against the session cwd, and filter to files that
-    /// actually exist on disk (the file-exists check runs at view-build
-    /// time but is cheap once paths are resolved).
-    private func collect() -> [Artifact] {
-        let repoCwd = session.worktreePath ?? session.repoKey
-        var out: [Artifact] = []
-        var seen: Set<String> = []
-        for entry in chatStore.snapshot.artifactEntries {
-            let absolute: String = entry.path.hasPrefix("/")
-                ? entry.path
-                : (repoCwd as NSString).appendingPathComponent(entry.path)
-            guard !seen.contains(absolute) else { continue }
-            seen.insert(absolute)
-            guard FileManager.default.fileExists(atPath: absolute) else { continue }
-            out.append(Artifact(path: absolute, url: URL(fileURLWithPath: absolute)))
-        }
-        return out
-    }
+    // The artifact-extension allowlist + the per-render `collect()` helper
+    // both lived here previously. After T9 the source of truth is
+    // `StagingParser.artifactExtensions`; after hardening, the verified
+    // existence list is computed off-main via `refreshVerified()` above
+    // and stored in `@State verifiedArtifacts` so the view body does
+    // zero per-render filesystem work.
 }
 
 // MARK: - QuickLook thumbnail (NSViewRepresentable)

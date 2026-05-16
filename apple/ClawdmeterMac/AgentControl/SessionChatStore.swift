@@ -102,6 +102,16 @@ public final class SessionChatStore: ObservableObject {
     /// store can't publish after navigation.
     private var parseGeneration: UInt64 = 0
     private var commitTask: Task<Void, Never>?
+    /// Reverse-tail ingest task — tracked so `stop()` cancels it (was
+    /// previously fire-and-forget, so a `stop()` followed by `start()`
+    /// could let the old reverse-tail's late ingests bleed into the new
+    /// parse generation through the shared StagingParser).
+    private var ingestTailTask: Task<Void, Never>?
+    /// Per-line ingest tasks spawned by the JSONLTail handler. These are
+    /// also tracked so `stop()` cancels them; combined with the per-task
+    /// generation check inside the ingest closure, this closes the
+    /// "stop() doesn't stop all writers" race surfaced in /review.
+    private var perLineIngestTasks: [Task<Void, Never>] = []
 
     public init(sessionId: UUID, sessionFileURL: URL) {
         self.sessionId = sessionId
@@ -119,27 +129,56 @@ public final class SessionChatStore: ObservableObject {
         startSignpostID = signpostID
         chatLogger.info("Starting chat store for session \(self.sessionId.uuidString, privacy: .public) at \(self.sessionFileURL.path, privacy: .public)")
 
-        // T4 reverse-tail progressive parse: synchronously kick off a
-        // background task that reads the last ~256 KB of the JSONL and
-        // ingests the newest ~50 messages into the staging actor FIRST.
-        // The commit loop's first frame then shows the latest messages;
-        // the head parse (JSONLTail from line 0) fills in older history
-        // behind them. StagingParser dedups by id + sorts by timestamp,
-        // so the final items array is in correct chronological order
-        // regardless of arrival.
+        // Reset the staging actor so a start-after-stop cycle doesn't
+        // bleed stale messages / seenIds / derived counters from the
+        // previous generation. Fire-and-forget: the await happens inside
+        // a detached Task so start() stays synchronous from the caller's
+        // perspective. Subsequent reverse-tail and per-line ingests
+        // serialize behind the reset via actor ordering.
         let staging = self.staging
-        let sessionURL = self.sessionFileURL
         Task.detached(priority: .userInitiated) {
-            await Self.ingestTail(url: sessionURL, into: staging)
+            await staging.reset()
+        }
+
+        // T4 reverse-tail progressive parse: kick off a background task
+        // that reads the last ~256 KB of the JSONL and ingests the newest
+        // ~50 messages into the staging actor FIRST. The commit loop's
+        // first frame then shows the latest messages; the head parse
+        // (JSONLTail from line 0) fills in older history behind them.
+        // StagingParser dedups by id + sorts by timestamp, so the final
+        // items array is in correct chronological order regardless of
+        // arrival.
+        let sessionURL = self.sessionFileURL
+        ingestTailTask = Task.detached(priority: .userInitiated) { [weak self] in
+            await Self.ingestTail(
+                url: sessionURL,
+                into: staging,
+                generation: generation,
+                store: self
+            )
         }
 
         // JSONLTail runs on its background queue. The handler converts
         // [String: Any] → typed `ParsedLine` (Sendable) BEFORE crossing
         // into the actor — codex tension #7b: typed boundary, not raw
-        // dictionaries.
-        let tail = JSONLTail(fileURL: sessionFileURL) { json in
+        // dictionaries. The per-line task is tracked on `self` so
+        // `stop()` can cancel it; the closure-level generation check
+        // also drops late ingests from a prior parse generation.
+        let tail = JSONLTail(fileURL: sessionFileURL) { [weak self] json in
             guard let parsed = ParsedLine.from(json: json) else { return }
-            Task { await staging.ingest(parsed) }
+            let task = Task { [weak self] in
+                guard let self else { return }
+                // The MainActor read is necessary because parseGeneration
+                // lives on self (@MainActor). Snapshot it once then drop
+                // the hop.
+                let currentGen = await MainActor.run { self.parseGeneration }
+                guard currentGen == generation else { return }
+                await staging.ingest(parsed)
+            }
+            // Track the task so stop() can cancel any in-flight ingests.
+            Task { @MainActor [weak self] in
+                self?.perLineIngestTasks.append(task)
+            }
         }
         self.tail = tail
         tail.start()
@@ -196,8 +235,26 @@ public final class SessionChatStore: ObservableObject {
         parseGeneration &+= 1
         commitTask?.cancel()
         commitTask = nil
+        ingestTailTask?.cancel()
+        ingestTailTask = nil
+        // Cancel any per-line ingest tasks that haven't finished yet.
+        // The generation guard inside each task is the primary defense;
+        // explicit cancel just shortens the time window during which a
+        // stopped store's queued ingests can still hit the actor.
+        for task in perLineIngestTasks { task.cancel() }
+        perLineIngestTasks.removeAll(keepingCapacity: false)
         tail?.stop()
         tail = nil
+        // Close out the session-open signpost if start()'s 500ms isLoading
+        // task didn't reach it before stop(). Without this, Instruments
+        // traces show an unbounded `session-open` interval that never
+        // ends — confusing during perf analysis.
+        if let id = startSignpostID {
+            os_signpost(.end, log: chatPerfLog, name: "session-open",
+                        signpostID: id,
+                        "messageCount=%d stopped=1", self.snapshot.items.count)
+            startSignpostID = nil
+        }
     }
 
     /// Safety net for the rare case where a caller drops the store
@@ -216,8 +273,17 @@ public final class SessionChatStore: ObservableObject {
     /// likely partial (we seeked mid-line) so we skip to the first newline
     /// before parsing. Fail-quiet on any error — the head parse via
     /// JSONLTail will cover what we missed.
+    ///
+    /// The `generation` argument is captured at `start()` time and
+    /// checked before each ingest so a `stop()` that races the
+    /// reverse-tail can prevent stale ingests from polluting a future
+    /// parse. `Task.checkCancellation()` is the primary defense; the
+    /// generation check is the belt to the cancellation suspenders.
     private nonisolated static func ingestTail(
-        url: URL, into staging: StagingParser
+        url: URL,
+        into staging: StagingParser,
+        generation: UInt64,
+        store: SessionChatStore?
     ) async {
         let signpostID = OSSignpostID(log: chatPerfLog)
         os_signpost(.begin, log: chatPerfLog, name: "tail-read",
@@ -242,9 +308,12 @@ public final class SessionChatStore: ObservableObject {
         if start > 0, let nl = slice.firstIndex(of: 0x0A) {
             slice = bytes[bytes.index(after: nl)...]
         }
-        // Parse each complete line; ingest in order.
+        // Parse each complete line; ingest in order. Cancellation +
+        // generation check before each ingest keeps a stale tail from
+        // contaminating a new parse generation after stop() → start().
         var lineStart = slice.startIndex
         while lineStart < slice.endIndex {
+            if Task.isCancelled { return }
             let newlineIdx = slice[lineStart...].firstIndex(of: 0x0A) ?? slice.endIndex
             let lineBytes = slice[lineStart..<newlineIdx]
             lineStart = (newlineIdx < slice.endIndex)
@@ -253,6 +322,10 @@ public final class SessionChatStore: ObservableObject {
             guard !lineBytes.isEmpty else { continue }
             guard let json = (try? JSONSerialization.jsonObject(with: lineBytes)) as? [String: Any] else { continue }
             guard let parsed = ParsedLine.from(json: json) else { continue }
+            if let store {
+                let currentGen = await MainActor.run { store.parseGeneration }
+                guard currentGen == generation else { return }
+            }
             await staging.ingest(parsed)
         }
     }
@@ -554,13 +627,11 @@ struct ParsedLine: Sendable {
 /// - ChatItemBuilder + dedup state are isolated by the actor — no
 ///   manual locking, no @MainActor pinning.
 actor StagingParser {
-    /// Messages kept in chronological order (by `at` timestamp, tiebreak
-    /// by stable id). Insertion-sorted on ingest. This lets the reverse-
-    /// tail parser (T4) ingest the newest 50 messages FIRST without the
-    /// items array landing in tail-then-head order — snapshot() rebuilds
-    /// items from this sorted list so chronological order is preserved
-    /// regardless of arrival order. The seenIds dedup makes the head
-    /// parse a no-op for any line the tail already covered.
+    /// Messages kept in chronological order (by `at` timestamp, with a
+    /// kind-based tiebreak — see `insertIndex(for:)`). The reverse-tail
+    /// parser ingests newest-first; the head parse ingests oldest-first;
+    /// both converge into one sorted array via insertion. The seenIds
+    /// dedup makes the head parse a no-op for any line the tail covered.
     private var sortedMessages: [ChatMessage] = []
     private var seenIds: Set<String> = []
     /// External plan text (AgentSession.planText) injected via
@@ -575,6 +646,46 @@ actor StagingParser {
     private var cachedSnapshot: SessionChatStore.ChatSnapshot = .empty
     private var cachedCounter: UInt64 = 0
 
+    // --- Incremental derived state (hardening sprint) ----------------------
+    // Sources / artifacts / lowercased bodies are maintained on each
+    // ingest rather than recomputed during snapshot(). Trade: each ingest
+    // does O(1) extra work; snapshot() drops from O(N + M×candidate.length)
+    // to O(K log K) for the sources sort + O(M × 50) for the plan-step
+    // scan. With N=5,536 and M=24, this is a measurable difference
+    // during the backfill window where the snapshot() poll fires every
+    // 16 ms and the original implementation rebuilt all four derived
+    // arrays from scratch every tick.
+
+    private var fileCounts: [String: Int] = [:]
+    private var urlCounts: [String: Int] = [:]
+    private var artifactPaths: [String] = []          // insertion-order
+    private var seenArtifactPaths: Set<String> = []
+
+    /// Last ~200 assistant-message bodies, lowercased once at ingest time
+    /// and reused for plan-step completion detection. The original code
+    /// called `.lowercased()` on every candidate inside the M-step loop;
+    /// for sessions with long assistant bodies this allocated tens of MB
+    /// per snapshot during backfill.
+    private var lowercasedAssistantBodies: [String] = []
+    private static let maxCachedAssistantBodies = 200
+
+    /// Step-completion scan window — only the most-recent N assistant
+    /// bodies are checked. Steps from late in the conversation are the
+    /// ones that matter for the "is this complete" heuristic; older
+    /// bodies that already exist on screen don't need to be re-scanned
+    /// every tick.
+    private static let stepCompletionScanWindow = 50
+
+    /// Snapshot-rebuild throttle. During a high-rate backfill the
+    /// `updateCounter` changes on every ingest; without a throttle, the
+    /// 16 ms commit task rebuilds derived state on every tick. We cap
+    /// rebuilds to once per `minRebuildIntervalNanos` so the actor can
+    /// spend its time ingesting rather than re-publishing. Steady-state
+    /// (low ingest rate) is unaffected — the first rebuild after a quiet
+    /// window is always serviced immediately.
+    private var lastSnapshotRebuildNS: UInt64 = 0
+    private static let minRebuildIntervalNanos: UInt64 = 100_000_000  // 100 ms
+
     func ingest(_ line: ParsedLine) {
         var anyAppended = false
         for msg in line.messages {
@@ -582,6 +693,7 @@ actor StagingParser {
             seenIds.insert(msg.id)
             let idx = insertIndex(for: msg)
             sortedMessages.insert(msg, at: idx)
+            ingestIntoDerivedIndexes(msg)
             anyAppended = true
         }
         if anyAppended {
@@ -595,69 +707,187 @@ actor StagingParser {
         updateCounter &+= 1
     }
 
-    /// Snapshot the current state. Lazy-rebuilds derived arrays only when
-    /// sortedMessages / planText changed since last snapshot. All passes
-    /// run on the staging actor — never on main.
+    /// Hardening: clear all accumulated state without re-instantiating
+    /// the actor. Called by `SessionChatStore.start()` when re-entering
+    /// after a prior `stop()` so untracked in-flight ingests can't bleed
+    /// stale messages into a fresh session.
+    func reset() {
+        sortedMessages.removeAll(keepingCapacity: false)
+        seenIds.removeAll(keepingCapacity: false)
+        planText = nil
+        fileCounts.removeAll(keepingCapacity: false)
+        urlCounts.removeAll(keepingCapacity: false)
+        artifactPaths.removeAll(keepingCapacity: false)
+        seenArtifactPaths.removeAll(keepingCapacity: false)
+        lowercasedAssistantBodies.removeAll(keepingCapacity: false)
+        cachedSnapshot = .empty
+        cachedCounter = 0
+        updateCounter = 0
+        lastSnapshotRebuildNS = 0
+    }
+
+    /// Snapshot the current state. Two short-circuit paths:
+    /// 1. `cachedCounter == updateCounter` — nothing changed, return cache.
+    /// 2. Less than `minRebuildIntervalNanos` since the previous rebuild
+    ///    AND we already have a non-empty cached snapshot — under
+    ///    backfill, this keeps the poller from doing repeated rebuild
+    ///    work while ingest is still streaming.
     func snapshot() -> SessionChatStore.ChatSnapshot {
-        if cachedCounter != updateCounter {
-            // 1) items[] from chronological messages
-            var builder = ChatItemBuilder()
-            for msg in sortedMessages {
-                builder.ingest(msg)
-            }
-            builder.flushPending()
-            let items = builder.items
-
-            // 2) planSteps with isComplete flags
-            let steps = computePlanSteps(items: items, planText: planText)
-
-            // 3) source entries (Read / Grep / Glob / WebFetch / WebSearch)
-            let sources = computeSourceEntries(messages: sortedMessages)
-
-            // 4) artifact entries (Write tool calls with artifact-extension paths)
-            let artifacts = computeArtifactEntries(messages: sortedMessages)
-
-            cachedSnapshot = SessionChatStore.ChatSnapshot(
-                items: items,
-                planSteps: steps,
-                sourceEntries: sources,
-                artifactEntries: artifacts,
-                updateCounter: updateCounter
-            )
-            cachedCounter = updateCounter
+        guard cachedCounter != updateCounter else { return cachedSnapshot }
+        let nowNS = DispatchTime.now().uptimeNanoseconds
+        if cachedCounter != 0,
+           nowNS &- lastSnapshotRebuildNS < Self.minRebuildIntervalNanos {
+            // Within the throttle window — defer the rebuild. The commit
+            // loop will call snapshot() again on the next 16 ms tick and
+            // we'll eventually fall through this guard.
+            return cachedSnapshot
         }
+
+        // 1) items[] — has to be a full rebuild because ChatItemBuilder's
+        //    run-grouping depends on chronological order, and the reverse-
+        //    tail + head parses both insert into the middle of
+        //    sortedMessages until they meet.
+        var builder = ChatItemBuilder()
+        for msg in sortedMessages {
+            builder.ingest(msg)
+        }
+        builder.flushPending()
+        let items = builder.items
+
+        // 2) planSteps — bounded scan against precomputed lowercased
+        //    bodies. The candidate-extraction pass walks items once
+        //    (skipping non-assistant), but the completion check no longer
+        //    re-lowercases full bodies per step.
+        let steps = computePlanStepsIncremental(items: items)
+
+        // 3) source entries — sort the incremental dicts; no full scan.
+        var sources: [SourceEntry] = []
+        for (path, count) in fileCounts.sorted(by: { $0.value > $1.value }) {
+            sources.append(SourceEntry(
+                id: "f:\(path)", kind: .file, label: path,
+                payload: path, count: count
+            ))
+        }
+        for (url, count) in urlCounts.sorted(by: { $0.value > $1.value }) {
+            sources.append(SourceEntry(
+                id: "u:\(url)", kind: .url, label: url,
+                payload: url, count: count
+            ))
+        }
+
+        // 4) artifacts — maintained as an insertion-ordered list.
+        let artifacts = artifactPaths.map { ArtifactEntry(path: $0) }
+
+        cachedSnapshot = SessionChatStore.ChatSnapshot(
+            items: items,
+            planSteps: steps,
+            sourceEntries: sources,
+            artifactEntries: artifacts,
+            updateCounter: updateCounter
+        )
+        cachedCounter = updateCounter
+        lastSnapshotRebuildNS = nowNS
         return cachedSnapshot
     }
 
-    // MARK: - Derived-state computations
+    // MARK: - Incremental derived-state maintenance
 
-    private func computePlanSteps(items: [ChatItem], planText: String?) -> [PlanStep] {
+    /// Update fileCounts/urlCounts/artifactPaths/lowercasedAssistantBodies
+    /// in O(1) (amortized) on each new message. The original implementation
+    /// rebuilt these by scanning all of sortedMessages on every snapshot.
+    private func ingestIntoDerivedIndexes(_ msg: ChatMessage) {
+        switch msg.kind {
+        case .assistantText:
+            lowercasedAssistantBodies.append(msg.body.lowercased())
+            if lowercasedAssistantBodies.count > Self.maxCachedAssistantBodies {
+                let drop = lowercasedAssistantBodies.count - Self.maxCachedAssistantBodies
+                lowercasedAssistantBodies.removeFirst(drop)
+            }
+        case .toolCall:
+            let trimmed = msg.body.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return }
+            switch msg.title {
+            case "Read", "Edit":
+                fileCounts[trimmed, default: 0] += 1
+            case "Write":
+                fileCounts[trimmed, default: 0] += 1
+                let ext = (trimmed as NSString).pathExtension.lowercased()
+                if Self.artifactExtensions.contains(ext),
+                   !seenArtifactPaths.contains(trimmed) {
+                    seenArtifactPaths.insert(trimmed)
+                    artifactPaths.append(trimmed)
+                }
+            case "Glob", "Grep":
+                fileCounts[trimmed, default: 0] += 1
+            case "WebFetch", "WebSearch":
+                urlCounts[trimmed, default: 0] += 1
+            default:
+                break
+            }
+        case .userText, .toolResult, .meta:
+            break
+        }
+    }
+
+    // MARK: - Plan-step extraction
+
+    private func computePlanStepsIncremental(items: [ChatItem]) -> [PlanStep] {
+        // Step candidates come from planText first, then assistant
+        // messages in chronological order, capped at 24.
         var stepTexts: [String] = []
         var seen: Set<String> = []
-        let candidates: [String] = [planText ?? ""] + items.compactMap { item in
-            if case .message(let m) = item, m.kind == .assistantText { return m.body }
-            return nil
+        let plan = planText ?? ""
+        for step in Self.extractStepCandidates(from: plan) {
+            let key = String(step.lowercased().prefix(40))
+            if !seen.contains(key) {
+                seen.insert(key)
+                stepTexts.append(step)
+                if stepTexts.count >= 24 { break }
+            }
         }
-        for body in candidates {
-            for step in Self.extractStepCandidates(from: body) {
-                let key = String(step.lowercased().prefix(40))
-                if !seen.contains(key) {
-                    seen.insert(key)
-                    stepTexts.append(step)
+        if stepTexts.count < 24 {
+            for item in items {
+                if case .message(let m) = item, m.kind == .assistantText {
+                    for step in Self.extractStepCandidates(from: m.body) {
+                        let key = String(step.lowercased().prefix(40))
+                        if !seen.contains(key) {
+                            seen.insert(key)
+                            stepTexts.append(step)
+                            if stepTexts.count >= 24 { break }
+                        }
+                    }
                     if stepTexts.count >= 24 { break }
                 }
             }
-            if stepTexts.count >= 24 { break }
         }
-        // Mark each step complete if a SUBSEQUENT assistant message or
-        // tool_call references the step's first ~30 chars. O(M × candidates)
-        // — fine for M ≤ 24.
+
+        // Completion check: scan only the most-recent N lowercased
+        // assistant bodies (already cached at ingest time). Plus the
+        // planText, lowercased once.
+        let recentBodies = lowercasedAssistantBodies
+            .suffix(Self.stepCompletionScanWindow)
+        let lcPlan = plan.isEmpty ? "" : plan.lowercased()
         return stepTexts.enumerated().map { idx, text in
             let needle = String(text.lowercased().prefix(30))
-            let complete = candidates.contains { body in
-                body.lowercased().contains(needle) && body != text
+            let needleLen = needle.count
+            // Self-match guard: skip the body whose own first-30 chars
+            // are the needle (the body the step came from).
+            let inRecent = recentBodies.contains { body in
+                guard body.contains(needle) else { return false }
+                // Cheap self-match filter — if the recent body STARTS
+                // with the needle and is short enough to be just the
+                // step text repeated, treat as self-reference. Otherwise
+                // a later mention counts.
+                if body.hasPrefix(needle) && body.count <= needleLen + 4 {
+                    return false
+                }
+                return true
             }
-            return PlanStep(id: "step-\(idx)", text: text, isComplete: complete)
+            let inPlan = !lcPlan.isEmpty && lcPlan.contains(needle)
+                && !(lcPlan.hasPrefix(needle) && lcPlan.count <= needleLen + 4)
+            return PlanStep(
+                id: "step-\(idx)", text: text, isComplete: inRecent || inPlan
+            )
         }
     }
 
@@ -679,43 +909,6 @@ actor StagingParser {
         return out
     }
 
-    private func computeSourceEntries(messages: [ChatMessage]) -> [SourceEntry] {
-        var files: [String: Int] = [:]
-        var urls: [String: Int] = [:]
-        for msg in messages where msg.kind == .toolCall {
-            switch msg.title {
-            case "Read", "Edit", "Write":
-                let path = msg.body.trimmingCharacters(in: .whitespaces)
-                guard !path.isEmpty else { continue }
-                files[path, default: 0] += 1
-            case "Glob", "Grep":
-                let pattern = msg.body.trimmingCharacters(in: .whitespaces)
-                guard !pattern.isEmpty else { continue }
-                files[pattern, default: 0] += 1
-            case "WebFetch", "WebSearch":
-                let url = msg.body.trimmingCharacters(in: .whitespaces)
-                guard !url.isEmpty else { continue }
-                urls[url, default: 0] += 1
-            default:
-                break
-            }
-        }
-        var out: [SourceEntry] = []
-        for (path, count) in files.sorted(by: { $0.value > $1.value }) {
-            out.append(SourceEntry(
-                id: "f:\(path)", kind: .file, label: path,
-                payload: path, count: count
-            ))
-        }
-        for (url, count) in urls.sorted(by: { $0.value > $1.value }) {
-            out.append(SourceEntry(
-                id: "u:\(url)", kind: .url, label: url,
-                payload: url, count: count
-            ))
-        }
-        return out
-    }
-
     private static let artifactExtensions: Set<String> = [
         "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
         "png", "jpg", "jpeg", "gif", "svg", "webp", "tiff",
@@ -724,39 +917,48 @@ actor StagingParser {
         "zip", "tar", "gz",
     ]
 
-    private func computeArtifactEntries(messages: [ChatMessage]) -> [ArtifactEntry] {
-        var seen: Set<String> = []
-        var out: [ArtifactEntry] = []
-        for msg in messages where msg.kind == .toolCall && msg.title == "Write" {
-            let path = msg.body.trimmingCharacters(in: .whitespaces)
-            guard !path.isEmpty else { continue }
-            let ext = (path as NSString).pathExtension.lowercased()
-            guard Self.artifactExtensions.contains(ext) else { continue }
-            // For relative paths, we keep them as-is — the view layer
-            // resolves to absolute by combining with session.repoKey.
-            guard !seen.contains(path) else { continue }
-            seen.insert(path)
-            out.append(ArtifactEntry(path: path))
-        }
-        return out
-    }
-
     /// Binary-search insertion index keeping `sortedMessages` ordered by
-    /// `(at, id)`. Ties on timestamp broken by stable id so two messages
-    /// in the same JSONL line (e.g. tool_use + tool_result blocks) keep
-    /// a deterministic order across runs.
+    /// `(at, kindRank, id)`. The kind-based tiebreak fixes the previous
+    /// `(at, id)` design that relied on `"call:" < "result:"` lexicographic
+    /// ordering — fragile against any future change to Anthropic's id
+    /// prefixes. With the kind rank, tool_use always sorts before its
+    /// matching tool_result on the same timestamp regardless of id form.
     private func insertIndex(for msg: ChatMessage) -> Int {
         var lo = 0
         var hi = sortedMessages.count
         while lo < hi {
             let mid = (lo + hi) / 2
             let m = sortedMessages[mid]
-            if m.at < msg.at || (m.at == msg.at && m.id < msg.id) {
+            if Self.precedes(m, msg) {
                 lo = mid + 1
             } else {
                 hi = mid
             }
         }
         return lo
+    }
+
+    /// Ordering rank for `ChatMessage.kind` — drives the `(at, kind, id)`
+    /// sort tiebreak. The interesting case: on the same timestamp, a
+    /// `tool_use` MUST sort before its matching `tool_result` so that
+    /// ChatItemBuilder pairs them correctly. The previous code relied on
+    /// `"call:" < "result:"` lexicographic ordering of ids; this is the
+    /// typed form per the hardening sprint.
+    private static func kindRank(_ kind: ChatMessage.Kind) -> Int {
+        switch kind {
+        case .userText:      return 0
+        case .assistantText: return 1
+        case .toolCall:      return 2
+        case .toolResult:    return 3
+        case .meta:          return 4
+        }
+    }
+
+    private static func precedes(_ a: ChatMessage, _ b: ChatMessage) -> Bool {
+        if a.at != b.at { return a.at < b.at }
+        let ra = kindRank(a.kind)
+        let rb = kindRank(b.kind)
+        if ra != rb { return ra < rb }
+        return a.id < b.id
     }
 }

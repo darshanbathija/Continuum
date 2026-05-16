@@ -52,10 +52,27 @@ struct MarkdownRenderer: View {
             }
         }
         .onAppear {
-            // First-attach parse; subsequent renders reuse cachedChunks.
-            // No-op when scrolling back to a previously-mounted row.
+            // First-attach parse runs OFF MAIN. For long assistant
+            // messages (multi-KB body, several code fences) the markdown
+            // parse can take 5–30ms per row; doing that synchronously
+            // inside `.onAppear` on the main thread caused faulted-in
+            // scroll hitches the perf overhaul was meant to eliminate.
+            // We render the row immediately (chunks=nil → empty body)
+            // and assign the parsed chunks back when ready. The visual
+            // effect is "row appears, text fills in within ~1 frame".
             if cachedChunks == nil {
-                cachedChunks = Self.prepare(source: source)
+                let src = source
+                Task.detached(priority: .userInitiated) {
+                    let prepared = Self.prepare(source: src)
+                    await MainActor.run {
+                        // Only assign if the source the view holds is
+                        // still the one we parsed — protects against
+                        // LazyVStack rebinding during the parse.
+                        if source == src {
+                            cachedChunks = prepared
+                        }
+                    }
+                }
             }
         }
         // SwiftUI's LazyVStack recycling means a row's @State can outlive
@@ -63,7 +80,18 @@ struct MarkdownRenderer: View {
         // changes via diffing). Re-parse on source change so we don't
         // render stale markdown chunks for a different message body.
         .onChange(of: source) { _, newValue in
-            cachedChunks = Self.prepare(source: newValue)
+            let src = newValue
+            // Clear the stale cache so the view doesn't render the
+            // previous source's markdown for one frame.
+            cachedChunks = nil
+            Task.detached(priority: .userInitiated) {
+                let prepared = Self.prepare(source: src)
+                await MainActor.run {
+                    if source == src {
+                        cachedChunks = prepared
+                    }
+                }
+            }
         }
     }
 

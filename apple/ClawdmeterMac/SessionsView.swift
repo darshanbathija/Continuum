@@ -243,11 +243,32 @@ public final class SessionsModel: ObservableObject {
     private var chatStores: [UUID: SessionChatStore] = [:]
     private var chatStoreLRU: [UUID] = []
     private static let maxResidentChatStores = 3
+    /// Sessions explicitly protected from LRU eviction. The main
+    /// workspace's currently-open session is always protected; popped-out
+    /// session windows register themselves on mount (and unregister on
+    /// dismount). Without this, navigating through three other sessions
+    /// while a pop-out window is up would evict and `stop()` the pop-out's
+    /// store while it's still on screen — surfaced by Codex M1.
+    @Published public private(set) var protectedSessionIds: Set<UUID> = []
     /// Per-session PR mirrors (G16). Lazy-instantiated on first access; we
     /// attach the chat store automatically so PR detection picks up the
     /// agent's `gh pr create` output. Paired with `chatStores` — evicted
     /// together so we don't leak polling tasks.
     private var prMirrors: [UUID: PRMirror] = [:]
+
+    /// Register a session as protected from LRU eviction. Called by
+    /// PoppedOutSessionView.onAppear so the pop-out's chat store survives
+    /// even if the main workspace navigates to three other sessions.
+    public func protectSession(_ id: UUID) {
+        protectedSessionIds.insert(id)
+    }
+
+    /// Unregister a session from protection. Called by
+    /// PoppedOutSessionView.onDisappear; subsequent LRU sweeps may
+    /// evict the store on the next chatStore(for:) call.
+    public func unprotectSession(_ id: UUID) {
+        protectedSessionIds.remove(id)
+    }
 
     public init(
         repoIndex: RepoIndex,
@@ -292,14 +313,17 @@ public final class SessionsModel: ObservableObject {
     }
 
     /// Drop oldest stores until we're at or below `maxResidentChatStores`.
-    /// Never evicts the currently-open session (which would tear down the
-    /// view's data source mid-render). Pairs eviction with `prMirrors` so
-    /// the PR poller's Task is cancelled alongside the JSONLTail.
+    /// Never evicts a protected session — the currently-open one in the
+    /// main workspace plus any popped-out windows that have registered
+    /// themselves via `protectSession(_:)`. Pairs eviction with
+    /// `prMirrors` so the PR poller's Task is cancelled alongside the
+    /// JSONLTail.
     private func evictExcessChatStores() {
-        let protectedId = openSessionId
+        var protected = protectedSessionIds
+        if let open = openSessionId { protected.insert(open) }
         while chatStoreLRU.count > Self.maxResidentChatStores {
             // Find the oldest entry that isn't protected.
-            guard let evictIdx = chatStoreLRU.firstIndex(where: { $0 != protectedId })
+            guard let evictIdx = chatStoreLRU.firstIndex(where: { !protected.contains($0) })
             else { break }
             let evictId = chatStoreLRU.remove(at: evictIdx)
             chatStores[evictId]?.stop()

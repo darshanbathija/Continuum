@@ -387,12 +387,24 @@ public actor RepoIndex {
     /// T12 cached wrapper around `readFirstUserPrompt`. Hits the on-disk
     /// FirstPromptCache first; only reads from the JSONL when mtime+size
     /// have changed. Misses populate the cache for next refresh.
+    ///
+    /// Uses `URLResourceValues` with `.fileSizeKey` rather than
+    /// `FileManager.attributesOfItem` so a JSONL that's a symlink to an
+    /// offline network volume doesn't stall the actor for the TCP
+    /// timeout (~75 s on macOS). The URL-resource-value path returns
+    /// quickly with nil on unreachable paths.
     nonisolated static func cachedFirstUserPrompt(at url: URL, mtime: Date) -> String? {
         let path = url.path
-        // Stat for current size; if we can't stat, skip cache + just read.
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let size = (attrs[.size] as? NSNumber)?.int64Value
-        else {
+        let size: Int64? = {
+            // Bounded-time stat via URLResourceValues.
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+            if let n = values?.fileSize { return Int64(n) }
+            return nil
+        }()
+        guard let size else {
+            // Couldn't stat — skip cache and try to read; if the file is
+            // unreachable readFirstUserPrompt will fail quickly via the
+            // FileHandle init returning nil.
             return readFirstUserPrompt(from: url)
         }
         let mtimeEpoch = mtime.timeIntervalSince1970
