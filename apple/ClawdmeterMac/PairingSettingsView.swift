@@ -4,123 +4,254 @@ import CoreImage.CIFilterBuiltins
 import ClawdmeterShared
 
 /// Mac Settings pane for the Sessions feature. Shows the pairing QR
-/// (host + ports + token), supervisor health, scan-roots editor,
-/// and explicit regenerate/revoke buttons for the bearer token.
+/// (host + ports + token), supervisor health, scan-roots editor, and
+/// explicit regenerate/revoke buttons for the bearer token.
 ///
 /// Per Codex Round 1 reviewer concern #6 (lost-phone story): regenerate
 /// invalidates the iPhone's stored token. Revoke removes the token
 /// entirely; the daemon refuses every connection until next launch
 /// auto-generates a fresh one.
+///
+/// Layout note: this view uses `Form { Section { } header: { } }` like
+/// the General preferences tab so the rendering matches macOS Settings
+/// chrome. The previous implementation used raw `VStack`s inside a
+/// `ScrollView` which gave inconsistent rendering — section headers,
+/// labels, and descriptions were technically present but rendered in
+/// system-default styling that blended into the Settings background.
 struct PairingSettingsView: View {
 
     @ObservedObject var runtime: AppRuntime
     @AppStorage(RepoIndex.scanRootsKey) private var scanRoots: String = ""
     @State private var qrImage: NSImage?
     @State private var tokenForDisplay: String = ""
+    @State private var didCopy: Bool = false
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Group {
-                    header("Pair iPhone")
-                    pairingPanel
-                }
-
-                Divider()
-
-                Group {
-                    header("Scan roots")
-                    scanRootsPanel
-                }
-
-                Divider()
-
-                Group {
-                    header("Supervisor")
-                    supervisorPanel
-                }
-
-                Divider()
-
-                Group {
-                    header("Security")
-                    securityPanel
-                }
-
-                Divider()
-
-                Group {
-                    header("Plugins")
-                    pluginsPanel
-                }
-            }
-            .padding(28)
+        Form {
+            pairSection
+            scanRootsSection
+            supervisorSection
+            securitySection
+            pluginsSection
         }
-        .frame(width: 540, height: 720)
-        .onAppear {
-            refreshQR()
-        }
+        .formStyle(.grouped)
+        .frame(width: 520, height: 680)
+        .onAppear { refreshQR() }
     }
 
-    // MARK: - Subviews
+    // MARK: - Sections
 
-    private func header(_ s: String) -> some View {
-        Text(s)
-            .font(.system(size: 18, weight: .semibold))
-    }
-
-    private var pairingPanel: some View {
-        HStack(alignment: .top, spacing: 24) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Scan the QR or copy the URL into Clawdmeter on your iPhone.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                if let httpPort = runtime.agentControlServer.boundPort,
-                   let wsPort = runtime.agentControlServer.boundWsPort {
-                    KeyValueRow(label: "Host", value: macHost())
-                    KeyValueRow(label: "HTTP port", value: "\(httpPort)")
-                    KeyValueRow(label: "WS port", value: "\(wsPort)")
-                    KeyValueRow(
-                        label: "Token",
-                        value: String(tokenForDisplay.prefix(8)) + "…",
-                        secondary: true
-                    )
-                    HStack(spacing: 8) {
-                        Button("Copy pairing URL") {
-                            copyPairingURL()
+    private var pairSection: some View {
+        Section {
+            if let httpPort = runtime.agentControlServer.boundPort,
+               let wsPort = runtime.agentControlServer.boundWsPort {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent("Host") {
+                            Text(macHost())
+                                .font(.system(size: 12, design: .monospaced))
+                                .textSelection(.enabled)
                         }
-                        if didCopy {
-                            Text("Copied ✓")
-                                .font(.caption)
-                                .foregroundStyle(.green)
+                        LabeledContent("HTTP port") {
+                            Text("\(httpPort)")
+                                .font(.system(size: 12, design: .monospaced))
+                                .textSelection(.enabled)
                         }
+                        LabeledContent("WS port") {
+                            Text("\(wsPort)")
+                                .font(.system(size: 12, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        LabeledContent("Token") {
+                            Text(String(tokenForDisplay.prefix(8)) + "…")
+                                .font(.system(size: 12, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        HStack(spacing: 8) {
+                            Button("Copy pairing URL", action: copyPairingURL)
+                            if didCopy {
+                                Text("Copied ✓")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        .padding(.top, 4)
                     }
-                    .padding(.top, 4)
-                } else {
-                    Text("Daemon not running")
-                        .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    qrTile
                 }
+            } else {
+                Label("Daemon not running", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        } header: {
+            Text("Pair iPhone")
+        } footer: {
+            Text("Scan the QR with Clawdmeter on your iPhone, or paste the URL after tapping **Copy pairing URL**.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var qrTile: some View {
+        Group {
             if let qr = qrImage {
                 Image(nsImage: qr)
                     .interpolation(.none)
                     .resizable()
-                    .frame(width: 200, height: 200)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 8))
+                    .frame(width: 140, height: 140)
             } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.secondary.opacity(0.2))
-                    .frame(width: 200, height: 200)
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quaternary)
+                    .frame(width: 140, height: 140)
+                    .overlay(
+                        ProgressView().controlSize(.small)
+                    )
             }
+        }
+        .padding(8)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(.quaternary, lineWidth: 1)
+        )
+    }
+
+    private var scanRootsSection: some View {
+        Section {
+            TextField(
+                "e.g. ~/Downloads, ~/code",
+                text: $scanRoots,
+                axis: .vertical
+            )
+            .lineLimit(1...3)
+            .onChange(of: scanRoots) { _, newValue in
+                let roots = newValue
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                UserDefaults.standard.set(roots, forKey: RepoIndex.scanRootsKey)
+                Task { await runtime.repoIndex.refresh() }
+            }
+        } header: {
+            Text("Scan roots")
+        } footer: {
+            Text("Comma-separated directories to scan for `.git` repos beyond `~/.claude/projects/` and `~/.codex/sessions/`. Empty by default; common picks: `~/Downloads`, `~/Desktop`, `~/code`.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
         }
     }
 
-    @State private var didCopy: Bool = false
+    private var supervisorSection: some View {
+        Section {
+            LabeledContent("Status") {
+                if runtime.tmuxSupervisor.isRecoveryBlocked {
+                    HStack(spacing: 8) {
+                        Label("Unrecoverable", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Button("Recover") {
+                            Task { await runtime.tmuxSupervisor.userInitiatedRecovery() }
+                        }
+                        .controlSize(.small)
+                    }
+                } else {
+                    Label("tmux server is healthy", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+            }
+            LabeledContent("Restart count") {
+                Text("\(runtime.tmuxSupervisor.restartCount)")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Supervisor")
+        }
+    }
+
+    private var securitySection: some View {
+        Section {
+            HStack(spacing: 12) {
+                Button("Regenerate token") {
+                    _ = PairingTokenStore.shared.regenerate()
+                    refreshQR()
+                }
+                Button("Revoke token", role: .destructive) {
+                    PairingTokenStore.shared.revoke()
+                    refreshQR()
+                }
+                Spacer()
+            }
+        } header: {
+            Text("Security")
+        } footer: {
+            Text("Regenerating the token invalidates every paired device — you'll need to scan the QR again on each iPhone. Revoking removes the token entirely; the daemon refuses every connection until you relaunch Clawdmeter.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var pluginsSection: some View {
+        Section {
+            let plugins = PluginRegistry.discover()
+            if plugins.isEmpty {
+                Text("No MCP servers or plugins detected.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(plugins) { plugin in
+                    HStack(spacing: 8) {
+                        Image(systemName: icon(for: plugin.kind))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 14)
+                        Text(plugin.name)
+                            .font(.system(size: 12, design: .monospaced))
+                        Text(label(for: plugin.kind))
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(.secondary.opacity(0.15), in: Capsule())
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(plugin.source)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+        } header: {
+            Text("Plugins")
+        } footer: {
+            Text("Read-only inventory of MCP servers and plugins from `~/.codex/config.toml` and `~/.claude/settings.json`. Enable or disable from the CLI configs.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func icon(for kind: PluginInfo.Kind) -> String {
+        switch kind {
+        case .codexMCP, .claudeMCP: return "plug"
+        case .claudePlugin: return "puzzlepiece.extension"
+        }
+    }
+
+    private func label(for kind: PluginInfo.Kind) -> String {
+        switch kind {
+        case .codexMCP: return "Codex MCP"
+        case .claudeMCP: return "Claude MCP"
+        case .claudePlugin: return "Claude plugin"
+        }
+    }
+
+    // MARK: - Actions
 
     private func copyPairingURL() {
         guard let httpPort = runtime.agentControlServer.boundPort,
@@ -131,116 +262,6 @@ struct PairingSettingsView: View {
         didCopy = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
             didCopy = false
-        }
-    }
-
-    private var scanRootsPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Comma-separated directories to scan for `.git` repos. Empty by default; common picks: `~/Downloads`, `~/Desktop`, `~/code`.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            TextField("e.g. ~/Downloads, ~/code", text: $scanRoots, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .onChange(of: scanRoots) { _, newValue in
-                    let roots = newValue.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                    UserDefaults.standard.set(roots, forKey: RepoIndex.scanRootsKey)
-                    Task { await runtime.repoIndex.refresh() }
-                }
-        }
-    }
-
-    private var supervisorPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Restart count: \(runtime.tmuxSupervisor.restartCount)")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-            if runtime.tmuxSupervisor.isRecoveryBlocked {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text("tmux unrecoverable — recovery attempts exhausted")
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    Button("Recover") {
-                        Task { await runtime.tmuxSupervisor.userInitiatedRecovery() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-                .padding(10)
-                .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-            } else {
-                Text("tmux server is healthy")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.green)
-            }
-        }
-    }
-
-    private var securityPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Regenerating the token invalidates every paired device. Revoking removes it entirely — the daemon will refuse every connection until you relaunch Clawdmeter.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 12) {
-                Button("Regenerate token") {
-                    _ = PairingTokenStore.shared.regenerate()
-                    refreshQR()
-                }
-                Button("Revoke token", role: .destructive) {
-                    PairingTokenStore.shared.revoke()
-                    refreshQR()
-                }
-            }
-        }
-    }
-
-    private var pluginsPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Read-only inventory of MCP servers and plugins your underlying Claude / Codex CLIs already know about. Enable / disable from the CLI configs.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            let plugins = PluginRegistry.discover()
-            if plugins.isEmpty {
-                Text("No MCP servers or plugins detected.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(plugins) { plugin in
-                            HStack(spacing: 6) {
-                                Image(systemName: icon(for: plugin.kind))
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                                Text(plugin.name)
-                                    .font(.system(size: 11, design: .monospaced))
-                                Text(plugin.kind == .codexMCP ? "Codex MCP"
-                                    : plugin.kind == .claudeMCP ? "Claude MCP"
-                                    : "Claude plugin")
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .padding(.horizontal, 4).padding(.vertical, 1)
-                                    .background(.secondary.opacity(0.15), in: Capsule())
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text(plugin.source)
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: 160)
-            }
-        }
-    }
-
-    private func icon(for kind: PluginInfo.Kind) -> String {
-        switch kind {
-        case .codexMCP, .claudeMCP: return "plug"
-        case .claudePlugin: return "puzzlepiece.extension"
         }
     }
 
@@ -286,28 +307,11 @@ struct PairingSettingsView: View {
         filter.message = Data(string.utf8)
         filter.correctionLevel = "M"
         guard let outputImage = filter.outputImage else { return nil }
-        // Scale up so the QR is crisp at 200x200.
-        let scaleFactor: CGFloat = 10
+        // Scale up so the QR is crisp at the rendered size.
+        let scaleFactor: CGFloat = 8
         let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: scaleFactor, y: scaleFactor))
         guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: 200, height: 200))
-    }
-}
-
-private struct KeyValueRow: View {
-    let label: String
-    let value: String
-    var secondary: Bool = false
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(label)
-                .frame(width: 90, alignment: .leading)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 12, design: secondary ? .monospaced : .default))
-                .textSelection(.enabled)
-        }
+        return NSImage(cgImage: cg, size: NSSize(width: 140, height: 140))
     }
 }
 
