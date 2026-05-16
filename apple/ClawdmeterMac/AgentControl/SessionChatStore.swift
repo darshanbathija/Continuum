@@ -44,6 +44,17 @@ public final class SessionChatStore: ObservableObject {
         public let planSteps: [PlanStep]
         public let sourceEntries: [SourceEntry]
         public let artifactEntries: [ArtifactEntry]
+        /// Total input tokens summed across all assistant messages in this
+        /// session. Pulled from each line's `message.usage.input_tokens` +
+        /// `cache_creation_input_tokens` + `cache_read_input_tokens` —
+        /// matches the analytics layer's `inputTokens + cacheReadTokens`
+        /// reading.
+        public let totalInputTokens: Int
+        public let totalOutputTokens: Int
+        /// Timestamp of the latest ingested message. Drives the
+        /// "thinking" indicator — the chat shows the running animation
+        /// when the file has been touched within the activity window.
+        public let lastEventAt: Date?
         /// Monotonic counter that bumps each time the snapshot updates.
         /// View code uses this for `.onChange` triggers instead of
         /// `items.last?.id`, which would change object identity per render.
@@ -54,16 +65,26 @@ public final class SessionChatStore: ObservableObject {
             planSteps: [PlanStep] = [],
             sourceEntries: [SourceEntry] = [],
             artifactEntries: [ArtifactEntry] = [],
+            totalInputTokens: Int = 0,
+            totalOutputTokens: Int = 0,
+            lastEventAt: Date? = nil,
             updateCounter: UInt64
         ) {
             self.items = items
             self.planSteps = planSteps
             self.sourceEntries = sourceEntries
             self.artifactEntries = artifactEntries
+            self.totalInputTokens = totalInputTokens
+            self.totalOutputTokens = totalOutputTokens
+            self.lastEventAt = lastEventAt
             self.updateCounter = updateCounter
         }
 
         public static let empty = ChatSnapshot(items: [], updateCounter: 0)
+
+        /// Total tokens for the session — input + output combined. Used
+        /// by the activity strip beneath the composer.
+        public var totalTokens: Int { totalInputTokens + totalOutputTokens }
     }
 
     @Published public private(set) var snapshot: ChatSnapshot = .empty
@@ -515,6 +536,14 @@ public final class SessionChatStore: ObservableObject {
 struct ParsedLine: Sendable {
     let timestamp: Date
     let messages: [ChatMessage]
+    /// Delta input tokens contributed by this line. Pulled from
+    /// `message.usage.input_tokens + cache_creation_input_tokens +
+    /// cache_read_input_tokens` on Claude assistant turns. Zero for
+    /// user/meta lines and for Codex (Codex's token totals live in
+    /// `event_msg.token_count` events which we don't surface as chat).
+    let deltaInputTokens: Int
+    /// Delta output tokens — `message.usage.output_tokens`.
+    let deltaOutputTokens: Int
 
     /// Convert a raw JSONL dict into a typed ParsedLine. Returns `nil` for
     /// lines we don't surface (queue-operation, last-prompt, attachment,
@@ -567,7 +596,7 @@ struct ParsedLine: Sendable {
             }
         }
         guard !out.isEmpty else { return nil }
-        return ParsedLine(timestamp: at, messages: out)
+        return ParsedLine(timestamp: at, messages: out, deltaInputTokens: 0, deltaOutputTokens: 0)
     }
 
     private static func decodeAssistant(json: [String: Any], at: Date) -> ParsedLine? {
@@ -609,7 +638,23 @@ struct ParsedLine: Sendable {
             }
         }
         guard !out.isEmpty else { return nil }
-        return ParsedLine(timestamp: at, messages: out)
+        // Pull Claude's per-message usage. The shape matches the
+        // analytics layer's parser:
+        //   inputTokens = input_tokens + cache_creation + cache_read
+        //   outputTokens = output_tokens
+        // For Codex (no `usage` on assistant messages), both stay zero.
+        var inTok = 0
+        var outTok = 0
+        if let usage = message["usage"] as? [String: Any] {
+            inTok += (usage["input_tokens"] as? Int) ?? 0
+            inTok += (usage["cache_creation_input_tokens"] as? Int) ?? 0
+            inTok += (usage["cache_read_input_tokens"] as? Int) ?? 0
+            outTok = (usage["output_tokens"] as? Int) ?? 0
+        }
+        return ParsedLine(
+            timestamp: at, messages: out,
+            deltaInputTokens: inTok, deltaOutputTokens: outTok
+        )
     }
 }
 
@@ -638,6 +683,17 @@ actor StagingParser {
     /// `SessionChatStore.setPlanText`. Drives the `planSteps` precompute
     /// alongside steps mined from assistant messages.
     private var planText: String? = nil
+    /// Accumulated tokens for the session metadata strip. Summed from
+    /// each ParsedLine's `deltaInputTokens` / `deltaOutputTokens` (Claude
+    /// `message.usage` field). Codex sessions don't surface token totals
+    /// here — those live in `event_msg.token_count` events the chat
+    /// parser doesn't currently process.
+    private var totalInputTokens: Int = 0
+    private var totalOutputTokens: Int = 0
+    /// Timestamp of the most-recently ingested line. The chat's
+    /// "thinking" indicator pulses when this is within the activity
+    /// window (Date() - 30s).
+    private var lastEventAt: Date? = nil
     /// Bumps on every ingest that produced a delta. The @MainActor poll
     /// task uses this to short-circuit "nothing changed" commits.
     private var updateCounter: UInt64 = 0
@@ -698,6 +754,18 @@ actor StagingParser {
         }
         if anyAppended {
             updateCounter &+= 1
+            // Activity tracking: the metadata strip uses this to decide
+            // whether the "thinking" indicator should pulse. We keep
+            // the latest line's timestamp (not Date()) so a backfill of
+            // historical messages doesn't falsely show the agent as
+            // active.
+            if let stamp = line.messages.map(\.at).max() {
+                if lastEventAt == nil || stamp > lastEventAt! {
+                    lastEventAt = stamp
+                }
+            }
+            totalInputTokens += line.deltaInputTokens
+            totalOutputTokens += line.deltaOutputTokens
         }
     }
 
@@ -720,6 +788,9 @@ actor StagingParser {
         artifactPaths.removeAll(keepingCapacity: false)
         seenArtifactPaths.removeAll(keepingCapacity: false)
         lowercasedAssistantBodies.removeAll(keepingCapacity: false)
+        totalInputTokens = 0
+        totalOutputTokens = 0
+        lastEventAt = nil
         cachedSnapshot = .empty
         cachedCounter = 0
         updateCounter = 0
@@ -783,6 +854,9 @@ actor StagingParser {
             planSteps: steps,
             sourceEntries: sources,
             artifactEntries: artifacts,
+            totalInputTokens: totalInputTokens,
+            totalOutputTokens: totalOutputTokens,
+            lastEventAt: lastEventAt,
             updateCounter: updateCounter
         )
         cachedCounter = updateCounter

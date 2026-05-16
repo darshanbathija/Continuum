@@ -22,24 +22,43 @@ public struct AnalyticsRepoList: View {
     }
 
     /// Merge the two providers' byRepo for the active window, recompute %
-    /// share, re-rank, and keep top-8 + rollup.
+    /// share, re-rank, and keep top-8 + rollup. Each row carries BOTH the
+    /// combined cost AND the per-provider breakdown so the progress bar
+    /// renderer can stack Claude (orange) and Codex (blue) segments,
+    /// rather than showing a single solid tint that hides which provider
+    /// contributed how much.
     private var rows: [Row] {
-        var totalsByRepo: [RepoKey: TokenTotals] = [:]
+        var claudeByRepo: [RepoKey: TokenTotals] = [:]
+        var codexByRepo: [RepoKey: TokenTotals] = [:]
         if providerFilter != .codex {
             for row in snapshot.claude.window(window).byRepo where row.repo != "__rest__" {
-                totalsByRepo[row.repo, default: .zero] += row.totals
+                claudeByRepo[row.repo, default: .zero] += row.totals
             }
         }
         if providerFilter != .claude {
             for row in snapshot.codex.window(window).byRepo where row.repo != "__rest__" {
-                totalsByRepo[row.repo, default: .zero] += row.totals
+                codexByRepo[row.repo, default: .zero] += row.totals
             }
         }
 
-        let totalCost = totalsByRepo.values.reduce(Decimal.zero, { $0 + $1.costUSD })
+        // Build a combined keyset so a repo that's Codex-only still shows.
+        let allRepoKeys = Set(claudeByRepo.keys).union(codexByRepo.keys)
+        var combinedByRepo: [RepoKey: (claude: Decimal, codex: Decimal, total: Decimal, tokens: Int)] = [:]
+        for key in allRepoKeys {
+            let cl = claudeByRepo[key, default: .zero]
+            let cx = codexByRepo[key, default: .zero]
+            combinedByRepo[key] = (
+                claude: cl.costUSD,
+                codex: cx.costUSD,
+                total: cl.costUSD + cx.costUSD,
+                tokens: cl.totalTokens + cx.totalTokens
+            )
+        }
+
+        let totalCost = combinedByRepo.values.reduce(Decimal.zero, { $0 + $1.total })
         guard totalCost > 0 else { return [] }
 
-        let sorted = totalsByRepo.sorted { $0.value.costUSD > $1.value.costUSD }
+        let sorted = combinedByRepo.sorted { $0.value.total > $1.value.total }
         let top = Array(sorted.prefix(8))
         let rest = Array(sorted.dropFirst(8))
 
@@ -48,21 +67,27 @@ public struct AnalyticsRepoList: View {
                 id: key,
                 repo: key,
                 displayName: RepoIdentity.displayName(for: key),
-                cost: value.costUSD,
-                tokens: value.totalTokens,
-                share: NSDecimalNumber(decimal: value.costUSD / totalCost).doubleValue,
+                cost: value.total,
+                claudeCost: value.claude,
+                codexCost: value.codex,
+                tokens: value.tokens,
+                share: NSDecimalNumber(decimal: value.total / totalCost).doubleValue,
                 isRest: false,
                 restCount: 0
             )
         }
         if !rest.isEmpty {
-            let restCost = rest.map(\.value.costUSD).reduce(Decimal.zero, +)
-            let restTokens = rest.map(\.value.totalTokens).reduce(0, +)
+            let restClaude = rest.map(\.value.claude).reduce(Decimal.zero, +)
+            let restCodex = rest.map(\.value.codex).reduce(Decimal.zero, +)
+            let restCost = restClaude + restCodex
+            let restTokens = rest.map(\.value.tokens).reduce(0, +)
             out.append(Row(
                 id: "__rest__",
                 repo: "__rest__",
                 displayName: "…\(rest.count) more",
                 cost: restCost,
+                claudeCost: restClaude,
+                codexCost: restCodex,
                 tokens: restTokens,
                 share: NSDecimalNumber(decimal: restCost / totalCost).doubleValue,
                 isRest: true,
@@ -109,6 +134,14 @@ public struct AnalyticsRepoList: View {
         let repo: RepoKey
         let displayName: String
         let cost: Decimal
+        /// Claude's contribution to this repo's cost. Used to draw the
+        /// orange (Claude) segment of the stacked progress bar.
+        let claudeCost: Decimal
+        /// Codex's contribution to this repo's cost. Used to draw the
+        /// blue (Codex) segment of the stacked progress bar — without
+        /// this, a Codex-heavy repo would render as solid orange and
+        /// the user couldn't see Codex's share.
+        let codexCost: Decimal
         let tokens: Int
         let share: Double
         let isRest: Bool
@@ -120,6 +153,16 @@ public struct AnalyticsRepoList: View {
 private struct RepoRow: View {
     let row: AnalyticsRepoList.Row
     @State private var expanded = false
+
+    /// Claude's share of THIS repo's cost (not the whole window).
+    private var claudeShare: Double {
+        guard row.cost > 0 else { return 0 }
+        return NSDecimalNumber(decimal: row.claudeCost / row.cost).doubleValue
+    }
+    private var codexShare: Double {
+        guard row.cost > 0 else { return 0 }
+        return NSDecimalNumber(decimal: row.codexCost / row.cost).doubleValue
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -139,9 +182,13 @@ private struct RepoRow: View {
                     .monospacedDigit()
                     .frame(width: 44, alignment: .trailing)
             }
-            ProgressView(value: row.share)
-                .progressViewStyle(.linear)
-                .tint(Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255))
+            // Stacked progress bar — Claude (terra-cotta) below, Codex
+            // (accent blue) on top. The widths sum to `row.share` of
+            // the total window cost. Without this split, a Codex-heavy
+            // repo looked identical to a Claude-heavy one in the UI.
+            providerSegmentedBar
+                .frame(height: 6)
+                .clipShape(Capsule())
 
             if expanded && !row.isRest {
                 Text(row.repo)
@@ -153,12 +200,56 @@ private struct RepoRow: View {
         }
         .contentShape(Rectangle())
 #if os(macOS)
-        .help(row.isRest ? "" : row.repo)
+        .help(providerBreakdownTooltip)
 #else
         .onTapGesture {
             if !row.isRest { withAnimation(.snappy) { expanded.toggle() } }
         }
 #endif
+    }
+
+    private var providerSegmentedBar: some View {
+        // We size each segment by its share of the TOTAL window cost so
+        // bars across rows are comparable. Inside a row the segments
+        // sum to `row.share`; the remaining width is the unused track.
+        GeometryReader { geo in
+            let totalWidth = geo.size.width
+            let claudeWidth = totalWidth * claudeShare * row.share
+            let codexWidth = totalWidth * codexShare * row.share
+            ZStack(alignment: .leading) {
+                // Track
+                Capsule()
+                    .fill(Color.secondary.opacity(0.15))
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(claudeColor)
+                        .frame(width: claudeWidth)
+                    Rectangle()
+                        .fill(codexColor)
+                        .frame(width: codexWidth)
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private var claudeColor: Color {
+        Color(red: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255)
+    }
+    private var codexColor: Color {
+        Color.accentColor
+    }
+
+    private var providerBreakdownTooltip: String {
+        guard !row.isRest else { return "" }
+        var parts: [String] = [row.repo]
+        if row.claudeCost > 0 {
+            parts.append("Claude " + AnalyticsCurrencyFormatter.format(row.claudeCost))
+        }
+        if row.codexCost > 0 {
+            parts.append("Codex " + AnalyticsCurrencyFormatter.format(row.codexCost))
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func percentString(_ share: Double) -> String {

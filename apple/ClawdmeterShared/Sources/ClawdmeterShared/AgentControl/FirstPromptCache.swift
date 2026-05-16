@@ -29,11 +29,37 @@ public final class FirstPromptCache: @unchecked Sendable {
         public let mtime: TimeInterval  // seconds since 1970
         public let size: Int64
         public let prompt: String?
+        /// True when the JSONL's first user message was an automation
+        /// payload (`<scheduled-task>...</scheduled-task>`) rather than
+        /// a real user prompt. The RepoIndex filters these out of the
+        /// "Recent (last 30 days)" sidebar — they're noise from cron-
+        /// style automations the user didn't manually drive.
+        public let isScheduledTask: Bool
 
-        public init(mtime: TimeInterval, size: Int64, prompt: String?) {
+        public init(
+            mtime: TimeInterval,
+            size: Int64,
+            prompt: String?,
+            isScheduledTask: Bool = false
+        ) {
             self.mtime = mtime
             self.size = size
             self.prompt = prompt
+            self.isScheduledTask = isScheduledTask
+        }
+
+        // Custom decoder so v1 sidecars (no `isScheduledTask` field)
+        // still load — we treat missing as `false`. v2 sidecars include
+        // the field and decode normally.
+        private enum CodingKeys: String, CodingKey {
+            case mtime, size, prompt, isScheduledTask
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.mtime = try c.decode(TimeInterval.self, forKey: .mtime)
+            self.size = try c.decode(Int64.self, forKey: .size)
+            self.prompt = try c.decodeIfPresent(String.self, forKey: .prompt)
+            self.isScheduledTask = (try? c.decodeIfPresent(Bool.self, forKey: .isScheduledTask)) ?? false
         }
     }
 
@@ -41,7 +67,11 @@ public final class FirstPromptCache: @unchecked Sendable {
         var schemaVersion: Int
         var entries: [String: Entry]
     }
-    private static let currentSchemaVersion = 1
+    // v2: `Entry.isScheduledTask` field added. Old v1 sidecars decode
+    // cleanly via the custom Entry decoder above (missing field → false),
+    // so the version bump is forward-only — `load()` accepts v1 and v2;
+    // `save()` writes v2.
+    private static let currentSchemaVersion = 2
 
     public static let shared = FirstPromptCache()
 
@@ -168,8 +198,16 @@ public final class FirstPromptCache: @unchecked Sendable {
                 lock.unlock()
                 return
             }
-            if file.schemaVersion < Self.currentSchemaVersion {
-                cacheLogger.warning("first-prompt-cache schema v\(file.schemaVersion) (we expect v\(Self.currentSchemaVersion)); discarding")
+            // v1 → v2: the schema bump added `isScheduledTask` so the
+            // sidebar can filter cron-style automation sessions. Existing
+            // v1 entries default to `isScheduledTask=false`, which means
+            // scheduled-task JSONLs already in the v1 cache would stay
+            // visible in the sidebar until their next refresh forces a
+            // re-parse. We discard rather than migrate so the next
+            // refresh re-classifies the whole corpus correctly. The
+            // re-parse takes ~3 s for ~1,500 JSONLs — a one-time cost.
+            if file.schemaVersion != Self.currentSchemaVersion {
+                cacheLogger.warning("first-prompt-cache schema v\(file.schemaVersion) (we expect v\(Self.currentSchemaVersion)); discarding so the next refresh re-classifies entries")
                 return
             }
             lock.lock()

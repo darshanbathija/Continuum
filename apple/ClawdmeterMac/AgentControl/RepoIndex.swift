@@ -143,13 +143,17 @@ public actor RepoIndex {
                                 liveCounts[key, default: 0] += 1
                             }
                             if mtime > recentCutoff {
-                                let prompt = Self.cachedFirstUserPrompt(at: jsonl, mtime: mtime)
+                                let result = Self.cachedFirstPromptResult(at: jsonl, mtime: mtime)
+                                // Skip cron-style automations — they show
+                                // up as `<scheduled-task>...` first user
+                                // messages and aren't user-driven work.
+                                if result.isScheduledTask { continue }
                                 recentByRepo[key, default: []].append(
                                     RecentSession(
                                         path: jsonl.path,
                                         lastModified: mtime,
                                         provider: .claude,
-                                        firstPrompt: prompt
+                                        firstPrompt: result.prompt
                                     )
                                 )
                             }
@@ -171,15 +175,18 @@ public actor RepoIndex {
             if meta.mtime > liveCutoff {
                 liveCounts[key, default: 0] += 1
             }
-            let prompt = Self.cachedFirstUserPrompt(
+            let result = Self.cachedFirstPromptResult(
                 at: URL(fileURLWithPath: meta.path), mtime: meta.mtime
             )
+            // Same scheduled-task filter as the Claude side — drop them
+            // before they reach the sidebar.
+            if result.isScheduledTask { continue }
             recentByRepo[key, default: []].append(
                 RecentSession(
                     path: meta.path,
                     lastModified: meta.mtime,
                     provider: .codex,
-                    firstPrompt: prompt
+                    firstPrompt: result.prompt
                 )
             )
         }
@@ -384,6 +391,14 @@ public actor RepoIndex {
         return nil
     }
 
+    /// Result of inspecting a JSONL's first user line. Used by callers
+    /// to label the row AND decide whether to surface it at all
+    /// (scheduled-task automations are dropped from the sidebar).
+    struct FirstPromptResult: Sendable, Hashable {
+        let prompt: String?
+        let isScheduledTask: Bool
+    }
+
     /// T12 cached wrapper around `readFirstUserPrompt`. Hits the on-disk
     /// FirstPromptCache first; only reads from the JSONL when mtime+size
     /// have changed. Misses populate the cache for next refresh.
@@ -393,7 +408,9 @@ public actor RepoIndex {
     /// offline network volume doesn't stall the actor for the TCP
     /// timeout (~75 s on macOS). The URL-resource-value path returns
     /// quickly with nil on unreachable paths.
-    nonisolated static func cachedFirstUserPrompt(at url: URL, mtime: Date) -> String? {
+    nonisolated static func cachedFirstPromptResult(
+        at url: URL, mtime: Date
+    ) -> FirstPromptResult {
         let path = url.path
         let size: Int64? = {
             // Bounded-time stat via URLResourceValues.
@@ -403,22 +420,36 @@ public actor RepoIndex {
         }()
         guard let size else {
             // Couldn't stat — skip cache and try to read; if the file is
-            // unreachable readFirstUserPrompt will fail quickly via the
+            // unreachable readFirstPrompt will fail quickly via the
             // FileHandle init returning nil.
-            return readFirstUserPrompt(from: url)
+            return readFirstPrompt(from: url)
         }
         let mtimeEpoch = mtime.timeIntervalSince1970
         if let entry = FirstPromptCache.shared.lookup(path: path),
            entry.mtime == mtimeEpoch, entry.size == size {
-            return entry.prompt
+            return FirstPromptResult(
+                prompt: entry.prompt,
+                isScheduledTask: entry.isScheduledTask
+            )
         }
         // Cache miss / stale — read + store.
-        let prompt = readFirstUserPrompt(from: url)
+        let result = readFirstPrompt(from: url)
         FirstPromptCache.shared.set(
             path: path,
-            entry: .init(mtime: mtimeEpoch, size: size, prompt: prompt)
+            entry: .init(
+                mtime: mtimeEpoch,
+                size: size,
+                prompt: result.prompt,
+                isScheduledTask: result.isScheduledTask
+            )
         )
-        return prompt
+        return result
+    }
+
+    /// Back-compat shim: existing call sites that only want the prompt
+    /// string keep working without dealing with the scheduled-task flag.
+    nonisolated static func cachedFirstUserPrompt(at url: URL, mtime: Date) -> String? {
+        cachedFirstPromptResult(at: url, mtime: mtime).prompt
     }
 
     /// Extract the first real user prompt from a JSONL. Used as the
@@ -432,12 +463,18 @@ public actor RepoIndex {
     ///   blocks (continuation messages, not prompts)
     /// - System reminders Claude Code injects (start with `<system-reminder>`)
     ///
-    /// Returns a trimmed, single-line, ~80-character preview. Caller is
-    /// responsible for fitting it into the row.
-    static func readFirstUserPrompt(from url: URL) -> String? {
-        guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
+    /// Returns a trimmed, single-line, ~80-character preview PLUS a flag
+    /// indicating whether the JSONL is an automation/scheduled-task
+    /// session (the sidebar filters those out). Caller is responsible
+    /// for fitting the prompt into the row.
+    static func readFirstPrompt(from url: URL) -> FirstPromptResult {
+        guard let fh = try? FileHandle(forReadingFrom: url) else {
+            return FirstPromptResult(prompt: nil, isScheduledTask: false)
+        }
         defer { try? fh.close() }
-        guard let chunk = try? fh.read(upToCount: 256 * 1024), !chunk.isEmpty else { return nil }
+        guard let chunk = try? fh.read(upToCount: 256 * 1024), !chunk.isEmpty else {
+            return FirstPromptResult(prompt: nil, isScheduledTask: false)
+        }
         var lineStart = chunk.startIndex
         while lineStart < chunk.endIndex {
             let newlineIdx = chunk[lineStart...].firstIndex(of: 0x0A) ?? chunk.endIndex
@@ -446,17 +483,26 @@ public actor RepoIndex {
                 ? chunk.index(after: newlineIdx)
                 : chunk.endIndex
             // Delegate to the shared JSONLLineDecoder so the
-            // `<system-reminder>` stripping, `<command-name>` unwrap, and
-            // 80-char truncation live in exactly one place. This used to
-            // be a per-file duplicate `cleanPrompt` here; consolidating
-            // also gets us the XCTest coverage that already exists in
-            // `JSONLLineDecoderTests`.
+            // `<system-reminder>` stripping, `<command-name>` unwrap,
+            // `<scheduled-task>` detection, and 80-char truncation all
+            // live in exactly one place. JSONLLineDecoderTests in
+            // ClawdmeterShared protects the regex behavior.
             guard let json = JSONLLineDecoder.decodeJSON(line: Data(lineBytes)) else { continue }
-            if let prompt = JSONLLineDecoder.decodeUserPrompt(from: json) {
-                return prompt
+            let line = JSONLLineDecoder.decodeFirstUserLine(from: json)
+            if line.isScheduledTask {
+                return FirstPromptResult(prompt: nil, isScheduledTask: true)
             }
+            if let prompt = line.prompt {
+                return FirstPromptResult(prompt: prompt, isScheduledTask: false)
+            }
+            // Otherwise (no prompt yet, no scheduled-task) — keep scanning.
         }
-        return nil
+        return FirstPromptResult(prompt: nil, isScheduledTask: false)
+    }
+
+    /// Back-compat for callers that only want the prompt string.
+    static func readFirstUserPrompt(from url: URL) -> String? {
+        readFirstPrompt(from: url).prompt
     }
 
     /// BFS under `root` for `.git` directories or files (worktree markers).

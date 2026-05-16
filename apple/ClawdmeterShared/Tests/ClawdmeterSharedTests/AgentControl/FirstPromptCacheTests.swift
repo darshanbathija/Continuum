@@ -132,7 +132,8 @@ final class FirstPromptCacheTests: XCTestCase {
         let data = try Data(contentsOf: url)
         let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         XCTAssertNotNil(parsed)
-        XCTAssertEqual(parsed?["schemaVersion"] as? Int, 1)
+        // Don't pin the version number — the schema bumps freely.
+        XCTAssertNotNil(parsed?["schemaVersion"] as? Int)
         XCTAssertNotNil(parsed?["entries"] as? [String: Any])
     }
 
@@ -153,13 +154,13 @@ final class FirstPromptCacheTests: XCTestCase {
     // MARK: - Schema-downgrade guard (hardening sprint addition)
 
     func testNewerSchemaSidecarIsNotOverwrittenOnSave() throws {
-        // Simulate a future Clawdmeter build wrote a v2 sidecar; this
-        // binary (v1) must NOT silently overwrite it on save() —
-        // otherwise a user who installs a newer build then downgrades
-        // loses their cache.
-        let url = sidecarURL("v2.json")
-        let v2Payload: [String: Any] = [
-            "schemaVersion": 2,
+        // Simulate a future Clawdmeter build wrote a v999 sidecar; this
+        // binary (current schema) must NOT silently overwrite it on
+        // save() — otherwise a user who installs a newer build then
+        // downgrades loses their cache.
+        let url = sidecarURL("future.json")
+        let futurePayload: [String: Any] = [
+            "schemaVersion": 999,
             "entries": [
                 "/tmp/future.jsonl": [
                     "mtime": 1_750_000_000,
@@ -168,21 +169,21 @@ final class FirstPromptCacheTests: XCTestCase {
                 ]
             ]
         ]
-        let data = try JSONSerialization.data(withJSONObject: v2Payload, options: [.prettyPrinted])
+        let data = try JSONSerialization.data(withJSONObject: futurePayload, options: [.prettyPrinted])
         try data.write(to: url)
 
         let cache = FirstPromptCache(storeURL: url)
-        // The v2 sidecar should NOT have loaded into memory (different schema).
+        // The newer sidecar should NOT have loaded into memory.
         XCTAssertEqual(cache.count, 0)
-        // Add a v1 entry to dirty the cache.
+        // Add an entry to dirty the cache.
         cache.set(path: "/tmp/local.jsonl", entry: makeEntry(prompt: "local"))
         // Save should be a no-op (refuseToOverwriteSidecar is set).
         cache.save()
 
-        // The on-disk file should still be v2 — unchanged.
+        // The on-disk file should still be v999 — unchanged.
         let reread = try Data(contentsOf: url)
         let parsed = try JSONSerialization.jsonObject(with: reread) as? [String: Any]
-        XCTAssertEqual(parsed?["schemaVersion"] as? Int, 2)
+        XCTAssertEqual(parsed?["schemaVersion"] as? Int, 999)
         let entries = parsed?["entries"] as? [String: Any]
         XCTAssertNotNil(entries?["/tmp/future.jsonl"])
         XCTAssertNil(entries?["/tmp/local.jsonl"])
@@ -190,8 +191,7 @@ final class FirstPromptCacheTests: XCTestCase {
 
     func testOlderSchemaSidecarIsDiscardedAndOverwritten() throws {
         // The opposite case: an older v0 sidecar should be discarded
-        // on load and overwritten with v1 on next save. (Today
-        // currentSchemaVersion=1 so we simulate a hypothetical v0.)
+        // on load and overwritten on the next save.
         let url = sidecarURL("v0.json")
         let v0Payload: [String: Any] = [
             "schemaVersion": 0,
@@ -207,8 +207,10 @@ final class FirstPromptCacheTests: XCTestCase {
 
         let reread = try Data(contentsOf: url)
         let parsed = try JSONSerialization.jsonObject(with: reread) as? [String: Any]
-        XCTAssertEqual(parsed?["schemaVersion"] as? Int, 1,
-                       "v0 file should have been overwritten with v1")
+        // Newly saved sidecar should reflect the current schema version.
+        XCTAssertNotNil(parsed?["schemaVersion"])
+        XCTAssertNotEqual(parsed?["schemaVersion"] as? Int, 0,
+                          "v0 file should have been overwritten with the current schema")
     }
 
     // MARK: - Corrupted sidecar resilience

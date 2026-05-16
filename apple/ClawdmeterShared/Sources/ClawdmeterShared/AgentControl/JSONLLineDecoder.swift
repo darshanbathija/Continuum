@@ -84,17 +84,60 @@ public enum JSONLLineDecoder {
     /// - is a `tool_result`-only user message (continuation, not prompt)
     /// - has empty content after cleaning
     public static func decodeUserPrompt(from json: [String: Any]) -> String? {
+        guard let raw = rawUserText(from: json), !raw.isEmpty else { return nil }
+        return cleanPrompt(raw)
+    }
+
+    /// Rich result describing the first-user line. Adds two extras beyond
+    /// `decodeUserPrompt`:
+    ///   • `isScheduledTask` — true when the first user content is a
+    ///     `<scheduled-task ...>...</scheduled-task>` automation payload.
+    ///     The sidebar filters these out so cron-style background runs
+    ///     don't clutter the "Recent (last 30 days)" list.
+    ///   • `prompt` — the cleaned, truncated label for the row.
+    public struct FirstUserLine: Sendable, Hashable {
+        public let prompt: String?
+        public let isScheduledTask: Bool
+
+        public init(prompt: String?, isScheduledTask: Bool) {
+            self.prompt = prompt
+            self.isScheduledTask = isScheduledTask
+        }
+    }
+
+    /// Inspect a user line and return both the cleaned prompt AND whether
+    /// the line is an automation/scheduled-task wrapper. Callers should
+    /// drop the entire session from sidebars when `isScheduledTask` is
+    /// true; they're not user-driven sessions.
+    public static func decodeFirstUserLine(from json: [String: Any]) -> FirstUserLine {
+        guard let raw = rawUserText(from: json), !raw.isEmpty else {
+            return FirstUserLine(prompt: nil, isScheduledTask: false)
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Claude Code wraps automated triggers in `<scheduled-task name="…">`.
+        // Detect by leading tag (case-sensitive — Claude always emits
+        // lowercase). The session has no user-driven content even when
+        // the wrapper contains a task description.
+        if trimmed.hasPrefix("<scheduled-task") {
+            return FirstUserLine(prompt: nil, isScheduledTask: true)
+        }
+        return FirstUserLine(prompt: cleanPrompt(raw), isScheduledTask: false)
+    }
+
+    /// Pull the first plain-text content out of a user message. Walks the
+    /// same block traversal as `decodeUserPrompt` but returns the raw
+    /// (uncleaned) text so the caller can apply its own filters
+    /// (`<scheduled-task>` detection, etc.) before truncation strips
+    /// signal.
+    private static func rawUserText(from json: [String: Any]) -> String? {
         guard (json["type"] as? String) == "user" else { return nil }
         guard let message = json["message"] as? [String: Any] else { return nil }
-        if let text = message["content"] as? String {
-            return cleanPrompt(text)
-        }
+        if let text = message["content"] as? String { return text }
         if let blocks = message["content"] as? [[String: Any]] {
             for block in blocks {
                 let blockType = block["type"] as? String
-                if blockType == "text", let text = block["text"] as? String,
-                   let cleaned = cleanPrompt(text) {
-                    return cleaned
+                if blockType == "text", let text = block["text"] as? String {
+                    return text
                 }
                 // tool_result blocks aren't user prompts — skip.
             }

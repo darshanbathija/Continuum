@@ -806,6 +806,15 @@ private struct CenterThread: View {
     private var chatPane: some View {
         VStack(spacing: 0) {
             messageList
+            // Activity strip — time / tokens / cost / live indicator.
+            // Sits between the message list and the composer (or the
+            // read-only footer for outside-Clawdmeter sessions) so the
+            // user always knows what the agent is doing without having
+            // to switch to the Analytics tab.
+            if let store = model.chatStore(for: session) {
+                Divider()
+                SessionActivityStrip(session: session, chatStore: store)
+            }
             if !isReadOnly {
                 Divider()
                 composerArea

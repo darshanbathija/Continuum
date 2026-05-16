@@ -85,6 +85,78 @@ final class JSONLLineDecoderTests: XCTestCase {
         XCTAssertNil(JSONLLineDecoder.decodeUserPrompt(from: json))
     }
 
+    // MARK: - decodeFirstUserLine (scheduled-task detection)
+
+    func testDecodeFirstUserLineRegularPrompt() {
+        let json: [String: Any] = [
+            "type": "user",
+            "message": ["content": "fix the auth bug"]
+        ]
+        let result = JSONLLineDecoder.decodeFirstUserLine(from: json)
+        XCTAssertFalse(result.isScheduledTask)
+        XCTAssertEqual(result.prompt, "fix the auth bug")
+    }
+
+    func testDecodeFirstUserLineScheduledTaskString() {
+        let json: [String: Any] = [
+            "type": "user",
+            "message": [
+                "content": #"<scheduled-task name="run-dashboard-health" cron="*/10 * * * *">Run health checks on the dashboard</scheduled-task>"#
+            ]
+        ]
+        let result = JSONLLineDecoder.decodeFirstUserLine(from: json)
+        XCTAssertTrue(result.isScheduledTask,
+                      "first line wrapped in <scheduled-task> must be flagged")
+        XCTAssertNil(result.prompt,
+                     "scheduled-task sessions don't surface a prompt label")
+    }
+
+    func testDecodeFirstUserLineScheduledTaskArrayBlock() {
+        let json: [String: Any] = [
+            "type": "user",
+            "message": [
+                "content": [
+                    ["type": "text",
+                     "text": #"<scheduled-task name="cron-deploy">Deploy nightly</scheduled-task>"#]
+                ]
+            ]
+        ]
+        let result = JSONLLineDecoder.decodeFirstUserLine(from: json)
+        XCTAssertTrue(result.isScheduledTask)
+        XCTAssertNil(result.prompt)
+    }
+
+    func testDecodeFirstUserLineScheduledTaskWithLeadingWhitespace() {
+        // Some agents prepend a newline; the detector trims first.
+        let json: [String: Any] = [
+            "type": "user",
+            "message": ["content": "\n  <scheduled-task name=\"x\">work</scheduled-task>"]
+        ]
+        let result = JSONLLineDecoder.decodeFirstUserLine(from: json)
+        XCTAssertTrue(result.isScheduledTask)
+    }
+
+    func testDecodeFirstUserLineNonUserTypeIsNeither() {
+        let json: [String: Any] = ["type": "assistant", "message": ["content": "hi"]]
+        let result = JSONLLineDecoder.decodeFirstUserLine(from: json)
+        XCTAssertFalse(result.isScheduledTask)
+        XCTAssertNil(result.prompt)
+    }
+
+    func testDecodeFirstUserLineToolResultOnlyIsNeither() {
+        // tool_result-only user messages aren't prompts AND aren't
+        // scheduled-tasks. They should return both nil/false.
+        let json: [String: Any] = [
+            "type": "user",
+            "message": ["content": [
+                ["type": "tool_result", "tool_use_id": "x", "content": "ok"]
+            ]]
+        ]
+        let result = JSONLLineDecoder.decodeFirstUserLine(from: json)
+        XCTAssertFalse(result.isScheduledTask)
+        XCTAssertNil(result.prompt)
+    }
+
     // MARK: - decodeJSON
 
     func testDecodeJSONValid() {
