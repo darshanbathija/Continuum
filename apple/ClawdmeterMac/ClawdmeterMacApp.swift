@@ -88,6 +88,9 @@ struct ClawdmeterMacApp: App {
 
                 PairingSettingsView(runtime: runtime)
                     .tabItem { Label("Sessions", systemImage: "rectangle.connected.to.line.below") }
+
+                DiagnosticsSettingsView()
+                    .tabItem { Label("Diagnostics", systemImage: "stethoscope") }
             }
         }
     }
