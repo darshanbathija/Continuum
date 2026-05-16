@@ -531,59 +531,136 @@ private struct PairingFlow: View {
     }
 }
 
+/// Sessions v2 Phase 2 — full new-session sheet matching the design spec:
+/// Repo → Goal → Agent → Model picker → Effort dial → Mode chip → Plan
+/// toggle → Start (sticky bottom). Sends a complete `NewSessionRequest`
+/// with effort + optional A/B pair config.
 private struct NewSessionSheet: View {
     @ObservedObject var client: AgentControlClient
     @Binding var isPresented: Bool
+
     @State private var repoKey: String = ""
-    @State private var agent: AgentKind = .claude
+    @State private var baseBranch: String = "main"
     @State private var goal: String = ""
+    @State private var agent: AgentKind = .claude
+    @State private var modelId: String?
+    @State private var effort: ReasoningEffort = .medium
+    @State private var mode: SessionMode = .worktree
     @State private var planMode: Bool = true
-    @State private var useWorktree: Bool = true
+    @State private var runAsABPair: Bool = false
+    @State private var isStarting: Bool = false
 
     var body: some View {
         NavigationStack {
             Form {
-                Picker("Repo", selection: $repoKey) {
-                    ForEach(client.repos, id: \.key) { repo in
-                        Text(repo.displayName).tag(repo.key)
+                Section("Project") {
+                    Picker("Repo", selection: $repoKey) {
+                        ForEach(client.repos, id: \.key) { repo in
+                            Text(repo.displayName).tag(repo.key)
+                        }
+                    }
+                    TextField("Base branch", text: $baseBranch)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+
+                Section("Goal") {
+                    TextField("What should the agent do?", text: $goal, axis: .vertical)
+                        .textInputAutocapitalization(.sentences)
+                        .lineLimit(3...6)
+                }
+
+                Section("Agent") {
+                    Picker("Agent", selection: $agent) {
+                        Text("Claude").tag(AgentKind.claude)
+                        Text("Codex").tag(AgentKind.codex)
+                    }
+                    .pickerStyle(.segmented)
+
+                    iOSModelPicker(selectedModelId: $modelId, catalog: client.modelCatalog, agent: agent)
+
+                    iOSEffortDial(selected: $effort, supportsEffort: currentModelSupportsEffort)
+                }
+
+                Section("Run mode") {
+                    Picker("Mode", selection: $mode) {
+                        Text("Local").tag(SessionMode.local)
+                        Text("Worktree").tag(SessionMode.worktree)
+                    }
+                    .pickerStyle(.segmented)
+
+                    Toggle("Plan mode (Claude only)", isOn: $planMode)
+                        .disabled(agent != .claude)
+
+                    Toggle("Run as A/B pair (Claude + Codex)", isOn: $runAsABPair)
+                        .toggleStyle(.switch)
+                        .tint(SessionsV2Theme.accent)
+                }
+
+                if client.hasWireVersionMismatch {
+                    Section {
+                        Label("Mac is running a different version. Update the Mac app.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(SessionsV2Theme.warn)
                     }
                 }
-                Picker("Agent", selection: $agent) {
-                    Text("Claude").tag(AgentKind.claude)
-                    Text("Codex").tag(AgentKind.codex)
-                }
-                TextField("Goal (optional)", text: $goal)
-                Toggle("Plan mode (Claude only)", isOn: $planMode)
-                    .disabled(agent != .claude)
-                Toggle("Branch off main (worktree)", isOn: $useWorktree)
             }
             .navigationTitle("New session")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { isPresented = false }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Start") {
-                        Task {
-                            _ = await client.createSession(NewSessionRequest(
-                                repoKey: repoKey,
-                                agent: agent,
-                                model: nil,
-                                planMode: agent == .claude && planMode,
-                                goal: goal.isEmpty ? nil : goal,
-                                useWorktree: useWorktree,
-                                baseBranch: nil
-                            ))
-                            isPresented = false
+                ToolbarItem(placement: .bottomBar) {
+                    Button(action: startSession) {
+                        if isStarting {
+                            ProgressView()
+                        } else {
+                            Label("Start", systemImage: "play.fill")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
                         }
                     }
-                    .disabled(repoKey.isEmpty)
+                    .buttonStyle(.borderedProminent)
+                    .tint(SessionsV2Theme.accent)
+                    .disabled(repoKey.isEmpty || isStarting)
+                    .accessibilityLabel("Start new session")
                 }
             }
-            .onAppear {
+            .task {
+                await client.refreshModelCatalog()
                 if repoKey.isEmpty, let first = client.repos.first {
                     repoKey = first.key
                 }
+            }
+        }
+    }
+
+    private var currentModelSupportsEffort: Bool {
+        guard let id = modelId,
+              let entry = client.modelCatalog.entry(forId: id)
+        else { return true }
+        return entry.supportsEffort
+    }
+
+    private func startSession() {
+        guard !repoKey.isEmpty else { return }
+        isStarting = true
+        Task {
+            _ = await client.createSession(NewSessionRequest(
+                repoKey: repoKey,
+                agent: agent,
+                model: modelId,
+                planMode: agent == .claude && planMode,
+                goal: goal.isEmpty ? nil : goal,
+                useWorktree: mode == .worktree,
+                baseBranch: baseBranch.isEmpty ? nil : baseBranch,
+                effort: currentModelSupportsEffort ? effort : nil,
+                abPair: runAsABPair ? (agent == .claude ? .codex : .claude) : nil
+            ))
+            await MainActor.run {
+                isStarting = false
+                isPresented = false
             }
         }
     }

@@ -588,6 +588,32 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
+    /// Sessions v2 Phase 1: swap the model on a live session. Wraps
+    /// `SessionConfigChanger` so the kill+respawn lives in one place.
+    /// The chip picker calls this with the new entry's id; if `entry.cliAlias`
+    /// is set, we pass the alias (e.g. "opus") since claude --model accepts
+    /// both aliases and full ids.
+    public func switchModel(sessionId: UUID, to entry: ModelCatalogEntry, effort: ReasoningEffort? = nil) async {
+        guard let runtime = AppDelegate.runtime else { return }
+        let changer = SessionConfigChanger(registry: registry, tmux: runtime.tmuxClient)
+        let modelToUse = entry.cliAlias ?? entry.id
+        _ = await changer.swap(sessionId: sessionId, newModel: modelToUse, newEffort: .some(effort))
+    }
+
+    /// Sessions v2 Phase 1: swap the effort dial mid-session.
+    public func switchEffort(sessionId: UUID, to effort: ReasoningEffort) async {
+        guard let runtime = AppDelegate.runtime else { return }
+        let changer = SessionConfigChanger(registry: registry, tmux: runtime.tmuxClient)
+        _ = await changer.swap(sessionId: sessionId, newEffort: .some(effort))
+    }
+
+    /// Sessions v2 Phase 1: toggle plan/code mid-session (Claude only).
+    public func switchPlanMode(sessionId: UUID, planMode: Bool) async {
+        guard let runtime = AppDelegate.runtime else { return }
+        let changer = SessionConfigChanger(registry: registry, tmux: runtime.tmuxClient)
+        _ = await changer.swap(sessionId: sessionId, newPlanMode: planMode)
+    }
+
     public func endSession(id: UUID) async {
         guard let session = registry.session(id: id),
               let runtime = AppDelegate.runtime,

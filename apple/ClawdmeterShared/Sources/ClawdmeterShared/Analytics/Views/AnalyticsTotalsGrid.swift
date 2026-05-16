@@ -19,17 +19,24 @@ public struct AnalyticsTotalsGrid: View {
 
     public var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 14) {
-            // Header
+            // Header — provider logo + name, matching the Live tab's
+            // ClaudeSection / CodexSection treatment so users get the
+            // same visual anchor for "which column is which" across
+            // every screen that splits by provider.
             GridRow {
                 Text("")
-                Text("Claude")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .gridColumnAlignment(.trailing)
-                Text("Codex")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .gridColumnAlignment(.trailing)
+                providerHeader(
+                    name: "Claude",
+                    asset: "ClaudeLogo",
+                    isTemplate: false
+                )
+                .gridColumnAlignment(.trailing)
+                providerHeader(
+                    name: "Codex",
+                    asset: "CodexLogo",
+                    isTemplate: true
+                )
+                .gridColumnAlignment(.trailing)
             }
 
             ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { window in
@@ -44,6 +51,21 @@ public struct AnalyticsTotalsGrid: View {
                         .gridColumnAlignment(.trailing)
                 }
             }
+        }
+    }
+
+    /// Header label: small logo on the left, provider name on the right.
+    /// Codex's silhouette is a flat black PNG on a transparent canvas, so
+    /// we mark it `.template` and let SwiftUI tint it with the surrounding
+    /// `.secondary` foreground style — otherwise it disappears on dark
+    /// backgrounds. Claude's burst keeps its full terra-cotta color.
+    @ViewBuilder
+    private func providerHeader(name: String, asset: String, isTemplate: Bool) -> some View {
+        HStack(spacing: 5) {
+            ProviderBadgeImage(assetName: asset, isTemplate: isTemplate, size: 14)
+            Text(name)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
     }
 

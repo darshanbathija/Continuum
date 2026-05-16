@@ -850,8 +850,21 @@ private struct CenterThread: View {
 
     private var composerArea: some View {
         VStack(spacing: 6) {
-            HStack {
+            HStack(spacing: 6) {
                 ModePicker(mode: session.mode, agent: session.agent, onChange: onModeSwitch)
+                ModelPicker(
+                    selectedModelId: session.model,
+                    catalog: .bundled,
+                    agent: session.agent
+                ) { entry in
+                    Task { await model.switchModel(sessionId: session.id, to: entry, effort: session.effort) }
+                }
+                EffortDial(
+                    selected: session.effort,
+                    supportsEffort: modelSupportsEffort
+                ) { newEffort in
+                    Task { await model.switchEffort(sessionId: session.id, to: newEffort) }
+                }
                 Spacer()
                 if session.planText != nil {
                     Button(action: {
@@ -1001,6 +1014,16 @@ private struct CenterThread: View {
         colorScheme == .dark
             ? Color.white.opacity(0.06)
             : Color.black.opacity(0.04)
+    }
+
+    /// Whether the current model supports an effort dial. Haiku 4.5 does
+    /// not (supportsEffort=false in the bundled catalog); the dial renders
+    /// disabled with an explanatory tooltip when this is false.
+    private var modelSupportsEffort: Bool {
+        guard let id = session.model,
+              let entry = ModelCatalog.bundled.entry(forId: id)
+        else { return true }
+        return entry.supportsEffort
     }
 
     private var terraCotta: Color {

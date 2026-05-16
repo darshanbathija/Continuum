@@ -85,6 +85,11 @@ public struct AnalyticsDailyChart: View {
                     "Claude": Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255),
                     "Codex": Color.accentColor,
                 ])
+                // Replace the auto-generated colored-dot legend with our
+                // own provider-logo legend below. Matches the Live tab's
+                // section headers so users get the same visual anchor
+                // across screens.
+                .chartLegend(.hidden)
                 .chartXAxis {
                     AxisMarks(values: .stride(by: .day, count: max(1, data.count / 14))) {
                         AxisGridLine()
@@ -103,12 +108,45 @@ public struct AnalyticsDailyChart: View {
                 }
                 .frame(height: 160)
 
+                legendRow
+
                 if let max = maxDay(data) {
                     Text("Max day \(AnalyticsCurrencyFormatter.format(max.cost)) · \(max.day.formatted(date: .abbreviated, time: .omitted))")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    /// Custom legend: provider logo + name + matching colored dot, in
+    /// place of Swift Charts's auto legend (which only carries the
+    /// colored dot + name string).
+    private var legendRow: some View {
+        HStack(spacing: 14) {
+            if providerFilter != .codex {
+                HStack(spacing: 5) {
+                    ProviderBadgeImage(assetName: "ClaudeLogo", isTemplate: false, size: 11)
+                    Circle()
+                        .fill(Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255))
+                        .frame(width: 6, height: 6)
+                    Text("Claude")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if providerFilter != .claude {
+                HStack(spacing: 5) {
+                    ProviderBadgeImage(assetName: "CodexLogo", isTemplate: true, size: 11)
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 6, height: 6)
+                    Text("Codex")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
         }
     }
 

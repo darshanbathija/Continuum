@@ -18,6 +18,13 @@ public final class AgentControlClient: ObservableObject {
     @Published public private(set) var sessions: [AgentSession] = []
     @Published public private(set) var lastPolledAt: Date?
     @Published public private(set) var lastError: String?
+    /// Sessions v2 Phase 0: fetched from `GET /models`. Defaults to the
+    /// bundled catalog so the iOS UI works while paired Mac is unreachable.
+    @Published public private(set) var modelCatalog: ModelCatalog = .bundled
+    /// Wire-version handshake (E8). Populated on /health refresh. iOS shows
+    /// a mismatch banner when local `AgentControlWireVersion.current` differs.
+    @Published public private(set) var serverVersion: String?
+    @Published public private(set) var serverWireVersion: Int?
 
     public init() {
         self.isConfigured = (host != nil && token != nil)
@@ -75,8 +82,133 @@ public final class AgentControlClient: ObservableObject {
 
     @MainActor
     public func refreshAll() async {
+        await refreshHealth()
         await refreshRepos()
         await refreshSessions()
+        await refreshModelCatalog()
+    }
+
+    @MainActor
+    public func refreshHealth() async {
+        guard let request = makeRequest(path: "/health") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            if let payload = try? JSONDecoder().decode(HealthResponse.self, from: data) {
+                self.serverVersion = payload.serverVersion
+                self.serverWireVersion = payload.wireVersion
+            }
+        } catch {
+            clientLogger.debug("refreshHealth failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    public func refreshModelCatalog() async {
+        guard let request = makeRequest(path: "/models") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            self.modelCatalog = try decoder.decode(ModelCatalog.self, from: data)
+        } catch {
+            // Bundled catalog is the fallback — keep current value.
+            clientLogger.debug("refreshModelCatalog failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// True when the paired Mac is running a different wire version than
+    /// this app expects. iOS shows a banner with a copy-link to the DMG.
+    @MainActor
+    public var hasWireVersionMismatch: Bool {
+        guard let serverWireVersion else { return false }
+        return serverWireVersion != AgentControlWireVersion.current
+    }
+
+    // MARK: - Sessions v2 mid-session controls
+
+    @MainActor
+    @discardableResult
+    public func changeModel(sessionId: UUID, request body: ChangeModelRequest) async -> AgentSession? {
+        await postJSON(path: "/sessions/\(sessionId.uuidString)/model", body: body)
+    }
+
+    @MainActor
+    @discardableResult
+    public func changeEffort(sessionId: UUID, effort: ReasoningEffort) async -> AgentSession? {
+        await postJSON(path: "/sessions/\(sessionId.uuidString)/effort", body: ChangeEffortRequest(effort: effort))
+    }
+
+    @MainActor
+    @discardableResult
+    public func changeMode(sessionId: UUID, mode: SessionMode, planMode: Bool? = nil) async -> AgentSession? {
+        await postJSON(path: "/sessions/\(sessionId.uuidString)/mode",
+                        body: ChangeModeRequest(mode: mode, planMode: planMode))
+    }
+
+    @MainActor
+    public func sendPrompt(sessionId: UUID, text: String, asFollowUp: Bool = true) async {
+        await postBody(path: "/sessions/\(sessionId.uuidString)/send",
+                        body: SendPromptRequest(text: text, asFollowUp: asFollowUp))
+    }
+
+    @MainActor
+    public func interruptSession(sessionId: UUID) async {
+        await postEmpty(path: "/sessions/\(sessionId.uuidString)/interrupt")
+    }
+
+    @MainActor
+    public func setAutopilot(sessionId: UUID, enabled: Bool) async {
+        await postBody(path: "/sessions/\(sessionId.uuidString)/autopilot",
+                        body: AutopilotRequest(enabled: enabled))
+    }
+
+    @MainActor
+    @discardableResult
+    private func postJSON<T: Encodable>(path: String, body: T) async -> AgentSession? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let bodyData = try? encoder.encode(body),
+              let request = makeRequest(path: path, method: "POST", body: bodyData) else {
+            return nil
+        }
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let session = try decoder.decode(AgentSession.self, from: data)
+            if let idx = sessions.firstIndex(where: { $0.id == session.id }) {
+                sessions[idx] = session
+            }
+            return session
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    private func postBody<T: Encodable>(path: String, body: T) async {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let bodyData = try? encoder.encode(body),
+              let request = makeRequest(path: path, method: "POST", body: bodyData) else {
+            return
+        }
+        do {
+            _ = try await URLSession.shared.data(for: request)
+        } catch {
+            self.lastError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func postEmpty(path: String) async {
+        guard let request = makeRequest(path: path, method: "POST") else { return }
+        do {
+            _ = try await URLSession.shared.data(for: request)
+        } catch {
+            self.lastError = error.localizedDescription
+        }
     }
 
     @MainActor
