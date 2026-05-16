@@ -29,6 +29,7 @@ final class AppRuntime: ObservableObject {
     let agentControlServer: AgentControlServer
     let notificationDispatcher: NotificationDispatcher
     let sessionsModel: SessionsModel
+    let sessionScheduler: SessionScheduler
 
     private var cancellables = Set<AnyCancellable>()
     private var usageQueryService: UsageQueryService?
@@ -103,6 +104,10 @@ final class AppRuntime: ObservableObject {
             registry: self.agentSessionRegistry,
             supervisor: self.tmuxSupervisor
         )
+        self.sessionScheduler = SessionScheduler(
+            registry: self.agentSessionRegistry,
+            tmuxClient: self.tmuxClient
+        )
 
         // Vend the Mach service the widget extension queries. Created here
         // (after all stored properties are initialized) so the service can
@@ -114,6 +119,7 @@ final class AppRuntime: ObservableObject {
             self.tmuxSupervisor.start()
             self.agentControlServer.start()
             self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
+            self.sessionScheduler.start()
             runtimeLogger.info("Sessions daemon started on port \(self.agentControlServer.boundPort ?? 0)")
         } else {
             runtimeLogger.info("Sessions feature disabled via UserDefaults — daemon not started")

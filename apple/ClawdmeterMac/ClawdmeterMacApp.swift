@@ -60,6 +60,24 @@ struct ClawdmeterMacApp: App {
         .defaultSize(width: 980, height: 1100)
         .windowResizability(.contentMinSize)
 
+        // G14: pop-out window for a single session. Accepts a UUID via the
+        // `openWindow(value:)` environment action. The window's title and
+        // content reflect the chosen session; closing it doesn't affect the
+        // main dashboard.
+        WindowGroup("Session", id: "session-detail", for: UUID.self) { $sessionId in
+            if let sessionId,
+               let session = runtime.agentSessionRegistry.sessions.first(where: { $0.id == sessionId }) {
+                PoppedOutSessionView(session: session, model: runtime.sessionsModel)
+            } else {
+                ContentUnavailableView(
+                    "Session not found",
+                    systemImage: "questionmark.circle",
+                    description: Text("This session may have been closed.")
+                )
+            }
+        }
+        .defaultSize(width: 720, height: 720)
+
         Settings {
             TabView {
                 PreferencesView(
@@ -75,9 +93,140 @@ struct ClawdmeterMacApp: App {
     }
 }
 
+// MARK: - Pop-out session window
+
+/// G14 detachable session view. Shows just the chat thread + composer for
+/// the chosen session; no sidebar, no review pane. The host window picks
+/// up the `.floating` level when the user toggles "Stay on top" in the
+/// Window menu (handled by AppDelegate).
+struct PoppedOutSessionView: View {
+    let session: AgentSession
+    @ObservedObject var model: SessionsModel
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if let store = model.chatStore(for: session) {
+                PoppedChatThread(store: store, session: session, model: model)
+            } else {
+                ContentUnavailableView {
+                    Label("No JSONL yet", systemImage: "ellipsis.bubble")
+                } description: {
+                    Text("Waiting for the agent to write its first message…")
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(bg)
+        .frame(minWidth: 480, minHeight: 360)
+    }
+
+    private var header: some View {
+        HStack {
+            Circle().fill(.green).frame(width: 8, height: 8)
+            Text(session.goal ?? session.repoDisplayName)
+                .font(.system(size: 13, weight: .semibold))
+            Text("· \(session.agent.rawValue.capitalized) · \(session.status.rawValue)")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button(action: toggleStayOnTop) {
+                Image(systemName: "pin")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.plain)
+            .help("Toggle stay-on-top for this window")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private func toggleStayOnTop() {
+        guard let window = NSApp.keyWindow else { return }
+        window.level = (window.level == .floating) ? .normal : .floating
+    }
+
+    private var bg: Color {
+        colorScheme == .dark
+            ? Color(red: 0.08, green: 0.08, blue: 0.08)
+            : Color(red: 0.98, green: 0.98, blue: 0.98)
+    }
+}
+
+/// Minimal chat-thread renderer reused inside PoppedOutSessionView. Mirrors
+/// the main workspace's `ChatThreadScroll` but with no plan-card / no
+/// review pane — just chat + send.
+private struct PoppedChatThread: View {
+    @ObservedObject var store: SessionChatStore
+    let session: AgentSession
+    @ObservedObject var model: SessionsModel
+    @State private var composerText: String = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(store.messages) { msg in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: msg.kind == .userText
+                                ? "person.fill"
+                                : (msg.kind == .toolCall ? "wrench" : "sparkle"))
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16)
+                            Text(msg.body)
+                                .font(.system(size: 12, design: msg.kind == .toolCall ? .monospaced : .default))
+                                .foregroundStyle(.primary)
+                                .lineLimit(msg.kind == .toolResult ? 3 : nil)
+                                .textSelection(.enabled)
+                        }
+                        .padding(.horizontal, 12)
+                    }
+                    Color.clear.frame(height: 8).id("bottom")
+                }
+                .padding(.vertical, 8)
+            }
+            Divider()
+            HStack {
+                TextField("Message the agent…", text: $composerText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .lineLimit(1...5)
+                Button(action: send) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(composerText.isEmpty ? .secondary : Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.return, modifiers: [.command])
+                .disabled(composerText.isEmpty)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+    }
+
+    private func send() {
+        let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty,
+              let runtime = AppDelegate.runtime,
+              let pane = session.tmuxPaneId ?? session.tmuxWindowId
+        else { return }
+        composerText = ""
+        let bytes = Data((text + "\n").utf8)
+        Task {
+            try? await runtime.tmuxClient.pasteBytes(paneId: pane, bytes: bytes)
+        }
+    }
+}
+
 /// Zero-pixel SwiftUI helper that owns an `openWindow` environment action and
 /// forwards `AppDelegate.openDashboardRequest` notifications to it. Lives
-/// inside the dashboard window so it can call `openWindow(id:)`.
+/// inside the dashboard window so it can call `openWindow(id:)`. Also
+/// listens for `popOutSession` (G14) and opens a new session-detail window.
 private struct DashboardOpener: View {
     @Environment(\.openWindow) private var openWindow
 
@@ -86,6 +235,10 @@ private struct DashboardOpener: View {
             .frame(width: 0, height: 0)
             .onReceive(NotificationCenter.default.publisher(for: AppDelegate.openDashboardRequest)) { _ in
                 openWindow(id: "dashboard")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .popOutSession)) { note in
+                guard let sessionId = note.userInfo?["sessionId"] as? UUID else { return }
+                openWindow(id: "session-detail", value: sessionId)
             }
     }
 }

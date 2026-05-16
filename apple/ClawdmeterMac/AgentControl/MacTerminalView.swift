@@ -19,12 +19,22 @@ public struct MacTerminalView: NSViewRepresentable {
     public let host: String
     public let wsPort: Int
     public let token: String
+    /// G12 multi-terminal: override the session's primary pane with a
+    /// specific tmux pane id (e.g. "%9"). nil = use primary.
+    public let paneId: String?
 
-    public init(sessionId: UUID, host: String, wsPort: Int, token: String) {
+    public init(
+        sessionId: UUID,
+        host: String,
+        wsPort: Int,
+        token: String,
+        paneId: String? = nil
+    ) {
         self.sessionId = sessionId
         self.host = host
         self.wsPort = wsPort
         self.token = token
+        self.paneId = paneId
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -32,7 +42,8 @@ public struct MacTerminalView: NSViewRepresentable {
             sessionId: sessionId,
             host: host,
             wsPort: wsPort,
-            token: token
+            token: token,
+            paneId: paneId
         )
     }
 
@@ -58,15 +69,17 @@ public struct MacTerminalView: NSViewRepresentable {
         let host: String
         let wsPort: Int
         let token: String
+        let paneId: String?
 
         weak var terminalView: TerminalView?
         private var task: URLSessionWebSocketTask?
 
-        init(sessionId: UUID, host: String, wsPort: Int, token: String) {
+        init(sessionId: UUID, host: String, wsPort: Int, token: String, paneId: String?) {
             self.sessionId = sessionId
             self.host = host
             self.wsPort = wsPort
             self.token = token
+            self.paneId = paneId
         }
 
         func connect() {
@@ -78,12 +91,16 @@ public struct MacTerminalView: NSViewRepresentable {
             let task = URLSession.shared.webSocketTask(with: request)
             self.task = task
             task.resume()
-            // Send the subscription envelope.
-            let envelope = [
+            // Send the subscription envelope. paneId is optional — the
+            // server falls back to the session's primary pane when absent.
+            var envelope: [String: Any] = [
                 "op": "terminal",
                 "token": token,
                 "sessionId": sessionId.uuidString,
-            ] as [String: Any]
+            ]
+            if let paneId, !paneId.isEmpty {
+                envelope["paneId"] = paneId
+            }
             if let data = try? JSONSerialization.data(withJSONObject: envelope) {
                 task.send(.data(data)) { error in
                     if let error {

@@ -455,6 +455,43 @@ public final class SessionsModel: ObservableObject {
         registry.delete(id: id)
     }
 
+    // MARK: - G12 multi-terminal
+
+    /// Spawn a new shell pane in the session's tmux window and add a
+    /// TerminalPaneRef to the registry. Returns the new pane id.
+    @discardableResult
+    public func addTerminalPane(sessionId: UUID) async -> String? {
+        guard let runtime = AppDelegate.runtime,
+              let session = registry.session(id: sessionId),
+              let windowId = session.tmuxWindowId
+        else { return nil }
+        let cwd = session.worktreePath ?? session.repoKey
+        do {
+            let paneId = try await runtime.tmuxClient.splitWindow(
+                windowId: windowId, cwd: cwd, horizontal: false
+            )
+            let ref = TerminalPaneRef(
+                paneId: paneId,
+                title: "Pane \(session.terminalPanes.count + 2)",
+                isPrimary: false
+            )
+            registry.addTerminalPane(sessionId: sessionId, pane: ref)
+            return paneId
+        } catch {
+            return nil
+        }
+    }
+
+    /// Close one terminal pane (non-primary). Sends `kill-pane` to tmux
+    /// and removes the registry entry.
+    public func closeTerminalPane(sessionId: UUID, paneRef: TerminalPaneRef) async {
+        guard !paneRef.isPrimary,
+              let runtime = AppDelegate.runtime
+        else { return }
+        try? await runtime.tmuxClient.killPane(paneRef.paneId)
+        registry.removeTerminalPane(sessionId: sessionId, paneRefId: paneRef.id)
+    }
+
     public func approvePlan(id: UUID) async {
         guard let runtime = AppDelegate.runtime,
               let session = registry.session(id: id),

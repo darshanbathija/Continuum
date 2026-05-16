@@ -220,6 +220,36 @@ public actor TmuxControlClient {
         return windowId
     }
 
+    /// Split an existing window vertically (a new pane below the current).
+    /// Returns the new pane id (e.g. "%9"). Used by the multi-terminal tab
+    /// strip (G12) to give a session N tmux panes that share the window.
+    /// Spawns the user's default shell — no child argv is forced.
+    public func splitWindow(
+        windowId: String,
+        cwd: String,
+        horizontal: Bool = false
+    ) async throws -> String {
+        let direction = horizontal ? "-h" : "-v"
+        let result = try await command([
+            "split-window",
+            direction,
+            "-P",
+            "-F", "'#{pane_id}'",
+            "-t", windowId,
+            "-c", Self.tmuxQuote(cwd),
+        ])
+        let paneId = result.lines.first?.trimmingCharacters(in: .whitespaces) ?? ""
+        guard paneId.hasPrefix("%") else {
+            throw TmuxError.commandFailed("split-window returned unexpected: \(paneId)")
+        }
+        return paneId
+    }
+
+    /// Kill a specific pane. Used when the user closes a multi-terminal tab.
+    public func killPane(_ paneId: String) async throws {
+        try await command(["kill-pane", "-t", paneId])
+    }
+
     /// Send raw bytes to a pane via `send-keys -l`. Suitable for short
     /// keystrokes (<256 bytes, no escape sequences). Longer / risky payloads
     /// go through `pasteBytes` which uses `set-buffer + paste-buffer`.

@@ -74,6 +74,65 @@ public enum SessionMode: String, Codable, Hashable, Sendable, CaseIterable {
     case cloud
 }
 
+// MARK: - Multi-terminal (G12)
+
+/// One tmux pane belonging to a session. A session can own N panes — the
+/// primary pane runs the agent CLI, secondary panes are shell scratch space
+/// the user spawns from the workspace's terminal tab strip.
+public struct TerminalPaneRef: Codable, Hashable, Sendable, Identifiable {
+    public let id: UUID
+    /// tmux pane identifier (e.g. "%7"). Targets `send-keys` / `paste-buffer`.
+    public let paneId: String
+    /// User-facing label. Empty = "Pane <index>".
+    public let title: String
+    /// True when this is the agent's primary pane (created at spawn time).
+    /// Primary pane can't be deleted via the tab strip's × button.
+    public let isPrimary: Bool
+    public let createdAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        paneId: String,
+        title: String = "",
+        isPrimary: Bool = false,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.paneId = paneId
+        self.title = title
+        self.isPrimary = isPrimary
+        self.createdAt = createdAt
+    }
+}
+
+// MARK: - Scheduled follow-ups (G15)
+
+/// One scheduled prompt that the SessionScheduler will inject into the
+/// session's primary tmux pane at `fireAt`. Persisted so they survive
+/// app restarts; on launch the scheduler re-arms timers for any not-yet-
+/// fired entries.
+public struct ScheduledFollowUp: Codable, Hashable, Sendable, Identifiable {
+    public let id: UUID
+    /// Wall-clock when the prompt should fire.
+    public let fireAt: Date
+    /// The literal text injected into the agent's input.
+    public let prompt: String
+    /// When the scheduler actually delivered the prompt. `nil` until then.
+    public let firedAt: Date?
+
+    public init(
+        id: UUID = UUID(),
+        fireAt: Date,
+        prompt: String,
+        firedAt: Date? = nil
+    ) {
+        self.id = id
+        self.fireAt = fireAt
+        self.prompt = prompt
+        self.firedAt = firedAt
+    }
+}
+
 /// Lifecycle phase of a session as seen by the daemon.
 public enum AgentSessionStatus: String, Codable, Hashable, Sendable {
     /// Agent is in `--permission-mode plan` (Claude) or equivalent.
@@ -132,6 +191,16 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// are hidden from the default sidebar but recoverable via "Show archived".
     /// Done-detector auto-archives sessions older than the configured threshold.
     public let archivedAt: Date?
+    /// Additional tmux panes spawned via the workspace terminal tab strip.
+    /// The primary pane lives at `tmuxPaneId`; this collection is everything
+    /// else. Empty for pre-G2 sessions (decoded as `[]`).
+    public let terminalPanes: [TerminalPaneRef]
+    /// Pending follow-up prompts scheduled by the user; the SessionScheduler
+    /// fires them and writes back into the session via `paste-buffer`.
+    public let scheduledFollowUps: [ScheduledFollowUp]
+    /// If this session was spawned as a sub-chat (Cmd+;), the id of the
+    /// parent session. Sidebar nests sub-rows under the parent.
+    public let parentSessionId: UUID?
 
     public init(
         id: UUID,
@@ -149,7 +218,10 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         lastEventAt: Date,
         lastEventSeq: UInt64,
         mode: SessionMode = .local,
-        archivedAt: Date? = nil
+        archivedAt: Date? = nil,
+        terminalPanes: [TerminalPaneRef] = [],
+        scheduledFollowUps: [ScheduledFollowUp] = [],
+        parentSessionId: UUID? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -167,6 +239,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.lastEventSeq = lastEventSeq
         self.mode = mode
         self.archivedAt = archivedAt
+        self.terminalPanes = terminalPanes
+        self.scheduledFollowUps = scheduledFollowUps
+        self.parentSessionId = parentSessionId
     }
 
     public init(from decoder: Decoder) throws {
@@ -185,20 +260,24 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.createdAt = try c.decode(Date.self, forKey: .createdAt)
         self.lastEventAt = try c.decode(Date.self, forKey: .lastEventAt)
         self.lastEventSeq = try c.decode(UInt64.self, forKey: .lastEventSeq)
-        // mode: if absent, infer from worktreePath (back-compat).
+        // mode: if absent, infer from worktreePath (back-compat with v1).
         if let decoded = try? c.decodeIfPresent(SessionMode.self, forKey: .mode) {
             self.mode = decoded ?? (self.worktreePath != nil ? .worktree : .local)
         } else {
             self.mode = self.worktreePath != nil ? .worktree : .local
         }
         self.archivedAt = try c.decodeIfPresent(Date.self, forKey: .archivedAt)
+        self.terminalPanes = (try? c.decodeIfPresent([TerminalPaneRef].self, forKey: .terminalPanes)) ?? []
+        self.scheduledFollowUps = (try? c.decodeIfPresent([ScheduledFollowUp].self, forKey: .scheduledFollowUps)) ?? []
+        self.parentSessionId = try c.decodeIfPresent(UUID.self, forKey: .parentSessionId)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, repoKey, repoDisplayName, agent, model, goal,
              worktreePath, tmuxWindowId, tmuxPaneId,
              status, planText, createdAt, lastEventAt, lastEventSeq,
-             mode, archivedAt
+             mode, archivedAt,
+             terminalPanes, scheduledFollowUps, parentSessionId
     }
 }
 

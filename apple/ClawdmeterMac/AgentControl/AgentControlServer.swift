@@ -275,8 +275,21 @@ public final class AgentControlServer {
         case "terminal":
             guard let sessionIdString = envelope.sessionId,
                   let sessionId = UUID(uuidString: sessionIdString),
-                  let session = registry.session(id: sessionId),
-                  let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+                  let session = registry.session(id: sessionId)
+            else {
+                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+                return
+            }
+            // G12: envelope can target a specific pane within the session
+            // (multi-terminal tab strip). Falls back to the session's
+            // primary pane / window for the single-terminal case.
+            let paneId: String? = {
+                if let explicit = envelope.paneId, !explicit.isEmpty {
+                    return explicit
+                }
+                return session.tmuxPaneId ?? session.tmuxWindowId
+            }()
+            guard let paneId else {
                 sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
                 return
             }
@@ -326,6 +339,9 @@ public final class AgentControlServer {
         let token: String
         let sessionId: String?   // required for "terminal"
         let since: UInt64?       // optional for "events"
+        /// G12: target a specific pane (multi-terminal tab strip). When nil,
+        /// the server falls back to the session's primary pane.
+        let paneId: String?
     }
 
     // MARK: - Accept handling

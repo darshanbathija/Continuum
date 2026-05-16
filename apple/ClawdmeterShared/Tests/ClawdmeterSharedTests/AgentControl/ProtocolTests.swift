@@ -221,6 +221,61 @@ final class AgentControlProtocolTests: XCTestCase {
         XCTAssertNil(session.archivedAt)
     }
 
+    // G2: terminalPanes + scheduledFollowUps + parentSessionId round-trip
+    func testAgentSessionG2FieldsRoundTrip() throws {
+        let parentId = UUID()
+        let session = AgentSession(
+            id: UUID(),
+            repoKey: "/x", repoDisplayName: "x",
+            agent: .claude, model: nil, goal: nil,
+            worktreePath: nil,
+            tmuxWindowId: "@4", tmuxPaneId: "%9",
+            status: .running, planText: nil,
+            createdAt: Date(), lastEventAt: Date(), lastEventSeq: 1,
+            mode: .local, archivedAt: nil,
+            terminalPanes: [
+                TerminalPaneRef(paneId: "%10", title: "scratch", isPrimary: false),
+                TerminalPaneRef(paneId: "%11", title: "logs", isPrimary: false),
+            ],
+            scheduledFollowUps: [
+                ScheduledFollowUp(
+                    fireAt: Date(timeIntervalSince1970: 1747200000),
+                    prompt: "check the tests again"
+                )
+            ],
+            parentSessionId: parentId
+        )
+        let data = try JSONEncoder().encode(session)
+        let decoded = try JSONDecoder().decode(AgentSession.self, from: data)
+        XCTAssertEqual(decoded.terminalPanes.count, 2)
+        XCTAssertEqual(decoded.terminalPanes[0].paneId, "%10")
+        XCTAssertEqual(decoded.scheduledFollowUps.count, 1)
+        XCTAssertEqual(decoded.scheduledFollowUps[0].prompt, "check the tests again")
+        XCTAssertEqual(decoded.parentSessionId, parentId)
+    }
+
+    /// v1 sessions.json (pre-G2) had no terminalPanes/scheduledFollowUps/
+    /// parentSessionId fields. Decoder must default them all.
+    func testAgentSessionBackwardCompatDecodeV1NoG2Fields() throws {
+        let legacyJSON = """
+        {
+            "id": "\(UUID().uuidString)",
+            "repoKey": "/x", "repoDisplayName": "x",
+            "agent": "claude", "status": "running",
+            "createdAt": "2026-05-16T12:00:00Z",
+            "lastEventAt": "2026-05-16T12:01:00Z",
+            "lastEventSeq": 1,
+            "mode": "local"
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let session = try decoder.decode(AgentSession.self, from: legacyJSON)
+        XCTAssertEqual(session.terminalPanes, [])
+        XCTAssertEqual(session.scheduledFollowUps, [])
+        XCTAssertNil(session.parentSessionId)
+    }
+
     func testAgentSessionBackwardCompatDecodeLocal() throws {
         let legacyJSON = """
         {

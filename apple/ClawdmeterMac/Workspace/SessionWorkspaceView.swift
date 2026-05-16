@@ -30,6 +30,7 @@ struct SessionWorkspaceView: View {
         case diff = "Diff"
         case sources = "Sources"
         case artifacts = "Artifacts"
+        case browser = "Browser"
         var id: String { rawValue }
 
         var systemImage: String {
@@ -38,6 +39,7 @@ struct SessionWorkspaceView: View {
             case .diff:      return "arrow.triangle.swap"
             case .sources:   return "doc.text.magnifyingglass"
             case .artifacts: return "paperclip"
+            case .browser:   return "safari"
             }
         }
     }
@@ -70,6 +72,7 @@ struct SessionWorkspaceView: View {
                 ReviewPane(
                     session: session,
                     chatStore: model.chatStore(for: session),
+                    model: model,
                     selectedTab: $rightPaneTab,
                     onClose: { showingReviewPane = false },
                     onApprove: {
@@ -527,6 +530,7 @@ private struct CenterThread: View {
     @State private var composerText: String = ""
     @State private var composerTextBeforeDictation: String = ""
     @State private var viewMode: ViewMode = .chat
+    @State private var showingScheduler = false
     @StateObject private var dictation = SpeechDictation()
 
     enum ViewMode: String, CaseIterable {
@@ -546,6 +550,9 @@ private struct CenterThread: View {
                 case .terminal: terminalPane
                 }
             }
+        }
+        .sheet(isPresented: $showingScheduler) {
+            FollowUpSchedulerSheet(session: session, registry: model.registry)
         }
     }
 
@@ -580,14 +587,26 @@ private struct CenterThread: View {
                 .labelsHidden()
 
                 Menu {
-                    Button("End session", role: .destructive) {
-                        Task {
-                            await model.endSession(id: session.id)
-                        }
+                    Button("Schedule follow-up…", systemImage: "clock") {
+                        showingScheduler = true
                     }
+                    Button("Pop out window", systemImage: "rectangle.portrait.on.rectangle.portrait") {
+                        NotificationCenter.default.post(
+                            name: .popOutSession,
+                            object: nil,
+                            userInfo: ["sessionId": session.id]
+                        )
+                    }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
+                    Divider()
                     if session.archivedAt == nil {
                         Button("Archive") {
                             model.registry.archive(id: session.id)
+                        }
+                    }
+                    Button("End session", role: .destructive) {
+                        Task {
+                            await model.endSession(id: session.id)
                         }
                     }
                 } label: {
@@ -753,9 +772,9 @@ private struct CenterThread: View {
     private var terminalPane: some View {
         if let runtime = AppDelegate.runtime,
            let port = runtime.agentControlServer.boundWsPort {
-            MacTerminalView(
-                sessionId: session.id,
-                host: "127.0.0.1",
+            TerminalTabContainer(
+                session: session,
+                model: model,
                 wsPort: Int(port),
                 token: PairingTokenStore.shared.currentToken()
             )
@@ -963,6 +982,7 @@ private struct ChatThreadScroll: View {
 private struct ReviewPane: View {
     let session: AgentSession
     let chatStore: SessionChatStore?
+    @ObservedObject var model: SessionsModel
     @Binding var selectedTab: SessionWorkspaceView.RightPaneTab
     let onClose: () -> Void
     let onApprove: () -> Void
@@ -1038,6 +1058,8 @@ private struct ReviewPane: View {
             } else {
                 placeholder(text: "Waiting for agent JSONL…")
             }
+        case .browser:
+            InAppBrowser(session: session, model: model)
         }
     }
 
@@ -1063,8 +1085,198 @@ private struct ReviewPane: View {
     }
 }
 
+// MARK: - G12 multi-terminal tab strip
+
+private struct TerminalTabContainer: View {
+    let session: AgentSession
+    @ObservedObject var model: SessionsModel
+    let wsPort: Int
+    let token: String
+
+    /// nil = primary pane. Non-nil = a TerminalPaneRef.id from session.terminalPanes.
+    @State private var selectedSecondaryId: UUID? = nil
+
+    var body: some View {
+        VStack(spacing: 0) {
+            tabStrip
+            Divider()
+            terminal
+        }
+    }
+
+    private var tabStrip: some View {
+        HStack(spacing: 2) {
+            tabButton(id: nil, title: primaryTabTitle, isPrimary: true)
+            ForEach(session.terminalPanes) { ref in
+                tabButton(id: ref.id, title: ref.title, isPrimary: false, paneRef: ref)
+            }
+            Button(action: {
+                Task {
+                    if let _ = await model.addTerminalPane(sessionId: session.id) {
+                        // Switch to the new tab — pick the last added.
+                        if let last = model.registry.session(id: session.id)?.terminalPanes.last {
+                            selectedSecondaryId = last.id
+                        }
+                    }
+                }
+            }) {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("New terminal pane")
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+
+    private var primaryTabTitle: String {
+        // Agent pane gets a nicer label than just the tmux id.
+        "\(session.agent.rawValue.capitalized)"
+    }
+
+    private func tabButton(
+        id: UUID?,
+        title: String,
+        isPrimary: Bool,
+        paneRef: TerminalPaneRef? = nil
+    ) -> some View {
+        let isSelected = (id == selectedSecondaryId)
+        return HStack(spacing: 4) {
+            Button(action: { selectedSecondaryId = id }) {
+                HStack(spacing: 4) {
+                    Image(systemName: isPrimary ? "sparkle" : "terminal")
+                        .font(.system(size: 9))
+                    Text(title)
+                        .font(.system(size: 11))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                .background(
+                    isSelected
+                        ? Color.accentColor.opacity(0.18)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
+            }
+            .buttonStyle(.plain)
+            if let paneRef, !isPrimary {
+                Button(action: {
+                    Task {
+                        await model.closeTerminalPane(sessionId: session.id, paneRef: paneRef)
+                        if selectedSecondaryId == paneRef.id {
+                            selectedSecondaryId = nil
+                        }
+                    }
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Close pane")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var terminal: some View {
+        let targetPaneId: String? = {
+            guard let sid = selectedSecondaryId,
+                  let ref = session.terminalPanes.first(where: { $0.id == sid })
+            else { return nil }
+            return ref.paneId
+        }()
+        // SwiftUI re-creates the view (and the WS connection) when the
+        // .id() changes. That's what we want: switching tabs hangs up the
+        // previous WS and opens one for the new pane.
+        MacTerminalView(
+            sessionId: session.id,
+            host: "127.0.0.1",
+            wsPort: wsPort,
+            token: token,
+            paneId: targetPaneId
+        )
+        .id(targetPaneId ?? "primary")
+    }
+}
+
 // MARK: - Cross-pane notifications (keyboard shortcuts)
 
 extension Notification.Name {
     static let focusSidebarSearch = Notification.Name("clawdmeter.workspace.focusSidebarSearch")
+    static let popOutSession = Notification.Name("clawdmeter.workspace.popOutSession")
+}
+
+// MARK: - G15 scheduler sheet
+
+private struct FollowUpSchedulerSheet: View {
+    let session: AgentSession
+    let registry: AgentSessionRegistry
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var fireAt: Date = Date().addingTimeInterval(5 * 60)
+    @State private var prompt: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Schedule follow-up")
+                .font(.system(size: 16, weight: .semibold))
+            Text("Sends the prompt as a fresh message into this session at the chosen time.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            DatePicker("Fire at", selection: $fireAt, in: Date()...)
+                .datePickerStyle(.field)
+            TextField("Prompt", text: $prompt, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...6)
+            if !session.scheduledFollowUps.isEmpty {
+                Divider()
+                Text("Pending")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(session.scheduledFollowUps.filter { $0.firedAt == nil }) { up in
+                    HStack {
+                        Text(up.fireAt, style: .time)
+                            .font(.system(size: 11, design: .monospaced))
+                        Text(up.prompt)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer()
+                        Button(action: {
+                            registry.removeScheduledFollowUp(sessionId: session.id, followUpId: up.id)
+                        }) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Schedule") {
+                    let up = ScheduledFollowUp(fireAt: fireAt, prompt: prompt)
+                    registry.addScheduledFollowUp(sessionId: session.id, followUp: up)
+                    prompt = ""
+                    fireAt = Date().addingTimeInterval(5 * 60)
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0))
+                .disabled(prompt.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 440)
+    }
 }

@@ -58,7 +58,8 @@ public final class AgentSessionRegistry: ObservableObject {
         tmuxWindowId: String?,
         tmuxPaneId: String?,
         planMode: Bool,
-        mode: SessionMode = .local
+        mode: SessionMode = .local,
+        parentSessionId: UUID? = nil
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -78,7 +79,8 @@ public final class AgentSessionRegistry: ObservableObject {
             createdAt: now,
             lastEventAt: now,
             lastEventSeq: 1,
-            mode: mode
+            mode: mode,
+            parentSessionId: parentSessionId
         )
         sessions.append(session)
         save()
@@ -100,7 +102,10 @@ public final class AgentSessionRegistry: ObservableObject {
             status: status, planText: s.planText,
             createdAt: s.createdAt, lastEventAt: Date(),
             lastEventSeq: s.lastEventSeq + 1,
-            mode: s.mode, archivedAt: s.archivedAt
+            mode: s.mode, archivedAt: s.archivedAt,
+            terminalPanes: s.terminalPanes,
+            scheduledFollowUps: s.scheduledFollowUps,
+            parentSessionId: s.parentSessionId
         )
         nextEventSeqBySession[id] = (nextEventSeqBySession[id] ?? 1) + 1
         save()
@@ -117,7 +122,10 @@ public final class AgentSessionRegistry: ObservableObject {
             status: s.status, planText: planText,
             createdAt: s.createdAt, lastEventAt: Date(),
             lastEventSeq: s.lastEventSeq + 1,
-            mode: s.mode, archivedAt: s.archivedAt
+            mode: s.mode, archivedAt: s.archivedAt,
+            terminalPanes: s.terminalPanes,
+            scheduledFollowUps: s.scheduledFollowUps,
+            parentSessionId: s.parentSessionId
         )
         save()
     }
@@ -142,7 +150,10 @@ public final class AgentSessionRegistry: ObservableObject {
             status: s.status, planText: s.planText,
             createdAt: s.createdAt, lastEventAt: Date(),
             lastEventSeq: s.lastEventSeq + 1,
-            mode: mode, archivedAt: s.archivedAt
+            mode: mode, archivedAt: s.archivedAt,
+            terminalPanes: s.terminalPanes,
+            scheduledFollowUps: s.scheduledFollowUps,
+            parentSessionId: s.parentSessionId
         )
         save()
     }
@@ -159,7 +170,10 @@ public final class AgentSessionRegistry: ObservableObject {
             status: s.status, planText: s.planText,
             createdAt: s.createdAt, lastEventAt: Date(),
             lastEventSeq: s.lastEventSeq + 1,
-            mode: s.mode, archivedAt: date
+            mode: s.mode, archivedAt: date,
+            terminalPanes: s.terminalPanes,
+            scheduledFollowUps: s.scheduledFollowUps,
+            parentSessionId: s.parentSessionId
         )
         save()
     }
@@ -175,9 +189,86 @@ public final class AgentSessionRegistry: ObservableObject {
             status: s.status, planText: s.planText,
             createdAt: s.createdAt, lastEventAt: Date(),
             lastEventSeq: s.lastEventSeq + 1,
-            mode: s.mode, archivedAt: nil
+            mode: s.mode, archivedAt: nil,
+            terminalPanes: s.terminalPanes,
+            scheduledFollowUps: s.scheduledFollowUps,
+            parentSessionId: s.parentSessionId
         )
         save()
+    }
+
+    // MARK: - G12 multi-terminal
+
+    public func addTerminalPane(sessionId: UUID, pane: TerminalPaneRef) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        let s = sessions[idx]
+        var panes = s.terminalPanes
+        panes.append(pane)
+        sessions[idx] = with(s, terminalPanes: panes)
+        save()
+    }
+
+    public func removeTerminalPane(sessionId: UUID, paneRefId: UUID) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        let s = sessions[idx]
+        let panes = s.terminalPanes.filter { $0.id != paneRefId }
+        sessions[idx] = with(s, terminalPanes: panes)
+        save()
+    }
+
+    // MARK: - G15 scheduled follow-ups
+
+    public func addScheduledFollowUp(sessionId: UUID, followUp: ScheduledFollowUp) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        let s = sessions[idx]
+        var ups = s.scheduledFollowUps
+        ups.append(followUp)
+        sessions[idx] = with(s, scheduledFollowUps: ups)
+        save()
+    }
+
+    public func removeScheduledFollowUp(sessionId: UUID, followUpId: UUID) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        let s = sessions[idx]
+        let ups = s.scheduledFollowUps.filter { $0.id != followUpId }
+        sessions[idx] = with(s, scheduledFollowUps: ups)
+        save()
+    }
+
+    public func markFollowUpFired(sessionId: UUID, followUpId: UUID, at firedAt: Date = Date()) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        let s = sessions[idx]
+        let ups = s.scheduledFollowUps.map { f -> ScheduledFollowUp in
+            if f.id == followUpId {
+                return ScheduledFollowUp(id: f.id, fireAt: f.fireAt, prompt: f.prompt, firedAt: firedAt)
+            }
+            return f
+        }
+        sessions[idx] = with(s, scheduledFollowUps: ups)
+        save()
+    }
+
+    /// Re-emit the AgentSession with a swapped field set, preserving the rest.
+    /// Bumps `lastEventAt`. Doesn't bump `lastEventSeq` because these are
+    /// local-state mutations, not cross-device events.
+    private func with(
+        _ s: AgentSession,
+        terminalPanes: [TerminalPaneRef]? = nil,
+        scheduledFollowUps: [ScheduledFollowUp]? = nil
+    ) -> AgentSession {
+        AgentSession(
+            id: s.id, repoKey: s.repoKey, repoDisplayName: s.repoDisplayName,
+            agent: s.agent, model: s.model, goal: s.goal,
+            worktreePath: s.worktreePath,
+            tmuxWindowId: s.tmuxWindowId, tmuxPaneId: s.tmuxPaneId,
+            status: s.status, planText: s.planText,
+            createdAt: s.createdAt, lastEventAt: Date(),
+            lastEventSeq: s.lastEventSeq,
+            mode: s.mode, archivedAt: s.archivedAt,
+            terminalPanes: terminalPanes ?? s.terminalPanes,
+            scheduledFollowUps: scheduledFollowUps ?? s.scheduledFollowUps,
+            parentSessionId: s.parentSessionId
+        )
     }
 
     public func delete(id: UUID) {
@@ -193,7 +284,10 @@ public final class AgentSessionRegistry: ObservableObject {
         var sessions: [AgentSession]
     }
 
-    private static let currentSchemaVersion = 1
+    /// Bumped to 2 in G2 (terminalPanes, scheduledFollowUps, parentSessionId
+    /// added to AgentSession). v1 files decode cleanly because the new keys
+    /// default to empty in `AgentSession.init(from:)`.
+    private static let currentSchemaVersion = 2
 
     private func load() {
         guard FileManager.default.fileExists(atPath: storeURL.path) else { return }
