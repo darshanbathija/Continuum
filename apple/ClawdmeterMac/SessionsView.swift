@@ -1,54 +1,55 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// Sessions tab for the Mac dashboard. Single-pane vertical list per
-/// user direction:
-///   - Repo header (collapsible)
-///   - Sessions underneath as one-line rows (one-line description = goal
-///     or "{agent} · {status}")
-///   - Click a session → push into a chat-style detail (structured cards
-///     primary, terminal view as a toggle)
-///   - ＋ New session button at the bottom
+/// Sessions tab. List of repos with sessions nested underneath; click into
+/// a session → chat-style detail with explicit back chrome (state-driven
+/// view swap, NOT NavigationStack — on macOS that splits into columns +
+/// hides the back affordance).
 ///
-/// "Live outside Clawdmeter" repos surface with a green pill so the user
-/// can see Conductor / Cursor / Terminal-launched activity, even though
-/// Clawdmeter can't directly control those sessions.
+/// Design reference: Anthropic's Claude Code desktop redesign (April 2026)
+/// — left sidebar of sessions + central conversational thread + chat tab
+/// with markdown / tool-call cards. We render the same primitives.
 struct SessionsView: View {
 
     @ObservedObject var model: SessionsModel
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                headerBar
-                Divider()
-                content
-                Divider()
-                newSessionButton
-            }
-            .background(backgroundColor)
-            .navigationDestination(for: AgentSession.self) { session in
-                SessionChatView(session: session, model: model)
+        Group {
+            if let session = model.openSession {
+                SessionChatView(
+                    session: session,
+                    isReadOnly: model.openSessionIsReadOnly,
+                    onBack: { model.closeChatView() },
+                    model: model
+                )
+            } else {
+                listView
             }
         }
+        .background(backgroundColor)
         .sheet(isPresented: $model.showingNewSessionSheet) {
             NewSessionMacSheet(model: model)
         }
     }
 
-    // MARK: - Header
+    // MARK: - List
+
+    private var listView: some View {
+        VStack(spacing: 0) {
+            headerBar
+            Divider()
+            content
+            Divider()
+            newSessionButton
+        }
+    }
 
     private var headerBar: some View {
         HStack {
             Text("Sessions")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(secondaryText)
-            if let lastRefresh = lastRefreshText {
-                Text(lastRefresh)
-                    .font(.system(size: 11))
-                    .foregroundStyle(secondaryText.opacity(0.7))
-            }
             Spacer()
             if model.isRefreshing {
                 ProgressView()
@@ -65,21 +66,13 @@ struct SessionsView: View {
         .padding(.vertical, 10)
     }
 
-    private var lastRefreshText: String? {
-        // Phase 4 polish — surface "Last refresh X ago". For now, just an
-        // indication when we're not refreshing.
-        nil
-    }
-
-    // MARK: - Content
-
     @ViewBuilder
     private var content: some View {
         if model.repos.isEmpty && model.registry.sessions.isEmpty {
             emptyState
         } else {
             ScrollView {
-                LazyVStack(spacing: 0, pinnedViews: []) {
+                LazyVStack(spacing: 0) {
                     ForEach(model.repos, id: \.key) { repo in
                         repoSection(repo)
                     }
@@ -113,7 +106,23 @@ struct SessionsView: View {
         return VStack(alignment: .leading, spacing: 0) {
             repoHeader(repo, isExpanded: isExpanded, sessionCount: sessions.count)
             if isExpanded {
-                if sessions.isEmpty {
+                // Clawdmeter-spawned sessions (controllable).
+                ForEach(sessions) { session in
+                    Button(action: { model.openSessionId = session.id }) {
+                        sessionRow(session)
+                    }
+                    .buttonStyle(.plain)
+                }
+                // Outside-Clawdmeter activity: show as a read-only row that
+                // opens the newest JSONL.
+                if repo.liveSessionCount > 0 {
+                    Button(action: { model.openOutsideSession(repoKey: repo.key) }) {
+                        outsideSessionRow(repo)
+                    }
+                    .buttonStyle(.plain)
+                }
+                // Empty / always-available "start a session here" row.
+                if sessions.isEmpty && repo.liveSessionCount == 0 {
                     HStack(spacing: 8) {
                         Image(systemName: "plus.circle")
                             .foregroundStyle(secondaryText)
@@ -122,19 +131,12 @@ struct SessionsView: View {
                             .foregroundStyle(secondaryText)
                         Spacer()
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 36)
                     .padding(.vertical, 8)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         model.selectedRepoKey = repo.key
                         model.showingNewSessionSheet = true
-                    }
-                } else {
-                    ForEach(sessions) { session in
-                        NavigationLink(value: session) {
-                            sessionRow(session)
-                        }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -144,11 +146,8 @@ struct SessionsView: View {
 
     private func repoHeader(_ repo: AgentRepo, isExpanded: Bool, sessionCount: Int) -> some View {
         Button(action: {
-            if isExpanded {
-                model.expandedRepoKeys.remove(repo.key)
-            } else {
-                model.expandedRepoKeys.insert(repo.key)
-            }
+            if isExpanded { model.expandedRepoKeys.remove(repo.key) }
+            else { model.expandedRepoKeys.insert(repo.key) }
         }) {
             HStack(spacing: 8) {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
@@ -173,7 +172,7 @@ struct SessionsView: View {
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.green)
                     }
-                    .help("\(repo.liveSessionCount) JSONL file(s) modified in the last 5 minutes — Conductor, Cursor, or a Terminal-launched agent is writing here right now")
+                    .help("\(repo.liveSessionCount) JSONL file(s) modified in the last 5 minutes — Conductor, Cursor, or a Terminal-launched agent is writing here right now. Clawdmeter doesn't control these directly; click to open the latest session as read-only chat.")
                 }
                 Spacer()
             }
@@ -182,10 +181,35 @@ struct SessionsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(rowHover ? hoverBg : Color.clear)
     }
 
-    @State private var rowHover: Bool = false
+    private func outsideSessionRow(_ repo: AgentRepo) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(.green)
+                .frame(width: 6, height: 6)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Latest session (outside Clawdmeter)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(primaryText)
+                Text("\(repo.liveSessionCount) JSONL touched recently · read-only chat")
+                    .font(.system(size: 11))
+                    .foregroundStyle(secondaryText)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "eye")
+                .font(.system(size: 11))
+                .foregroundStyle(secondaryText)
+                .help("Open as read-only chat. Clawdmeter can't control sessions it didn't spawn — composer is disabled.")
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(secondaryText)
+        }
+        .padding(.horizontal, 36)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+    }
 
     private func sessionRow(_ session: AgentSession) -> some View {
         HStack(spacing: 10) {
@@ -208,11 +232,11 @@ struct SessionsView: View {
                     .foregroundStyle(terraCotta)
                     .help("Plan ready for approval")
             }
-            Text(session.createdAt.formatted(.relative(presentation: .numeric)))
-                .font(.system(size: 10))
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(secondaryText)
         }
-        .padding(.horizontal, 36)  // indent under the header
+        .padding(.horizontal, 36)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
     }
@@ -226,7 +250,6 @@ struct SessionsView: View {
         if let goal = session.goal, !goal.isEmpty {
             return "\(session.agent.rawValue.capitalized) · \(session.status.rawValue)"
         }
-        // No goal — show window id as a debugging hint.
         return session.tmuxWindowId.map { "tmux \($0)" } ?? "starting…"
     }
 
@@ -239,8 +262,6 @@ struct SessionsView: View {
         case .degraded: return .secondary
         }
     }
-
-    // MARK: - New session button
 
     private var newSessionButton: some View {
         Button(action: { model.showingNewSessionSheet = true }) {
@@ -283,24 +304,24 @@ struct SessionsView: View {
             ? Color.white.opacity(0.55)
             : Color.black.opacity(0.55)
     }
-    private var hoverBg: Color {
-        colorScheme == .dark
-            ? Color.white.opacity(0.04)
-            : Color.black.opacity(0.04)
-    }
 }
 
 // MARK: - Chat-style detail
 
-/// "Once one is clicked into — it looks like a chat session." Structured
-/// cards (messages + tool calls + plan card if planText is non-nil) as
-/// the primary surface; the terminal view is reachable via a toggle.
+/// Per-session detail. Top: back button + repo + status. Middle: chat
+/// thread (user / assistant / tool calls / tool results, dense Cursor-/
+/// Claude-desktop-style rendering). Bottom: composer with paperclip +
+/// input + send. Side toggle to swap to the raw terminal pane.
 struct SessionChatView: View {
     let session: AgentSession
+    let isReadOnly: Bool
+    let onBack: () -> Void
     @ObservedObject var model: SessionsModel
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var viewMode: ViewMode = .chat
+    @State private var chatStore: SessionChatStore?
+    @State private var composerText: String = ""
 
     enum ViewMode: String, CaseIterable {
         case chat = "Chat"
@@ -309,87 +330,215 @@ struct SessionChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            chatHeader
-
-            Picker("View", selection: $viewMode) {
-                ForEach(ViewMode.allCases, id: \.self) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-
+            header
             Divider()
-
             ZStack {
                 switch viewMode {
-                case .chat:
-                    chatBody
-                case .terminal:
-                    terminalBody
+                case .chat: chatPane
+                case .terminal: terminalPane
                 }
             }
         }
-        .navigationTitle(session.repoDisplayName)
-        .toolbar {
-            ToolbarItem(placement: .destructiveAction) {
-                Menu {
-                    Button("End session", role: .destructive) {
-                        Task { await model.endSession(id: session.id) }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-            }
+        .onAppear { ensureChatStore() }
+        .onDisappear { chatStore?.stop() }
+        .background(bg)
+    }
+
+    private func ensureChatStore() {
+        guard chatStore == nil else { return }
+        if let url = SessionChatStore.resolveSessionFileURL(repoCwd: session.repoKey) {
+            let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
+            store.start()
+            self.chatStore = store
         }
     }
 
-    private var chatHeader: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(statusColor(session.status))
-                .frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 2) {
+    // MARK: - Header (back chrome — the bug was no back affordance)
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Button(action: onBack) {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Sessions")
+                        .font(.system(size: 12))
+                }
+                .foregroundStyle(secondaryText)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("[", modifiers: [.command])
+
+            Spacer().frame(width: 4)
+
+            Circle().fill(statusColor).frame(width: 8, height: 8)
+
+            VStack(alignment: .leading, spacing: 0) {
                 Text(headerTitle)
-                    .font(.system(size: 16, weight: .semibold))
-                Text("\(session.agent.rawValue.capitalized) · \(session.status.rawValue)")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(primaryText)
+                    .lineLimit(1)
+                Text("\(session.repoDisplayName) · \(session.agent.rawValue.capitalized) · \(session.status.rawValue)")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryText)
+                    .lineLimit(1)
             }
             Spacer()
+
+            if isReadOnly {
+                Text("Read-only")
+                    .font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.green.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.green)
+                    .help("This session was started outside Clawdmeter. We can show its JSONL but can't control it.")
+            } else {
+                Picker("", selection: $viewMode) {
+                    ForEach(ViewMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 160)
+                .labelsHidden()
+
+                Menu {
+                    Button("End session", role: .destructive) {
+                        Task {
+                            await model.endSession(id: session.id)
+                            onBack()
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 14))
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 30)
+            }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
     }
 
     private var headerTitle: String {
         session.goal ?? session.repoDisplayName
     }
 
-    @ViewBuilder
-    private var chatBody: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                if let planText = session.planText, !planText.isEmpty {
-                    PlanCardView(
-                        goal: session.goal,
-                        planSummary: planText,
-                        files: [],
-                        onApprove: {
-                            Task { await model.approvePlan(id: session.id) }
-                        }
-                    )
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                }
-                StructuredEventList(items: [])
+    private var statusColor: Color {
+        switch session.status {
+        case .planning: return .gray
+        case .running: return .green
+        case .paused: return .yellow
+        case .done: return terraCotta
+        case .degraded: return .secondary
+        }
+    }
+
+    // MARK: - Chat pane
+
+    private var chatPane: some View {
+        VStack(spacing: 0) {
+            messageList
+            if !isReadOnly {
+                Divider()
+                composer
+            } else {
+                Divider()
+                readOnlyFooter
             }
         }
     }
 
+    private var readOnlyFooter: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "eye")
+                .font(.system(size: 11))
+                .foregroundStyle(secondaryText)
+            Text("Read-only view of a session started outside Clawdmeter. Composer is disabled because we'd be writing into a tmux pane we don't own.")
+                .font(.system(size: 11))
+                .foregroundStyle(secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
     @ViewBuilder
-    private var terminalBody: some View {
+    private var messageList: some View {
+        if let store = chatStore {
+            ChatMessagesScroll(store: store, session: session, model: model)
+        } else {
+            ContentUnavailableView {
+                Label("No JSONL yet", systemImage: "ellipsis.bubble")
+            } description: {
+                Text("Waiting for the agent to write its first message. If this session was just spawned, it may take a few seconds.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var composer: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            Button(action: {}) {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 14))
+                    .foregroundStyle(secondaryText)
+            }
+            .buttonStyle(.plain)
+            .help("Attach (not yet wired)")
+            .disabled(true)
+
+            TextField("Message the agent…", text: $composerText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(composerBg, in: RoundedRectangle(cornerRadius: 8))
+                .lineLimit(1...6)
+                .onSubmit { sendComposer() }
+
+            Button(action: sendComposer) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(composerText.isEmpty ? secondaryText : terraCotta)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.return, modifiers: [.command])
+            .disabled(composerText.isEmpty)
+            .help("Send (⌘↩)")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private func sendComposer() {
+        let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        composerText = ""
+        guard let runtime = AppDelegate.runtime,
+              let pane = session.tmuxPaneId ?? session.tmuxWindowId else { return }
+        // Send the text + newline. The pane is running an interactive TUI;
+        // most TUIs accept stdin via a paste.
+        let bytes = Data((text + "\n").utf8)
+        Task {
+            do {
+                try await runtime.tmuxClient.pasteBytes(paneId: pane, bytes: bytes)
+            } catch {
+                // Surface in a future iteration.
+            }
+        }
+    }
+
+    // MARK: - Terminal pane
+
+    @ViewBuilder
+    private var terminalPane: some View {
         if let runtime = AppDelegate.runtime,
            let port = runtime.agentControlServer.boundWsPort {
             MacTerminalView(
@@ -407,14 +556,224 @@ struct SessionChatView: View {
         }
     }
 
-    private func statusColor(_ status: AgentSessionStatus) -> Color {
-        switch status {
-        case .planning: return .gray
-        case .running: return .green
-        case .paused: return .yellow
-        case .done: return Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-        case .degraded: return .secondary
+    // MARK: - Theme
+
+    private var terraCotta: Color {
+        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
+    }
+    private var bg: Color {
+        colorScheme == .dark
+            ? Color(red: 0.08, green: 0.08, blue: 0.08)
+            : Color(red: 0.98, green: 0.98, blue: 0.98)
+    }
+    private var composerBg: Color {
+        colorScheme == .dark
+            ? Color.white.opacity(0.06)
+            : Color.black.opacity(0.04)
+    }
+    private var primaryText: Color {
+        colorScheme == .dark ? .white : .black
+    }
+    private var secondaryText: Color {
+        colorScheme == .dark
+            ? Color.white.opacity(0.55)
+            : Color.black.opacity(0.55)
+    }
+}
+
+/// The actual scrollable thread, observing the chat store's messages.
+/// Auto-scrolls to bottom on new messages (chat-app behavior).
+private struct ChatMessagesScroll: View {
+    @ObservedObject var store: SessionChatStore
+    let session: AgentSession
+    let model: SessionsModel
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    // Plan card pinned at top when present.
+                    if let planText = session.planText, !planText.isEmpty {
+                        PlanCardView(
+                            goal: session.goal,
+                            planSummary: planText,
+                            files: [],
+                            onApprove: {
+                                Task { await model.approvePlan(id: session.id) }
+                            }
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.top, 14)
+                    }
+
+                    if store.messages.isEmpty && !store.isLoading {
+                        emptyState
+                    } else {
+                        ForEach(store.messages) { msg in
+                            messageRow(msg)
+                                .id(msg.id)
+                                .padding(.horizontal, 16)
+                        }
+                    }
+
+                    Color.clear.frame(height: 12).id("bottom-anchor")
+                }
+                .padding(.vertical, 12)
+            }
+            .onChange(of: store.messages.count) { _, _ in
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                }
+            }
+            .onAppear {
+                proxy.scrollTo("bottom-anchor", anchor: .bottom)
+            }
         }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "ellipsis.bubble")
+                .font(.system(size: 24))
+                .foregroundStyle(.secondary)
+            Text("No messages yet")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            Text("Type below to talk to the agent.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
+
+    // MARK: - Message rendering
+
+    @ViewBuilder
+    private func messageRow(_ msg: SessionChatStore.ChatMessage) -> some View {
+        switch msg.kind {
+        case .userText:
+            userBubble(msg)
+        case .assistantText:
+            assistantBubble(msg)
+        case .toolCall:
+            toolCallCard(msg)
+        case .toolResult:
+            toolResultCard(msg)
+        case .meta:
+            metaRow(msg)
+        }
+    }
+
+    private func userBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
+        HStack {
+            Spacer(minLength: 64)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(msg.body)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(terraCotta.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func assistantBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 11))
+                .foregroundStyle(terraCotta)
+                .frame(width: 18, height: 18)
+                .padding(.top, 3)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(msg.body)
+                    .font(.system(size: 13, design: .serif))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 64)
+        }
+    }
+
+    private func toolCallCard(_ msg: SessionChatStore.ChatMessage) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: toolIcon(msg.title))
+                .font(.system(size: 11))
+                .foregroundStyle(toolTint(msg.title))
+                .frame(width: 18, height: 18)
+            Text(msg.title)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(toolTint(msg.title))
+            Text(msg.body)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(toolTint(msg.title).opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func toolResultCard(_ msg: SessionChatStore.ChatMessage) -> some View {
+        let trimmed = msg.body.split(whereSeparator: \.isNewline).prefix(3).joined(separator: "\n")
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: msg.isError ? "exclamationmark.triangle" : "arrow.turn.down.right")
+                .font(.system(size: 10))
+                .foregroundStyle(msg.isError ? .red : .secondary)
+                .frame(width: 18, height: 18)
+            Text(trimmed)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(msg.isError ? .red : .secondary)
+                .lineLimit(3)
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+    }
+
+    private func metaRow(_ msg: SessionChatStore.ChatMessage) -> some View {
+        HStack {
+            Spacer()
+            Text(msg.body)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func toolIcon(_ name: String) -> String {
+        switch name {
+        case "Read", "Glob", "Grep": return "doc.text.magnifyingglass"
+        case "Write": return "pencil"
+        case "Edit": return "pencil.line"
+        case "Bash": return "terminal"
+        case "WebFetch", "WebSearch": return "globe"
+        case "Task": return "person.fill.questionmark"
+        default: return "wrench.adjustable"
+        }
+    }
+
+    private func toolTint(_ name: String) -> Color {
+        switch name {
+        case "Read", "Glob", "Grep": return .blue
+        case "Write", "Edit": return terraCotta
+        case "Bash": return .green
+        case "WebFetch", "WebSearch": return .purple
+        default: return .secondary
+        }
+    }
+
+    private var terraCotta: Color {
+        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
     }
 }
 
@@ -449,7 +808,6 @@ struct NewSessionMacSheet: View {
 
                 TextField("Or enter a path", text: $repoPath,
                           prompt: Text("/Users/.../my-repo"))
-                    .help("Paste an absolute path. The agent runs with this as its cwd.")
 
                 Picker("Agent", selection: $agent) {
                     Text("Claude").tag(AgentKind.claude)
@@ -488,9 +846,7 @@ struct NewSessionMacSheet: View {
         .padding(24)
         .frame(width: 460)
         .onAppear {
-            if let selected = model.selectedRepoKey {
-                repoPath = selected
-            }
+            if let selected = model.selectedRepoKey { repoPath = selected }
         }
     }
 
@@ -530,24 +886,71 @@ struct NewSessionMacSheet: View {
 
 // MARK: - Model
 
-/// Lightweight ObservableObject the SessionsView observes. Wraps the
-/// RepoIndex actor (for the repo list) + AgentSessionRegistry (for live
-/// session metadata) + TmuxSupervisor (for daemon health).
 @MainActor
 public final class SessionsModel: ObservableObject {
 
     @Published public var repos: [AgentRepo] = []
     @Published public var selectedRepoKey: String?
     @Published public var isRefreshing: Bool = false
-    @Published public var selectedSessionId: UUID?
     @Published public var showingNewSessionSheet: Bool = false
-
-    /// Which repo headers are currently expanded in the list.
     @Published public var expandedRepoKeys: Set<String> = []
+    /// The session currently pushed open in the chat detail view. nil = list mode.
+    @Published public var openSessionId: UUID?
 
-    public var selectedRepo: AgentRepo? {
-        guard let key = selectedRepoKey else { return nil }
-        return repos.first { $0.key == key }
+    /// When the user opens a repo's outside-Clawdmeter latest session, we
+    /// synthesize a read-only AgentSession instance and route the chat view
+    /// at it. Stored here so it survives the SessionChatView render cycle.
+    @Published public var openOutsideRepoKey: String?
+    private var syntheticOutsideSessions: [String: AgentSession] = [:]
+
+    public var openSession: AgentSession? {
+        if let id = openSessionId, let s = registry.sessions.first(where: { $0.id == id }) {
+            return s
+        }
+        if let key = openOutsideRepoKey, let s = syntheticOutsideSessions[key] {
+            return s
+        }
+        return nil
+    }
+
+    /// Open a read-only chat view for a repo whose live activity is from
+    /// outside Clawdmeter (Conductor / Cursor / Terminal-launched agent).
+    /// Synthesizes a non-registry AgentSession so SessionChatView can render
+    /// the JSONL but composer + actions are disabled (see `isReadOnly`).
+    public func openOutsideSession(repoKey: String) {
+        let displayName = repos.first { $0.key == repoKey }?.displayName
+            ?? (repoKey as NSString).lastPathComponent
+        let synth = AgentSession(
+            id: UUID(),
+            repoKey: repoKey,
+            repoDisplayName: displayName,
+            agent: .claude,
+            model: nil,
+            goal: nil,
+            worktreePath: nil,
+            tmuxWindowId: nil,    // nil = composer disabled
+            tmuxPaneId: nil,
+            status: .running,
+            planText: nil,
+            createdAt: Date(),
+            lastEventAt: Date(),
+            lastEventSeq: 0
+        )
+        syntheticOutsideSessions[repoKey] = synth
+        openOutsideRepoKey = repoKey
+        openSessionId = nil
+    }
+
+    public func closeChatView() {
+        openSessionId = nil
+        openOutsideRepoKey = nil
+    }
+
+    /// True when the currently-open session is a synthetic outside-Clawdmeter
+    /// one. Composer / End-session menu / Approve buttons are hidden in
+    /// that case.
+    public var openSessionIsReadOnly: Bool {
+        openOutsideRepoKey != nil && openSessionId == nil
     }
 
     public let repoIndex: RepoIndex
@@ -565,23 +968,15 @@ public final class SessionsModel: ObservableObject {
         self.supervisor = supervisor
     }
 
-    public var selectedSession: AgentSession? {
-        guard let id = selectedSessionId else { return nil }
-        return registry.sessions.first { $0.id == id }
-    }
-
     public func sessions(for repoKey: String) -> [AgentSession] {
         registry.sessions.filter { $0.repoKey == repoKey }
     }
 
-    /// Trigger a refresh of the repo list. Idempotent.
     public func refresh() async {
         isRefreshing = true
         defer { isRefreshing = false }
         let snapshot = await repoIndex.refresh()
         self.repos = snapshot
-        // Auto-expand any repo that has Clawdmeter-owned sessions OR is
-        // live outside Clawdmeter, so the user sees them by default.
         for repo in snapshot {
             if !sessions(for: repo.key).isEmpty || repo.liveSessionCount > 0 {
                 expandedRepoKeys.insert(repo.key)
@@ -589,8 +984,6 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
-    /// Subscribe to periodic background refreshes (E6: 60s cadence).
-    /// Called once at app startup. The returned task lives for the app lifetime.
     public func startPeriodicRefresh() -> Task<Void, Never> {
         Task { [weak self] in
             guard let self else { return }
@@ -603,7 +996,6 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
-    /// Spawn a new session via the in-process daemon's tmux client.
     public func spawnSession(
         repoPath: String,
         agent: AgentKind,
@@ -647,17 +1039,12 @@ public final class SessionsModel: ObservableObject {
         return session
     }
 
-    /// Stop a session. Kills tmux window + cleans up.
     public func endSession(id: UUID) async {
         guard let session = registry.session(id: id),
               let runtime = AppDelegate.runtime,
               let windowId = session.tmuxWindowId
         else { return }
-        do {
-            try await runtime.tmuxClient.killWindow(windowId)
-        } catch {
-            // tmux may already have closed; log + continue.
-        }
+        do { try await runtime.tmuxClient.killWindow(windowId) } catch {}
         if let worktreePath = session.worktreePath {
             _ = try? await WorktreeManager.shared.delete(
                 repoRoot: session.repoKey,
@@ -669,8 +1056,6 @@ public final class SessionsModel: ObservableObject {
         registry.delete(id: id)
     }
 
-    /// Approve the pending plan for a session. Triggers the D13 overlay
-    /// + pane swap on the daemon side.
     public func approvePlan(id: UUID) async {
         guard let runtime = AppDelegate.runtime,
               let session = registry.session(id: id),
@@ -683,17 +1068,8 @@ public final class SessionsModel: ObservableObject {
                 "--permission-mode", "acceptEdits",
             ]
             let cwd = session.worktreePath ?? session.repoKey
-            let newWindow = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
-            // Reflect in the registry: status running, planText cleared isn't
-            // a registry op we have; just leave planText in place — the UI
-            // checks status to decide whether to show the plan card.
+            _ = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
             registry.updateStatus(id: id, status: .running)
-            _ = newWindow
-        } catch {
-            // Surface in a future iteration.
-        }
+        } catch {}
     }
 }
-
-// AgentSession is already Hashable + Identifiable (from Protocol.swift), so
-// it can be used with NavigationStack `navigationDestination(for:)` directly.
