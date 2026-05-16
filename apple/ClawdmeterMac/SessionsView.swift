@@ -231,13 +231,22 @@ public final class SessionsModel: ObservableObject {
     public let supervisor: TmuxSupervisor
     private var refreshTask: Task<Void, Never>?
 
-    /// Per-session chat stores. Shared between the chat-thread view and
-    /// review pane (plan tracker, sources, artifacts) so they observe the
-    /// same parsed JSONL. Stored across re-renders to avoid re-parsing.
+    /// Per-session chat stores, LRU-bound to `maxResidentChatStores`. Each
+    /// store holds a JSONLTail dispatch source, a parsed messages array,
+    /// and (post-perf) a markdown cache; without this bound, navigating
+    /// through five large recent sessions would keep five tails + five
+    /// parsed arrays + five caches alive, which surfaced in the codex
+    /// outside-voice review as the plausible root cause of the
+    /// repeated-navigation beachball.
+    /// `chatStoreLRU` holds UUIDs oldest-first; accessing a store moves
+    /// its id to the tail of the array.
     private var chatStores: [UUID: SessionChatStore] = [:]
+    private var chatStoreLRU: [UUID] = []
+    private static let maxResidentChatStores = 3
     /// Per-session PR mirrors (G16). Lazy-instantiated on first access; we
     /// attach the chat store automatically so PR detection picks up the
-    /// agent's `gh pr create` output.
+    /// agent's `gh pr create` output. Paired with `chatStores` — evicted
+    /// together so we don't leak polling tasks.
     private var prMirrors: [UUID: PRMirror] = [:]
 
     public init(
@@ -254,20 +263,56 @@ public final class SessionsModel: ObservableObject {
     /// our synthetic outside-Clawdmeter ones, route through the pinned URL
     /// the caller registered via `openOutsideSession(...)`; otherwise fall
     /// back to "newest JSONL under the repo's project dir".
+    /// On cache hit, the id is bumped to the tail of the LRU. On miss, the
+    /// new store is created, started, and any over-cap entries are evicted
+    /// via `evictExcessChatStores()` (which calls `stop()` to cancel each
+    /// evicted store's JSONLTail + parse task).
     public func chatStore(for session: AgentSession) -> SessionChatStore? {
-        if let existing = chatStores[session.id] { return existing }
+        if let existing = chatStores[session.id] {
+            touchLRU(session.id)
+            return existing
+        }
         let url: URL? = forcedChatStoreURLs[session.id]
             ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.repoKey)
         guard let url else { return nil }
         let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
         store.start()
         chatStores[session.id] = store
+        chatStoreLRU.append(session.id)
+        evictExcessChatStores()
         return store
+    }
+
+    /// LRU bump: move `id` to the tail (most-recently-used position).
+    private func touchLRU(_ id: UUID) {
+        if let idx = chatStoreLRU.firstIndex(of: id) {
+            chatStoreLRU.remove(at: idx)
+        }
+        chatStoreLRU.append(id)
+    }
+
+    /// Drop oldest stores until we're at or below `maxResidentChatStores`.
+    /// Never evicts the currently-open session (which would tear down the
+    /// view's data source mid-render). Pairs eviction with `prMirrors` so
+    /// the PR poller's Task is cancelled alongside the JSONLTail.
+    private func evictExcessChatStores() {
+        let protectedId = openSessionId
+        while chatStoreLRU.count > Self.maxResidentChatStores {
+            // Find the oldest entry that isn't protected.
+            guard let evictIdx = chatStoreLRU.firstIndex(where: { $0 != protectedId })
+            else { break }
+            let evictId = chatStoreLRU.remove(at: evictIdx)
+            chatStores[evictId]?.stop()
+            chatStores.removeValue(forKey: evictId)
+            prMirrors[evictId]?.detach()
+            prMirrors.removeValue(forKey: evictId)
+        }
     }
 
     public func closeChatStore(for sessionId: UUID) {
         chatStores[sessionId]?.stop()
         chatStores.removeValue(forKey: sessionId)
+        chatStoreLRU.removeAll { $0 == sessionId }
         prMirrors[sessionId]?.detach()
         prMirrors.removeValue(forKey: sessionId)
     }

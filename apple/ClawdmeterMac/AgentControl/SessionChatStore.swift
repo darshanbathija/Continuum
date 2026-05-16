@@ -1,8 +1,15 @@
 import Foundation
 import ClawdmeterShared
 import OSLog
+import os.signpost
 
 private let chatLogger = Logger(subsystem: "com.clawdmeter.mac", category: "ChatStore")
+
+/// Perf-overhaul P0/T14 instrumentation. Always-on; OSSignposts are free
+/// at runtime when no Instruments trace is attached. Captures the
+/// session-open → first-paint window so we can prove the perf wins in
+/// future refactors.
+let chatPerfLog = OSLog(subsystem: "com.clawdmeter.mac", category: "Performance")
 
 /// Per-session chat-style event store. Tails the session's JSONL, parses
 /// each line into a typed `ChatMessage`, and publishes the array for the
@@ -22,44 +29,30 @@ private let chatLogger = Logger(subsystem: "com.clawdmeter.mac", category: "Chat
 @MainActor
 public final class SessionChatStore: ObservableObject {
 
-    public struct ChatMessage: Identifiable, Hashable, Sendable {
-        public enum Kind: String, Hashable, Sendable {
-            case userText
-            case assistantText
-            case toolCall
-            case toolResult
-            case meta  // sidecar info like "Session started", "Plan ready"
-        }
-        public let id: String
-        public let kind: Kind
-        public let title: String   // tool name, "You", "Claude", etc
-        public let body: String
-        /// Auxiliary detail for tool calls / results — args summary, exit code,
-        /// stdout/stderr preview. Optional second-line under the main body.
-        public let detail: String?
-        public let at: Date
-        /// Whether a tool_result reported `is_error: true`. Tints the row red.
-        public let isError: Bool
+    /// `ChatMessage` is now the Shared value type (T1 extraction). Keeping
+    /// the SessionChatStore.ChatMessage alias preserves the existing
+    /// `[SessionChatStore.ChatMessage]` API used by PRMirror and views.
+    public typealias ChatMessage = ClawdmeterShared.ChatMessage
 
-        public init(
-            id: String,
-            kind: Kind,
-            title: String,
-            body: String,
-            detail: String? = nil,
-            at: Date,
-            isError: Bool = false
-        ) {
-            self.id = id
-            self.kind = kind
-            self.title = title
-            self.body = body
-            self.detail = detail
-            self.at = at
-            self.isError = isError
-        }
+    /// Snapshot of all derived chat state — items array (with ToolPair
+    /// runs), plus future per-pane caches added in T8/T9. Published as
+    /// a single value so SwiftUI's Combine fan-out is one invalidation
+    /// per frame instead of N per message. Codex tension #4 baked in:
+    /// consistency by construction.
+    public struct ChatSnapshot: Sendable, Equatable {
+        public let items: [ChatItem]
+        /// Monotonic counter that bumps each time the snapshot updates.
+        /// View code uses this for `.onChange` triggers instead of
+        /// `items.last?.id`, which would change object identity per render.
+        public let updateCounter: UInt64
+
+        public static let empty = ChatSnapshot(items: [], updateCounter: 0)
     }
 
+    @Published public private(set) var snapshot: ChatSnapshot = .empty
+    /// Back-compat: views that still call `store.messages` keep working.
+    /// Derived from `snapshot.items`; populated on each snapshot commit.
+    /// Removed in T5 once all view code reads `snapshot.items` directly.
     @Published public private(set) var messages: [ChatMessage] = []
     @Published public private(set) var isLoading: Bool = true
     @Published public private(set) var lastError: String?
@@ -67,9 +60,17 @@ public final class SessionChatStore: ObservableObject {
     public let sessionId: UUID
     private let sessionFileURL: URL
     private var tail: JSONLTail?
-    /// Dedupe key for tool_use blocks so we don't double-show them when we
-    /// also see a corresponding tool_result.
-    private var seenIds: Set<String> = []
+    /// Background parser actor — owns ChatItemBuilder, ingests typed
+    /// `ParsedLine` values, never touches main. The 16ms commit task
+    /// polls `await staging.snapshot()` and publishes to main.
+    private let staging = StagingParser()
+    /// Generation token (codex tension #6). Bumped on every `start()` /
+    /// `stop()`. Background commit task captures its generation at launch
+    /// and silently drops any commit where the captured generation
+    /// doesn't match the current — so stale parses from an evicted
+    /// store can't publish after navigation.
+    private var parseGeneration: UInt64 = 0
+    private var commitTask: Task<Void, Never>?
 
     public init(sessionId: UUID, sessionFileURL: URL) {
         self.sessionId = sessionId
@@ -78,142 +79,111 @@ public final class SessionChatStore: ObservableObject {
 
     public func start() {
         guard tail == nil else { return }
+        parseGeneration &+= 1
+        let generation = parseGeneration
+        let signpostID = OSSignpostID(log: chatPerfLog, object: self)
+        os_signpost(.begin, log: chatPerfLog, name: "session-open",
+                    signpostID: signpostID,
+                    "session=%{public}@", self.sessionId.uuidString)
+        startSignpostID = signpostID
         chatLogger.info("Starting chat store for session \(self.sessionId.uuidString, privacy: .public) at \(self.sessionFileURL.path, privacy: .public)")
-        let tail = JSONLTail(fileURL: sessionFileURL) { [weak self] json in
-            // JSONLTail's handler runs on its own queue. Hop to main.
-            Task { @MainActor in
-                self?.applyLine(json)
-            }
+
+        // JSONLTail still runs on its background queue. The handler
+        // converts [String: Any] → typed `ParsedLine` (Sendable) BEFORE
+        // crossing into the actor — codex tension #7b: typed boundary,
+        // not raw dictionaries.
+        let staging = self.staging
+        let tail = JSONLTail(fileURL: sessionFileURL) { json in
+            guard let parsed = ParsedLine.from(json: json) else { return }
+            Task { await staging.ingest(parsed) }
         }
         self.tail = tail
         tail.start()
-        // Mark loading false after a brief settle window.
+
+        // Background commit task: every 16ms, snapshot the staging actor
+        // and publish to main. Generation-token guard suppresses any
+        // commits from stale parses (codex tension #6).
+        commitTask = Task.detached(priority: .userInitiated) { [weak self] in
+            // Single signposted batch loop. Each iteration is one frame's
+            // worth of commit work — cheap when nothing changed, real
+            // work only when items array grew.
+            var lastCommittedCounter: UInt64 = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                let next = await staging.snapshot()
+                guard next.updateCounter != lastCommittedCounter else { continue }
+                lastCommittedCounter = next.updateCounter
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    guard self.parseGeneration == generation else { return }
+                    self.snapshot = next
+                    // Back-compat: rebuild `messages` array from the
+                    // snapshot's items. Drops in T5 once views read
+                    // snapshot.items directly.
+                    self.messages = Self.flattenMessages(from: next.items)
+                }
+            }
+        }
+
+        // Mark loading false after a settle window.
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
+            guard self.parseGeneration == generation else { return }
             self.isLoading = false
+            if let id = self.startSignpostID {
+                os_signpost(.end, log: chatPerfLog, name: "session-open",
+                            signpostID: id,
+                            "messageCount=%d", self.messages.count)
+                self.startSignpostID = nil
+            }
         }
     }
 
+    private var startSignpostID: OSSignpostID?
+
     public func stop() {
+        // Bump generation so any in-flight commit task drops its next
+        // publish (defense-in-depth with Task cancellation).
+        parseGeneration &+= 1
+        commitTask?.cancel()
+        commitTask = nil
         tail?.stop()
         tail = nil
     }
 
+    /// Flatten `ChatItem.toolRun` pairs back into a flat message array.
+    /// Order matches arrival order — useful for back-compat views and
+    /// for `PRMirror.findPRURL` which scans every assistant body / tool
+    /// result for a github.com PR URL.
+    private static func flattenMessages(from items: [ChatItem]) -> [ChatMessage] {
+        var out: [ChatMessage] = []
+        for item in items {
+            switch item {
+            case .message(let m):
+                out.append(m)
+            case .toolRun(_, let pairs):
+                for pair in pairs {
+                    out.append(pair.call)
+                    if let r = pair.result { out.append(r) }
+                }
+            }
+        }
+        return out
+    }
+
     // MARK: - Parsing
+    // The legacy main-actor `applyLine` + `handleUser` / `handleAssistant`
+    // path was replaced by the off-main `ParsedLine.from(json:)` →
+    // `StagingParser.ingest(_:)` pipeline. Helpers below
+    // (`summarizeInput`, `expandedDetail`, `flattenContent`,
+    // `parseTimestamp`) are marked `nonisolated` so ParsedLine.from can
+    // call them from any context.
 
-    private func applyLine(_ json: [String: Any]) {
-        let type = json["type"] as? String ?? ""
-        let at = Self.parseTimestamp(json) ?? Date()
-        switch type {
-        case "user":
-            handleUser(json, at: at)
-        case "assistant":
-            handleAssistant(json, at: at)
-        default:
-            // skip queue-operation / last-prompt / attachment / etc
-            break
-        }
-    }
 
-    private func handleUser(_ json: [String: Any], at: Date) {
-        guard let message = json["message"] as? [String: Any] else { return }
-        // user content can be a string OR an array of blocks (with tool_results).
-        if let s = message["content"] as? String, !s.isEmpty {
-            append(ChatMessage(
-                id: stableId(json, suffix: "user-text"),
-                kind: .userText,
-                title: "You",
-                body: s,
-                at: at
-            ))
-            return
-        }
-        if let blocks = message["content"] as? [[String: Any]] {
-            for (i, block) in blocks.enumerated() {
-                let blockType = block["type"] as? String ?? ""
-                let baseId = stableId(json, suffix: "u\(i)-\(blockType)")
-                switch blockType {
-                case "text":
-                    if let s = block["text"] as? String, !s.isEmpty {
-                        append(ChatMessage(
-                            id: baseId, kind: .userText,
-                            title: "You", body: s, at: at
-                        ))
-                    }
-                case "tool_result":
-                    let resultId = (block["tool_use_id"] as? String) ?? baseId
-                    let isError = (block["is_error"] as? Bool) ?? false
-                    let body = Self.flattenContent(block["content"])
-                    append(ChatMessage(
-                        id: "result:\(resultId)",
-                        kind: .toolResult,
-                        title: "Tool result",
-                        body: body,
-                        at: at,
-                        isError: isError
-                    ))
-                default:
-                    break
-                }
-            }
-        }
-    }
+    // MARK: - Helpers (used by ParsedLine.from)
 
-    private func handleAssistant(_ json: [String: Any], at: Date) {
-        guard let message = json["message"] as? [String: Any] else { return }
-        guard let blocks = message["content"] as? [[String: Any]] else {
-            // Some streams put plain text directly on `content`.
-            if let s = message["content"] as? String, !s.isEmpty {
-                append(ChatMessage(
-                    id: stableId(json, suffix: "a-text"),
-                    kind: .assistantText,
-                    title: "Claude",
-                    body: s,
-                    at: at
-                ))
-            }
-            return
-        }
-        for (i, block) in blocks.enumerated() {
-            let blockType = block["type"] as? String ?? ""
-            let baseId = stableId(json, suffix: "a\(i)-\(blockType)")
-            switch blockType {
-            case "text":
-                if let s = block["text"] as? String, !s.isEmpty {
-                    append(ChatMessage(
-                        id: baseId, kind: .assistantText,
-                        title: "Claude", body: s, at: at
-                    ))
-                }
-            case "tool_use":
-                let toolUseId = (block["id"] as? String) ?? baseId
-                let name = (block["name"] as? String) ?? "tool"
-                let inputSummary = Self.summarizeInput(block["input"], for: name)
-                let inputDetail = Self.expandedDetail(block["input"], for: name)
-                append(ChatMessage(
-                    id: "call:\(toolUseId)",
-                    kind: .toolCall,
-                    title: name,
-                    body: inputSummary,
-                    detail: inputDetail,
-                    at: at
-                ))
-            default:
-                break
-            }
-        }
-    }
-
-    private func append(_ message: ChatMessage) {
-        // De-dupe on id (re-tailed files may replay).
-        if seenIds.contains(message.id) { return }
-        seenIds.insert(message.id)
-        messages.append(message)
-    }
-
-    // MARK: - Helpers
-
-    private func stableId(_ json: [String: Any], suffix: String) -> String {
+    /// Generate a stable id from a JSON line's uuid/timestamp field.
+    nonisolated static func stableId(_ json: [String: Any], suffix: String) -> String {
         let uuid = (json["uuid"] as? String) ?? (json["timestamp"] as? String) ?? UUID().uuidString
         return "\(uuid):\(suffix)"
     }
@@ -221,7 +191,7 @@ public final class SessionChatStore: ObservableObject {
     /// Compact one-line summary of a tool_use `input` for the row label. This
     /// is what the user sees in the collapsed disclosure header — favors a
     /// human-readable description over the raw command bytes.
-    static func summarizeInput(_ input: Any?, for tool: String) -> String {
+    nonisolated static func summarizeInput(_ input: Any?, for tool: String) -> String {
         guard let dict = input as? [String: Any] else { return "" }
         switch tool {
         case "Bash":
@@ -262,7 +232,7 @@ public final class SessionChatStore: ObservableObject {
     /// Verbose detail shown only when the user expands the tool row. For
     /// Bash this is the full command (multi-line preserved); for file ops
     /// `nil` — the path in the headline is already the full detail.
-    static func expandedDetail(_ input: Any?, for tool: String) -> String? {
+    nonisolated static func expandedDetail(_ input: Any?, for tool: String) -> String? {
         guard let dict = input as? [String: Any] else { return nil }
         switch tool {
         case "Bash":
@@ -286,7 +256,7 @@ public final class SessionChatStore: ObservableObject {
     /// tool_result `content` may be a string OR array of blocks. Flatten to
     /// a single string, joining text blocks with newlines, capped at 4KB
     /// for the chat row (the user can expand via UI later).
-    static func flattenContent(_ content: Any?) -> String {
+    nonisolated static func flattenContent(_ content: Any?) -> String {
         if let s = content as? String { return String(s.prefix(4096)) }
         if let blocks = content as? [[String: Any]] {
             let strs = blocks.compactMap { block -> String? in
@@ -301,7 +271,7 @@ public final class SessionChatStore: ObservableObject {
         return ""
     }
 
-    static func parseTimestamp(_ json: [String: Any]) -> Date? {
+    nonisolated static func parseTimestamp(_ json: [String: Any]) -> Date? {
         if let s = json["timestamp"] as? String {
             let f = ISO8601DateFormatter()
             f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -359,5 +329,162 @@ public final class SessionChatStore: ObservableObject {
             let bd = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return ad < bd
         }
+    }
+}
+
+// MARK: - ParsedLine (typed Sendable boundary)
+
+/// Typed representation of one JSONL line. Converted from `[String: Any]`
+/// on the JSONLTail's dispatch queue (off main + off actor), then crossed
+/// into the StagingParser actor as a `Sendable` value. Closes the codex
+/// tension #7b trap: `[String: Any]` is not properly Sendable.
+struct ParsedLine: Sendable {
+    let timestamp: Date
+    let messages: [ChatMessage]
+
+    /// Convert a raw JSONL dict into a typed ParsedLine. Returns `nil` for
+    /// lines we don't surface (queue-operation, last-prompt, attachment,
+    /// etc.) or malformed lines. Pure value transform.
+    static func from(json: [String: Any]) -> ParsedLine? {
+        let at = SessionChatStore.parseTimestamp(json) ?? Date()
+        let type = json["type"] as? String ?? ""
+        switch type {
+        case "user":
+            return decodeUser(json: json, at: at)
+        case "assistant":
+            return decodeAssistant(json: json, at: at)
+        default:
+            return nil
+        }
+    }
+
+    private static func decodeUser(json: [String: Any], at: Date) -> ParsedLine? {
+        guard let message = json["message"] as? [String: Any] else { return nil }
+        var out: [ChatMessage] = []
+        if let s = message["content"] as? String, !s.isEmpty {
+            out.append(ChatMessage(
+                id: SessionChatStore.stableId(json, suffix: "user-text"),
+                kind: .userText, title: "You", body: s, at: at
+            ))
+        } else if let blocks = message["content"] as? [[String: Any]] {
+            for (i, block) in blocks.enumerated() {
+                let blockType = block["type"] as? String ?? ""
+                let baseId = SessionChatStore.stableId(json, suffix: "u\(i)-\(blockType)")
+                switch blockType {
+                case "text":
+                    if let s = block["text"] as? String, !s.isEmpty {
+                        out.append(ChatMessage(
+                            id: baseId, kind: .userText, title: "You",
+                            body: s, at: at
+                        ))
+                    }
+                case "tool_result":
+                    let resultId = (block["tool_use_id"] as? String) ?? baseId
+                    let isError = (block["is_error"] as? Bool) ?? false
+                    let body = SessionChatStore.flattenContent(block["content"])
+                    out.append(ChatMessage(
+                        id: "result:\(resultId)", kind: .toolResult,
+                        title: "Tool result", body: body, at: at,
+                        isError: isError
+                    ))
+                default:
+                    break
+                }
+            }
+        }
+        guard !out.isEmpty else { return nil }
+        return ParsedLine(timestamp: at, messages: out)
+    }
+
+    private static func decodeAssistant(json: [String: Any], at: Date) -> ParsedLine? {
+        guard let message = json["message"] as? [String: Any] else { return nil }
+        var out: [ChatMessage] = []
+        if let s = message["content"] as? String, !s.isEmpty {
+            out.append(ChatMessage(
+                id: SessionChatStore.stableId(json, suffix: "a-text"),
+                kind: .assistantText, title: "Claude", body: s, at: at
+            ))
+        } else if let blocks = message["content"] as? [[String: Any]] {
+            for (i, block) in blocks.enumerated() {
+                let blockType = block["type"] as? String ?? ""
+                let baseId = SessionChatStore.stableId(json, suffix: "a\(i)-\(blockType)")
+                switch blockType {
+                case "text":
+                    if let s = block["text"] as? String, !s.isEmpty {
+                        out.append(ChatMessage(
+                            id: baseId, kind: .assistantText, title: "Claude",
+                            body: s, at: at
+                        ))
+                    }
+                case "tool_use":
+                    let toolUseId = (block["id"] as? String) ?? baseId
+                    let name = (block["name"] as? String) ?? "tool"
+                    let inputSummary = SessionChatStore.summarizeInput(
+                        block["input"], for: name
+                    )
+                    let inputDetail = SessionChatStore.expandedDetail(
+                        block["input"], for: name
+                    )
+                    out.append(ChatMessage(
+                        id: "call:\(toolUseId)", kind: .toolCall, title: name,
+                        body: inputSummary, detail: inputDetail, at: at
+                    ))
+                default:
+                    break
+                }
+            }
+        }
+        guard !out.isEmpty else { return nil }
+        return ParsedLine(timestamp: at, messages: out)
+    }
+}
+
+// MARK: - StagingParser (background actor)
+
+/// Owns the `ChatItemBuilder` + dedup state. Consumes typed `ParsedLine`
+/// values from off-main contexts (JSONLTail's dispatch queue → ParsedLine
+/// conversion → Task into this actor). Exposes the latest snapshot for
+/// the @MainActor commit task to poll.
+///
+/// Why an actor (vs the previous @MainActor in-line work):
+/// - All parsing work moves off the main thread (codex tension #1).
+/// - Per-line scheduling overhead drops from "Task hop per line" to
+///   "one snapshot poll per 16ms frame".
+/// - ChatItemBuilder + dedup state are isolated by the actor — no
+///   manual locking, no @MainActor pinning.
+actor StagingParser {
+    private var builder = ChatItemBuilder()
+    /// De-dupe ids so re-tailing the JSONL on file rotation doesn't
+    /// double-render. Matches the legacy `seenIds` behavior.
+    private var seenIds: Set<String> = []
+    /// Bumps on every ingest that produced a delta. The @MainActor poll
+    /// task uses this to short-circuit "nothing changed" commits.
+    private var updateCounter: UInt64 = 0
+
+    func ingest(_ line: ParsedLine) {
+        for msg in line.messages {
+            guard !seenIds.contains(msg.id) else { continue }
+            seenIds.insert(msg.id)
+            builder.ingest(msg)
+        }
+        updateCounter &+= 1
+    }
+
+    /// Flush any pending tool run (used at EOF or when caller wants a
+    /// stable rendering). Bumps updateCounter so the poll task picks it
+    /// up next frame.
+    func flushPending() {
+        builder.flushPending()
+        updateCounter &+= 1
+    }
+
+    /// Snapshot the current builder state. The @MainActor commit task
+    /// polls this every 16ms; if `updateCounter` hasn't advanced it
+    /// short-circuits.
+    func snapshot() -> SessionChatStore.ChatSnapshot {
+        SessionChatStore.ChatSnapshot(
+            items: builder.items,
+            updateCounter: updateCounter
+        )
     }
 }
