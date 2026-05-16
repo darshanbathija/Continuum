@@ -5,7 +5,18 @@ import ClawdmeterShared
 /// `~/.clawdmeter/audit/`. Shows the most recent 200 entries per stream
 /// (sends / swaps / autopilot) with filter + search. Mirrors dmux's logs
 /// popup pattern.
+///
+/// T18 (Wire Inspector) lives inside the same Diagnostics tab — toggle
+/// the segmented control at the top to switch between Audit Log and Wire
+/// Inspector. The inspector is off by default; turning it on starts
+/// recording HTTP request/response bodies into a rolling buffer.
 struct DiagnosticsSettingsView: View {
+    enum Surface: String, CaseIterable, Identifiable {
+        case auditLog = "Audit Log"
+        case wireInspector = "Wire Inspector"
+        var id: String { rawValue }
+    }
+    @State private var surface: Surface = .auditLog
     @State private var selectedKind: AuditKind = .sends
     @State private var entries: [AuditEntry] = []
     @State private var query: String = ""
@@ -26,18 +37,43 @@ struct DiagnosticsSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            surfacePicker
             Divider()
-            if filteredEntries.isEmpty {
-                emptyState
-            } else {
-                entryList
+            Group {
+                switch surface {
+                case .auditLog:
+                    auditLogSurface
+                case .wireInspector:
+                    WireInspectorPane()
+                }
             }
         }
         .padding(.vertical, 12)
         .frame(minWidth: 560, minHeight: 400)
         .task(id: refreshTick) { await reload() }
         .task(id: selectedKind) { await reload() }
+    }
+
+    private var surfacePicker: some View {
+        Picker("Surface", selection: $surface) {
+            ForEach(Surface.allCases) { s in
+                Text(s.rawValue).tag(s)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private var auditLogSurface: some View {
+        header
+        Divider()
+        if filteredEntries.isEmpty {
+            emptyState
+        } else {
+            entryList
+        }
     }
 
     private var header: some View {
@@ -180,6 +216,158 @@ struct AuditEntry {
             self.summary = "\(enabled ? "ON " : "OFF") repo=\(repo)"
         default:
             self.summary = raw
+        }
+    }
+}
+
+/// T18. Live tail of the WireInspector rolling buffer. Off by default;
+/// toggle the switch to start recording. Polls every second when visible.
+struct WireInspectorPane: View {
+    @State private var entries: [WireInspector.Entry] = []
+    @State private var enabled: Bool = false
+    @State private var query: String = ""
+    @State private var pollTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            if !enabled && entries.isEmpty {
+                offState
+            } else if filtered.isEmpty {
+                Spacer()
+                Text("Waiting for traffic…")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(filtered) { entry in
+                            WireInspectorRow(entry: entry)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 6)
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            enabled = await WireInspector.shared.isEnabled()
+            pollTask = Task { await pollLoop() }
+        }
+        .onDisappear { pollTask?.cancel() }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Toggle(isOn: $enabled) {
+                    Text("Record HTTP/WS payloads")
+                }
+                .toggleStyle(.switch)
+                .onChange(of: enabled) { _, on in
+                    Task { await WireInspector.shared.setEnabled(on) }
+                }
+                Spacer()
+                Button("Clear") {
+                    Task { await WireInspector.shared.clear(); await refresh() }
+                }
+                .disabled(entries.isEmpty)
+            }
+            TextField("Filter path or peer", text: $query)
+                .textFieldStyle(.roundedBorder)
+            Text("Capped at 500 entries (~5MB). Bodies under 16KB sniff JSON; larger payloads stub as `NB <content-type>`.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    private var offState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                .font(.largeTitle)
+                .foregroundStyle(.tertiary)
+            Text("Inspector is off")
+                .foregroundStyle(.secondary)
+            Text("Toggle the switch to start recording.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var filtered: [WireInspector.Entry] {
+        let q = query.lowercased()
+        guard !q.isEmpty else { return entries.reversed() }
+        return entries.reversed().filter {
+            $0.path.lowercased().contains(q) || $0.peer.lowercased().contains(q)
+        }
+    }
+
+    private func pollLoop() async {
+        while !Task.isCancelled {
+            await refresh()
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+    }
+
+    @MainActor
+    private func refresh() async {
+        let latest = await WireInspector.shared.entries(limit: 500)
+        entries = latest
+    }
+}
+
+private struct WireInspectorRow: View {
+    let entry: WireInspector.Entry
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(entry.direction.rawValue)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(entry.direction == .incoming ? Color.green : Color.blue)
+                if let method = entry.method {
+                    Text(method)
+                        .font(.caption.monospaced().bold())
+                }
+                if let status = entry.status {
+                    Text("\(status)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(status >= 400 ? .red : .secondary)
+                }
+                Text(entry.path)
+                    .font(.caption.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Text(entry.at.formatted(.dateTime.hour().minute().second()))
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                Button {
+                    expanded.toggle()
+                } label: {
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .disabled(entry.bodyPreview.isEmpty)
+            }
+            if expanded && !entry.bodyPreview.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(entry.bodyPreview)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
         }
     }
 }

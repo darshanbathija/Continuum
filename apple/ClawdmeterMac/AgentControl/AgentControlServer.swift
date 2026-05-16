@@ -506,6 +506,14 @@ public final class AgentControlServer {
             }
         }
 
+        // T18 Wire Inspector: record the incoming request body when enabled.
+        let peerString = Self.endpointString(connection.endpoint)
+        await WireInspector.shared.recordRequest(
+            method: request.method, path: request.path, peer: peerString,
+            body: request.body.isEmpty ? nil : request.body,
+            contentType: request.headers["content-type"]
+        )
+
         if let match = routes.match(method: request.method, path: request.path) {
             await match.handler(request, connection, match.params)
             return
@@ -1528,6 +1536,21 @@ public final class AgentControlServer {
             contentType: response.contentType,
             body: response.body
         )
+        // T18 Wire Inspector: record outgoing response on a best-effort
+        // Task; bypassing the actor would let the inspector skew under
+        // load. The detached Task here is fine — outbound recording is
+        // pure observation, not load-bearing.
+        let peerString = Self.endpointString(connection.endpoint)
+        let status = response.status
+        let contentType = response.contentType
+        let body = response.body
+        Task.detached { @Sendable in
+            await WireInspector.shared.recordResponse(
+                method: "—", path: "—", peer: peerString,
+                status: status, body: body.isEmpty ? nil : body,
+                contentType: contentType
+            )
+        }
         connection.send(content: bytes, completion: .contentProcessed { _ in
             connection.cancel()  // HTTP/1.1 keep-alive is not implemented; close after each response
         })

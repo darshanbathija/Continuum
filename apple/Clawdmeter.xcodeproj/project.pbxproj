@@ -59,6 +59,7 @@
 		60A48BFCE0BBD51D03ADE378 /* RouteTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69F9BF1DB0AAF2EE4A463E7C /* RouteTable.swift */; };
 		61794D0EF2D8FF16588C087C /* ClawdmeteriOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCD9574C1A626280070D394 /* ClawdmeteriOSApp.swift */; };
 		62C7229BE15443B5FF6B2555 /* PlanModeWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDDB2A4C242F45EC4FCD4241 /* PlanModeWatcher.swift */; };
+		63B6862C7101C88DCC150054 /* WireInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94EDF3CEF7F199E2380D7927 /* WireInspector.swift */; };
 		6653C3F935F6EB49BCBE566D /* iOSChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BE652466D437D2E8099589C /* iOSChatStore.swift */; };
 		6C249C45CE80F037E5833FD4 /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 62CE064984915F22CE6D0444 /* ClawdmeterShared */; };
 		6EE13264AFF611DAB56A9E1C /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = BE3F00806303DA92CDA654D3 /* ClawdmeterShared */; };
@@ -242,6 +243,7 @@
 		925041B8C85D144E1647A0E6 /* RateLimiter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RateLimiter.swift; sourceTree = "<group>"; };
 		93A894C6B7326CFA1F502397 /* PRReviewPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRReviewPane.swift; sourceTree = "<group>"; };
 		93D530AD60605887515476C0 /* iOSDiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSDiffView.swift; sourceTree = "<group>"; };
+		94EDF3CEF7F199E2380D7927 /* WireInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireInspector.swift; sourceTree = "<group>"; };
 		96732148372DBB9D002F93B9 /* ClawdmeteriOSWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeteriOSWidgets.swift; sourceTree = "<group>"; };
 		96C446A0B7936EDEA144F30E /* SourcesPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesPane.swift; sourceTree = "<group>"; };
 		985A7892D8BD9DC9E3227E5F /* PseudoTerminal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PseudoTerminal.swift; sourceTree = "<group>"; };
@@ -379,6 +381,7 @@
 				840350A245B7AFF9FC1014B3 /* TmuxControlClient.swift */,
 				59E7B70E400451C1AF93243A /* TmuxSupervisor.swift */,
 				112147989D4BC1A47AD29F81 /* TranscriptLoader.swift */,
+				94EDF3CEF7F199E2380D7927 /* WireInspector.swift */,
 				2E29211E150FD6B84E379166 /* WorktreeManager.swift */,
 				4FA0A2EA3B5F097F12B28E4B /* WSChannel.swift */,
 			);
@@ -872,6 +875,7 @@
 				D9D0C23F96A52B7F41CBD04F /* TranscriptLoader.swift in Sources */,
 				D89B4592E0A3C71E668ED91F /* UsageQueryService.swift in Sources */,
 				490356C50E6D9478834E1622 /* WSChannel.swift in Sources */,
+				63B6862C7101C88DCC150054 /* WireInspector.swift in Sources */,
 				4F080AADD46A264ED2A23C23 /* WorktreeManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
