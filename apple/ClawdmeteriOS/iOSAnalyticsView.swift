@@ -7,6 +7,7 @@ import ClawdmeterShared
 @available(iOS 16, *)
 struct iOSAnalyticsView: View {
     @ObservedObject var model: UsageModel
+    @ObservedObject var agentClient: AgentControlClient
 
     @State private var activeWindow: UsageHistorySnapshot.Window = .past30d
     /// Per-section window for the by-repo list. Independent of `activeWindow`.
@@ -14,6 +15,13 @@ struct iOSAnalyticsView: View {
 
     private var iCloudAvailable: Bool {
         UsageCloudMirror.shared.isICloudAvailable
+    }
+
+    /// True when the iPhone has scanned the pairing QR (host + token
+    /// stored). The Tailscale path is the primary sync route now;
+    /// iCloud is a fallback for users who happen to have it set up.
+    private var isPairedWithMac: Bool {
+        agentClient.host != nil && agentClient.token != nil
     }
 
     var body: some View {
@@ -69,10 +77,12 @@ struct iOSAnalyticsView: View {
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                             .padding(.horizontal, 4)
+                    } else if isPairedWithMac {
+                        waitingForMacCard
                     } else if iCloudAvailable {
                         waitingForMacCard
                     } else {
-                        iCloudUnavailableCard
+                        notPairedCard
                     }
                 }
                 .padding(.horizontal, 16)
@@ -94,7 +104,7 @@ struct iOSAnalyticsView: View {
                 .foregroundStyle(.secondary)
             Text("Waiting for Mac sync")
                 .font(.system(size: 17, weight: .semibold))
-            Text("Run Clawdmeter on your Mac to populate the analytics here. The numbers sync via iCloud.")
+            Text("Open Clawdmeter on your Mac. Analytics syncs over Tailscale every 30 seconds.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -106,14 +116,14 @@ struct iOSAnalyticsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
-    private var iCloudUnavailableCard: some View {
+    private var notPairedCard: some View {
         VStack(spacing: 12) {
-            Image(systemName: "icloud.slash")
+            Image(systemName: "qrcode.viewfinder")
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(.secondary)
-            Text("iCloud not enabled")
+            Text("Not paired with a Mac")
                 .font(.system(size: 17, weight: .semibold))
-            Text("Token analytics syncs from your Mac via iCloud. Enable the iCloud Key-Value capability on a paid Apple Developer account (or sign into iCloud on this device) to populate this tab.")
+            Text("Open the Sessions tab and scan the QR from Clawdmeter on your Mac (Settings → Sessions). Analytics syncs over Tailscale once paired — no iCloud required.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

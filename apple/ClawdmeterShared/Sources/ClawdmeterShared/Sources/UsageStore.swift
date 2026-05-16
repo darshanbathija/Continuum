@@ -244,6 +244,18 @@ public struct UsageStore: Sendable {
         public let displayName: String
         public let usage: UsageData
         public let writtenAt: Date
+
+        public init(
+            providerID: String,
+            displayName: String,
+            usage: UsageData,
+            writtenAt: Date
+        ) {
+            self.providerID = providerID
+            self.displayName = displayName
+            self.usage = usage
+            self.writtenAt = writtenAt
+        }
     }
 
     // MARK: - Widget refresh

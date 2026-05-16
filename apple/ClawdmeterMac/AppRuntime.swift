@@ -99,6 +99,16 @@ final class AppRuntime: ObservableObject {
             tmux: self.tmuxClient,
             notifications: self.notificationDispatcher
         )
+        // Hand the daemon refs to the live-usage publishers + analytics
+        // store so the iPhone's `/usage` and `/analytics` endpoints can
+        // serve fresh data over Tailscale. Drops the iCloud-KV-sync
+        // requirement for analytics — users without a paid Apple
+        // Developer entitlement now get the same data via pairing.
+        self.agentControlServer.attachUsageSources(
+            claude: self.claudeModel,
+            codex: self.codexModel,
+            history: self.usageHistoryStore
+        )
         self.sessionsModel = SessionsModel(
             repoIndex: self.repoIndex,
             registry: self.agentSessionRegistry,

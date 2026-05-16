@@ -40,6 +40,13 @@ public final class UsageModel: ObservableObject {
     private var poller: UsagePoller?
     private var clockTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
+    /// Background timer that pulls live Codex usage + analytics from the
+    /// paired Mac daemon (over Tailscale via `AgentControlClient`). Set
+    /// up by `wire(daemonClient:)` once the iOS app has finished pairing.
+    /// Drops the iCloud-KV-sync dependency for users without a paid
+    /// Apple Developer entitlement.
+    private var daemonRefreshTimer: Timer?
+    private weak var daemonClient: AgentControlClient?
 
     public init() {
         // Use the shared, iCloud-synced Keychain entry. The Mac app mirrors
@@ -103,6 +110,60 @@ public final class UsageModel: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+    }
+
+    /// Subscribe to a paired Mac daemon for live Codex usage + analytics
+    /// so the iPhone doesn't depend on iCloud. Idempotent — calling
+    /// twice replaces the previous client/timer. Polls every 30s while
+    /// the app is foregrounded; iCloud KV stays available as a fallback
+    /// for users on a paid developer account.
+    public func wire(daemonClient: AgentControlClient) {
+        self.daemonClient = daemonClient
+        daemonRefreshTimer?.invalidate()
+        // Immediate fetch — don't wait 30s on first launch.
+        Task { @MainActor in await self.refreshFromDaemon() }
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.refreshFromDaemon() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        daemonRefreshTimer = timer
+    }
+
+    /// One-shot fetch — drop the daemon's `/usage` + `/analytics` data
+    /// onto the published properties. The Live tab's CodexSection and
+    /// the Analytics tab already render from these publishers, so the
+    /// switch to daemon-sourced data is invisible to the views.
+    @MainActor
+    private func refreshFromDaemon() async {
+        guard let client = daemonClient else { return }
+        // Only attempt when the client is actually paired — otherwise we
+        // just burn cellular every 30s for 404s.
+        guard client.host != nil, client.token != nil else { return }
+
+        async let usagePayload = client.fetchUsage()
+        async let analyticsPayload = client.fetchAnalytics()
+
+        if let usage = await usagePayload {
+            if let codex = usage.codex {
+                // Mirror to the same `codexSnapshot` shape the iCloud
+                // path populates so the Live tab's `CodexSection`
+                // doesn't need to know which source served the data.
+                codexSnapshot = UsageStore.Snapshot(
+                    providerID: "codex",
+                    displayName: "Codex",
+                    usage: codex,
+                    writtenAt: usage.lastChecked
+                )
+                UsageStore.write(codex, providerID: "codex", displayName: "Codex")
+                UsageStore.reloadWidgets(providerID: "codex")
+            }
+        }
+        if let snap = await analyticsPayload {
+            // Plan A19 monotonic guard: only accept newer snapshots.
+            if snap.computedAt > (analyticsSnapshot?.computedAt ?? .distantPast) {
+                analyticsSnapshot = snap
+            }
+        }
     }
 
     public func setAutoReviveEnabled(_ enabled: Bool) {

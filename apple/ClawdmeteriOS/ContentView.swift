@@ -15,6 +15,12 @@ struct ContentView: View {
         let client = AgentControlClient()
         _agentClient = StateObject(wrappedValue: client)
         _notifManager = StateObject(wrappedValue: iOSNotificationManager(client: client))
+        // Hand the same AgentControlClient to UsageModel so it can pull
+        // live Codex usage + analytics from the Mac daemon over
+        // Tailscale. Replaces the iCloud-KV path for users without a
+        // paid Apple Developer entitlement (analytics + Codex tabs
+        // previously showed "iCloud not enabled" stuck).
+        model.wire(daemonClient: client)
     }
 
     var body: some View {
@@ -24,7 +30,7 @@ struct ContentView: View {
                     Label("Live", systemImage: "gauge.with.dots.needle.67percent")
                 }
 
-            iOSAnalyticsView(model: model)
+            iOSAnalyticsView(model: model, agentClient: agentClient)
                 .tabItem {
                     Label("Analytics", systemImage: "chart.bar")
                 }
@@ -364,7 +370,7 @@ private struct WaitingForMacCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Waiting for the Mac app")
                 .font(.headline)
-            Text("Codex usage syncs via iCloud once you run Clawdmeter on a Mac with `~/.codex/sessions/` available.")
+            Text("Codex usage syncs from your paired Mac over Tailscale. Open Clawdmeter on the Mac and make sure ~/.codex/sessions/ has at least one rollout. If you haven't paired yet, scan the QR from Mac Settings → Sessions.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

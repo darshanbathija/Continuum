@@ -384,7 +384,18 @@ public actor RepoIndex {
             guard !lineBytes.isEmpty,
                   let json = try? JSONSerialization.jsonObject(with: lineBytes) as? [String: Any]
             else { continue }
+            // Top-level cwd — Claude Code JSONLs put it here.
             if let cwd = json["cwd"] as? String, !cwd.isEmpty {
+                return cwd
+            }
+            // Codex CLI nests cwd under payload (`session_meta` /
+            // `turn_context` events). Without this branch, every Codex
+            // JSONL produced nil cwd, the recent-session loop skipped
+            // them, and the sidebar showed no Codex sessions for repos
+            // that only had Codex JSONLs. Real bug: axtior-platform's
+            // 10+ live Codex sessions were invisible because of this.
+            if let payload = json["payload"] as? [String: Any],
+               let cwd = payload["cwd"] as? String, !cwd.isEmpty {
                 return cwd
             }
         }

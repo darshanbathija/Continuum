@@ -46,6 +46,7 @@
 		5902D9B4BE8E0E4A9929A13E /* ShellRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D48BE3092D019C68CDF1B6D9 /* ShellRunner.swift */; };
 		5B7846A11606DFD0DFA9656E /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 8B73D594070D689DF9E8C5DF /* ClawdmeterShared */; };
 		5DE92C384076350BC6A8F25F /* SessionWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB6CC1AA9EB4821E16119827 /* SessionWorkspaceView.swift */; };
+		60A48BFCE0BBD51D03ADE378 /* RouteTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69F9BF1DB0AAF2EE4A463E7C /* RouteTable.swift */; };
 		61794D0EF2D8FF16588C087C /* ClawdmeteriOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCD9574C1A626280070D394 /* ClawdmeteriOSApp.swift */; };
 		62C7229BE15443B5FF6B2555 /* PlanModeWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDDB2A4C242F45EC4FCD4241 /* PlanModeWatcher.swift */; };
 		6C249C45CE80F037E5833FD4 /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 62CE064984915F22CE6D0444 /* ClawdmeterShared */; };
@@ -80,6 +81,7 @@
 		C97F41751616AF2672BAA590 /* CodexLogo.png in Resources */ = {isa = PBXBuildFile; fileRef = 41B60D6E8F440791CA97B015 /* CodexLogo.png */; };
 		CD8144413F727D9F57E7BC66 /* ControlModeParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A965446683135119981D9C40 /* ControlModeParser.swift */; };
 		CDE7A1BA0C782C1DC9C5CCAD /* DoneDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F53B364B4BB9E6F7F3F9C8DC /* DoneDetector.swift */; };
+		D609B22B0D306509093B09D2 /* AutopilotState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5239318D643E1B51443A7C3 /* AutopilotState.swift */; };
 		D64E0EA5E4866E7E56001DE4 /* MenuBarGaugeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA1C225091C6434AB97D2E8 /* MenuBarGaugeView.swift */; };
 		D89B4592E0A3C71E668ED91F /* UsageQueryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24E844E6256A865A0DFEEF18 /* UsageQueryService.swift */; };
 		D9D0C23F96A52B7F41CBD04F /* TranscriptLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112147989D4BC1A47AD29F81 /* TranscriptLoader.swift */; };
@@ -198,6 +200,7 @@
 		6576347309635291F6B4C01B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		68EF91556CDC1149B2B2C480 /* MacTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTerminalView.swift; sourceTree = "<group>"; };
 		69F2E3291A6E0BEC1EE5ABEC /* SpeechDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechDictation.swift; sourceTree = "<group>"; };
+		69F9BF1DB0AAF2EE4A463E7C /* RouteTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteTable.swift; sourceTree = "<group>"; };
 		6C40566A9CD019426F02502C /* CodexLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = CodexLogo.png; sourceTree = "<group>"; };
 		6FF9E7F2868CDF9804D82F59 /* PluginRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginRegistry.swift; sourceTree = "<group>"; };
 		748E1F1BC9C3BDE9E666458C /* ClawdmeterMacWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeterMacWidgets.swift; sourceTree = "<group>"; };
@@ -217,6 +220,7 @@
 		A27CA03750EC59D41E11FB18 /* iOSTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSTerminalView.swift; sourceTree = "<group>"; };
 		A48C1F28E237626714EF1272 /* AgentControlClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlClient.swift; sourceTree = "<group>"; };
 		A4BDBE8D894DEC31C57C6929 /* PairingTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTokenStore.swift; sourceTree = "<group>"; };
+		A5239318D643E1B51443A7C3 /* AutopilotState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutopilotState.swift; sourceTree = "<group>"; };
 		A7EDE305AE4E9350183F0920 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A965446683135119981D9C40 /* ControlModeParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlModeParser.swift; sourceTree = "<group>"; };
 		A9E7176EBAE8AB4546A14340 /* AnalyticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsView.swift; sourceTree = "<group>"; };
@@ -309,6 +313,7 @@
 				AF9881A0E3387C6A605D8D83 /* AgentEventStream.swift */,
 				8C1B8A7FA6946383349924D1 /* AgentSessionRegistry.swift */,
 				60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */,
+				A5239318D643E1B51443A7C3 /* AutopilotState.swift */,
 				23BA2D80741F5E8B24ACEA51 /* ControlModeFrame.swift */,
 				A965446683135119981D9C40 /* ControlModeParser.swift */,
 				F53B364B4BB9E6F7F3F9C8DC /* DoneDetector.swift */,
@@ -322,6 +327,7 @@
 				12661A9455392080A33FC23C /* PRMirror.swift */,
 				985A7892D8BD9DC9E3227E5F /* PseudoTerminal.swift */,
 				FA356EF8A22C268A0070F750 /* RepoIndex.swift */,
+				69F9BF1DB0AAF2EE4A463E7C /* RouteTable.swift */,
 				154FAAB82985A5CA50923DC2 /* SessionChatStore.swift */,
 				8CB1DCED1C1E9B286E0D594F /* SessionEventWiring.swift */,
 				D321C61E9596892F1EB13C97 /* SessionScheduler.swift */,
@@ -735,6 +741,7 @@
 				91F59FC843FCFADA8995B62C /* AppRuntime.swift in Sources */,
 				358CD1C23BCFA5602E805A41 /* AppTheme.swift in Sources */,
 				34D7C13B0CC63BC0EC18F305 /* ArtifactsPane.swift in Sources */,
+				D609B22B0D306509093B09D2 /* AutopilotState.swift in Sources */,
 				1A33BCE35CFE5B8AFC5BD284 /* ClawdmeterMacApp.swift in Sources */,
 				8ABD7420F16C440E13AA36DF /* ControlModeFrame.swift in Sources */,
 				CD8144413F727D9F57E7BC66 /* ControlModeParser.swift in Sources */,
@@ -759,6 +766,7 @@
 				5432E5C01B962FF077E05110 /* ProviderConfig.swift in Sources */,
 				DCA8543E3CD0D2378D6C6BC3 /* PseudoTerminal.swift in Sources */,
 				EC15D5F8B7BC3F151C890C8C /* RepoIndex.swift in Sources */,
+				60A48BFCE0BBD51D03ADE378 /* RouteTable.swift in Sources */,
 				C15F6B1B18050515ACE534FC /* SessionActivityStrip.swift in Sources */,
 				741209CFF5D32C74514BAC0A /* SessionChatStore.swift in Sources */,
 				C224374E77207E3B9E0DB3BE /* SessionEventWiring.swift in Sources */,
@@ -890,7 +898,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -1125,7 +1133,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

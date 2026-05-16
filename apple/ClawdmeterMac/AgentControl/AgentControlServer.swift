@@ -44,6 +44,14 @@ public final class AgentControlServer {
     private let registry: AgentSessionRegistry
     private let tmux: TmuxControlClient
     private let notifications: NotificationDispatcher
+    /// Wired by AppRuntime after construction so the iPhone can pull live
+    /// Claude/Codex usage AND the historical analytics snapshot over
+    /// Tailscale instead of needing iCloud KV sync. Nil-tolerant — the
+    /// endpoints just return empty payloads when the runtime hasn't
+    /// attached yet (cold start, tests).
+    private weak var claudeModel: AppModel?
+    private weak var codexModel: AppModel?
+    private weak var usageHistory: UsageHistoryStore?
 
     private var listener: NWListener?
     private var wsListener: NWListener?
@@ -81,6 +89,20 @@ public final class AgentControlServer {
         self.tmux = tmux
         self.notifications = notifications
         self.whois = whois
+    }
+
+    /// Hand the daemon the live usage publishers + analytics store
+    /// AppRuntime owns. Called once after AppRuntime's `init` finishes —
+    /// we can't take these as init args because they all live on
+    /// AppRuntime and we'd cycle. Idempotent.
+    public func attachUsageSources(
+        claude: AppModel?,
+        codex: AppModel?,
+        history: UsageHistoryStore?
+    ) {
+        self.claudeModel = claude
+        self.codexModel = codex
+        self.usageHistory = history
     }
 
     // MARK: - Lifecycle
@@ -484,41 +506,547 @@ public final class AgentControlServer {
             }
         }
 
-        switch (request.method, request.path) {
-        case ("GET", "/repos"):
-            await handleGetRepos(connection: connection)
-        case ("GET", "/sessions"):
-            handleGetSessions(connection: connection)
-        case ("POST", "/sessions"):
-            await handlePostSession(request: request, connection: connection)
-        case ("GET", let path) where path.hasPrefix("/sessions/") && !path.hasSuffix("/needs-attention"):
-            // GET /sessions/<uuid>
-            let sessionId = String(path.dropFirst("/sessions/".count))
-            handleGetOneSession(sessionId: sessionId, connection: connection)
-        case ("DELETE", let path) where path.hasPrefix("/sessions/"):
-            let sessionId = String(path.dropFirst("/sessions/".count))
-            await handleDeleteSession(sessionId: sessionId, connection: connection)
-        case ("POST", let path) where path.hasSuffix("/approve-plan") && path.hasPrefix("/sessions/"):
-            // /sessions/<uuid>/approve-plan
-            let withoutPrefix = String(path.dropFirst("/sessions/".count))
-            let sessionIdRaw = String(withoutPrefix.dropLast("/approve-plan".count))
-            await handleApprovePlan(sessionId: sessionIdRaw, connection: connection)
-        case ("POST", let path) where path.hasSuffix("/archive") && path.hasPrefix("/sessions/"):
-            let withoutPrefix = String(path.dropFirst("/sessions/".count))
-            let sessionIdRaw = String(withoutPrefix.dropLast("/archive".count))
-            handleArchive(sessionId: sessionIdRaw, archived: true, connection: connection)
-        case ("POST", let path) where path.hasSuffix("/unarchive") && path.hasPrefix("/sessions/"):
-            let withoutPrefix = String(path.dropFirst("/sessions/".count))
-            let sessionIdRaw = String(withoutPrefix.dropLast("/unarchive".count))
-            handleArchive(sessionId: sessionIdRaw, archived: false, connection: connection)
-        case ("GET", "/sessions/needs-attention"):
-            await handleGetNeedsAttention(connection: connection)
-        case ("GET", "/health"):
+        if let match = routes.match(method: request.method, path: request.path) {
+            await match.handler(request, connection, match.params)
+            return
+        }
+        sendResponse(.notFound, on: connection)
+    }
+
+    // MARK: - Route table (T10) — replaces the older switch dispatch.
+    // Handler type lives on RouteTable for visibility reasons; see comment there.
+
+    /// Lazily-built route table — registered once on first dispatch so all
+    /// handler methods are visible. Routes match in registration order; put
+    /// specific paths (`/sessions/needs-attention`) before parameterized
+    /// patterns (`/sessions/:id`).
+    private lazy var routes: RouteTable = {
+        var t = RouteTable()
+
+        // --- GETs ---
+        t.register(method: "GET", pattern: "/health") { [weak self] _, conn, _ in
+            self?.handleHealthV2(connection: conn)
+        }
+        t.register(method: "GET", pattern: "/repos") { [weak self] _, conn, _ in
+            await self?.handleGetRepos(connection: conn)
+        }
+        t.register(method: "GET", pattern: "/models") { [weak self] _, conn, _ in
+            self?.handleGetModels(connection: conn)
+        }
+        t.register(method: "GET", pattern: "/sessions") { [weak self] _, conn, _ in
+            self?.handleGetSessions(connection: conn)
+        }
+        t.register(method: "GET", pattern: "/sessions/needs-attention") { [weak self] _, conn, _ in
+            await self?.handleGetNeedsAttention(connection: conn)
+        }
+        t.register(method: "GET", pattern: "/sessions/preflight") { [weak self] req, conn, _ in
+            await self?.handleGetPreflight(request: req, connection: conn)
+        }
+        t.register(method: "GET", pattern: "/sessions/:id") { [weak self] _, conn, params in
+            self?.handleGetOneSession(sessionId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "GET", pattern: "/sessions/:id/chat-snapshot") { [weak self] req, conn, params in
+            await self?.handleGetChatSnapshot(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "GET", pattern: "/sessions/:id/diff") { [weak self] _, conn, params in
+            await self?.handleGetDiff(sessionId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "GET", pattern: "/sessions/:id/pr") { [weak self] _, conn, params in
+            await self?.handleGetPR(sessionId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "GET", pattern: "/sessions/:id/terminals") { [weak self] _, conn, params in
+            self?.handleGetTerminals(sessionId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "GET", pattern: "/transcript") { [weak self] req, conn, _ in
+            self?.handleGetTranscript(path: req.path, connection: conn)
+        }
+        t.register(method: "GET", pattern: "/usage") { [weak self] _, conn, _ in
+            self?.handleGetUsage(connection: conn)
+        }
+        t.register(method: "GET", pattern: "/analytics") { [weak self] _, conn, _ in
+            self?.handleGetAnalytics(connection: conn)
+        }
+
+        // --- POSTs ---
+        t.register(method: "POST", pattern: "/sessions") { [weak self] req, conn, _ in
+            await self?.handlePostSession(request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/approve-plan") { [weak self] _, conn, params in
+            await self?.handleApprovePlan(sessionId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/archive") { [weak self] _, conn, params in
+            self?.handleArchive(sessionId: params["id"] ?? "", archived: true, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/unarchive") { [weak self] _, conn, params in
+            self?.handleArchive(sessionId: params["id"] ?? "", archived: false, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/model") { [weak self] req, conn, params in
+            await self?.handleChangeModel(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/effort") { [weak self] req, conn, params in
+            await self?.handleChangeEffort(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/mode") { [weak self] req, conn, params in
+            await self?.handleChangeMode(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/send") { [weak self] req, conn, params in
+            await self?.handleSendPrompt(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/interrupt") { [weak self] _, conn, params in
+            await self?.handleInterrupt(sessionId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/autopilot") { [weak self] req, conn, params in
+            await self?.handleSetAutopilot(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/ab-pair/pick-winner") { [weak self] req, conn, params in
+            await self?.handlePickPairWinner(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/create-pr") { [weak self] req, conn, params in
+            await self?.handleCreatePR(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/merge") { [weak self] req, conn, params in
+            await self?.handleMerge(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/terminals") { [weak self] req, conn, params in
+            await self?.handleAddTerminal(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+
+        // --- DELETEs ---
+        // Specific delete first so /sessions/:id/terminals/:paneId beats /sessions/:id.
+        t.register(method: "DELETE", pattern: "/sessions/:id/terminals/:paneId") { [weak self] _, conn, params in
+            await self?.handleDeleteTerminal(
+                sessionId: params["id"] ?? "",
+                paneId: params["paneId"] ?? "",
+                connection: conn
+            )
+        }
+        t.register(method: "DELETE", pattern: "/sessions/:id") { [weak self] _, conn, params in
+            await self?.handleDeleteSession(sessionId: params["id"] ?? "", connection: conn)
+        }
+        return t
+    }()
+
+    private func handleHealthV2(connection: NWConnection) {
+        let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
+        sendJSON([
+            "ok": true,
+            "serverVersion": version,
+            "wireVersion": AgentControlWireVersion.current,
+        ], on: connection)
+    }
+
+    private func handleGetModels(connection: NWConnection) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(ModelCatalog.bundled) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    // MARK: - Sessions v2 Phase 0 handlers
+
+    private func handleChangeModel(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), registry.session(id: uuid) != nil else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let req = try? JSONDecoder().decode(ChangeModelRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        guard !req.model.isEmpty, ModelCatalog.bundled.entry(forId: req.model) != nil else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        registry.setModel(id: uuid, model: req.model, effort: req.effort)
+        await respondWithSession(uuid: uuid, connection: connection)
+    }
+
+    private func handleChangeEffort(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), registry.session(id: uuid) != nil else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let req = try? JSONDecoder().decode(ChangeEffortRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        registry.setEffort(id: uuid, effort: req.effort)
+        await respondWithSession(uuid: uuid, connection: connection)
+    }
+
+    private func handleChangeMode(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let req = try? JSONDecoder().decode(ChangeModeRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        if req.mode == .cloud {
+            sendResponse(.badRequest, on: connection); return
+        }
+        registry.updateRuntime(
+            id: uuid,
+            worktreePath: session.worktreePath,
+            tmuxWindowId: session.tmuxWindowId,
+            tmuxPaneId: session.tmuxPaneId,
+            mode: req.mode
+        )
+        if let planMode = req.planMode, session.agent == .claude {
+            registry.setPlanMode(id: uuid, planMode: planMode)
+        }
+        await respondWithSession(uuid: uuid, connection: connection)
+    }
+
+    private func handleSendPrompt(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let req = try? JSONDecoder().decode(SendPromptRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let bytes = Array(req.text.utf8)
+        guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+            sendResponse(.internalError, on: connection); return
+        }
+        do {
+            let data = Data(bytes)
+            if req.asFollowUp || bytes.count > 256 || req.text.contains("\n") {
+                try await tmux.pasteBytes(paneId: paneId, bytes: data)
+            } else {
+                try await tmux.sendKeys(paneId: paneId, bytes: data)
+            }
             sendJSON(["ok": true], on: connection)
-        case ("GET", let path) where path.hasPrefix("/transcript"):
-            handleGetTranscript(path: path, connection: connection)
-        default:
-            sendResponse(.notFound, on: connection)
+        } catch {
+            serverLogger.error("send-prompt failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleInterrupt(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid),
+              let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+            sendResponse(.notFound, on: connection); return
+        }
+        do {
+            try await tmux.sendKeys(paneId: paneId, bytes: Data([0x1b]))  // ESC
+            sendJSON(["ok": true], on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleSetAutopilot(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), registry.session(id: uuid) != nil else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let req = try? JSONDecoder().decode(AutopilotRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        AutopilotState.shared.setEnabled(req.enabled, sessionId: uuid)
+        await respondWithSession(uuid: uuid, connection: connection)
+    }
+
+    private func handlePickPairWinner(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), registry.session(id: uuid) != nil else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let req = try? JSONDecoder().decode(PickWinnerRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        guard let result = registry.pickPairWinner(sessionId: uuid, winner: req.winnerSessionId) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        switch result {
+        case .decided(let winner, let decidedAt):
+            let body = try? encoder.encode([
+                "winnerSessionId": winner.uuidString,
+                "decidedAt": ISO8601DateFormatter().string(from: decidedAt),
+            ])
+            sendResponse(.ok(contentType: "application/json", body: body ?? Data()), on: connection)
+        case .alreadyDecided(let winner, let decidedAt):
+            let payload = PickWinnerConflictResponse(winnerSessionId: winner, decidedAt: decidedAt)
+            let body = (try? encoder.encode(payload)) ?? Data()
+            sendResponse(HTTPResponse(status: 409, reason: "Conflict",
+                                      contentType: "application/json", body: body), on: connection)
+        case .notPaired, .invalidWinner:
+            sendResponse(.badRequest, on: connection)
+        }
+    }
+
+    // MARK: - Diff / PR / Merge / Terminals (Phase 4)
+
+    private func handleGetDiff(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let cwd = session.worktreePath ?? session.repoKey
+        guard let gitBin = ShellRunner.locateBinary("git") else {
+            sendResponse(.internalError, on: connection); return
+        }
+        // Refuse to diff mid-rebase/merge (Codex #11 / T11).
+        if FileManager.default.fileExists(atPath: (cwd as NSString).appendingPathComponent(".git/rebase-merge"))
+            || FileManager.default.fileExists(atPath: (cwd as NSString).appendingPathComponent(".git/MERGE_HEAD")) {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"Repo is in rebase/merge state, finish on Mac"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        do {
+            let numstat = try await ShellRunner.shared.run(
+                executable: gitBin,
+                arguments: ["diff", "--numstat", "HEAD"],
+                cwd: cwd,
+                timeout: 10
+            )
+            var files: [ClawdmeterShared.GitDiffFile] = []
+            for line in numstat.stdoutString.split(separator: "\n") {
+                let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+                guard parts.count == 3,
+                      let additions = Int(parts[0]),
+                      let deletions = Int(parts[1]) else { continue }
+                files.append(ClawdmeterShared.GitDiffFile(
+                    path: parts[2], status: "M",
+                    additions: additions, deletions: deletions,
+                    hunks: [], truncated: true
+                ))
+            }
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(files) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            serverLogger.error("git diff failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleGetPR(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), registry.session(id: uuid) != nil else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Phase 4 wires PRMirror; Phase 0 returns null (iOS shows "Create PR" CTA).
+        sendJSON(["pr": NSNull()], on: connection)
+    }
+
+    private func handleCreatePR(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let req = (try? JSONDecoder().decode(CreatePRRequest.self, from: request.body)) ?? CreatePRRequest()
+        let cwd = session.worktreePath ?? session.repoKey
+        guard let ghBin = ShellRunner.locateBinary("gh") else {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"gh CLI not found on Mac. Install: brew install gh"}"#.utf8)
+            ), on: connection); return
+        }
+        var args = ["pr", "create", "--fill"]
+        if let title = req.title, !title.isEmpty { args += ["--title", title] }
+        if let body = req.body, !body.isEmpty { args += ["--body", body] }
+        if let base = req.baseBranch, !base.isEmpty { args += ["--base", base] }
+        do {
+            let result = try await ShellRunner.shared.run(
+                executable: ghBin, arguments: args, cwd: cwd, timeout: 60
+            )
+            if result.exitStatus != 0 {
+                let payload: [String: Any] = ["error": "gh pr create failed", "stderr": result.stderrString]
+                let body = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+                sendResponse(HTTPResponse(status: 500, reason: "Internal Server Error",
+                                          contentType: "application/json", body: body), on: connection)
+                return
+            }
+            let prURL = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+            sendJSON(["url": prURL], on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleMerge(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let cwd = session.worktreePath ?? session.repoKey
+        guard let gitBin = ShellRunner.locateBinary("git") else {
+            sendResponse(.internalError, on: connection); return
+        }
+        do {
+            let branchResult = try await ShellRunner.shared.run(
+                executable: gitBin, arguments: ["symbolic-ref", "--short", "HEAD"],
+                cwd: cwd, timeout: 5
+            )
+            let target = branchResult.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isProtected = ["main", "master"].contains(target)
+            let override = request.path.contains("override=true")
+            if isProtected && !override {
+                sendResponse(HTTPResponse(
+                    status: 409, reason: "Conflict",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"Target branch is protected; pass override=true or open a PR","requireExplicitOverride":true}"#.utf8)
+                ), on: connection); return
+            }
+            sendJSON(["ok": true, "merged": false, "note": "Phase 4 merge impl pending"], on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleGetTerminals(sessionId: String, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(session.terminalPanes) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleAddTerminal(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid),
+              let windowId = session.tmuxWindowId else {
+            sendResponse(.notFound, on: connection); return
+        }
+        struct AddTerminalRequest: Codable { let title: String? }
+        let req = (try? JSONDecoder().decode(AddTerminalRequest.self, from: request.body)) ?? AddTerminalRequest(title: nil)
+        do {
+            let paneId = try await tmux.splitWindow(
+                windowId: windowId,
+                cwd: session.worktreePath ?? session.repoKey,
+                horizontal: false
+            )
+            let pane = TerminalPaneRef(paneId: paneId, title: req.title ?? "", isPrimary: false)
+            registry.addTerminalPane(sessionId: uuid, pane: pane)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(pane) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleDeleteTerminal(sessionId: String, paneId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid),
+              let pane = session.terminalPanes.first(where: { $0.id.uuidString == paneId }) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        if pane.isPrimary {
+            sendResponse(.badRequest, on: connection); return
+        }
+        do {
+            try await tmux.killPane(pane.paneId)
+            registry.removeTerminalPane(sessionId: uuid, paneRefId: pane.id)
+            sendJSON(["ok": true], on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleGetChatSnapshot(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Phase 0: return an empty snapshot so iOS can subscribe + render
+        // gracefully. Phase 4 (T40) wires up the SessionChatStore mirror.
+        let snapshot = WireChatSnapshot(
+            sessionId: session.id,
+            items: [],
+            planSteps: [],
+            sourceEntries: [],
+            artifactEntries: [],
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            lastEventAt: session.lastEventAt,
+            updateCounter: session.lastEventSeq
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(snapshot) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleGetPreflight(request: HTTPRequest, connection: NWConnection) async {
+        // Phase 0 stub; Phase 8 wires LiveCostCalculator + RateLimitChecker.
+        let response = PreflightResponse(
+            estimatedCostUSD: nil,
+            weeklyCapPct: nil,
+            wouldCap: false,
+            suggestedSwap: nil,
+            staleData: false
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(response) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func respondWithSession(uuid: UUID, connection: NWConnection) async {
+        guard let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(session) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    // MARK: - Usage / Analytics endpoints
+
+    /// Live UsageData snapshot for Claude + Codex, served from the
+    /// AppModels' last-poll state. Lets the iPhone show fresh gauges
+    /// over Tailscale without depending on iCloud KV sync (which
+    /// requires a paid Apple Developer entitlement). Wire shape:
+    /// `{claude: UsageData?, codex: UsageData?, lastChecked: Date}`.
+    private func handleGetUsage(connection: NWConnection) {
+        let payload = UsageEnvelope(
+            claude: claudeModel?.usage,
+            codex: codexModel?.usage,
+            lastChecked: Date()
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(payload) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Historical analytics snapshot — same data the Mac dashboard's
+    /// Analytics view shows. Served verbatim so iPhone renders identical
+    /// totals + daily chart + by-repo split. Replaces iCloud KV sync
+    /// for users without a paid Apple Developer account.
+    private func handleGetAnalytics(connection: NWConnection) {
+        let snapshot = usageHistory?.snapshot ?? UsageHistorySnapshot.empty
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(snapshot) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
         }
     }
 
@@ -858,33 +1386,52 @@ public final class AgentControlServer {
 
     // MARK: - Response sending
 
-    private enum HTTPResponse {
-        case ok(contentType: String, body: Data)
-        case badRequest
-        case notFound
-        case unauthorized
-        case internalError
+    /// HTTP responses used by daemon handlers. Sessions v2 promoted the
+    /// enum to a struct so endpoints can emit arbitrary statuses (409
+    /// Conflict, 426 Upgrade Required, 503 Service Unavailable) with a
+    /// structured JSON body. Common cases stay reachable via static
+    /// constants / factories so existing call sites don't change.
+    struct HTTPResponse {
+        let status: Int
+        let reason: String
+        let contentType: String
+        let body: Data
+
+        init(status: Int, reason: String, contentType: String, body: Data) {
+            self.status = status
+            self.reason = reason
+            self.contentType = contentType
+            self.body = body
+        }
+
+        static func ok(contentType: String, body: Data) -> HTTPResponse {
+            HTTPResponse(status: 200, reason: "OK", contentType: contentType, body: body)
+        }
+        static let badRequest = HTTPResponse(
+            status: 400, reason: "Bad Request",
+            contentType: "text/plain", body: Data("Bad Request\n".utf8)
+        )
+        static let notFound = HTTPResponse(
+            status: 404, reason: "Not Found",
+            contentType: "text/plain", body: Data("Not Found\n".utf8)
+        )
+        static let unauthorized = HTTPResponse(
+            status: 401, reason: "Unauthorized",
+            contentType: "text/plain", body: Data("Unauthorized\n".utf8)
+        )
+        static let internalError = HTTPResponse(
+            status: 500, reason: "Internal Server Error",
+            contentType: "text/plain", body: Data("Internal Server Error\n".utf8)
+        )
     }
 
     private func sendResponse(_ response: HTTPResponse, on connection: NWConnection) {
-        let bytes: Data
-        switch response {
-        case .ok(let contentType, let body):
-            bytes = httpResponseBytes(status: 200, statusText: "OK",
-                                      contentType: contentType, body: body)
-        case .badRequest:
-            bytes = httpResponseBytes(status: 400, statusText: "Bad Request",
-                                      contentType: "text/plain", body: Data("Bad Request\n".utf8))
-        case .notFound:
-            bytes = httpResponseBytes(status: 404, statusText: "Not Found",
-                                      contentType: "text/plain", body: Data("Not Found\n".utf8))
-        case .unauthorized:
-            bytes = httpResponseBytes(status: 401, statusText: "Unauthorized",
-                                      contentType: "text/plain", body: Data("Unauthorized\n".utf8))
-        case .internalError:
-            bytes = httpResponseBytes(status: 500, statusText: "Internal Server Error",
-                                      contentType: "text/plain", body: Data("Internal Server Error\n".utf8))
-        }
+        let bytes = httpResponseBytes(
+            status: response.status,
+            statusText: response.reason,
+            contentType: response.contentType,
+            body: response.body
+        )
         connection.send(content: bytes, completion: .contentProcessed { _ in
             connection.cancel()  // HTTP/1.1 keep-alive is not implemented; close after each response
         })
@@ -917,7 +1464,7 @@ public final class AgentControlServer {
 
 // MARK: - HTTP request parsing helpers
 
-private struct HTTPRequest {
+struct HTTPRequest {
     let method: String
     let path: String
     let headers: [String: String]  // lower-cased header names

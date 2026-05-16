@@ -220,6 +220,46 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    /// Fetch the latest live Claude + Codex usage gauges from the Mac.
+    /// The daemon serves whatever its in-process pollers have — so the
+    /// iPhone sees the same numbers the Mac dashboard does, no iCloud
+    /// dependency. Returns nil for any failure path; callers fall back
+    /// to iCloud KV (when available) or empty state.
+    public func fetchUsage() async -> UsageEnvelope? {
+        guard let request = makeRequest(path: "/usage") else { return nil }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                return nil
+            }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(UsageEnvelope.self, from: data)
+        } catch {
+            clientLogger.debug("usage fetch failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Fetch the historical token-analytics snapshot from the Mac. Same
+    /// shape the iCloud-KV mirror used to ship; this is the no-iCloud
+    /// path. Polled every 60s while the Analytics tab is active.
+    public func fetchAnalytics() async -> UsageHistorySnapshot? {
+        guard let request = makeRequest(path: "/analytics") else { return nil }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                return nil
+            }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(UsageHistorySnapshot.self, from: data)
+        } catch {
+            clientLogger.debug("analytics fetch failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     /// Fetch the parsed chat transcript for a JSONL at `path`. Used by
     /// the iOS session detail screens so they can render the actual
     /// conversation instead of a useless "Read-only · JSONL path · Last

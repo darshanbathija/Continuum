@@ -1083,3 +1083,25 @@ public struct TranscriptEnvelope: Codable, Sendable {
         self.truncated = truncated
     }
 }
+
+// MARK: - Usage envelope
+
+/// Response shape for `GET /usage`. Carries the latest Claude + Codex
+/// UsageData snapshots the Mac daemon has from its in-process pollers.
+/// Replaces the iCloud-KV-sync path on iOS for users without a paid
+/// Apple Developer entitlement — the iPhone just polls this every 30s
+/// from the same paired Tailscale connection it uses for Sessions.
+public struct UsageEnvelope: Codable, Sendable {
+    public let claude: UsageData?
+    public let codex: UsageData?
+    /// Server-side wall-clock when the snapshot was assembled. The
+    /// iPhone uses this to age the gauges ("Last checked X ago") so
+    /// the user knows when the Mac last actually polled the providers.
+    public let lastChecked: Date
+
+    public init(claude: UsageData?, codex: UsageData?, lastChecked: Date) {
+        self.claude = claude
+        self.codex = codex
+        self.lastChecked = lastChecked
+    }
+}
