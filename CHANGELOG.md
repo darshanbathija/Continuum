@@ -4,6 +4,61 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.2.0 build 16] - 2026-05-17
+
+### Added
+- **WCAG AA across v2 surfaces (T35).** Every interactive element on
+  the v2 surfaces (effort dial, model picker, controls strip, activity
+  strip, diff view, PR pane, plan tracker, terminal tabs, artifacts
+  pane, Watch list, Mac chips) gets explicit `accessibilityLabel` +
+  value + hint. Effort dial adds `accessibilityAdjustableAction`
+  (swipe up/down) and collapses into a Menu with 44pt rows once
+  Dynamic Type ≥ accessibility3. Long-form labels in `accessibilityValue`
+  so synthesized speech says "Extra high" instead of "xHigh".
+  Decorative icons hidden from VoiceOver. Touch targets ≥44pt.
+- **End-to-end wire round-trip test (T16).** New
+  `SessionsV2E2ETests.swift` (19 cases) walks the full
+  create-session → swap-model → effort → mode → send → approve →
+  diff → PR-create → merge → preflight → A/B-pair → autopilot cycle
+  through the Codable DTOs. Catches protocol drift between iOS and
+  Mac without needing a real daemon.
+- **RepoIdentity.normalize smoke test (T30).**
+  `test_canonicalRepo_claudeWorktreeWithRealGitParent` creates a real
+  `.git` directory on the parent and asserts worktree sessions bucket
+  back to the canonical parent path (not "(other)"). Guards the
+  analytics layer's bucketing through `repo/.claude/worktrees/<slug>`.
+- **fastlane scaffolding (T27).** `apple/fastlane/{Appfile,Matchfile,Fastfile}`
+  + `apple/Gemfile`. Lanes: `match_dev`, `match_release`,
+  `build_mac_dmg`, `ios_testflight`, `release` (bumps build, archives
+  Mac, archives iOS, uploads to TestFlight, drafts a GitHub release).
+  Env-var-gated so a fresh checkout can't accidentally hit Apple's
+  signing infra.
+- **Phase 5 swipe quick-actions.** Leading-edge swipe on a session
+  row reveals Approve (when the session is in plan mode) and Interrupt
+  (when running). Trailing edge keeps Archive / Unarchive / End.
+- **Sidebar by-status grouping (Phase 5 status groups).** New
+  segmented picker above the Sessions list flips between repo-grouped
+  (default) and status-grouped (Needs attention / In progress / Idle /
+  Done / Archived). Status buckets adopted from Conductor's split.
+
+### Changed
+- **Motion specs centralized (T36).** New
+  `SessionsV2Theme.disclosureToggle(reduceMotion:)` replaces ad-hoc
+  `easeInOut(duration: 0.18)` calls on v2 surfaces; honors Reduce
+  Motion (collapses to `.linear` at instant duration). Mac
+  `SessionActivityStrip` pulses now route through the existing
+  `pulseAnimation(for:reduceMotion:)` helper instead of hardcoded
+  durations.
+- **Interaction-state coverage filled (T37).** iOSSessionsView splits
+  "no sessions yet" from "Mac unreachable" based on
+  `client.lastPolledAt > 60s`; the unreachable branch ships a Retry
+  CTA. iOSPRPane's `checksRollup` renders distinct glyph + color
+  paths for success / failure / pending / neutral / unknown (pending
+  uses the warn color instead of being lumped with failure).
+
+### Tests
+- `ClawdmeterShared`: 195 → 215 (+20 from T16 e2e + T30 smoke).
+
 ## [0.2.0 build 15] - 2026-05-17
 
 ### Added
