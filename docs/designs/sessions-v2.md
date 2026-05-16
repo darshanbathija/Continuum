@@ -125,7 +125,62 @@ diffs + PRs + multi-tab terminals, and approve plans from the Lock Screen.
 - 19/19 in `tools/tmux-cc-probe`.
 - All three platform schemes (Mac / iOS / Watch) build clean.
 
-## What's deferred to v2.0.1+
+## v2.0.1 polish (same-day, 2026-05-17)
+
+A polish pass landed the same day as v2.0 ship. Driven by the first
+hour of real use — Mac DMG re-uploaded to the `v0.2.0-mac` release at
+build 13. Source of truth for what's in the DMG is
+`CURRENT_PROJECT_VERSION` in `apple/project.yml`.
+
+- **Pairing front-and-center.** `PairingQRPopoverContent` view + a
+  terra-cotta "Sync with iPhone" button in the Mac dashboard header
+  (`DashboardView.swift`). iOS empty states (Sessions / Analytics /
+  Codex "Waiting for the Mac app") all show a shared
+  `PairingCTAButtons` with Scan QR + Paste URL pre-targeted via
+  `PairingFlow.initialMode`.
+- **Plan mode works for Codex.** `AgentSpawner.codexArgv` accepts
+  `planMode: Bool` → emits `-s read-only`. `handleApprovePlan`
+  branches on `session.agent` and respawns with `claudeArgv`
+  (`acceptEdits`) or `codexArgv` (`workspace-write`). Codex sessions
+  in plan mode get a synthetic `planText` so existing plan-card UI
+  shows the Approve & run button without code changes. "Claude only"
+  copy gone from both New Session sheets + iOS controls strip.
+- **Codex chat renders.** `SessionChatStore.ParsedLine.from` gained
+  `case "response_item":` + `decodeCodexResponseItem` for Codex's
+  shape (`message`, `function_call`, `function_call_output`,
+  `reasoning`). `<environment_context>` user turns + `role: developer`
+  wrappers filtered. Tool-arg summaries via `summarizeCodexInput`
+  (`cmd`, `brief`, `apply_patch` variants). `TranscriptLoader` reuses
+  the same parser → iOS gets it for free.
+- **Codex sub-agents hidden from sidebar.** `RepoIndex.readCodexSessionMeta`
+  drops rollouts where `payload.thread_source == "subagent"` or
+  `payload.agent_role` is non-empty. Parent rollouts still surface.
+- **iOS Sessions sidebar collapses.** `Section(isExpanded:)` (iOS 17+)
+  per-repo with rotating chevron + count badge. Default expanded for
+  live/active repos, collapsed for stale; `manuallyExpanded` /
+  `manuallyCollapsed` overrides stick for the session.
+- **Provider logos in Analytics.** New cross-platform
+  `ProviderBadgeImage` handles AppKit/UIKit `.isTemplate` asymmetry.
+  Used by `AnalyticsTotalsGrid` header and a custom legend in
+  `AnalyticsDailyChart` (Swift Charts' auto-legend hidden).
+- **Settings → Diagnostics shipped (T17 + T18).**
+  `DiagnosticsSettingsView` with a segmented Audit Log / Wire
+  Inspector picker. Audit-log viewer reads the JSONL files with
+  text + session-ID filter + tap-to-expand-raw. Wire-inspector
+  toggles `WireInspector` recording and shows a live tail polling
+  every second.
+- **iOS multi-pane terminal shipped (T33).** `iOSTerminalTabsView`
+  wraps `iOSTerminalView` with chip-strip tabs, `+` to spawn,
+  long-press to delete non-primary panes.
+- **iOS Artifacts pane shipped.** Overflow menu → "Artifacts (N)"
+  opens a list backed by a new `GET /sessions/:id/artifact?path=`
+  daemon endpoint. Bytes download into a temp dir and preview via
+  `QLPreviewController`.
+- **AuditLog + RateLimiter wired into handlers (T12 + T13).**
+  Infrastructure was already in place from the v2 ship; this pass
+  closed the call sites in send/swap/autopilot.
+
+## What's deferred to v2.0.2+
 
 - **Phase 5 polish**: status groups (Backlog / In Progress / Review /
   Done), command palette, voice composer in mid-session prompt, quick
@@ -137,13 +192,6 @@ diffs + PRs + multi-tab terminals, and approve plans from the Lock Screen.
 - **Voice-first new session** (D6): Foundation Models on-device intent
   parse for "Start a Claude Opus session in axtior to fix the redis
   timeout" as one utterance.
-- **Multi-pane terminal tab strip on iOS** (T33): the daemon endpoint
-  is wired; iOS just shows a single pane today.
-- **Artifacts pane on iOS** (Phase 4): Mac has `ArtifactsPane`, iOS
-  shows the artifact list inside the diff view for now.
-- **Settings → Diagnostics**: Session Event Timeline (T17) +
-  Wire Inspector (T18). The audit log infrastructure exists; the viewer
-  UI lands next.
 - **fastlane setup with Match** (T27).
 - **End-to-end smoke test** that drives the full create → swap →
   approve → diff → merge cycle (T16).

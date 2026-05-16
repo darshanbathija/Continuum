@@ -260,6 +260,65 @@ mid-session change DTOs, `HealthResponse`, `WireChatSnapshot`, `CityPool`,
 `WatchSessionSummary`. 19/19 in `tools/tmux-cc-probe`. All three
 platform schemes build clean.
 
+## Sessions v2.0.1 polish (2026-05-17 same-day follow-up)
+
+After the v2.0 ship, a same-day polish pass closed the most visible
+asymmetries and rendering gaps the user hit in the first hour of real
+use. Mac DMG bumped builds 7 → 13 across this pass and re-uploaded to
+the `v0.2.0-mac` GitHub release.
+
+- **Pairing is front-and-center.** New `PairingQRPopoverContent` view
+  is hosted by a terra-cotta "Sync with iPhone" button in the Mac
+  dashboard header (`DashboardView.swift`) — clicking opens a popover
+  with the QR code + a Copy URL CTA. The full Settings → Sessions
+  pane still owns regenerate/revoke. On iOS, every empty state that
+  needs pairing (Sessions / Analytics / Codex card) now shows a
+  shared `PairingCTAButtons` view with side-by-side Scan QR + Paste
+  URL, each pre-targeting the corresponding tab in `PairingFlow` via
+  the new `initialMode` parameter.
+- **Plan mode for Codex.** `AgentSpawner.codexArgv` accepts
+  `planMode: Bool` and emits `-s read-only`. `handleApprovePlan`
+  branches on `session.agent` and uses `claudeArgv` (`acceptEdits`)
+  or `codexArgv` (`workspace-write`) for the post-approve respawn.
+  Codex sessions seeded into plan mode get a synthetic `planText`
+  so the existing `PlanCardView` / `iOSPlanTrackerView` render the
+  Approve & run button without code changes — Codex doesn't emit
+  `ExitPlanMode`. The "Claude only" copy in both New Session sheets
+  and the `iOSSessionControlsStrip` Plan/Code toggle is gone.
+- **Codex chat actually renders.** `SessionChatStore.ParsedLine.from`
+  gained a `case "response_item":` branch + `decodeCodexResponseItem`
+  helper. Maps Codex's payload shapes (`message` user/assistant,
+  `function_call`, `function_call_output`, `reasoning`) into the
+  existing `ChatMessage` model. Filters Codex's auto-injected
+  `<environment_context>` user turns and `role: developer` system
+  wrappers. Tool-arg summaries use Codex's names (`cmd`, `brief`,
+  `apply_patch` variants) via `summarizeCodexInput`. The
+  `TranscriptLoader` daemon endpoint reuses the same parser, so iOS
+  gets Codex chat rendering for free.
+- **Sub-agents stop drowning the sidebar.** `RepoIndex.readCodexSessionMeta`
+  now reads `payload.thread_source` / `payload.agent_role` from each
+  Codex rollout. Rollouts tagged `subagent` (Codex worker threads —
+  one user turn can spawn 5–10) are skipped at the meta stage. Parent
+  rollouts still surface as Recent rows.
+- **Sessions sidebar collapses by repo on iOS.** Repo headers in
+  `iOSSessionsView.repoList` are now `Section(isExpanded:)` (iOS 17+).
+  Default: expanded if the repo has a live or active session,
+  collapsed otherwise. Manual taps win via `manuallyExpanded` /
+  `manuallyCollapsed` Sets. Headers gained a rotating chevron + a
+  count badge for the combined `sessions + recentSessions`.
+- **Analytics totals + chart show provider logos.** New cross-platform
+  `ProviderBadgeImage` (`ClawdmeterShared/Analytics/Views/`) handles
+  the AppKit/UIKit `.isTemplate` asymmetry (Codex silhouette needs
+  `.template` to render on dark backgrounds; Claude's burst keeps
+  full color). `AnalyticsTotalsGrid` header row uses it; `AnalyticsDailyChart`
+  hides Swift Charts' auto-legend (`.chartLegend(.hidden)`) and
+  renders a custom legend with the same logos.
+
+The post-v2 commits ship to `main` directly without a feature branch —
+the repo is solo-dev / personal-use, so `/ship` and `/document-release`
+abort their PR-flow scaffolding. The build version (`CURRENT_PROJECT_VERSION`
+in `apple/project.yml`) is the source of truth for what's in the DMG.
+
 ## Sessions feature v1 (added 2026-05-16, extended through Phase G3)
 
 Read-write control plane for Claude Code + Codex CLI agent sessions, on top

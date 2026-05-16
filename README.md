@@ -25,10 +25,22 @@ The Clawdmeter icon appears in the menu bar. Click it to view your Claude / Code
 | Surface | What it does |
 |---|---|
 | **Mac menu bar** | Live session % + reset countdown for Claude and Codex side-by-side. Click → popover with the same data + an "Open dashboard" link. |
-| **Mac dashboard window** | Side-by-side Claude + Codex live cards (session %, weekly %, auto-revive controls) plus the **Token usage** row: totals grid (4 windows × 2 providers, dollars primary), stacked daily-spend chart, by-repo breakdown with its own window picker. |
-| **iPhone app** | TabView: **Live** (Claude live-polled, Codex mirrored from Mac via iCloud KV) and **Analytics** (read-only mirror of the Mac's analytics snapshot). |
-| **Apple Watch app** | Wrist meter showing session + weekly usage. Token + UsageData arrive from the paired iPhone over WatchConnectivity. |
+| **Mac dashboard window** | Side-by-side Claude + Codex live cards (session %, weekly %, auto-revive controls) plus the **Token usage** row: totals grid (4 windows × 2 providers, dollars primary), stacked daily-spend chart, by-repo breakdown with its own window picker. A **Sessions** tab is the read+write control plane for live Claude Code + Codex CLI sessions (see below). A "Sync with iPhone" button in the header opens a pairing QR + Copy URL popover. |
+| **iPhone app** | TabView: **Live** (Claude live-polled, Codex mirrored from Mac), **Analytics** (totals + by-repo, synced from the Mac over Tailscale once paired), and **Sessions** (start / monitor / approve plans / view diffs / merge PRs on Mac sessions from your phone). |
+| **Apple Watch app** | Wrist meter showing session + weekly usage, plus a session list + Approve / Interrupt / Voice-reply controls for the paired Mac's live agents. |
 | **Widgets** | Lock Screen + Home Screen widgets on iOS, complications on watchOS (four families), and a Mac menu bar widget that ships with the Mac app. |
+
+## Sessions: mobile-native control plane for Claude Code + Codex
+
+The Sessions tab on Mac (and the matching tab on iPhone) turns Clawdmeter into a read+write control plane for the CLIs themselves.
+
+- Start a Claude or Codex session in any repo with a model picker, effort dial, plan-or-code mode, and worktree-or-local cwd — from the Mac dashboard or directly from your phone.
+- Plan mode works for both agents: Claude maps it to `--permission-mode plan`, Codex maps it to `--sandbox read-only`. Approve & run flips the permission/sandbox afterwards.
+- The Sessions sidebar groups live sessions and recent JSONLs by repo; iOS sections collapse to keep the screen scannable.
+- Pairing is QR + Tailscale: tap "Sync with iPhone" on the Mac, scan or paste the URL on the phone. No iCloud, no APNS, no `.p8` key custody.
+- The Mac daemon (`Network.framework` HTTP + WS on ports 21731 / 21732, bound to loopback + Tailscale CGNAT) exposes the full control surface to the iPhone and Watch.
+
+See `docs/designs/sessions-v2.md` for the full ship details and `TODOS.md` for deferred work.
 
 ## Building from source
 
@@ -39,7 +51,7 @@ brew install xcodegen            # one-time
 git clone https://github.com/darshanbathija/Clawdmeter
 cd Clawdmeter/apple
 xcodegen                         # regenerate Clawdmeter.xcodeproj from project.yml
-( cd ClawdmeterShared && swift test )   # 59 tests, ~0.2s
+( cd ClawdmeterShared && swift test )   # 153 tests, ~0.3s
 xcodebuild -scheme "Clawdmeter (Mac)"   -destination 'platform=macOS,arch=arm64' build
 xcodebuild -scheme "Clawdmeter (iOS)"   -destination 'generic/platform=iOS Simulator' build
 xcodebuild -scheme "Clawdmeter (Watch)" -destination 'generic/platform=watchOS Simulator' build
