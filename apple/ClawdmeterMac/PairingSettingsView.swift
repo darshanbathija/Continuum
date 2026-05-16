@@ -50,10 +50,17 @@ struct PairingSettingsView: View {
                     header("Security")
                     securityPanel
                 }
+
+                Divider()
+
+                Group {
+                    header("Plugins")
+                    pluginsPanel
+                }
             }
             .padding(28)
         }
-        .frame(width: 540, height: 600)
+        .frame(width: 540, height: 720)
         .onAppear {
             refreshQR()
         }
@@ -186,6 +193,54 @@ struct PairingSettingsView: View {
                     refreshQR()
                 }
             }
+        }
+    }
+
+    private var pluginsPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Read-only inventory of MCP servers and plugins your underlying Claude / Codex CLIs already know about. Enable / disable from the CLI configs.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            let plugins = PluginRegistry.discover()
+            if plugins.isEmpty {
+                Text("No MCP servers or plugins detected.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(plugins) { plugin in
+                            HStack(spacing: 6) {
+                                Image(systemName: icon(for: plugin.kind))
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                Text(plugin.name)
+                                    .font(.system(size: 11, design: .monospaced))
+                                Text(plugin.kind == .codexMCP ? "Codex MCP"
+                                    : plugin.kind == .claudeMCP ? "Claude MCP"
+                                    : "Claude plugin")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .padding(.horizontal, 4).padding(.vertical, 1)
+                                    .background(.secondary.opacity(0.15), in: Capsule())
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text(plugin.source)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 160)
+            }
+        }
+    }
+
+    private func icon(for kind: PluginInfo.Kind) -> String {
+        switch kind {
+        case .codexMCP, .claudeMCP: return "plug"
+        case .claudePlugin: return "puzzlepiece.extension"
         }
     }
 

@@ -218,6 +218,10 @@ public final class SessionsModel: ObservableObject {
     /// review pane (plan tracker, sources, artifacts) so they observe the
     /// same parsed JSONL. Stored across re-renders to avoid re-parsing.
     private var chatStores: [UUID: SessionChatStore] = [:]
+    /// Per-session PR mirrors (G16). Lazy-instantiated on first access; we
+    /// attach the chat store automatically so PR detection picks up the
+    /// agent's `gh pr create` output.
+    private var prMirrors: [UUID: PRMirror] = [:]
 
     public init(
         repoIndex: RepoIndex,
@@ -244,6 +248,20 @@ public final class SessionsModel: ObservableObject {
     public func closeChatStore(for sessionId: UUID) {
         chatStores[sessionId]?.stop()
         chatStores.removeValue(forKey: sessionId)
+        prMirrors[sessionId]?.detach()
+        prMirrors.removeValue(forKey: sessionId)
+    }
+
+    /// G16: lazy PR mirror, attached to this session's chat store on first
+    /// access so it can auto-detect a `gh pr create` URL.
+    public func prMirror(for session: AgentSession) -> PRMirror {
+        if let existing = prMirrors[session.id] { return existing }
+        let mirror = PRMirror(sessionId: session.id)
+        if let store = chatStore(for: session) {
+            mirror.attach(chatStore: store)
+        }
+        prMirrors[session.id] = mirror
+        return mirror
     }
 
     public func sessions(for repoKey: String, includeArchived: Bool = false) -> [AgentSession] {
@@ -252,6 +270,14 @@ public final class SessionsModel: ObservableObject {
             if !includeArchived, s.archivedAt != nil { return false }
             return true
         }
+    }
+
+    /// Children of a parent session (G17). Used by the sidebar to nest
+    /// sub-chats under their parent row.
+    public func children(of parentId: UUID) -> [AgentSession] {
+        registry.sessions
+            .filter { $0.parentSessionId == parentId && $0.archivedAt == nil }
+            .sorted { $0.createdAt < $1.createdAt }
     }
 
     /// G6 sidebar search. Filters a session list by search query against
@@ -285,14 +311,37 @@ public final class SessionsModel: ObservableObject {
     }
 
     /// G8 keyboard nav: flat list of sessions visible in the sidebar, in
-    /// the order they're rendered. Used by Cmd+1..9 jump shortcuts.
+    /// the order they're rendered (parents first, children nested under).
+    /// Used by Cmd+1..9 jump shortcuts and Cmd+; sub-chat detection.
     public var visibleSessions: [AgentSession] {
         var out: [AgentSession] = []
         for repo in filteredRepos {
             guard expandedRepoKeys.contains(repo.key) else { continue }
-            out.append(contentsOf: filter(sessions: sessions(for: repo.key, includeArchived: showArchived)))
+            let all = filter(sessions: sessions(for: repo.key, includeArchived: showArchived))
+            let roots = all.filter { $0.parentSessionId == nil }
+            for root in roots {
+                out.append(root)
+                appendChildren(of: root, into: &out, allowed: Set(all.map { $0.id }))
+            }
         }
         return out
+    }
+
+    /// Recursively append children of `parent` (subject to `allowed`) in
+    /// depth-first order. Loops are impossible in a healthy tree but the
+    /// `seen` guard keeps a cycle (corrupt registry) from spinning forever.
+    private func appendChildren(
+        of parent: AgentSession,
+        into out: inout [AgentSession],
+        allowed: Set<UUID>,
+        seen: Set<UUID> = []
+    ) {
+        var seen = seen
+        seen.insert(parent.id)
+        for child in children(of: parent.id) where allowed.contains(child.id) && !seen.contains(child.id) {
+            out.append(child)
+            appendChildren(of: child, into: &out, allowed: allowed, seen: seen)
+        }
     }
 
     /// Jump to the Nth visible session (1-indexed for the Cmd+1..9 shortcut).
@@ -453,6 +502,50 @@ public final class SessionsModel: ObservableObject {
         if openSessionId == id { openSessionId = nil }
         closeChatStore(for: id)
         registry.delete(id: id)
+    }
+
+    // MARK: - G17 threaded sub-chats
+
+    /// Spawn a child session linked to the parent via `parentSessionId`.
+    /// The child runs in the same cwd as the parent (worktree-aware) but
+    /// uses a fresh tmux window + JSONL. The sidebar nests it under the
+    /// parent row.
+    @discardableResult
+    public func spawnSubchat(parentId: UUID) async -> AgentSession? {
+        guard let runtime = AppDelegate.runtime,
+              let parent = registry.session(id: parentId)
+        else { return nil }
+        try? await runtime.tmuxClient.start()
+        let cwd = parent.worktreePath ?? parent.repoKey
+        let argv = AgentSpawner.argv(for: NewSessionRequest(
+            repoKey: parent.repoKey,
+            agent: parent.agent,
+            model: parent.model,
+            planMode: false,
+            goal: nil,
+            useWorktree: parent.mode == .worktree
+        ))
+        do {
+            let windowId = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
+            let child = registry.create(
+                repoKey: parent.repoKey,
+                repoDisplayName: parent.repoDisplayName,
+                agent: parent.agent,
+                model: parent.model,
+                goal: nil,
+                worktreePath: parent.worktreePath,
+                tmuxWindowId: windowId,
+                tmuxPaneId: nil,
+                planMode: false,
+                mode: parent.mode,
+                parentSessionId: parentId
+            )
+            openSessionId = child.id
+            await refresh()
+            return child
+        } catch {
+            return nil
+        }
     }
 
     // MARK: - G12 multi-terminal

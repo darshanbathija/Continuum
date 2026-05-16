@@ -31,6 +31,7 @@ struct SessionWorkspaceView: View {
         case sources = "Sources"
         case artifacts = "Artifacts"
         case browser = "Browser"
+        case pr = "PR"
         var id: String { rawValue }
 
         var systemImage: String {
@@ -40,6 +41,7 @@ struct SessionWorkspaceView: View {
             case .sources:   return "doc.text.magnifyingglass"
             case .artifacts: return "paperclip"
             case .browser:   return "safari"
+            case .pr:        return "arrow.triangle.pull"
             }
         }
     }
@@ -98,10 +100,10 @@ struct SessionWorkspaceView: View {
         .background(KeyboardShortcuts(model: model))
     }
 
-    /// Hidden buttons that own the Cmd+1..9 + Cmd+Shift+F keyboard
-    /// shortcuts. SwiftUI's `.keyboardShortcut` only fires when the view is
-    /// in the focus chain; attaching to `Color.clear` in a background layer
-    /// keeps them globally active without stealing focus.
+    /// Hidden buttons that own the Cmd+1..9 + Cmd+Shift+F + Cmd+;
+    /// keyboard shortcuts. SwiftUI's `.keyboardShortcut` only fires when
+    /// the view is in the focus chain; attaching to `Color.clear` in a
+    /// background layer keeps them globally active without stealing focus.
     private struct KeyboardShortcuts: View {
         @ObservedObject var model: SessionsModel
         var body: some View {
@@ -121,6 +123,14 @@ struct SessionWorkspaceView: View {
                     )
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                // G17 sub-chat: Cmd+; branches off the open session.
+                Button("") {
+                    guard let parentId = model.openSessionId else { return }
+                    Task { _ = await model.spawnSubchat(parentId: parentId) }
+                }
+                .keyboardShortcut(";", modifiers: [.command])
                 .opacity(0)
                 .frame(width: 0, height: 0)
             }
@@ -294,23 +304,13 @@ private struct SidebarPane: View {
     private func repoSection(_ repo: AgentRepo) -> some View {
         let allSessions = model.sessions(for: repo.key, includeArchived: model.showArchived)
         let visibleSessions = model.filter(sessions: allSessions)
+        let rootSessions = visibleSessions.filter { $0.parentSessionId == nil }
         let isExpanded = model.expandedRepoKeys.contains(repo.key)
         return VStack(alignment: .leading, spacing: 0) {
             repoHeader(repo, isExpanded: isExpanded, sessionCount: visibleSessions.count)
             if isExpanded {
-                ForEach(visibleSessions) { session in
-                    sessionRow(session, isOpen: model.openSessionId == session.id)
-                        .contextMenu {
-                            if session.archivedAt == nil {
-                                Button("Archive") { model.registry.archive(id: session.id) }
-                            } else {
-                                Button("Unarchive") { model.registry.unarchive(id: session.id) }
-                            }
-                            Divider()
-                            Button("End session", role: .destructive) {
-                                Task { await model.endSession(id: session.id) }
-                            }
-                        }
+                ForEach(rootSessions) { root in
+                    sessionTree(root: root, depth: 0)
                 }
                 if repo.liveSessionCount > 0 {
                     Button(action: { model.openOutsideSession(repoKey: repo.key) }) {
@@ -338,6 +338,43 @@ private struct SidebarPane: View {
                     .buttonStyle(.plain)
                 }
             }
+        }
+    }
+
+    /// G17: render a session row + its children indented underneath.
+    /// Iterative (not recursive) so SwiftUI's opaque return type doesn't
+    /// hit the self-defining-`some View` ban.
+    private func sessionTree(root: AgentSession, depth: Int) -> some View {
+        // Flatten the subtree depth-first into (session, depth) pairs.
+        var flat: [(AgentSession, Int)] = []
+        var stack: [(AgentSession, Int)] = [(root, depth)]
+        var seen: Set<UUID> = []
+        while let (s, d) = stack.popLast() {
+            guard !seen.contains(s.id) else { continue }
+            seen.insert(s.id)
+            flat.append((s, d))
+            // Push children in reverse so the leftmost child ends up first.
+            for child in model.children(of: s.id).reversed() {
+                stack.append((child, d + 1))
+            }
+        }
+        return ForEach(Array(flat.enumerated()), id: \.element.0.id) { _, pair in
+            let (s, d) = pair
+            sessionRow(s, isOpen: model.openSessionId == s.id, depth: d)
+                .contextMenu {
+                    if s.archivedAt == nil {
+                        Button("Archive") { model.registry.archive(id: s.id) }
+                    } else {
+                        Button("Unarchive") { model.registry.unarchive(id: s.id) }
+                    }
+                    Button("New sub-chat (⌘;)") {
+                        Task { _ = await model.spawnSubchat(parentId: s.id) }
+                    }
+                    Divider()
+                    Button("End session", role: .destructive) {
+                        Task { await model.endSession(id: s.id) }
+                    }
+                }
         }
     }
 
@@ -382,12 +419,18 @@ private struct SidebarPane: View {
         .buttonStyle(.plain)
     }
 
-    private func sessionRow(_ session: AgentSession, isOpen: Bool) -> some View {
+    private func sessionRow(_ session: AgentSession, isOpen: Bool, depth: Int = 0) -> some View {
         Button(action: {
             model.openSessionId = session.id
             model.openOutsideRepoKey = nil
         }) {
             HStack(spacing: 8) {
+                if depth > 0 {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, CGFloat(depth - 1) * 12)
+                }
                 Circle()
                     .fill(statusColor(session.status))
                     .frame(width: 6, height: 6)
@@ -414,7 +457,8 @@ private struct SidebarPane: View {
                         .foregroundStyle(terraCotta)
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.leading, 24 + CGFloat(depth) * 6)
+            .padding(.trailing, 24)
             .padding(.vertical, 5)
             .background(isOpen
                 ? terraCotta.opacity(0.15)
@@ -1060,6 +1104,8 @@ private struct ReviewPane: View {
             }
         case .browser:
             InAppBrowser(session: session, model: model)
+        case .pr:
+            PRReviewPane(session: session, mirror: model.prMirror(for: session))
         }
     }
 
