@@ -19,11 +19,28 @@ struct SessionWorkspaceView: View {
     @ObservedObject var model: SessionsModel
 
     @State private var rightPaneTab: RightPaneTab = .plan
+    /// User's explicit toggle for the review pane (Cmd+W). Even when this is
+    /// true the pane is hidden if the window is too narrow to fit it
+    /// without crushing the chat — see `effectiveShowReviewPane`.
     @State private var showingReviewPane: Bool = true
     @State private var showingModeSwitchOverlay: Bool = false
     @State private var modeSwitchLabel: String = ""
+    /// Workspace-level width, measured via GeometryReader. Drives responsive
+    /// pane collapsing so Sessions + chat stay first-class at narrow widths.
+    @State private var workspaceWidth: CGFloat = 1400
 
     @Environment(\.colorScheme) private var colorScheme
+
+    /// Below this width the review pane crowds the chat (the right-pane
+    /// tabs wrap letter-by-letter at the observed cramped sizes). We hide
+    /// it automatically so Sessions sidebar + chat get the room. Above the
+    /// threshold the user's `showingReviewPane` toggle takes over.
+    /// 220 (sidebar min) + 420 (center min) + 320 (review min) + chrome ≈ 1080.
+    private static let reviewPaneThreshold: CGFloat = 1100
+
+    private var effectiveShowReviewPane: Bool {
+        showingReviewPane && workspaceWidth >= Self.reviewPaneThreshold
+    }
 
     enum RightPaneTab: String, CaseIterable, Identifiable {
         case plan = "Plan"
@@ -70,7 +87,7 @@ struct SessionWorkspaceView: View {
             }
             .frame(minWidth: 420, idealWidth: 600)
 
-            if showingReviewPane, let session = model.openSession {
+            if effectiveShowReviewPane, let session = model.openSession {
                 ReviewPane(
                     session: session,
                     chatStore: model.chatStore(for: session),
@@ -81,20 +98,34 @@ struct SessionWorkspaceView: View {
                         Task { await model.approvePlan(id: session.id) }
                     }
                 )
-                .frame(minWidth: 300, idealWidth: 360, maxWidth: 520)
+                .frame(minWidth: 320, idealWidth: 380, maxWidth: 520)
             }
         }
         .background(backgroundColor)
+        .background(
+            // Measure the actual workspace width. Don't use GeometryReader
+            // as the root because HSplitView misbehaves inside it.
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(key: WorkspaceWidthKey.self, value: proxy.size.width)
+            }
+        )
+        .onPreferenceChange(WorkspaceWidthKey.self) { workspaceWidth = $0 }
         .sheet(isPresented: $model.showingNewSessionSheet) {
             NewSessionMacSheet(model: model)
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button(action: { showingReviewPane.toggle() }) {
-                    Image(systemName: showingReviewPane ? "sidebar.right" : "sidebar.right")
-                        .help(showingReviewPane ? "Hide review pane" : "Show review pane")
+                    Image(systemName: "sidebar.right")
+                        .help(effectiveShowReviewPane
+                            ? "Hide review pane (⌘W)"
+                            : workspaceWidth < Self.reviewPaneThreshold
+                                ? "Widen the window to show the review pane"
+                                : "Show review pane (⌘W)")
                 }
                 .keyboardShortcut("w", modifiers: [.command])
+                .disabled(workspaceWidth < Self.reviewPaneThreshold)
             }
         }
         .background(KeyboardShortcuts(model: model))
@@ -231,10 +262,11 @@ private struct SidebarPane: View {
     }
 
     private var sidebarHeader: some View {
-        HStack {
+        HStack(spacing: 6) {
             Text("Sessions")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
+                .lineLimit(1)
             Spacer()
             if model.isRefreshing {
                 ProgressView().controlSize(.mini)
@@ -317,6 +349,8 @@ private struct SidebarPane: View {
                     Text("Recent (last 30 days)")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                         .padding(.leading, 24)
                         .padding(.top, 4)
                     ForEach(recentSessions) { recent in
@@ -1476,6 +1510,16 @@ private struct TerminalTabContainer: View {
 extension Notification.Name {
     static let focusSidebarSearch = Notification.Name("clawdmeter.workspace.focusSidebarSearch")
     static let popOutSession = Notification.Name("clawdmeter.workspace.popOutSession")
+}
+
+/// Workspace-level width preference. Drives responsive collapsing of the
+/// review pane (and at very narrow widths, the sidebar).
+private struct WorkspaceWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 1400
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
 }
 
 // MARK: - G15 scheduler sheet
