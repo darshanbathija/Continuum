@@ -440,6 +440,58 @@ public final class SessionChatStore: ObservableObject {
         return stringFields.min(by: { $0.count < $1.count }) ?? ""
     }
 
+    /// Codex tool-input summarizer. Codex's tool name set + arg names
+    /// differ from Claude's, so the Claude path's `summarizeInput`
+    /// returns the wrong thing for `exec_command` / `spawn_agent` /
+    /// etc. This one knows Codex shapes.
+    nonisolated static func summarizeCodexInput(
+        _ dict: [String: Any], for tool: String, fallback: String
+    ) -> String {
+        switch tool {
+        case "exec_command", "shell":
+            // Codex's exec_command: `cmd` is the shell command;
+            // `description` is sometimes set as a one-liner summary.
+            if let desc = (dict["description"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !desc.isEmpty { return desc }
+            if let cmd = dict["cmd"] as? String {
+                return cmd.replacingOccurrences(of: "\n", with: " ")
+            }
+        case "spawn_agent":
+            if let brief = dict["brief"] as? String { return brief }
+            if let task = dict["task"] as? String { return task }
+        case "apply_patch":
+            // apply_patch takes a unified diff in `input` / `patch` /
+            // `diff`; pull whichever's set, peek at the first file.
+            for key in ["input", "patch", "diff"] {
+                if let s = dict[key] as? String {
+                    if let line = s.split(separator: "\n").first(where: {
+                        $0.hasPrefix("*** ") || $0.hasPrefix("+++ ") || $0.hasPrefix("--- ")
+                    }) {
+                        return String(line)
+                    }
+                    return s.replacingOccurrences(of: "\n", with: " ")
+                }
+            }
+        case "read_file":
+            if let path = dict["path"] as? String { return path }
+        case "write_file":
+            if let path = dict["path"] as? String { return path }
+        default:
+            break
+        }
+        // Generic fallback: shortest non-empty string field, else the raw
+        // JSON args.
+        let stringFields = dict.compactMap { (_, v) -> String? in
+            if let s = v as? String, !s.isEmpty { return s }
+            return nil
+        }
+        if let pick = stringFields.min(by: { $0.count < $1.count }) {
+            return pick.replacingOccurrences(of: "\n", with: " ")
+        }
+        return fallback.replacingOccurrences(of: "\n", with: " ")
+    }
+
     /// Verbose detail shown only when the user expands the tool row. For
     /// Bash this is the full command (multi-line preserved); for file ops
     /// `nil` — the path in the headline is already the full detail.
@@ -459,6 +511,16 @@ public final class SessionChatStore: ObservableObject {
             return dict["prompt"] as? String
         case "WebFetch":
             return dict["prompt"] as? String
+        case "exec_command", "shell":
+            // Codex shell tool — `cmd` is the full command.
+            return dict["cmd"] as? String
+        case "spawn_agent":
+            // Codex sub-agent spawn — `brief` is the longer task spec.
+            return dict["brief"] as? String ?? dict["task"] as? String
+        case "apply_patch":
+            return (dict["input"] as? String)
+                ?? (dict["patch"] as? String)
+                ?? (dict["diff"] as? String)
         default:
             return nil
         }
@@ -571,6 +633,16 @@ struct ParsedLine: Sendable {
     /// Convert a raw JSONL dict into a typed ParsedLine. Returns `nil` for
     /// lines we don't surface (queue-operation, last-prompt, attachment,
     /// etc.) or malformed lines. Pure value transform.
+    ///
+    /// Both Claude and Codex JSONLs flow through here:
+    /// - Claude lines have `type: "user" | "assistant"` at the top level
+    ///   and a `message: {content, usage}` body. We decode them via
+    ///   `decodeUser` / `decodeAssistant`.
+    /// - Codex lines have `type: "response_item"` with a `payload` carrying
+    ///   `type: "message" | "function_call" | "function_call_output" |
+    ///   "reasoning"` and a role (`user | assistant | developer`). The
+    ///   shape is wildly different from Claude's; `decodeCodexResponseItem`
+    ///   handles it.
     static func from(json: [String: Any]) -> ParsedLine? {
         let at = SessionChatStore.parseTimestamp(json) ?? Date()
         let type = json["type"] as? String ?? ""
@@ -579,9 +651,157 @@ struct ParsedLine: Sendable {
             return decodeUser(json: json, at: at)
         case "assistant":
             return decodeAssistant(json: json, at: at)
+        case "response_item":
+            return decodeCodexResponseItem(json: json, at: at)
         default:
             return nil
         }
+    }
+
+    /// Codex JSONL chat decoder. Maps each `response_item` payload variant
+    /// to a `ChatMessage` so the existing chat UI renders without knowing
+    /// it's a Codex rollout vs a Claude transcript. Skipped variants:
+    ///   - `role: developer` (system-prompt wrapper, noise)
+    ///   - user messages whose body is `<environment_context>...` (Codex
+    ///     auto-injects this before every user turn)
+    private static func decodeCodexResponseItem(json: [String: Any], at: Date) -> ParsedLine? {
+        guard let payload = json["payload"] as? [String: Any] else { return nil }
+        let payloadType = payload["type"] as? String ?? ""
+        var out: [ChatMessage] = []
+        let baseId = SessionChatStore.stableId(json, suffix: "codex-\(payloadType)")
+
+        switch payloadType {
+        case "message":
+            let role = payload["role"] as? String ?? ""
+            guard role == "user" || role == "assistant" else {
+                return nil
+            }
+            // Flatten the content array into a single string. Codex blocks
+            // use `type: "input_text"` (user) or `output_text"` (assistant)
+            // with the actual prose in `text`. Older rollouts also include
+            // a top-level `content` string; handle both.
+            var bodyParts: [String] = []
+            if let s = payload["content"] as? String {
+                bodyParts.append(s)
+            } else if let blocks = payload["content"] as? [[String: Any]] {
+                for block in blocks {
+                    if let s = block["text"] as? String, !s.isEmpty {
+                        bodyParts.append(s)
+                    }
+                }
+            }
+            let body = bodyParts.joined(separator: "\n")
+            // Drop Codex's auto-injected environment context turns — they
+            // clutter the chat without telling the user anything they
+            // didn't already know about their own machine.
+            if role == "user", body.hasPrefix("<environment_context>") {
+                return nil
+            }
+            guard !body.isEmpty else { return nil }
+            out.append(ChatMessage(
+                id: baseId,
+                kind: role == "user" ? .userText : .assistantText,
+                title: role == "user" ? "You" : "Codex",
+                body: body,
+                at: at
+            ))
+
+        case "function_call":
+            // Codex's tool calls: `name` + JSON-encoded `arguments` string.
+            // The chat row shows the name + a one-line argument summary;
+            // expanding reveals the full argument JSON.
+            let name = (payload["name"] as? String) ?? "tool"
+            let argsString = (payload["arguments"] as? String) ?? ""
+            // Try to parse the args JSON so we can summarize the same way
+            // we do for Claude. Fall back to the raw string.
+            var inputDict: [String: Any]? = nil
+            if let data = argsString.data(using: .utf8),
+               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                inputDict = parsed
+            }
+            let summary: String
+            let detail: String?
+            if let dict = inputDict {
+                summary = SessionChatStore.summarizeCodexInput(dict, for: name, fallback: argsString)
+                detail = SessionChatStore.expandedDetail(dict, for: name) ?? argsString
+            } else {
+                // Args weren't JSON — show the raw string truncated.
+                summary = argsString.replacingOccurrences(of: "\n", with: " ")
+                detail = argsString
+            }
+            // Codex emits a `call_id` field at the payload level for
+            // pairing with the matching function_call_output.
+            let callId = (payload["call_id"] as? String) ?? baseId
+            out.append(ChatMessage(
+                id: "call:\(callId)",
+                kind: .toolCall,
+                title: name,
+                body: summary,
+                detail: detail,
+                at: at
+            ))
+
+        case "function_call_output":
+            // Codex's tool result. `output` is the raw stdout/stderr blob.
+            // The matching call_id pairs it back to the function_call.
+            let output = (payload["output"] as? String) ?? ""
+            let callId = (payload["call_id"] as? String) ?? baseId
+            // Some Codex builds wrap the output in a status envelope —
+            // `{"output": "...", "metadata": {...}}`. Unwrap if present.
+            var body = output
+            if let data = output.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let inner = obj["output"] as? String {
+                body = inner
+            }
+            // Cap chat-row body at 4KB; users expand the disclosure for
+            // the full thing.
+            if body.count > 4096 {
+                body = String(body.prefix(4096)) + "\n…[truncated]"
+            }
+            guard !body.isEmpty else { return nil }
+            out.append(ChatMessage(
+                id: "result:\(callId)",
+                kind: .toolResult,
+                title: "Tool result",
+                body: body,
+                at: at
+            ))
+
+        case "reasoning":
+            // Codex emits a `reasoning` summary periodically. Surface it
+            // as a meta row so users can see what the agent was thinking,
+            // without it overwhelming the main assistant prose.
+            var summaryText = ""
+            if let summary = payload["summary"] as? [[String: Any]] {
+                for block in summary {
+                    if let s = block["text"] as? String, !s.isEmpty {
+                        summaryText += (summaryText.isEmpty ? "" : "\n") + s
+                    }
+                }
+            } else if let s = payload["summary"] as? String {
+                summaryText = s
+            }
+            guard !summaryText.isEmpty else { return nil }
+            out.append(ChatMessage(
+                id: baseId,
+                kind: .meta,
+                title: "Thinking",
+                body: summaryText,
+                at: at
+            ))
+
+        default:
+            return nil
+        }
+
+        guard !out.isEmpty else { return nil }
+        return ParsedLine(
+            timestamp: at, messages: out,
+            deltaInputTokens: 0, deltaOutputTokens: 0,
+            deltaCacheCreationTokens: 0, deltaCacheReadTokens: 0,
+            model: nil
+        )
     }
 
     private static func decodeUser(json: [String: Any], at: Date) -> ParsedLine? {
