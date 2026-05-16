@@ -92,6 +92,37 @@ struct SessionWorkspaceView: View {
                 .keyboardShortcut("w", modifiers: [.command])
             }
         }
+        .background(KeyboardShortcuts(model: model))
+    }
+
+    /// Hidden buttons that own the Cmd+1..9 + Cmd+Shift+F keyboard
+    /// shortcuts. SwiftUI's `.keyboardShortcut` only fires when the view is
+    /// in the focus chain; attaching to `Color.clear` in a background layer
+    /// keeps them globally active without stealing focus.
+    private struct KeyboardShortcuts: View {
+        @ObservedObject var model: SessionsModel
+        var body: some View {
+            ZStack {
+                ForEach(1...9, id: \.self) { index in
+                    Button("") {
+                        model.openVisibleSession(at: index)
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index)")),
+                                      modifiers: [.command])
+                    .opacity(0)
+                    .frame(width: 0, height: 0)
+                }
+                Button("") {
+                    NotificationCenter.default.post(
+                        name: .focusSidebarSearch, object: nil
+                    )
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+            }
+            .allowsHitTesting(false)
+        }
     }
 
     // MARK: - Center empty state
@@ -494,7 +525,9 @@ private struct CenterThread: View {
     let onModeSwitch: (SessionMode) -> Void
 
     @State private var composerText: String = ""
+    @State private var composerTextBeforeDictation: String = ""
     @State private var viewMode: ViewMode = .chat
+    @StateObject private var dictation = SpeechDictation()
 
     enum ViewMode: String, CaseIterable {
         case chat = "Chat"
@@ -623,6 +656,16 @@ private struct CenterThread: View {
                 .disabled(true)
                 .help("Attach (not yet wired)")
 
+                Button(action: toggleDictation) {
+                    Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
+                        .font(.system(size: 14))
+                        .foregroundStyle(dictation.state == .recording ? terraCotta : .secondary)
+                        .symbolEffect(.pulse, isActive: dictation.state == .recording)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("m", modifiers: [.control])
+                .help(dictationTooltip)
+
                 TextField("Message the agent…", text: $composerText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
@@ -642,9 +685,42 @@ private struct CenterThread: View {
                 .disabled(composerText.isEmpty)
                 .help("Send (⌘↩)")
             }
+            if case let .denied(reason) = dictation.state {
+                Text(reason)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red)
+            } else if case let .unavailable(reason) = dictation.state {
+                Text(reason)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .onReceive(dictation.$partialTranscript) { newPartial in
+            guard dictation.state == .recording, !newPartial.isEmpty else { return }
+            let base = composerTextBeforeDictation
+            composerText = base.isEmpty ? newPartial : "\(base) \(newPartial)"
+        }
+    }
+
+    private func toggleDictation() {
+        if dictation.state == .recording {
+            dictation.stop()
+        } else {
+            composerTextBeforeDictation = composerText
+            Task { await dictation.start() }
+        }
+    }
+
+    private var dictationTooltip: String {
+        switch dictation.state {
+        case .recording: return "Stop dictation (Ctrl+M)"
+        case .requestingPermission: return "Requesting permission…"
+        case .denied(let r): return r
+        case .unavailable(let r): return r
+        case .idle: return "Dictate (Ctrl+M)"
+        }
     }
 
     private var readOnlyFooter: some View {

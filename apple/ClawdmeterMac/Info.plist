@@ -22,5 +22,9 @@
 	<string>14.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Clawdmeter contributors.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Clawdmeter uses speech recognition to dictate messages into the agent composer (Ctrl+M). Audio is processed on-device when possible.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Clawdmeter records audio for voice dictation in the agent composer (Ctrl+M). Recording only happens while you hold the mic button.</string>
 </dict>
 </plist>

@@ -284,6 +284,25 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
+    /// G8 keyboard nav: flat list of sessions visible in the sidebar, in
+    /// the order they're rendered. Used by Cmd+1..9 jump shortcuts.
+    public var visibleSessions: [AgentSession] {
+        var out: [AgentSession] = []
+        for repo in filteredRepos {
+            guard expandedRepoKeys.contains(repo.key) else { continue }
+            out.append(contentsOf: filter(sessions: sessions(for: repo.key, includeArchived: showArchived)))
+        }
+        return out
+    }
+
+    /// Jump to the Nth visible session (1-indexed for the Cmd+1..9 shortcut).
+    public func openVisibleSession(at index: Int) {
+        guard index >= 1, index <= visibleSessions.count else { return }
+        let session = visibleSessions[index - 1]
+        openOutsideRepoKey = nil
+        openSessionId = session.id
+    }
+
     public func refresh() async {
         isRefreshing = true
         defer { isRefreshing = false }
