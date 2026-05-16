@@ -14,9 +14,12 @@ struct iOSTerminalView: UIViewRepresentable {
     let host: String
     let wsPort: Int
     let token: String
+    /// Optional tmux pane filter. When nil the daemon falls back to the
+    /// session's primary pane (preserves single-pane behavior).
+    var paneId: String? = nil
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(sessionId: sessionId, host: host, wsPort: wsPort, token: token)
+        Coordinator(sessionId: sessionId, host: host, wsPort: wsPort, token: token, paneId: paneId)
     }
 
     func makeUIView(context: Context) -> TerminalView {
@@ -72,16 +75,18 @@ struct iOSTerminalView: UIViewRepresentable {
         let host: String
         let wsPort: Int
         let token: String
+        let paneId: String?
 
         weak var terminalView: TerminalView?
         private var task: URLSessionWebSocketTask?
         private var ctrlEngaged = false
 
-        init(sessionId: UUID, host: String, wsPort: Int, token: String) {
+        init(sessionId: UUID, host: String, wsPort: Int, token: String, paneId: String?) {
             self.sessionId = sessionId
             self.host = host
             self.wsPort = wsPort
             self.token = token
+            self.paneId = paneId
         }
 
         func connect() {
@@ -91,11 +96,12 @@ struct iOSTerminalView: UIViewRepresentable {
             let task = URLSession.shared.webSocketTask(with: request)
             self.task = task
             task.resume()
-            let envelope = [
+            var envelope: [String: Any] = [
                 "op": "terminal",
                 "token": token,
                 "sessionId": sessionId.uuidString,
-            ] as [String: Any]
+            ]
+            if let paneId { envelope["paneId"] = paneId }
             if let data = try? JSONSerialization.data(withJSONObject: envelope) {
                 task.send(.data(data)) { _ in }
             }

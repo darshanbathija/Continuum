@@ -539,16 +539,7 @@ private struct SessionDetailView: View {
 
     @ViewBuilder
     private var terminalView: some View {
-        if let host = client.host, let token = client.token {
-            iOSTerminalView(
-                sessionId: session.id,
-                host: host,
-                wsPort: client.wsPort,
-                token: token
-            )
-        } else {
-            ContentUnavailableView("Not paired", systemImage: "wifi.exclamationmark")
-        }
+        iOSTerminalTabsView(client: client, session: session)
     }
 }
 

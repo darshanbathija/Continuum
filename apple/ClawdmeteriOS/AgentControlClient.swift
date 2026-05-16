@@ -162,6 +162,51 @@ public final class AgentControlClient: ObservableObject {
                         body: AutopilotRequest(enabled: enabled))
     }
 
+    // MARK: - T33 multi-pane terminal endpoints
+
+    @MainActor
+    public func fetchTerminals(sessionId: UUID) async -> [TerminalPaneRef] {
+        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/terminals") else { return [] }
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode([TerminalPaneRef].self, from: data)
+        } catch {
+            clientLogger.debug("fetchTerminals failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    /// Spawn a new tmux pane in the session and return its ref. Daemon's
+    /// existing handler accepts `{title}` and returns the new TerminalPaneRef.
+    @MainActor
+    public func addTerminal(sessionId: UUID, title: String) async -> TerminalPaneRef? {
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: ["title": title]) else { return nil }
+        guard let request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/terminals",
+            method: "POST", body: bodyData
+        ) else { return nil }
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(TerminalPaneRef.self, from: data)
+        } catch {
+            clientLogger.debug("addTerminal failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    @MainActor
+    public func deleteTerminal(sessionId: UUID, paneId: String) async {
+        guard let request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/terminals/\(paneId)",
+            method: "DELETE"
+        ) else { return }
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
     @MainActor
     @discardableResult
     private func postJSON<T: Encodable>(path: String, body: T) async -> AgentSession? {
