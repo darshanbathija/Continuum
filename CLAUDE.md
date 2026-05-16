@@ -173,7 +173,80 @@ Source PNG: `~/Downloads/Clawd Logo.png` (user's design). Crop pipeline in
 No flood-fill, no rim sweep, no pixel manipulation — the HSV crop alone
 removes the source's white outer area cleanly.
 
-## Sessions feature (added 2026-05-16, extended through Phase G3)
+## Sessions feature v2 (2026-05-17)
+
+Mobile-native control plane for Claude Code + Codex. iPhone (and Watch)
+can now start, monitor, and control sessions running on the paired Mac
+in worktrees, with Conductor-grade model picker + effort dial + plan/code
+toggle + mid-session swap. See `docs/designs/sessions-v2.md` for the
+full v2 ship details and `TODOS.md` for deferred work.
+
+Wire (v3): `Protocol.swift` carries `ReasoningEffort`, `ModelCatalog`
+(5 Claude + 5 Codex models bundled), `HealthResponse` with `wireVersion`,
+`ChangeModel/Effort/Mode/Send/Autopilot/PickWinner` DTOs, `PRStatus`,
+`CreatePRRequest`, `GitDiffFile` + `GitDiffHunk`, `PreflightQuery/Response`,
+`WireChatSnapshot`. `AgentSession` schema v3 adds `effort`,
+`abPairSessionId`, `abPairDecidedAt`. v2 decoders accept new fields via
+`decodeIfPresent` — back-compat preserved. v2 readers reading a v3
+sessions.json silently drop the new fields.
+
+Daemon (Mac): `AgentControlServer` uses a route-table dispatcher
+(`RouteTable.swift`) with 19 new endpoints (`/models`,
+`/sessions/:id/{chat-snapshot,diff,pr,terminals,model,effort,mode,send,
+interrupt,autopilot,ab-pair/pick-winner,create-pr,merge}`,
+`/sessions/preflight`, `DELETE /sessions/:id/terminals/:paneId`).
+`AgentSpawner` uses `ShellRunner.locateBinary` (no hardcoded paths) and
+the correct CLI flags: `claude --effort {low,medium,high,xhigh,max}` and
+`codex -c model_reasoning_effort="..."`. `AgentSessionRegistry` uses a
+single `with()` helper so v3 fields propagate across every mutation
+(T41 audit). `AutopilotState` persists per-repo trust to
+`~/.clawdmeter/autopilot-trusted-repos.json`. `AuditLog` writes
+hash-only JSONL to `~/.clawdmeter/audit/{sends,swaps,autopilot}.jsonl`,
+rotating at 1MB or 7 days. `RateLimiter` caps 1 send/sec + 1 swap/5sec
+per session.
+
+Mac UI: `SessionWorkspaceView` composer header now hosts `ModelPicker`
++ `EffortDial` chips next to the existing `ModePicker`.
+`SessionConfigChanger` is the kill-pane + respawn-with-new-config
+helper. `SessionsModel.switchModel/Effort/PlanMode` wire it up.
+
+iOS Sessions tab: full picker rewrite. `iOSModelPicker` /
+`iOSEffortDial` / `iOSSessionControlsStrip` / `iOSSessionActivityStrip`.
+`SessionDetailView` is a 5-tab structure (Chat / Plan / Diff / PR /
+Terminal). `iOSDiffView`, `iOSPRPane`, `iOSPlanTrackerView` cover
+mobile review surfaces. `iOSChatStore` mirrors the daemon's chat
+snapshot; `iOSChatStoreCache` is LRU-2 with protected sessions.
+
+Watch: `SessionsListView` Crown-scrollable list. `WatchSessionDetailView`
+with Approve / Interrupt / Voice-reply buttons. `WatchPlanBridge` extended
+to receive `sessionsSummaryJSON` over WCSession `applicationContext`.
+
+Theme: `SessionsV2Theme` is the single source for accent (`#D97757`),
+codex blue (`#5C9DFF`), spacing scale, corner radius, animation tokens.
+Replaces the literal `Color(red: 0xD9/255, ...)` repeated across ≥6 sites.
+
+City labels: `CityPool` (200 cities) + `CityNamer` (persisted
+session→city assignments). iOS sidebar + Watch complication + Live
+Activity show city names alongside goal-derived branches.
+
+Live Activity: `SessionLiveActivityAttributes` + `LiveActivityCoordinator`
+ship the aggregate "N active sessions" pattern (E6 — not per-session).
+Foreground updates in-process; background APNS push (D9 narrow scope)
+deferred to v2.0.1.
+
+Chimes: `ChimeAudioPlayer` ships 4 packs (SF Muni, NYC MTA, Bell,
+Fanfare). Quiet-hours window default 22:00→07:00. Falls back to
+AudioToolbox `AudioServicesPlaySystemSound(1336)` when bundled `.caf`
+assets are missing.
+
+Tests: 153/153 (was 133) in `ClawdmeterShared` after adding
+`SessionsV2Tests` covering schema v3 round-trip + back-compat,
+`ReasoningEffort` flag mapping, `ModelCatalog.bundled` consistency,
+mid-session change DTOs, `HealthResponse`, `WireChatSnapshot`, `CityPool`,
+`WatchSessionSummary`. 19/19 in `tools/tmux-cc-probe`. All three
+platform schemes build clean.
+
+## Sessions feature v1 (added 2026-05-16, extended through Phase G3)
 
 Read-write control plane for Claude Code + Codex CLI agent sessions, on top
 of the existing read-only analytics. Mac runs a SwiftNIO-free
