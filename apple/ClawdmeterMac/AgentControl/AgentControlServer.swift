@@ -515,14 +515,18 @@ public final class AgentControlServer {
 
         // T18 Wire Inspector: record the incoming request body when enabled.
         // Also stash the request context so sendResponse can tag the
-        // matching outbound entry with the right method+path.
-        let peerString = Self.endpointString(connection.endpoint)
-        pendingRequests[ObjectIdentifier(connection)] = (request.method, request.path)
-        await WireInspector.shared.recordRequest(
-            method: request.method, path: request.path, peer: peerString,
-            body: request.body.isEmpty ? nil : request.body,
-            contentType: request.headers["content-type"]
-        )
+        // matching outbound entry with the right method+path. Check
+        // isEnabledFast first to avoid the actor hop + body retain on
+        // the hot path when the inspector is off (the common case).
+        if WireInspector.isEnabledFast {
+            let peerString = Self.endpointString(connection.endpoint)
+            pendingRequests[ObjectIdentifier(connection)] = (request.method, request.path)
+            await WireInspector.shared.recordRequest(
+                method: request.method, path: request.path, peer: peerString,
+                body: request.body.isEmpty ? nil : request.body,
+                contentType: request.headers["content-type"]
+            )
+        }
 
         if let match = routes.match(method: request.method, path: request.path) {
             await match.handler(request, connection, match.params)
@@ -703,10 +707,9 @@ public final class AgentControlServer {
         }
         registry.setEffort(id: uuid, effort: req.effort)
         let peer = Self.endpointString(connection.endpoint)
-        await AuditLog.shared.recordSwap(
+        await AuditLog.shared.recordEffortChange(
             sessionId: uuid, sourcePeer: peer,
-            from: session.model, to: session.model ?? "(default)",
-            effort: req.effort.rawValue
+            model: session.model, effort: req.effort.rawValue
         )
         await respondWithSession(uuid: uuid, connection: connection)
     }
@@ -740,10 +743,9 @@ public final class AgentControlServer {
             registry.setPlanMode(id: uuid, planMode: planMode)
         }
         let peer = Self.endpointString(connection.endpoint)
-        await AuditLog.shared.recordSwap(
+        await AuditLog.shared.recordModeChange(
             sessionId: uuid, sourcePeer: peer,
-            from: session.model, to: session.model ?? "(default)",
-            effort: "(mode=\(req.mode.rawValue))"
+            mode: req.mode.rawValue, planMode: req.planMode
         )
         await respondWithSession(uuid: uuid, connection: connection)
     }
@@ -1481,10 +1483,9 @@ public final class AgentControlServer {
             // respawn succeeds — a failed approval shouldn't leave an
             // audit entry implying it landed.
             let peer = Self.endpointString(connection.endpoint)
-            await AuditLog.shared.recordSwap(
+            await AuditLog.shared.recordPlanApprove(
                 sessionId: uuid, sourcePeer: peer,
-                from: session.model, to: session.model ?? "(default)",
-                effort: "(plan-approve agent=\(session.agent.rawValue))"
+                agent: session.agent.rawValue
             )
             sendResponse(.ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)), on: connection)
         } catch {
@@ -1674,19 +1675,30 @@ public final class AgentControlServer {
         // outbound row carries the original method+path (without this,
         // every response showed `— —`, useless for request/response
         // correlation).
-        let peerString = Self.endpointString(connection.endpoint)
-        let ctx = pendingRequests.removeValue(forKey: ObjectIdentifier(connection))
-        let method = ctx?.method ?? "—"
-        let path = ctx?.path ?? "—"
-        let status = response.status
-        let contentType = response.contentType
-        let body = response.body
-        Task.detached { @Sendable in
-            await WireInspector.shared.recordResponse(
-                method: method, path: path, peer: peerString,
-                status: status, body: body.isEmpty ? nil : body,
-                contentType: contentType
-            )
+        //
+        // Hot-path gate: only build the closure + retain the body when
+        // the inspector is on. For the /artifact endpoint (up to 50MB)
+        // this avoids pinning the full Data behind a detached Task that
+        // the actor would just drop inside.
+        if WireInspector.isEnabledFast {
+            let peerString = Self.endpointString(connection.endpoint)
+            let ctx = pendingRequests.removeValue(forKey: ObjectIdentifier(connection))
+            let method = ctx?.method ?? "—"
+            let path = ctx?.path ?? "—"
+            let status = response.status
+            let contentType = response.contentType
+            let body = response.body
+            Task.detached { @Sendable in
+                await WireInspector.shared.recordResponse(
+                    method: method, path: path, peer: peerString,
+                    status: status, body: body.isEmpty ? nil : body,
+                    contentType: contentType
+                )
+            }
+        } else {
+            // Still drop the per-connection map entry so it can't leak
+            // if the inspector flips on between request and response.
+            pendingRequests.removeValue(forKey: ObjectIdentifier(connection))
         }
         connection.send(content: bytes, completion: .contentProcessed { _ in
             connection.cancel()  // HTTP/1.1 keep-alive is not implemented; close after each response

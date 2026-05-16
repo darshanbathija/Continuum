@@ -62,15 +62,62 @@ public actor AuditLog {
         append(entry: entry, kind: "sends")
     }
 
+    /// Model swap — distinct from effort/mode/plan-approve. Use the
+    /// dedicated `recordEffortChange` / `recordModeChange` /
+    /// `recordPlanApprove` methods for those event kinds so the swaps
+    /// stream stays parseable by event-kind discriminator.
     public func recordSwap(sessionId: UUID, sourcePeer: String, from oldModel: String?, to newModel: String, effort: String?) {
         let entry: [String: Any] = [
             "at": ISO8601DateFormatter().string(from: Date()),
-            "kind": "swap",
+            "kind": "swap-model",
             "sessionId": sessionId.uuidString,
             "sourcePeer": sourcePeer,
             "oldModel": oldModel ?? "(default)",
             "newModel": newModel,
             "effort": effort ?? "(unchanged)",
+        ]
+        append(entry: entry, kind: "swaps")
+    }
+
+    public func recordEffortChange(
+        sessionId: UUID, sourcePeer: String, model: String?, effort: String
+    ) {
+        let entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "swap-effort",
+            "sessionId": sessionId.uuidString,
+            "sourcePeer": sourcePeer,
+            "model": model ?? "(default)",
+            "effort": effort,
+        ]
+        append(entry: entry, kind: "swaps")
+    }
+
+    public func recordModeChange(
+        sessionId: UUID, sourcePeer: String, mode: String, planMode: Bool?
+    ) {
+        var entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "swap-mode",
+            "sessionId": sessionId.uuidString,
+            "sourcePeer": sourcePeer,
+            "mode": mode,
+        ]
+        if let planMode {
+            entry["planMode"] = planMode
+        }
+        append(entry: entry, kind: "swaps")
+    }
+
+    public func recordPlanApprove(
+        sessionId: UUID, sourcePeer: String, agent: String
+    ) {
+        let entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "plan-approve",
+            "sessionId": sessionId.uuidString,
+            "sourcePeer": sourcePeer,
+            "agent": agent,
         ]
         append(entry: entry, kind: "swaps")
     }
