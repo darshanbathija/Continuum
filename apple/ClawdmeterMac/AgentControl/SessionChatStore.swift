@@ -481,10 +481,12 @@ public final class SessionChatStore: ObservableObject {
     }
 
     /// tool_result `content` may be a string OR array of blocks. Flatten to
-    /// a single string, joining text blocks with newlines, capped at 4KB
-    /// for the chat row (the user can expand via UI later).
-    nonisolated static func flattenContent(_ content: Any?) -> String {
-        if let s = content as? String { return String(s.prefix(4096)) }
+    /// a single string, joining text blocks with newlines.
+    nonisolated static func flattenContent(_ content: Any?, limit: Int? = nil) -> String {
+        if let s = content as? String {
+            guard let limit else { return s }
+            return String(s.prefix(limit))
+        }
         if let blocks = content as? [[String: Any]] {
             let strs = blocks.compactMap { block -> String? in
                 if block["type"] as? String == "text" {
@@ -493,7 +495,8 @@ public final class SessionChatStore: ObservableObject {
                 return nil
             }
             let joined = strs.joined(separator: "\n")
-            return String(joined.prefix(4096))
+            guard let limit else { return joined }
+            return String(joined.prefix(limit))
         }
         return ""
     }
@@ -653,10 +656,13 @@ struct ParsedLine: Sendable {
                 case "tool_result":
                     let resultId = (block["tool_use_id"] as? String) ?? baseId
                     let isError = (block["is_error"] as? Bool) ?? false
-                    let body = SessionChatStore.flattenContent(block["content"])
+                    let fullBody = SessionChatStore.flattenContent(block["content"])
+                    let body = SessionChatStore.flattenContent(block["content"], limit: 4096)
                     out.append(ChatMessage(
                         id: "result:\(resultId)", kind: .toolResult,
-                        title: "Tool result", body: body, at: at,
+                        title: "Tool result", body: body,
+                        detail: fullBody.count > body.count ? fullBody : nil,
+                        at: at,
                         isError: isError
                     ))
                 default:

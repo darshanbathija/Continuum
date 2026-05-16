@@ -305,25 +305,30 @@ public final class AgentSessionRegistry: ObservableObject {
             repoKey: s.repoKey,
             repoDisplayName: s.repoDisplayName,
             agent: s.agent,
-            model: model.flatMap { $0 } ?? s.model,
+            model: Self.resolve(model, fallback: s.model),
             goal: s.goal,
-            worktreePath: worktreePath.flatMap { $0 } ?? s.worktreePath,
-            tmuxWindowId: tmuxWindowId.flatMap { $0 } ?? s.tmuxWindowId,
-            tmuxPaneId: tmuxPaneId.flatMap { $0 } ?? s.tmuxPaneId,
+            worktreePath: Self.resolve(worktreePath, fallback: s.worktreePath),
+            tmuxWindowId: Self.resolve(tmuxWindowId, fallback: s.tmuxWindowId),
+            tmuxPaneId: Self.resolve(tmuxPaneId, fallback: s.tmuxPaneId),
             status: status ?? s.status,
-            planText: planText.flatMap { $0 } ?? s.planText,
+            planText: Self.resolve(planText, fallback: s.planText),
             createdAt: s.createdAt,
             lastEventAt: Date(),
             lastEventSeq: lastEventSeq ?? s.lastEventSeq,
             mode: mode ?? s.mode,
-            archivedAt: archivedAt.flatMap { $0 } ?? s.archivedAt,
+            archivedAt: Self.resolve(archivedAt, fallback: s.archivedAt),
             terminalPanes: terminalPanes ?? s.terminalPanes,
             scheduledFollowUps: scheduledFollowUps ?? s.scheduledFollowUps,
             parentSessionId: s.parentSessionId,
-            effort: effort.flatMap { $0 } ?? s.effort,
-            abPairSessionId: abPairSessionId.flatMap { $0 } ?? s.abPairSessionId,
-            abPairDecidedAt: abPairDecidedAt.flatMap { $0 } ?? s.abPairDecidedAt
+            effort: Self.resolve(effort, fallback: s.effort),
+            abPairSessionId: Self.resolve(abPairSessionId, fallback: s.abPairSessionId),
+            abPairDecidedAt: Self.resolve(abPairDecidedAt, fallback: s.abPairDecidedAt)
         )
+    }
+
+    private static func resolve<T>(_ override: T??, fallback: T?) -> T? {
+        guard let override else { return fallback }
+        return override
     }
 
     public func delete(id: UUID) {

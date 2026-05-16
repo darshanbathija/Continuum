@@ -117,8 +117,14 @@ public enum CodexJSONLParser {
             return decodeMessage(payload: payload, at: at, baseId: idForSuffix("codex-message"))
         case "function_call":
             return decodeFunctionCall(payload: payload, at: at, baseId: idForSuffix("codex-function_call"))
+        case "custom_tool_call":
+            return decodeCustomToolCall(payload: payload, at: at, baseId: idForSuffix("codex-custom_tool_call"))
         case "function_call_output":
             return decodeFunctionCallOutput(payload: payload, at: at, baseId: idForSuffix("codex-function_call_output"))
+        case "custom_tool_call_output":
+            return decodeCustomToolCallOutput(payload: payload, at: at, baseId: idForSuffix("codex-custom_tool_call_output"))
+        case "web_search_call":
+            return decodeWebSearchCall(payload: payload, at: at, baseId: idForSuffix("codex-web_search_call"))
         case "reasoning":
             return decodeReasoning(payload: payload, at: at, baseId: idForSuffix("codex-reasoning"))
         default:
@@ -205,14 +211,77 @@ public enum CodexJSONLParser {
         }
         // Cap chat-row body at 4KB; users expand the disclosure for the
         // full thing.
+        let fullBody = body
+        var detail: String? = nil
         if body.count > 4096 {
             body = String(body.prefix(4096)) + "\n…[truncated]"
+            detail = fullBody
         }
         guard !body.isEmpty else { return [] }
         return [ChatMessage(
             id: "result:\(callId)",
             kind: .toolResult,
             title: "Tool result",
+            body: body,
+            detail: detail,
+            at: at
+        )]
+    }
+
+    private static func decodeCustomToolCall(payload: [String: Any], at: Date, baseId: String) -> [ChatMessage] {
+        let name = (payload["name"] as? String) ?? (payload["tool_name"] as? String) ?? "custom_tool"
+        let callId = (payload["call_id"] as? String) ?? (payload["id"] as? String) ?? baseId
+        let rawInput: String
+        if let s = payload["input"] as? String {
+            rawInput = s
+        } else if let dict = payload["input"] as? [String: Any],
+                  let data = try? JSONSerialization.data(withJSONObject: dict),
+                  let s = String(data: data, encoding: .utf8) {
+            rawInput = s
+        } else {
+            rawInput = ""
+        }
+        let summary = rawInput.replacingOccurrences(of: "\n", with: " ")
+        return [ChatMessage(
+            id: "call:\(callId)",
+            kind: .toolCall,
+            title: name,
+            body: summary.isEmpty ? name : summary,
+            detail: rawInput.isEmpty ? nil : rawInput,
+            at: at
+        )]
+    }
+
+    private static func decodeCustomToolCallOutput(payload: [String: Any], at: Date, baseId: String) -> [ChatMessage] {
+        let callId = (payload["call_id"] as? String) ?? (payload["id"] as? String) ?? baseId
+        let output = (payload["output"] as? String) ?? (payload["result"] as? String) ?? ""
+        guard !output.isEmpty else { return [] }
+        var body = output
+        var detail: String? = nil
+        if body.count > 4096 {
+            body = String(body.prefix(4096)) + "\n…[truncated]"
+            detail = output
+        }
+        return [ChatMessage(
+            id: "result:\(callId)",
+            kind: .toolResult,
+            title: "Tool result",
+            body: body,
+            detail: detail,
+            at: at
+        )]
+    }
+
+    private static func decodeWebSearchCall(payload: [String: Any], at: Date, baseId: String) -> [ChatMessage] {
+        let callId = (payload["call_id"] as? String) ?? (payload["id"] as? String) ?? baseId
+        let action = payload["action"] as? [String: Any]
+        let query = action?["query"] as? String
+        let status = payload["status"] as? String
+        let body = query ?? status ?? "web search"
+        return [ChatMessage(
+            id: "call:\(callId)",
+            kind: .toolCall,
+            title: "web_search",
             body: body,
             at: at
         )]

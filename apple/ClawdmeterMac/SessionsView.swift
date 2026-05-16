@@ -327,7 +327,7 @@ public final class SessionsModel: ObservableObject {
     /// JSONLTail.
     private func evictExcessChatStores() {
         var protected = protectedSessionIds
-        if let open = openSessionId { protected.insert(open) }
+        if let open = openSession?.id { protected.insert(open) }
         while chatStoreLRU.count > Self.maxResidentChatStores {
             // Find the oldest entry that isn't protected.
             guard let evictIdx = chatStoreLRU.firstIndex(where: { !protected.contains($0) })
@@ -497,7 +497,7 @@ public final class SessionsModel: ObservableObject {
         // Fail fast on missing CLIs rather than spawning tmux + the
         // worktree only to error in the agent's pane (where the user
         // can't easily see it without opening the terminal view).
-        if let reason = AgentSpawner.preflight() {
+        if let reason = AgentSpawner.preflight(agent: agent) {
             throw SpawnError.missingBinary(reason)
         }
         try await tmux.start()
@@ -518,7 +518,10 @@ public final class SessionsModel: ObservableObject {
             goal: goal,
             useWorktree: mode == .worktree
         ))
-        let windowId = try await tmux.newWindow(cwd: cwd, child: argv)
+        guard !argv.isEmpty else {
+            throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
+        }
+        let window = try await tmux.newWindow(cwd: cwd, child: argv)
         let session = registry.create(
             repoKey: repoPath,
             repoDisplayName: (repoPath as NSString).lastPathComponent,
@@ -526,8 +529,8 @@ public final class SessionsModel: ObservableObject {
             model: nil,
             goal: goal,
             worktreePath: worktreePath,
-            tmuxWindowId: windowId,
-            tmuxPaneId: nil,
+            tmuxWindowId: window.windowId,
+            tmuxPaneId: window.paneId,
             planMode: planMode,
             mode: mode
         )
@@ -581,12 +584,13 @@ public final class SessionsModel: ObservableObject {
             useWorktree: newMode == .worktree
         ))
         do {
-            let newWindowId = try await runtime.tmuxClient.newWindow(cwd: newCwd, child: argv)
+            guard !argv.isEmpty else { return }
+            let newWindow = try await runtime.tmuxClient.newWindow(cwd: newCwd, child: argv)
             registry.updateRuntime(
                 id: sessionId,
                 worktreePath: newWorktree,
-                tmuxWindowId: newWindowId,
-                tmuxPaneId: nil,
+                tmuxWindowId: newWindow.windowId,
+                tmuxPaneId: newWindow.paneId,
                 mode: newMode
             )
         } catch {
@@ -665,7 +669,8 @@ public final class SessionsModel: ObservableObject {
             useWorktree: parent.mode == .worktree
         ))
         do {
-            let windowId = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
+            guard !argv.isEmpty else { return nil }
+            let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
             let child = registry.create(
                 repoKey: parent.repoKey,
                 repoDisplayName: parent.repoDisplayName,
@@ -673,8 +678,8 @@ public final class SessionsModel: ObservableObject {
                 model: parent.model,
                 goal: nil,
                 worktreePath: parent.worktreePath,
-                tmuxWindowId: windowId,
-                tmuxPaneId: nil,
+                tmuxWindowId: window.windowId,
+                tmuxPaneId: window.paneId,
                 planMode: false,
                 mode: parent.mode,
                 parentSessionId: parentId
@@ -727,16 +732,31 @@ public final class SessionsModel: ObservableObject {
     public func approvePlan(id: UUID) async {
         guard let runtime = AppDelegate.runtime,
               let session = registry.session(id: id),
-              let windowId = session.tmuxWindowId
+              let windowId = session.tmuxWindowId,
+              session.status == .planning,
+              (session.planText?.isEmpty == false || session.agent == .codex)
         else { return }
         do {
             try await runtime.tmuxClient.killWindow(windowId)
-            let argv = [
-                "/Users/darshanbathija_1/.local/bin/claude",
-                "--permission-mode", "acceptEdits",
-            ]
+            let argv = AgentSpawner.respawnArgv(
+                agent: session.agent,
+                resumeSessionId: session.id.uuidString,
+                model: session.model,
+                planMode: false,
+                effort: session.effort,
+                autopilot: false
+            )
+            guard !argv.isEmpty else { return }
             let cwd = session.worktreePath ?? session.repoKey
-            _ = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
+            let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
+            registry.updateRuntime(
+                id: id,
+                worktreePath: session.worktreePath,
+                tmuxWindowId: window.windowId,
+                tmuxPaneId: window.paneId,
+                mode: session.mode
+            )
+            registry.setPlanText(id: id, planText: "")
             registry.updateStatus(id: id, status: .running)
         } catch {}
     }

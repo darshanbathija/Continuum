@@ -82,9 +82,14 @@ public enum CodexUsageParser {
                 )
 
                 let delta: TokenTotals
-                if cumulative.totalTokens < previousCumulative.totalTokens {
-                    // Non-monotonic — session reset within this file. Treat
-                    // the new cumulative as a fresh baseline.
+                if cumulative.totalTokens < previousCumulative.totalTokens
+                    || cumulative.inputTokens < previousCumulative.inputTokens
+                    || cumulative.outputTokens < previousCumulative.outputTokens
+                    || cumulative.cacheReadTokens < previousCumulative.cacheReadTokens {
+                    // Non-monotonic — session reset within this file. Codex
+                    // can reset individual counters while total_tokens still
+                    // increases, so check every cumulative field, not just
+                    // the aggregate total.
                     delta = cumulative
                 } else {
                     delta = TokenTotals(

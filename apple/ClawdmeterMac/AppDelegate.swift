@@ -44,13 +44,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let runtime = AppDelegate.runtime else {
-            logger.error("AppDelegate: no runtime; menu bar items not created.")
+            logger.warning("AppDelegate: runtime not ready at launch; waiting for SwiftUI binding.")
             return
         }
-        claudeController = ProviderStatusController(model: runtime.claudeModel)
-        codexController = ProviderStatusController(model: runtime.codexModel)
+        configure(runtime: runtime)
+    }
 
+    func configure(runtime: AppRuntime) {
+        AppDelegate.runtime = runtime
+        if claudeController == nil {
+            claudeController = ProviderStatusController(model: runtime.claudeModel)
+        }
+        if codexController == nil {
+            codexController = ProviderStatusController(model: runtime.codexModel)
+        }
+        installObserversIfNeeded()
         applyVisibilityFromPrefs()
+    }
+
+    private func installObserversIfNeeded() {
+        guard prefsObserver == nil else { return }
 
         // Re-evaluate which items are visible whenever the user toggles a
         // pref from the dashboard. `UserDefaults.didChangeNotification` is

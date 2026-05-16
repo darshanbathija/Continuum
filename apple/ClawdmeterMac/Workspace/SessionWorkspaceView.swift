@@ -157,14 +157,13 @@ struct SessionWorkspaceView: View {
                     Image(systemName: showingReviewPane
                         ? "sidebar.right"
                         : "sidebar.squares.right")
-                        .help(effectiveShowReviewPane
-                            ? "Hide review pane (⌘W)"
-                            : workspaceWidth < Self.reviewPaneThreshold
-                                ? "Widen the window to show the review pane"
-                                : "Show review pane (⌘W)")
-                }
-                .keyboardShortcut("w", modifiers: [.command])
-                .disabled(workspaceWidth < Self.reviewPaneThreshold)
+	                        .help(effectiveShowReviewPane
+	                            ? "Hide review pane"
+	                            : workspaceWidth < Self.reviewPaneThreshold
+	                                ? "Widen the window to show the review pane"
+	                                : "Show review pane")
+	                }
+	                .disabled(workspaceWidth < Self.reviewPaneThreshold)
             }
         }
         .background(KeyboardShortcuts(model: model))

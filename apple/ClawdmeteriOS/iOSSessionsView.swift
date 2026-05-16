@@ -665,6 +665,11 @@ private struct NewSessionSheet: View {
     @State private var planMode: Bool = true
     @State private var runAsABPair: Bool = false
     @State private var isStarting: Bool = false
+    /// Phase 8: pre-flight cost + weekly-cap estimate. Refreshes when
+    /// any input the daemon would care about changes (repo, agent,
+    /// model, effort, goal length). Debounced via the .task(id:) below.
+    @State private var preflight: PreflightResponse?
+    @State private var preflightLoading: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -716,6 +721,8 @@ private struct NewSessionSheet: View {
                         .tint(SessionsV2Theme.accent)
                 }
 
+                preflightSection
+
                 if client.hasWireVersionMismatch {
                     Section {
                         Label("Mac is running a different version. Update the Mac app.",
@@ -750,6 +757,67 @@ private struct NewSessionSheet: View {
                 await client.refreshModelCatalog()
                 if repoKey.isEmpty, let first = client.repos.first {
                     repoKey = first.key
+                }
+            }
+            .task(id: preflightInputs) {
+                await refreshPreflight()
+            }
+        }
+    }
+
+    /// Tuple of every input the preflight estimate depends on. Used as
+    /// the `.task(id:)` key so SwiftUI re-runs the refresh whenever any
+    /// input changes (Form binding edits invalidate the task naturally).
+    private var preflightInputs: String {
+        "\(repoKey)|\(agent.rawValue)|\(modelId ?? "")|\(effort.rawValue)|\(goal.count)"
+    }
+
+    @MainActor
+    private func refreshPreflight() async {
+        // Need all three keys before the daemon can answer.
+        guard !repoKey.isEmpty,
+              let modelId, !modelId.isEmpty,
+              client.isConfigured else {
+            preflight = nil
+            return
+        }
+        preflightLoading = true
+        defer { preflightLoading = false }
+        let query = PreflightQuery(
+            repoKey: repoKey,
+            agent: agent,
+            model: modelId,
+            effort: currentModelSupportsEffort ? effort : nil,
+            goalLength: goal.count
+        )
+        preflight = await client.fetchPreflight(query: query)
+    }
+
+    @ViewBuilder
+    private var preflightSection: some View {
+        if let preflight {
+            Section {
+                CostBannerView(
+                    response: preflight,
+                    currentModel: modelId ?? "",
+                    onSwap: { newModel in
+                        modelId = newModel
+                    }
+                )
+            } header: {
+                Text("Estimated cost")
+            } footer: {
+                if preflight.staleData {
+                    Text("Estimate based on cached usage; may be off until the next analytics refresh.")
+                }
+            }
+        } else if preflightLoading {
+            Section {
+                HStack {
+                    ProgressView()
+                    Text("Calculating estimate…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

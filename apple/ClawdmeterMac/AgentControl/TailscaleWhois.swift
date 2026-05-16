@@ -39,8 +39,9 @@ public actor TailscaleWhois {
     /// - Parameter peerAddress: the connection's remote endpoint string
     ///   (`"100.91.212.32:53412"` or just `"100.91.212.32"`).
     public func userLoginName(for peerAddress: String) async -> String? {
-        // Strip port if present — whois only takes an IP.
-        let ip = peerAddress.split(separator: ":").first.map(String.init) ?? peerAddress
+        // Strip port if present — whois only takes an IP. Preserve raw IPv6
+        // literals, whose colons are part of the address.
+        let ip = Self.ipOnly(peerAddress)
 
         if let cached = cache[ip], Date().timeIntervalSince(cached.cachedAt) < cacheTTL {
             return cached.loginName
@@ -49,6 +50,18 @@ public actor TailscaleWhois {
         let login = await performWhois(ip: ip)
         cache[ip] = CacheEntry(loginName: login, cachedAt: Date())
         return login
+    }
+
+    static func ipOnly(_ peerAddress: String) -> String {
+        if peerAddress.hasPrefix("["),
+           let end = peerAddress.firstIndex(of: "]") {
+            return String(peerAddress[peerAddress.index(after: peerAddress.startIndex)..<end])
+        }
+        let colonCount = peerAddress.filter { $0 == ":" }.count
+        if colonCount == 1 {
+            return peerAddress.split(separator: ":").first.map(String.init) ?? peerAddress
+        }
+        return peerAddress
     }
 
     /// Force-invalidate the cache. Useful when the daemon detects a network

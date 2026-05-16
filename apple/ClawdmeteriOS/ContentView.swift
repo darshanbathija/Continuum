@@ -15,6 +15,7 @@ struct ContentView: View {
         let client = AgentControlClient()
         _agentClient = StateObject(wrappedValue: client)
         _notifManager = StateObject(wrappedValue: iOSNotificationManager(client: client))
+        WatchPlanBridgeIOS.configure(client: client)
         // Hand the same AgentControlClient to UsageModel so it can pull
         // live Codex usage + analytics from the Mac daemon over
         // Tailscale. Replaces the iCloud-KV path for users without a

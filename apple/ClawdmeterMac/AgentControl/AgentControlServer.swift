@@ -310,13 +310,17 @@ public final class AgentControlServer {
                 return
             }
             // G12: envelope can target a specific pane within the session
-            // (multi-terminal tab strip). Falls back to the session's
-            // primary pane / window for the single-terminal case.
+            // (multi-terminal tab strip). Only actual pane ids owned by the
+            // session are accepted; tmux output is keyed by "%pane", not
+            // "@window".
             let paneId: String? = {
                 if let explicit = envelope.paneId, !explicit.isEmpty {
+                    guard Self.isValidTmuxPaneId(explicit),
+                          explicit == session.tmuxPaneId || session.terminalPanes.contains(where: { $0.paneId == explicit })
+                    else { return nil }
                     return explicit
                 }
-                return session.tmuxPaneId ?? session.tmuxWindowId
+                return session.tmuxPaneId
             }()
             guard let paneId else {
                 sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
@@ -472,9 +476,25 @@ public final class AgentControlServer {
             }
             if let data, !data.isEmpty {
                 buffer.append(data)
-                if let request = buffer.tryParse() {
+                do {
+                    if let request = try buffer.tryParse() {
+                        Task { @MainActor in
+                            await self?.dispatch(request: request, connection: connection)
+                        }
+                        return
+                    }
+                } catch HTTPRequestBuffer.ParseError.payloadTooLarge {
                     Task { @MainActor in
-                        await self?.dispatch(request: request, connection: connection)
+                        self?.sendResponse(HTTPResponse(
+                            status: 413, reason: "Payload Too Large",
+                            contentType: "text/plain",
+                            body: Data("Payload Too Large\n".utf8)
+                        ), on: connection)
+                    }
+                    return
+                } catch {
+                    Task { @MainActor in
+                        self?.sendResponse(.badRequest, on: connection)
                     }
                     return
                 }
@@ -686,7 +706,15 @@ public final class AgentControlServer {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
         let oldModel = session.model
-        registry.setModel(id: uuid, model: req.model, effort: req.effort)
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux)
+        let result = await changer.swap(
+            sessionId: uuid,
+            newModel: req.model,
+            newEffort: req.effort == nil ? nil : .some(req.effort)
+        )
+        guard isSuccessfulSwap(result) else {
+            sendResponse(.internalError, on: connection); return
+        }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordSwap(
             sessionId: uuid, sourcePeer: peer,
@@ -705,7 +733,11 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        registry.setEffort(id: uuid, effort: req.effort)
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux)
+        let result = await changer.swap(sessionId: uuid, newEffort: .some(req.effort))
+        guard isSuccessfulSwap(result) else {
+            sendResponse(.internalError, on: connection); return
+        }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordEffortChange(
             sessionId: uuid, sourcePeer: peer,
@@ -727,20 +759,14 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        registry.updateRuntime(
-            id: uuid,
-            worktreePath: session.worktreePath,
-            tmuxWindowId: session.tmuxWindowId,
-            tmuxPaneId: session.tmuxPaneId,
-            mode: req.mode
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux)
+        let result = await changer.swap(
+            sessionId: uuid,
+            newPlanMode: req.planMode,
+            newMode: req.mode
         )
-        if let planMode = req.planMode {
-            // Plan mode applies to both agents now. Claude maps it to
-            // `--permission-mode plan`; Codex maps it to
-            // `--sandbox read-only`. Mid-session toggle is handled by
-            // the same registry call — the actual respawn happens on
-            // `approve-plan` or via the mode picker.
-            registry.setPlanMode(id: uuid, planMode: planMode)
+        guard isSuccessfulSwap(result) else {
+            sendResponse(.internalError, on: connection); return
         }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordModeChange(
@@ -1068,6 +1094,17 @@ public final class AgentControlServer {
               let windowId = session.tmuxWindowId else {
             sendResponse(.notFound, on: connection); return
         }
+        guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
+            sendResponse(.tooManyRequestsSwap, on: connection); return
+        }
+        guard session.terminalPanes.count < 7 else {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"terminal pane limit reached"}"#.utf8)
+            ), on: connection)
+            return
+        }
         struct AddTerminalRequest: Codable { let title: String? }
         let req = (try? JSONDecoder().decode(AddTerminalRequest.self, from: request.body)) ?? AddTerminalRequest(title: nil)
         do {
@@ -1111,11 +1148,22 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
-        // Phase 0: return an empty snapshot so iOS can subscribe + render
-        // gracefully. Phase 4 (T40) wires up the SessionChatStore mirror.
+        let cwd = session.worktreePath ?? session.repoKey
+        let url: URL?
+        if session.agent == .claude {
+            url = SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
+        } else {
+            url = newestCodexJSONL()
+        }
+        let messages = url.map { TranscriptLoader.load(from: $0, maxMessages: 500) } ?? []
+        var builder = ChatItemBuilder()
+        for message in messages {
+            builder.ingest(message)
+        }
+        builder.flushPending()
         let snapshot = WireChatSnapshot(
             sessionId: session.id,
-            items: [],
+            items: builder.items,
             planSteps: [],
             sourceEntries: [],
             artifactEntries: [],
@@ -1134,13 +1182,74 @@ public final class AgentControlServer {
     }
 
     private func handleGetPreflight(request: HTTPRequest, connection: NWConnection) async {
-        // Phase 0 stub; Phase 8 wires LiveCostCalculator + RateLimitChecker.
+        guard let comps = URLComponents(string: request.path),
+              let items = comps.queryItems else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        func qp(_ name: String) -> String? {
+            items.first(where: { $0.name == name })?.value
+        }
+        guard let repoKey = qp("repoKey"),
+              let agentRaw = qp("agent"), let agent = AgentKind(rawValue: agentRaw),
+              let model = qp("model") else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let effort: ReasoningEffort? = qp("effort").flatMap { ReasoningEffort(rawValue: $0) }
+        let goalLength = Int(qp("goalLength") ?? "0") ?? 0
+
+        // Cost estimate from the analytics snapshot.
+        let snapshot = usageHistory?.snapshot ?? UsageHistorySnapshot.empty
+        let estimatedCost = LiveCostCalculator.shared.estimate(
+            snapshot: snapshot,
+            repoKey: repoKey,
+            agent: agent,
+            model: model,
+            effort: effort,
+            goalLength: goalLength
+        )
+
+        // Weekly-cap projection from live usage. Pick the provider's
+        // poller matching the requested agent.
+        let liveUsage: UsageData? = (agent == .claude)
+            ? claudeModel?.usage
+            : codexModel?.usage
+        let currentWeeklyPct = liveUsage?.weeklyPct ?? 0
+
+        // Reverse the per-model cost back to a token estimate so the
+        // projection has the right units. Falls back to a conservative
+        // 50k tokens when pricing is unknown (unpriced model).
+        let estimatedTokens: Int = {
+            guard let dollars = estimatedCost, dollars > 0 else { return 50_000 }
+            let perTokenInput = Pricing.shared.cost(
+                for: model,
+                tokens: TokenTotals(inputTokens: 1, outputTokens: 0)
+            )
+            if perTokenInput > 0 {
+                let perTokenDouble = NSDecimalNumber(decimal: perTokenInput).doubleValue
+                return max(1, Int(dollars / perTokenDouble))
+            }
+            return 50_000
+        }()
+        let projected = RateLimitChecker.shared.projectedWeeklyCap(
+            currentWeeklyPct: currentWeeklyPct,
+            estimatedTokens: estimatedTokens
+        )
+        let wouldCap = projected >= 0.95  // D11 soft-warn threshold
+        let suggested = wouldCap
+            ? RateLimitChecker.shared.suggestedSwap(currentModel: model)
+            : nil
+
+        let staleData: Bool = {
+            let age = Date().timeIntervalSince(snapshot.computedAt)
+            return age > 3600
+        }()
+
         let response = PreflightResponse(
-            estimatedCostUSD: nil,
-            weeklyCapPct: nil,
-            wouldCap: false,
-            suggestedSwap: nil,
-            staleData: false
+            estimatedCostUSD: estimatedCost,
+            weeklyCapPct: liveUsage == nil ? nil : projected,
+            wouldCap: wouldCap,
+            suggestedSwap: suggested,
+            staleData: staleData
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -1162,6 +1271,11 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    private func isSuccessfulSwap(_ result: SessionConfigChanger.SwapResult) -> Bool {
+        if case .swapped = result { return true }
+        return false
     }
 
     // MARK: - Usage / Analytics endpoints
@@ -1314,11 +1428,19 @@ public final class AgentControlServer {
 
         // Build agent argv per E4.
         let argv = AgentSpawner.argv(for: req)
+        guard !argv.isEmpty else {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
+            ), on: connection)
+            return
+        }
 
         // Spawn into a new tmux window.
         do {
             try await tmux.start()  // idempotent
-            let windowId = try await tmux.newWindow(cwd: cwd, child: argv)
+            let window = try await tmux.newWindow(cwd: cwd, child: argv)
             // Phase 2 simplification: pane id = first pane of the new window.
             // tmux's `list-windows -F '#{pane_id}'` would tell us, but we
             // derive it lazily for now.
@@ -1329,8 +1451,8 @@ public final class AgentControlServer {
                 model: req.model,
                 goal: req.goal,
                 worktreePath: worktreePath,
-                tmuxWindowId: windowId,
-                tmuxPaneId: nil,
+                tmuxWindowId: window.windowId,
+                tmuxPaneId: window.paneId,
                 planMode: req.planMode
             )
             // Wire up JSONL tail + done-detector + plan-watcher for this
@@ -1415,11 +1537,40 @@ public final class AgentControlServer {
         }
     }
 
+    private nonisolated func newestCodexJSONL() -> URL? {
+        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sessions", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: sessionsDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        var newest: URL?
+        var newestDate = Date.distantPast
+        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if date > newestDate {
+                newestDate = date
+                newest = url
+            }
+        }
+        return newest
+    }
+
     private func handleApprovePlan(sessionId: String, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId),
               let session = registry.session(id: uuid),
               let windowId = session.tmuxWindowId else {
             sendResponse(.notFound, on: connection)
+            return
+        }
+        guard session.status == .planning,
+              session.planText?.isEmpty == false || session.agent == .codex else {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"session is not awaiting plan approval"}"#.utf8)
+            ), on: connection)
             return
         }
         // Approve-plan is functionally a swap (kill pane + respawn). Use
@@ -1469,6 +1620,13 @@ public final class AgentControlServer {
             try await tmux.killWindow(windowId)
             let cwd = session.worktreePath ?? session.repoKey
             let newWindow = try await tmux.newWindow(cwd: cwd, child: replacementArgv)
+            registry.updateRuntime(
+                id: uuid,
+                worktreePath: session.worktreePath,
+                tmuxWindowId: newWindow.windowId,
+                tmuxPaneId: newWindow.paneId,
+                mode: session.mode
+            )
             // Clear the plan card and flip status to running so the
             // approve button disappears from the chat UI.
             registry.updateStatus(id: uuid, status: .running)
@@ -1476,7 +1634,7 @@ public final class AgentControlServer {
             AgentEventStream.recordEvent(
                 sessionId: uuid,
                 kind: .statusChanged,
-                payload: ["status": "running", "newWindowId": newWindow]
+                payload: ["status": "running", "newWindowId": newWindow.windowId]
             )
             // T13: plan approval is a mid-session respawn that exits plan
             // mode and gives the agent edit permission. Recorded AFTER the
@@ -1562,6 +1720,11 @@ public final class AgentControlServer {
             return bytes.count == 16 && bytes.prefix(15).allSatisfy { $0 == 0 } && bytes.last == 1
         }
         return false
+    }
+
+    static func isValidTmuxPaneId(_ paneId: String) -> Bool {
+        guard paneId.first == "%", paneId.count > 1 else { return false }
+        return paneId.dropFirst().allSatisfy { $0.isNumber }
     }
 
     static func endpointString(_ endpoint: NWEndpoint) -> String {
@@ -1752,6 +1915,14 @@ struct HTTPRequest {
 /// single NWConnection.receive callback chain; the callback shape isn't
 /// quite Sendable-checkable but the runtime invariant holds.
 private final class HTTPRequestBuffer: @unchecked Sendable {
+    enum ParseError: Error {
+        case badRequest
+        case payloadTooLarge
+    }
+
+    private static let maxHeaderBytes = 32 * 1024
+    private static let maxBodyBytes = 1_000_000
+
     var data = Data()
 
     func append(_ chunk: Data) {
@@ -1760,15 +1931,24 @@ private final class HTTPRequestBuffer: @unchecked Sendable {
 
     /// Attempt to extract a complete HTTP request. Returns nil if more bytes
     /// are needed.
-    func tryParse() -> HTTPRequest? {
+    func tryParse() throws -> HTTPRequest? {
+        guard data.count <= Self.maxHeaderBytes + Self.maxBodyBytes else {
+            throw ParseError.payloadTooLarge
+        }
         // Find headers/body boundary.
-        guard let headerEndRange = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+        guard let headerEndRange = data.range(of: Data("\r\n\r\n".utf8)) else {
+            if data.count > Self.maxHeaderBytes { throw ParseError.payloadTooLarge }
+            return nil
+        }
+        guard headerEndRange.lowerBound <= Self.maxHeaderBytes else {
+            throw ParseError.payloadTooLarge
+        }
         let headerBytes = data[..<headerEndRange.lowerBound]
         let headerText = String(decoding: headerBytes, as: UTF8.self)
         let lines = headerText.split(separator: "\r\n", omittingEmptySubsequences: false).map(String.init)
-        guard let requestLine = lines.first else { return nil }
+        guard let requestLine = lines.first else { throw ParseError.badRequest }
         let parts = requestLine.split(separator: " ").map(String.init)
-        guard parts.count >= 3 else { return nil }
+        guard parts.count >= 3 else { throw ParseError.badRequest }
         let method = parts[0]
         let path = parts[1]
 
@@ -1780,7 +1960,14 @@ private final class HTTPRequestBuffer: @unchecked Sendable {
             headers[name] = value
         }
 
-        let contentLength = Int(headers["content-length"] ?? "0") ?? 0
+        let contentLengthRaw = headers["content-length"] ?? "0"
+        guard let contentLength = Int(contentLengthRaw),
+              contentLength >= 0 else {
+            throw ParseError.badRequest
+        }
+        guard contentLength <= Self.maxBodyBytes else {
+            throw ParseError.payloadTooLarge
+        }
         let bodyStart = headerEndRange.upperBound
         let availableBody = data.count - bodyStart
         if availableBody < contentLength {

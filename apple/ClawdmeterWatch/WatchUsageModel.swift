@@ -144,9 +144,9 @@ public final class WatchUsageModel: ObservableObject {
                 Task { @MainActor in
                     // Phone-forwarded snapshot trumps our (possibly stale)
                     // local poller result when we don't have our own token.
-                    if self.tokenProvider.hasToken == false {
-                        self.usage = usage
-                        self.receivingFromPhone = true
+	                    if self.tokenProvider.hasToken == false {
+	                        self.usage = usage
+	                        self.receivingFromPhone = true
                     } else {
                         // We have our own token; only adopt the phone's
                         // snapshot if it's newer than ours.
@@ -158,10 +158,12 @@ public final class WatchUsageModel: ObservableObject {
                         } else {
                             self.usage = usage
                             self.receivingFromPhone = true
-                        }
-                    }
-                }
-            }
+	                        }
+	                    }
+	                    UsageStore.write(usage, providerID: "claude", displayName: "Claude")
+	                    UsageStore.reloadWidgets(providerID: "claude")
+	                }
+	            }
             .store(in: &cancellables)
     }
 

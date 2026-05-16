@@ -81,6 +81,28 @@ public final class AgentControlClient: ObservableObject {
         return req
     }
 
+    private enum ClientHTTPError: LocalizedError {
+        case badStatus(Int, String?)
+
+        var errorDescription: String? {
+            switch self {
+            case .badStatus(let status, let retryAfter):
+                if let retryAfter {
+                    return "Daemon returned HTTP \(status). Retry after \(retryAfter)s."
+                }
+                return "Daemon returned HTTP \(status)."
+            }
+        }
+    }
+
+    private func sendChecked(_ request: URLRequest) async throws -> Data {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw ClientHTTPError.badStatus(http.statusCode, http.value(forHTTPHeaderField: "Retry-After"))
+        }
+        return data
+    }
+
     @MainActor
     public func refreshAll() async {
         await refreshHealth()
@@ -93,7 +115,7 @@ public final class AgentControlClient: ObservableObject {
     public func refreshHealth() async {
         guard let request = makeRequest(path: "/health") else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let data = try await sendChecked(request)
             if let payload = try? JSONDecoder().decode(HealthResponse.self, from: data) {
                 self.serverVersion = payload.serverVersion
                 self.serverWireVersion = payload.wireVersion
@@ -107,7 +129,7 @@ public final class AgentControlClient: ObservableObject {
     public func refreshModelCatalog() async {
         guard let request = makeRequest(path: "/models") else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             self.modelCatalog = try decoder.decode(ModelCatalog.self, from: data)
@@ -169,7 +191,7 @@ public final class AgentControlClient: ObservableObject {
     public func fetchTerminals(sessionId: UUID) async -> [TerminalPaneRef] {
         guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/terminals") else { return [] }
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             return try decoder.decode([TerminalPaneRef].self, from: data)
@@ -189,7 +211,7 @@ public final class AgentControlClient: ObservableObject {
             method: "POST", body: bodyData
         ) else { return nil }
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             return try decoder.decode(TerminalPaneRef.self, from: data)
@@ -208,7 +230,11 @@ public final class AgentControlClient: ObservableObject {
             path: "/sessions/\(sessionId.uuidString)/terminals/\(terminalRefId.uuidString)",
             method: "DELETE"
         ) else { return }
-        _ = try? await URLSession.shared.data(for: request)
+            do {
+                _ = try await sendChecked(request)
+            } catch {
+                self.lastError = error.localizedDescription
+            }
     }
 
     public enum ArtifactError: LocalizedError {
@@ -270,6 +296,40 @@ public final class AgentControlClient: ObservableObject {
         return ext.isEmpty ? hex : "\(hex).\(ext)"
     }
 
+    // MARK: - Phase 8: pre-flight cost banner
+
+    /// Fetch the daemon's pre-flight estimate for the soft-warn cost
+    /// banner in the new-session sheet (D3 + D11). Returns nil on any
+    /// failure path — the UI hides the banner when the result is nil.
+    @MainActor
+    public func fetchPreflight(query: PreflightQuery) async -> PreflightResponse? {
+        var comps = URLComponents()
+        comps.path = "/sessions/preflight"
+        comps.queryItems = [
+            URLQueryItem(name: "repoKey", value: query.repoKey),
+            URLQueryItem(name: "agent", value: query.agent.rawValue),
+            URLQueryItem(name: "model", value: query.model),
+            URLQueryItem(name: "goalLength", value: String(query.goalLength)),
+        ]
+        if let effort = query.effort {
+            comps.queryItems?.append(URLQueryItem(name: "effort", value: effort.rawValue))
+        }
+        guard let path = comps.url?.absoluteString,
+              let request = makeRequest(path: path) else { return nil }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                return nil
+            }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(PreflightResponse.self, from: data)
+        } catch {
+            clientLogger.debug("fetchPreflight failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     @MainActor
     @discardableResult
     private func postJSON<T: Encodable>(path: String, body: T) async -> AgentSession? {
@@ -280,7 +340,7 @@ public final class AgentControlClient: ObservableObject {
             return nil
         }
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let session = try decoder.decode(AgentSession.self, from: data)
@@ -303,7 +363,7 @@ public final class AgentControlClient: ObservableObject {
             return
         }
         do {
-            _ = try await URLSession.shared.data(for: request)
+            _ = try await sendChecked(request)
         } catch {
             self.lastError = error.localizedDescription
         }
@@ -313,7 +373,7 @@ public final class AgentControlClient: ObservableObject {
     private func postEmpty(path: String) async {
         guard let request = makeRequest(path: path, method: "POST") else { return }
         do {
-            _ = try await URLSession.shared.data(for: request)
+            _ = try await sendChecked(request)
         } catch {
             self.lastError = error.localizedDescription
         }
@@ -323,7 +383,7 @@ public final class AgentControlClient: ObservableObject {
     public func refreshRepos() async {
         guard let request = makeRequest(path: "/repos") else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             self.repos = try decoder.decode([AgentRepo].self, from: data)
@@ -339,13 +399,21 @@ public final class AgentControlClient: ObservableObject {
     public func refreshSessions() async {
         guard let request = makeRequest(path: "/sessions") else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             self.sessions = try decoder.decode([AgentSession].self, from: data)
             // Sessions v2 Phase 10: keep the aggregate Live Activity in
             // sync with the latest session list.
             LiveActivityCoordinator.shared.refresh(from: sessions)
+            let waiting = sessions.filter { $0.status == .planning && ($0.planText?.isEmpty == false || $0.agent == .codex) }
+            let latest = waiting.max(by: { $0.lastEventAt < $1.lastEventAt })
+            WatchPlanBridgeIOS.shared.updateContext(
+                count: waiting.count,
+                latestGoal: latest?.goal,
+                latestPlanSummary: latest?.planText,
+                latestSessionId: latest?.id
+            )
         } catch {
             clientLogger.debug("refreshSessions failed: \(error.localizedDescription)")
         }
@@ -361,7 +429,7 @@ public final class AgentControlClient: ObservableObject {
             return nil
         }
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let session = try decoder.decode(AgentSession.self, from: data)
@@ -377,7 +445,7 @@ public final class AgentControlClient: ObservableObject {
     public func deleteSession(id: UUID) async {
         guard let request = makeRequest(path: "/sessions/\(id.uuidString)", method: "DELETE") else { return }
         do {
-            _ = try await URLSession.shared.data(for: request)
+            _ = try await sendChecked(request)
             sessions.removeAll { $0.id == id }
         } catch {
             self.lastError = error.localizedDescription
@@ -388,7 +456,7 @@ public final class AgentControlClient: ObservableObject {
     public func approvePlan(sessionId: UUID) async {
         guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/approve-plan", method: "POST") else { return }
         do {
-            _ = try await URLSession.shared.data(for: request)
+            _ = try await sendChecked(request)
         } catch {
             self.lastError = error.localizedDescription
         }
@@ -398,7 +466,7 @@ public final class AgentControlClient: ObservableObject {
     public func archiveSession(id: UUID) async {
         guard let request = makeRequest(path: "/sessions/\(id.uuidString)/archive", method: "POST") else { return }
         do {
-            _ = try await URLSession.shared.data(for: request)
+            _ = try await sendChecked(request)
             // Optimistic local update — server will confirm on next refresh.
             if let idx = sessions.firstIndex(where: { $0.id == id }) {
                 let s = sessions[idx]
@@ -425,7 +493,7 @@ public final class AgentControlClient: ObservableObject {
     public func unarchiveSession(id: UUID) async {
         guard let request = makeRequest(path: "/sessions/\(id.uuidString)/unarchive", method: "POST") else { return }
         do {
-            _ = try await URLSession.shared.data(for: request)
+            _ = try await sendChecked(request)
             if let idx = sessions.firstIndex(where: { $0.id == id }) {
                 let s = sessions[idx]
                 sessions[idx] = AgentSession(
@@ -451,7 +519,7 @@ public final class AgentControlClient: ObservableObject {
     public func fetchNeedsAttention() async -> [NotificationEvent] {
         guard let request = makeRequest(path: "/sessions/needs-attention") else { return [] }
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let response = try decoder.decode(NeedsAttentionResponse.self, from: data)

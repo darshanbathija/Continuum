@@ -43,7 +43,7 @@ struct ClawdmeterMacApp: App {
                 // hierarchy materializes, but we can publish the runtime
                 // reference on first appearance and AppDelegate picks it
                 // up via the static var.
-                AppDelegate.runtime = runtime
+                appDelegate.configure(runtime: runtime)
                 // Notify so the delegate re-applies visibility (no-op if
                 // already configured).
                 NotificationCenter.default.post(

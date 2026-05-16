@@ -52,6 +52,7 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
     }
 
     private func apply(context: [String: Any]) {
+        WatchTokenBridge.shared.receive(context: context)
         if let count = context["planWaitingCount"] as? Int {
             planWaitingCount = count
             defaults?.set(count, forKey: "clawdmeter.watch.planWaitingCount")

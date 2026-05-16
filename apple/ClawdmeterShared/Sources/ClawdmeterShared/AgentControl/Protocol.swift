@@ -142,7 +142,8 @@ public struct ModelCatalog: Codable, Sendable {
 
     /// Resolve a model id to a catalog entry across both providers.
     public func entry(forId id: String) -> ModelCatalogEntry? {
-        claude.first(where: { $0.id == id }) ?? codex.first(where: { $0.id == id })
+        claude.first(where: { $0.id == id || $0.cliAlias == id })
+            ?? codex.first(where: { $0.id == id || $0.cliAlias == id })
     }
 }
 

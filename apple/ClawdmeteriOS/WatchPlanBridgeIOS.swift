@@ -15,9 +15,17 @@ private let bridgeLogger = Logger(subsystem: "com.clawdmeter.ios", category: "Wa
 /// App Group UserDefaults and updates its badge on next timeline reload.
 public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
 
-    public static let shared = WatchPlanBridgeIOS()
+    public private(set) static var shared = WatchPlanBridgeIOS()
 
     public let client: AgentControlClient
+
+    @discardableResult
+    public static func configure(client: AgentControlClient) -> WatchPlanBridgeIOS {
+        if shared.client !== client {
+            shared = WatchPlanBridgeIOS(client: client)
+        }
+        return shared
+    }
 
     public override init() {
         self.client = AgentControlClient()
