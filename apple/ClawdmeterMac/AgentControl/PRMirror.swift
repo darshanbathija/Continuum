@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import ClawdmeterShared
 import OSLog
 
@@ -31,22 +32,77 @@ public final class PRMirror: ObservableObject {
     private let sessionId: UUID
     private var pollTask: Task<Void, Never>?
     private var chatStore: SessionChatStore?
+    /// T10 codex tension #7g: track the chat-store snapshot updates so PR
+    /// detection picks up URLs that arrive AFTER attach. Without this,
+    /// the user opens the PR tab before the agent's `gh pr create` line
+    /// has streamed in, and we'd permanently show "No PR detected".
+    private var snapshotSubscription: AnyCancellable?
+    /// Whether the user has opened the PR tab. Polling only happens when
+    /// this is true (codex tension #7e — opt-in start). Auto-detection
+    /// still runs in the background so when the user does open the tab
+    /// we already have the URL in hand.
+    private var isWatching: Bool = false
+    /// Last URL we attempted to start polling for (avoids re-firing the
+    /// 30s task when the same URL is re-detected on every snapshot).
+    private var watchedURL: URL?
 
     public init(sessionId: UUID) {
         self.sessionId = sessionId
     }
 
+    /// Register a chat store as the PR-URL detection source. Does NOT
+    /// start polling — the PR tab's `onAppear` calls `startWatching()`
+    /// for that. We subscribe to the store's snapshot publisher so new
+    /// messages re-trigger URL detection until a URL is found.
     public func attach(chatStore: SessionChatStore) {
         self.chatStore = chatStore
-        // Try auto-detection on attach.
-        if let url = Self.findPRURL(in: chatStore.messages) {
+        snapshotSubscription?.cancel()
+        snapshotSubscription = chatStore.$snapshot
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.maybeDetectURL()
+            }
+        // Initial pass against whatever is already in the snapshot.
+        maybeDetectURL()
+    }
+
+    public func detach() {
+        snapshotSubscription?.cancel()
+        snapshotSubscription = nil
+        pollTask?.cancel()
+        pollTask = nil
+        isWatching = false
+    }
+
+    /// Called by `PRReviewPane.onAppear`. Starts the 30s poll loop if we
+    /// already have a detected URL; otherwise polling begins as soon as
+    /// `maybeDetectURL` finds one.
+    public func startWatching() {
+        isWatching = true
+        if state == nil, let url = watchedURL ?? Self.findPRURL(in: chatStore?.messages ?? []) {
             startPolling(url: url)
         }
     }
 
-    public func detach() {
+    /// Called by `PRReviewPane.onDisappear`. Cancels the 30s poll loop
+    /// but keeps the snapshot subscription alive so URLs that arrive
+    /// after the user closes the tab are still detected for next open.
+    public func stopWatching() {
+        isWatching = false
         pollTask?.cancel()
         pollTask = nil
+    }
+
+    /// Scan the current chat snapshot for a PR URL and, if found AND we're
+    /// in watching mode, start polling. No-op if we've already found a
+    /// URL or aren't watching.
+    private func maybeDetectURL() {
+        guard watchedURL == nil, let store = chatStore else { return }
+        guard let url = Self.findPRURL(in: store.messages) else { return }
+        watchedURL = url
+        if isWatching {
+            startPolling(url: url)
+        }
     }
 
     public func loadFromManualURL() {

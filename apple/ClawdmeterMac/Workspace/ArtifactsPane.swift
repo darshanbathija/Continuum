@@ -98,18 +98,18 @@ struct ArtifactsPane: View {
         "zip", "tar", "gz",
     ]
 
+    /// T9: read precomputed artifact entries from the snapshot, resolve
+    /// relative paths against the session cwd, and filter to files that
+    /// actually exist on disk (the file-exists check runs at view-build
+    /// time but is cheap once paths are resolved).
     private func collect() -> [Artifact] {
-        var seen: Set<String> = []
-        var out: [Artifact] = []
         let repoCwd = session.worktreePath ?? session.repoKey
-        for msg in chatStore.messages where msg.kind == .toolCall && msg.title == "Write" {
-            let path = msg.body.trimmingCharacters(in: .whitespaces)
-            guard !path.isEmpty else { continue }
-            let ext = (path as NSString).pathExtension.lowercased()
-            guard Self.artifactExtensions.contains(ext) else { continue }
-            let absolute: String
-            if path.hasPrefix("/") { absolute = path }
-            else { absolute = (repoCwd as NSString).appendingPathComponent(path) }
+        var out: [Artifact] = []
+        var seen: Set<String> = []
+        for entry in chatStore.snapshot.artifactEntries {
+            let absolute: String = entry.path.hasPrefix("/")
+                ? entry.path
+                : (repoCwd as NSString).appendingPathComponent(entry.path)
             guard !seen.contains(absolute) else { continue }
             seen.insert(absolute)
             guard FileManager.default.fileExists(atPath: absolute) else { continue }

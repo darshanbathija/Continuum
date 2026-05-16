@@ -41,10 +41,27 @@ public final class SessionChatStore: ObservableObject {
     /// consistency by construction.
     public struct ChatSnapshot: Sendable, Equatable {
         public let items: [ChatItem]
+        public let planSteps: [PlanStep]
+        public let sourceEntries: [SourceEntry]
+        public let artifactEntries: [ArtifactEntry]
         /// Monotonic counter that bumps each time the snapshot updates.
         /// View code uses this for `.onChange` triggers instead of
         /// `items.last?.id`, which would change object identity per render.
         public let updateCounter: UInt64
+
+        public init(
+            items: [ChatItem],
+            planSteps: [PlanStep] = [],
+            sourceEntries: [SourceEntry] = [],
+            artifactEntries: [ArtifactEntry] = [],
+            updateCounter: UInt64
+        ) {
+            self.items = items
+            self.planSteps = planSteps
+            self.sourceEntries = sourceEntries
+            self.artifactEntries = artifactEntries
+            self.updateCounter = updateCounter
+        }
 
         public static let empty = ChatSnapshot(items: [], updateCounter: 0)
     }
@@ -52,10 +69,18 @@ public final class SessionChatStore: ObservableObject {
     @Published public private(set) var snapshot: ChatSnapshot = .empty
     /// Back-compat: views that still call `store.messages` keep working.
     /// Derived from `snapshot.items`; populated on each snapshot commit.
-    /// Removed in T5 once all view code reads `snapshot.items` directly.
+    /// Removed once all view code reads `snapshot.items` directly.
     @Published public private(set) var messages: [ChatMessage] = []
     @Published public private(set) var isLoading: Bool = true
     @Published public private(set) var lastError: String?
+    /// External plan text (from AgentSession.planText). When set, the
+    /// next staging snapshot extracts steps from this text and merges
+    /// them with steps found in chat messages. The view doesn't have to
+    /// observe AgentSession separately — `snapshot.planSteps` is the
+    /// single source of truth for the Plan tab.
+    public func setPlanText(_ text: String?) {
+        Task { [staging] in await staging.setPlanText(text) }
+    }
 
     public let sessionId: UUID
     private let sessionFileURL: URL
@@ -88,11 +113,24 @@ public final class SessionChatStore: ObservableObject {
         startSignpostID = signpostID
         chatLogger.info("Starting chat store for session \(self.sessionId.uuidString, privacy: .public) at \(self.sessionFileURL.path, privacy: .public)")
 
-        // JSONLTail still runs on its background queue. The handler
-        // converts [String: Any] → typed `ParsedLine` (Sendable) BEFORE
-        // crossing into the actor — codex tension #7b: typed boundary,
-        // not raw dictionaries.
+        // T4 reverse-tail progressive parse: synchronously kick off a
+        // background task that reads the last ~256 KB of the JSONL and
+        // ingests the newest ~50 messages into the staging actor FIRST.
+        // The commit loop's first frame then shows the latest messages;
+        // the head parse (JSONLTail from line 0) fills in older history
+        // behind them. StagingParser dedups by id + sorts by timestamp,
+        // so the final items array is in correct chronological order
+        // regardless of arrival.
         let staging = self.staging
+        let sessionURL = self.sessionFileURL
+        Task.detached(priority: .userInitiated) {
+            await Self.ingestTail(url: sessionURL, into: staging)
+        }
+
+        // JSONLTail runs on its background queue. The handler converts
+        // [String: Any] → typed `ParsedLine` (Sendable) BEFORE crossing
+        // into the actor — codex tension #7b: typed boundary, not raw
+        // dictionaries.
         let tail = JSONLTail(fileURL: sessionFileURL) { json in
             guard let parsed = ParsedLine.from(json: json) else { return }
             Task { await staging.ingest(parsed) }
@@ -102,26 +140,31 @@ public final class SessionChatStore: ObservableObject {
 
         // Background commit task: every 16ms, snapshot the staging actor
         // and publish to main. Generation-token guard suppresses any
-        // commits from stale parses (codex tension #6).
+        // commits from stale parses (codex tension #6). T14 signposts
+        // make each batch visible in Instruments → Animation Hitches.
         commitTask = Task.detached(priority: .userInitiated) { [weak self] in
-            // Single signposted batch loop. Each iteration is one frame's
-            // worth of commit work — cheap when nothing changed, real
-            // work only when items array grew.
             var lastCommittedCounter: UInt64 = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 16_000_000)
                 let next = await staging.snapshot()
                 guard next.updateCounter != lastCommittedCounter else { continue }
+                let signpostID = OSSignpostID(log: chatPerfLog)
+                os_signpost(.begin, log: chatPerfLog, name: "staging-parse-batch",
+                            signpostID: signpostID,
+                            "items=%d counter=%llu",
+                            next.items.count, next.updateCounter)
                 lastCommittedCounter = next.updateCounter
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     guard self.parseGeneration == generation else { return }
                     self.snapshot = next
                     // Back-compat: rebuild `messages` array from the
-                    // snapshot's items. Drops in T5 once views read
+                    // snapshot's items. Drops once all views read
                     // snapshot.items directly.
                     self.messages = Self.flattenMessages(from: next.items)
                 }
+                os_signpost(.end, log: chatPerfLog, name: "staging-parse-batch",
+                            signpostID: signpostID)
             }
         }
 
@@ -149,6 +192,52 @@ public final class SessionChatStore: ObservableObject {
         commitTask = nil
         tail?.stop()
         tail = nil
+    }
+
+    /// T4: read the last ~256 KB of the JSONL, parse complete lines, and
+    /// ingest into the staging actor. The first line in the chunk is
+    /// likely partial (we seeked mid-line) so we skip to the first newline
+    /// before parsing. Fail-quiet on any error — the head parse via
+    /// JSONLTail will cover what we missed.
+    private nonisolated static func ingestTail(
+        url: URL, into staging: StagingParser
+    ) async {
+        let signpostID = OSSignpostID(log: chatPerfLog)
+        os_signpost(.begin, log: chatPerfLog, name: "tail-read",
+                    signpostID: signpostID,
+                    "path=%{public}@", url.lastPathComponent)
+        defer {
+            os_signpost(.end, log: chatPerfLog, name: "tail-read",
+                        signpostID: signpostID)
+        }
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? fh.close() }
+        // Get file size; if smaller than 256 KB read the whole thing.
+        guard let size = (try? fh.seekToEnd()) else { return }
+        let chunkSize: UInt64 = 256 * 1024
+        let start: UInt64 = size > chunkSize ? size - chunkSize : 0
+        do { try fh.seek(toOffset: start) } catch { return }
+        guard let bytes = try? fh.readToEnd(), !bytes.isEmpty else { return }
+
+        // If we started mid-file, skip to first newline (drop the partial
+        // leading line). When start==0 we begin at byte 0 — keep everything.
+        var slice = bytes[bytes.startIndex...]
+        if start > 0, let nl = slice.firstIndex(of: 0x0A) {
+            slice = bytes[bytes.index(after: nl)...]
+        }
+        // Parse each complete line; ingest in order.
+        var lineStart = slice.startIndex
+        while lineStart < slice.endIndex {
+            let newlineIdx = slice[lineStart...].firstIndex(of: 0x0A) ?? slice.endIndex
+            let lineBytes = slice[lineStart..<newlineIdx]
+            lineStart = (newlineIdx < slice.endIndex)
+                ? slice.index(after: newlineIdx)
+                : slice.endIndex
+            guard !lineBytes.isEmpty else { continue }
+            guard let json = (try? JSONSerialization.jsonObject(with: lineBytes)) as? [String: Any] else { continue }
+            guard let parsed = ParsedLine.from(json: json) else { continue }
+            await staging.ingest(parsed)
+        }
     }
 
     /// Flatten `ChatItem.toolRun` pairs back into a flat message array.
@@ -453,38 +542,209 @@ struct ParsedLine: Sendable {
 /// - ChatItemBuilder + dedup state are isolated by the actor — no
 ///   manual locking, no @MainActor pinning.
 actor StagingParser {
-    private var builder = ChatItemBuilder()
-    /// De-dupe ids so re-tailing the JSONL on file rotation doesn't
-    /// double-render. Matches the legacy `seenIds` behavior.
+    /// Messages kept in chronological order (by `at` timestamp, tiebreak
+    /// by stable id). Insertion-sorted on ingest. This lets the reverse-
+    /// tail parser (T4) ingest the newest 50 messages FIRST without the
+    /// items array landing in tail-then-head order — snapshot() rebuilds
+    /// items from this sorted list so chronological order is preserved
+    /// regardless of arrival order. The seenIds dedup makes the head
+    /// parse a no-op for any line the tail already covered.
+    private var sortedMessages: [ChatMessage] = []
     private var seenIds: Set<String> = []
+    /// External plan text (AgentSession.planText) injected via
+    /// `SessionChatStore.setPlanText`. Drives the `planSteps` precompute
+    /// alongside steps mined from assistant messages.
+    private var planText: String? = nil
     /// Bumps on every ingest that produced a delta. The @MainActor poll
     /// task uses this to short-circuit "nothing changed" commits.
     private var updateCounter: UInt64 = 0
+    /// Cached derived state rebuilt on snapshot() request. Invalidated
+    /// whenever sortedMessages or planText changes.
+    private var cachedSnapshot: SessionChatStore.ChatSnapshot = .empty
+    private var cachedCounter: UInt64 = 0
 
     func ingest(_ line: ParsedLine) {
+        var anyAppended = false
         for msg in line.messages {
             guard !seenIds.contains(msg.id) else { continue }
             seenIds.insert(msg.id)
-            builder.ingest(msg)
+            let idx = insertIndex(for: msg)
+            sortedMessages.insert(msg, at: idx)
+            anyAppended = true
         }
+        if anyAppended {
+            updateCounter &+= 1
+        }
+    }
+
+    func setPlanText(_ text: String?) {
+        guard planText != text else { return }
+        planText = text
         updateCounter &+= 1
     }
 
-    /// Flush any pending tool run (used at EOF or when caller wants a
-    /// stable rendering). Bumps updateCounter so the poll task picks it
-    /// up next frame.
-    func flushPending() {
-        builder.flushPending()
-        updateCounter &+= 1
-    }
-
-    /// Snapshot the current builder state. The @MainActor commit task
-    /// polls this every 16ms; if `updateCounter` hasn't advanced it
-    /// short-circuits.
+    /// Snapshot the current state. Lazy-rebuilds derived arrays only when
+    /// sortedMessages / planText changed since last snapshot. All passes
+    /// run on the staging actor — never on main.
     func snapshot() -> SessionChatStore.ChatSnapshot {
-        SessionChatStore.ChatSnapshot(
-            items: builder.items,
-            updateCounter: updateCounter
-        )
+        if cachedCounter != updateCounter {
+            // 1) items[] from chronological messages
+            var builder = ChatItemBuilder()
+            for msg in sortedMessages {
+                builder.ingest(msg)
+            }
+            builder.flushPending()
+            let items = builder.items
+
+            // 2) planSteps with isComplete flags
+            let steps = computePlanSteps(items: items, planText: planText)
+
+            // 3) source entries (Read / Grep / Glob / WebFetch / WebSearch)
+            let sources = computeSourceEntries(messages: sortedMessages)
+
+            // 4) artifact entries (Write tool calls with artifact-extension paths)
+            let artifacts = computeArtifactEntries(messages: sortedMessages)
+
+            cachedSnapshot = SessionChatStore.ChatSnapshot(
+                items: items,
+                planSteps: steps,
+                sourceEntries: sources,
+                artifactEntries: artifacts,
+                updateCounter: updateCounter
+            )
+            cachedCounter = updateCounter
+        }
+        return cachedSnapshot
+    }
+
+    // MARK: - Derived-state computations
+
+    private func computePlanSteps(items: [ChatItem], planText: String?) -> [PlanStep] {
+        var stepTexts: [String] = []
+        var seen: Set<String> = []
+        let candidates: [String] = [planText ?? ""] + items.compactMap { item in
+            if case .message(let m) = item, m.kind == .assistantText { return m.body }
+            return nil
+        }
+        for body in candidates {
+            for step in Self.extractStepCandidates(from: body) {
+                let key = String(step.lowercased().prefix(40))
+                if !seen.contains(key) {
+                    seen.insert(key)
+                    stepTexts.append(step)
+                    if stepTexts.count >= 24 { break }
+                }
+            }
+            if stepTexts.count >= 24 { break }
+        }
+        // Mark each step complete if a SUBSEQUENT assistant message or
+        // tool_call references the step's first ~30 chars. O(M × candidates)
+        // — fine for M ≤ 24.
+        return stepTexts.enumerated().map { idx, text in
+            let needle = String(text.lowercased().prefix(30))
+            let complete = candidates.contains { body in
+                body.lowercased().contains(needle) && body != text
+            }
+            return PlanStep(id: "step-\(idx)", text: text, isComplete: complete)
+        }
+    }
+
+    private static func extractStepCandidates(from body: String) -> [String] {
+        var out: [String] = []
+        for raw in body.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if let match = line.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
+                let content = String(line[match.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if !content.isEmpty { out.append(content) }
+                continue
+            }
+            if let match = line.range(of: #"^Step\s+\d+:?\s+"#,
+                                       options: [.regularExpression, .caseInsensitive]) {
+                let content = String(line[match.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if !content.isEmpty { out.append(content) }
+            }
+        }
+        return out
+    }
+
+    private func computeSourceEntries(messages: [ChatMessage]) -> [SourceEntry] {
+        var files: [String: Int] = [:]
+        var urls: [String: Int] = [:]
+        for msg in messages where msg.kind == .toolCall {
+            switch msg.title {
+            case "Read", "Edit", "Write":
+                let path = msg.body.trimmingCharacters(in: .whitespaces)
+                guard !path.isEmpty else { continue }
+                files[path, default: 0] += 1
+            case "Glob", "Grep":
+                let pattern = msg.body.trimmingCharacters(in: .whitespaces)
+                guard !pattern.isEmpty else { continue }
+                files[pattern, default: 0] += 1
+            case "WebFetch", "WebSearch":
+                let url = msg.body.trimmingCharacters(in: .whitespaces)
+                guard !url.isEmpty else { continue }
+                urls[url, default: 0] += 1
+            default:
+                break
+            }
+        }
+        var out: [SourceEntry] = []
+        for (path, count) in files.sorted(by: { $0.value > $1.value }) {
+            out.append(SourceEntry(
+                id: "f:\(path)", kind: .file, label: path,
+                payload: path, count: count
+            ))
+        }
+        for (url, count) in urls.sorted(by: { $0.value > $1.value }) {
+            out.append(SourceEntry(
+                id: "u:\(url)", kind: .url, label: url,
+                payload: url, count: count
+            ))
+        }
+        return out
+    }
+
+    private static let artifactExtensions: Set<String> = [
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "png", "jpg", "jpeg", "gif", "svg", "webp", "tiff",
+        "mp4", "mov", "mp3", "wav",
+        "csv", "tsv",
+        "zip", "tar", "gz",
+    ]
+
+    private func computeArtifactEntries(messages: [ChatMessage]) -> [ArtifactEntry] {
+        var seen: Set<String> = []
+        var out: [ArtifactEntry] = []
+        for msg in messages where msg.kind == .toolCall && msg.title == "Write" {
+            let path = msg.body.trimmingCharacters(in: .whitespaces)
+            guard !path.isEmpty else { continue }
+            let ext = (path as NSString).pathExtension.lowercased()
+            guard Self.artifactExtensions.contains(ext) else { continue }
+            // For relative paths, we keep them as-is — the view layer
+            // resolves to absolute by combining with session.repoKey.
+            guard !seen.contains(path) else { continue }
+            seen.insert(path)
+            out.append(ArtifactEntry(path: path))
+        }
+        return out
+    }
+
+    /// Binary-search insertion index keeping `sortedMessages` ordered by
+    /// `(at, id)`. Ties on timestamp broken by stable id so two messages
+    /// in the same JSONL line (e.g. tool_use + tool_result blocks) keep
+    /// a deterministic order across runs.
+    private func insertIndex(for msg: ChatMessage) -> Int {
+        var lo = 0
+        var hi = sortedMessages.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            let m = sortedMessages[mid]
+            if m.at < msg.at || (m.at == msg.at && m.id < msg.id) {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+        return lo
     }
 }

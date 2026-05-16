@@ -820,6 +820,15 @@ private struct CenterThread: View {
     private var messageList: some View {
         if let store = model.chatStore(for: session) {
             ChatThreadScroll(store: store, session: session, model: model)
+                .onAppear {
+                    // T8 wiring: push session.planText into the store so
+                    // the staging actor's precompute can mark steps
+                    // referenced from the plan as found.
+                    store.setPlanText(session.planText)
+                }
+                .onChange(of: session.planText) { _, newValue in
+                    store.setPlanText(newValue)
+                }
         } else {
             ContentUnavailableView {
                 Label("No JSONL yet", systemImage: "ellipsis.bubble")
@@ -997,19 +1006,21 @@ private struct ChatThreadScroll: View {
     let session: AgentSession
     let model: SessionsModel
 
-    /// IDs of expanded disclosure groups (tool-run groups + individual tool
-    /// rows). Held externally so LazyVStack can recycle subviews without
-    /// resetting expand state when the user scrolls.
+    /// IDs of expanded disclosure groups. Per-row `@State` would be ideal
+    /// (A5 codex finding) but with LazyVStack recycling that loses state
+    /// across scroll; this set is the simplest path that survives recycling.
+    /// Tests confirm tapping one row only invalidates that row when reads
+    /// flow through `snapshot.items` (T5).
     @State private var expanded: Set<String> = []
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    if store.messages.isEmpty && !store.isLoading {
+                    if store.snapshot.items.isEmpty && !store.isLoading {
                         emptyState
                     } else {
-                        ForEach(items) { item in
+                        ForEach(store.snapshot.items) { item in
                             itemRow(item)
                                 .id(item.id)
                                 .padding(.horizontal, 16)
@@ -1021,25 +1032,18 @@ private struct ChatThreadScroll: View {
                 }
                 .padding(.vertical, 12)
             }
-            // WhatsApp behavior: always pin to latest. New messages, plan
-            // text updates, store reload — anything that touches the
-            // thread snaps us back to the tail. The user reads history by
-            // scrolling up; the moment new content arrives they're back
-            // at the latest. No "Jump to latest" pill required.
-            .onChange(of: store.messages.count) { _, _ in
-                stickToBottom(proxy)
-            }
-            .onChange(of: store.messages.last?.id) { _, _ in
+            // T13 scroll consolidation: single throttled subscriber on
+            // the snapshot's updateCounter. Replaces the four deferred
+            // `.onAppear` scrolls + dual `.onChange` handlers.
+            .onChange(of: store.snapshot.updateCounter) { _, _ in
                 stickToBottom(proxy)
             }
             .onAppear {
-                // LazyVStack hasn't laid out yet on first appear — fire
-                // multiple deferred scrolls so the initial render lands
-                // at the tail regardless of how the layout settles.
-                for delay in [0.0, 0.05, 0.15, 0.4] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        proxy.scrollTo("bottom-anchor", anchor: .bottom)
-                    }
+                // Initial mount: one immediate + one deferred scroll to
+                // cover LazyVStack's lay-out-then-layout-again pass.
+                proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    proxy.scrollTo("bottom-anchor", anchor: .bottom)
                 }
             }
         }
@@ -1060,66 +1064,8 @@ private struct ChatThreadScroll: View {
     }
 
     /// One row in the thread. Either a plain user/assistant/meta message, or
-    /// a "tool run" — a contiguous burst of tool_call + tool_result messages
-    /// that we collapse into a single disclosure group.
-    private enum ChatItem: Identifiable {
-        case message(SessionChatStore.ChatMessage)
-        case toolRun(id: String, pairs: [ToolPair])
-        var id: String {
-            switch self {
-            case .message(let m): return m.id
-            case .toolRun(let id, _): return "run:\(id)"
-            }
-        }
-    }
-
-    private struct ToolPair: Identifiable {
-        let id: String        // tool_use id, matches across call + result
-        let call: SessionChatStore.ChatMessage
-        let result: SessionChatStore.ChatMessage?
-    }
-
-    /// Walk `store.messages` once and bucket runs of tool_call / tool_result
-    /// into ToolRun items. Plain prose flushes whatever's pending.
-    private var items: [ChatItem] {
-        var out: [ChatItem] = []
-        var pendingPairs: [String: ToolPair] = [:]
-        var pendingOrder: [String] = []
-
-        func flushTools() {
-            guard !pendingOrder.isEmpty else { return }
-            let pairs = pendingOrder.compactMap { pendingPairs[$0] }
-            if let first = pairs.first {
-                out.append(.toolRun(id: first.id, pairs: pairs))
-            }
-            pendingPairs.removeAll()
-            pendingOrder.removeAll()
-        }
-
-        for msg in store.messages {
-            switch msg.kind {
-            case .toolCall:
-                let toolUseId = msg.id.replacingOccurrences(of: "call:", with: "")
-                pendingPairs[toolUseId] = ToolPair(id: toolUseId, call: msg, result: nil)
-                pendingOrder.append(toolUseId)
-            case .toolResult:
-                let toolUseId = msg.id.replacingOccurrences(of: "result:", with: "")
-                if let existing = pendingPairs[toolUseId] {
-                    pendingPairs[toolUseId] = ToolPair(
-                        id: toolUseId, call: existing.call, result: msg
-                    )
-                }
-                // Results that arrive without a matching call get dropped
-                // here; they're rare (only when JSONL parsing missed the
-                // earlier call) and the result alone isn't actionable.
-            case .userText, .assistantText, .meta:
-                flushTools()
-                out.append(.message(msg))
-            }
-        }
-        flushTools()
-        return out
-    }
+    // ChatItem + ToolPair now live in ClawdmeterShared (T1 extraction).
+    // Views read `store.snapshot.items` directly — no per-render walk.
 
     private var emptyState: some View {
         VStack(spacing: 8) {

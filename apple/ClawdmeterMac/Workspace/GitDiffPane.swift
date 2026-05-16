@@ -86,6 +86,16 @@ final class GitDiffStore: ObservableObject {
         }
         isLoading = true
         defer { isLoading = false }
+        // T14 signpost: git-diff shell + parse cycle.
+        let signpostID = OSSignpostID(log: chatPerfLog)
+        os_signpost(.begin, log: chatPerfLog, name: "git-diff-run",
+                    signpostID: signpostID,
+                    "repo=%{public}@", repoCwd)
+        defer {
+            os_signpost(.end, log: chatPerfLog, name: "git-diff-run",
+                        signpostID: signpostID,
+                        "files=%d", files.count)
+        }
         do {
             // Combine staged + unstaged diff. `HEAD` covers both because the
             // index gets normalized into the comparison.
@@ -99,7 +109,15 @@ final class GitDiffStore: ObservableObject {
                 files = []
                 return
             }
-            self.files = Self.parse(unified: result.stdoutString)
+            // T11 codex tension #7d: parse off main. `parse(unified:)`
+            // walks a potentially huge string (5,000-line diffs hit the
+            // 10s timeout previously). Run on a detached task to keep
+            // the @MainActor responsive; commit the result back here.
+            let stdout = result.stdoutString
+            let parsed = await Task.detached(priority: .userInitiated) {
+                GitDiffStore.parse(unified: stdout)
+            }.value
+            self.files = parsed
             self.lastError = nil
             self.lastRefresh = Date()
         } catch {
@@ -227,7 +245,7 @@ final class GitDiffStore: ObservableObject {
 
     // MARK: - Unified diff parser
 
-    static func parse(unified: String) -> [GitDiffFile] {
+    nonisolated static func parse(unified: String) -> [GitDiffFile] {
         var files: [GitDiffFile] = []
         var lines = unified.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
 
@@ -246,7 +264,7 @@ final class GitDiffStore: ObservableObject {
         return files
     }
 
-    private static func parseFile(_ lines: [String]) -> GitDiffFile? {
+    private nonisolated static func parseFile(_ lines: [String]) -> GitDiffFile? {
         guard let first = lines.first, first.hasPrefix("diff --git ") else { return nil }
         // Header parse: "diff --git a/path b/path"
         let header = first.dropFirst("diff --git ".count)

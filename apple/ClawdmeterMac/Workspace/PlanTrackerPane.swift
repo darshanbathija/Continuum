@@ -35,7 +35,7 @@ struct PlanTrackerPane: View {
                     if let planText = session.planText, !planText.isEmpty {
                         planCard(planText)
                     }
-                    if !steps.isEmpty {
+                    if !chatStore.snapshot.planSteps.isEmpty {
                         stepsSection
                     } else if session.planText == nil {
                         emptyState
@@ -110,21 +110,22 @@ struct PlanTrackerPane: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.bottom, 8)
-            ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
-                stepRow(index: i, step: step, isComplete: isStepComplete(step))
+            // T8: steps come precomputed from the staging actor's
+            // snapshot. View does zero per-render work.
+            ForEach(chatStore.snapshot.planSteps) { step in
+                stepRow(step)
             }
         }
     }
 
-    private func stepRow(index: Int, step: String, isComplete: Bool) -> some View {
-        let key = "\(index):\(step.prefix(40))"
-        let manual = manuallyToggled.contains(key)
-        let effectivelyComplete = manual ? !isComplete : isComplete
+    private func stepRow(_ step: PlanStep) -> some View {
+        let manual = manuallyToggled.contains(step.id)
+        let effectivelyComplete = manual ? !step.isComplete : step.isComplete
         return Button(action: {
-            if manuallyToggled.contains(key) {
-                manuallyToggled.remove(key)
+            if manuallyToggled.contains(step.id) {
+                manuallyToggled.remove(step.id)
             } else {
-                manuallyToggled.insert(key)
+                manuallyToggled.insert(step.id)
             }
         }) {
             HStack(alignment: .top, spacing: 8) {
@@ -132,7 +133,7 @@ struct PlanTrackerPane: View {
                     .font(.system(size: 13))
                     .foregroundStyle(effectivelyComplete ? .green : .secondary)
                     .padding(.top, 1)
-                Text(step)
+                Text(step.text)
                     .font(.system(size: 12))
                     .foregroundStyle(.primary)
                     .strikethrough(effectivelyComplete)
@@ -165,49 +166,10 @@ struct PlanTrackerPane: View {
     }
 
     // MARK: - Derivations
-
-    /// Collect step strings from planText + later assistant messages, in
-    /// first-appearance order. Limit to 24 steps so a runaway plan doesn't
-    /// blow up the timeline.
-    private var steps: [String] {
-        var seen: Set<String> = []
-        var out: [String] = []
-        let candidates = [session.planText ?? ""]
-            + chatStore.messages.filter { $0.kind == .assistantText }.map { $0.body }
-        for body in candidates {
-            for step in Self.extractSteps(from: body) {
-                let key = step.lowercased().prefix(40)
-                if !seen.contains(String(key)) {
-                    seen.insert(String(key))
-                    out.append(step)
-                    if out.count >= 24 { return out }
-                }
-            }
-        }
-        return out
-    }
-
-    /// True if any subsequent assistant message or tool_call appears to
-    /// reference this step. Heuristic, not authoritative.
-    private func isStepComplete(_ step: String) -> Bool {
-        let needle = String(step.lowercased().prefix(30))
-        guard !needle.isEmpty else { return false }
-        for msg in chatStore.messages {
-            switch msg.kind {
-            case .assistantText:
-                if msg.body.lowercased().contains(needle), msg.body != step {
-                    return true
-                }
-            case .toolCall:
-                if msg.body.lowercased().contains(needle) {
-                    return true
-                }
-            default:
-                break
-            }
-        }
-        return false
-    }
+    // Step extraction + isComplete now precomputed in StagingParser
+    // (T8). `chatStore.snapshot.planSteps` is the source of truth.
+    // `extractSteps` kept here for backward compatibility with any
+    // existing test fixtures; new code path goes through the actor.
 
     /// Pull "1.", "Step 1:", or "- " items from a body. Trims numbering.
     static func extractSteps(from body: String) -> [String] {

@@ -22,6 +22,11 @@ struct PRReviewPane: View {
                 }
             }
         }
+        // T10 opt-in poll lifecycle: only run the 30s `gh pr view` loop
+        // while the user is looking at the PR tab. Snapshot subscription
+        // (PRMirror.attach) keeps URL detection alive in the background.
+        .onAppear { mirror.startWatching() }
+        .onDisappear { mirror.stopWatching() }
     }
 
     private var header: some View {

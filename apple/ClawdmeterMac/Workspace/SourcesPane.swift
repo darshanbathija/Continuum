@@ -14,7 +14,9 @@ struct SourcesPane: View {
     @ObservedObject var chatStore: SessionChatStore
 
     var body: some View {
-        let entries = collectEntries()
+        // T9: precomputed in StagingParser; zero per-render work here.
+        let snapshotEntries = chatStore.snapshot.sourceEntries
+        let entries = snapshotEntries.map { e in render(entry: e) }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if entries.isEmpty {
@@ -58,7 +60,7 @@ struct SourcesPane: View {
         .padding(.vertical, 32)
     }
 
-    private func row(_ entry: SourceEntry) -> some View {
+    private func row(_ entry: RenderedSourceEntry) -> some View {
         Button(action: { entry.open() }) {
             HStack(spacing: 8) {
                 Image(systemName: entry.icon)
@@ -84,81 +86,51 @@ struct SourcesPane: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Aggregation
+    // MARK: - View-layer rendering of precomputed SourceEntry
 
-    enum EntryKind { case file, url }
-
-    struct SourceEntry: Identifiable {
+    /// Mac-side rendering wrapper. Shared `SourceEntry` carries the
+    /// precomputed data (file/url, label, payload, count); the Mac side
+    /// adds the SF Symbol, tint Color, and the open closure that calls
+    /// into NSWorkspace.
+    struct RenderedSourceEntry: Identifiable {
         let id: String
-        let kind: EntryKind
+        let kind: ClawdmeterShared.SourceEntry.Kind
         let label: String
-        let payload: String
         let count: Int
         let icon: String
         let tint: Color
         let open: () -> Void
     }
 
-    private func collectEntries() -> [SourceEntry] {
-        var files: [String: Int] = [:]
-        var urls: [String: Int] = [:]
+    /// Convert a Shared `SourceEntry` into a `RenderedSourceEntry` with
+    /// UI styling + click behavior. Files resolve relative paths against
+    /// the session's repo cwd; URLs open via NSWorkspace.
+    private func render(entry: ClawdmeterShared.SourceEntry) -> RenderedSourceEntry {
         let repoCwd = session.worktreePath ?? session.repoKey
-
-        for msg in chatStore.messages where msg.kind == .toolCall {
-            switch msg.title {
-            case "Read", "Edit", "Write":
-                let path = msg.body.trimmingCharacters(in: .whitespaces)
-                guard !path.isEmpty else { continue }
-                files[path, default: 0] += 1
-            case "Glob", "Grep":
-                let pattern = msg.body.trimmingCharacters(in: .whitespaces)
-                guard !pattern.isEmpty else { continue }
-                files[pattern, default: 0] += 1
-            case "WebFetch", "WebSearch":
-                let url = msg.body.trimmingCharacters(in: .whitespaces)
-                guard !url.isEmpty else { continue }
-                urls[url, default: 0] += 1
-            default:
-                break
-            }
-        }
-
-        var out: [SourceEntry] = []
-        for (path, count) in files.sorted(by: { $0.value > $1.value }) {
-            let absolute: String
-            if path.hasPrefix("/") { absolute = path }
-            else { absolute = (repoCwd as NSString).appendingPathComponent(path) }
-            out.append(SourceEntry(
-                id: "f:\(path)",
-                kind: .file,
-                label: path,
-                payload: absolute,
-                count: count,
-                icon: "doc.text",
-                tint: .blue,
+        switch entry.kind {
+        case .file:
+            let absolute: String = entry.payload.hasPrefix("/")
+                ? entry.payload
+                : (repoCwd as NSString).appendingPathComponent(entry.payload)
+            return RenderedSourceEntry(
+                id: entry.id, kind: .file, label: entry.label,
+                count: entry.count, icon: "doc.text", tint: .blue,
                 open: {
                     NSWorkspace.shared.activateFileViewerSelecting(
                         [URL(fileURLWithPath: absolute)]
                     )
                 }
-            ))
-        }
-        for (url, count) in urls.sorted(by: { $0.value > $1.value }) {
-            out.append(SourceEntry(
-                id: "u:\(url)",
-                kind: .url,
-                label: url,
-                payload: url,
-                count: count,
-                icon: "globe",
-                tint: .purple,
+            )
+        case .url:
+            return RenderedSourceEntry(
+                id: entry.id, kind: .url, label: entry.label,
+                count: entry.count, icon: "globe", tint: .purple,
                 open: {
-                    if let parsed = URL(string: url) {
+                    if let parsed = URL(string: entry.payload) {
                         NSWorkspace.shared.open(parsed)
                     }
                 }
-            ))
+            )
         }
-        return out
     }
 }

@@ -18,37 +18,62 @@ struct MarkdownRenderer: View {
     let source: String
 
     @Environment(\.colorScheme) private var colorScheme
+    /// T6 lazy markdown cache (codex A2' override): parse `split()` +
+    /// `AttributedString(markdown:)` ONCE per visible message on first
+    /// appear, then reuse. SwiftUI's LazyVStack only mounts ~30 messages
+    /// at a time so this naturally bounds cache size to the visible
+    /// window. Off-screen messages evict with the view; scrolling back
+    /// re-parses (sub-millisecond per message).
+    @State private var cachedChunks: [PreparedChunk]?
+
+    /// A chunk with its AttributedString pre-parsed (for prose) so the
+    /// view body doesn't call `AttributedString(markdown:)` on every render.
+    private struct PreparedChunk: Identifiable {
+        let id: Int
+        let kind: Kind
+        enum Kind {
+            case prose(AttributedString, fallback: String)
+            case code(language: String?, body: String)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(Self.split(source).enumerated()), id: \.offset) { _, chunk in
-                switch chunk {
-                case .prose(let text):
-                    prose(text)
+            ForEach(cachedChunks ?? []) { chunk in
+                switch chunk.kind {
+                case .prose(let attr, _):
+                    Text(attr)
+                        .font(.system(size: 13, design: .serif))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                 case .code(let language, let body):
                     codeBlock(language: language, body: body)
                 }
             }
         }
+        .onAppear {
+            // First-attach parse; subsequent renders reuse cachedChunks.
+            // No-op when scrolling back to a previously-mounted row.
+            if cachedChunks == nil {
+                cachedChunks = Self.prepare(source: source)
+            }
+        }
     }
 
-    @ViewBuilder
-    private func prose(_ text: String) -> some View {
-        if let attr = try? AttributedString(
-            markdown: text,
-            options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .inlineOnlyPreservingWhitespace
-            )
-        ) {
-            Text(attr)
-                .font(.system(size: 13, design: .serif))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            Text(text)
-                .font(.system(size: 13, design: .serif))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+    private static func prepare(source: String) -> [PreparedChunk] {
+        let chunks = Self.split(source)
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        return chunks.enumerated().map { idx, chunk in
+            switch chunk {
+            case .prose(let text):
+                let attr = (try? AttributedString(markdown: text, options: options))
+                    ?? AttributedString(text)
+                return PreparedChunk(id: idx, kind: .prose(attr, fallback: text))
+            case .code(let language, let body):
+                return PreparedChunk(id: idx, kind: .code(language: language, body: body))
+            }
         }
     }
 

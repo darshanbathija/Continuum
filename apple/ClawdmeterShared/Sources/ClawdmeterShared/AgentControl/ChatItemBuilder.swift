@@ -78,6 +78,68 @@ public enum ChatItem: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
+// MARK: - T8/T9 precomputed right-pane state
+//
+// All three derived arrays below are produced by the StagingParser
+// alongside `items` so PlanTrackerPane / SourcesPane / ArtifactsPane can
+// read them with zero per-render work.
+
+/// One step extracted from a Plan / numbered-list / "Step N:" prefix in
+/// the planText or any assistant message. Carries a precomputed
+/// `isComplete` flag (set when a subsequent message references the step
+/// — substring match, lowercased, first ~30 chars).
+public struct PlanStep: Identifiable, Hashable, Sendable, Codable {
+    public let id: String
+    public let text: String
+    public let isComplete: Bool
+
+    public init(id: String, text: String, isComplete: Bool) {
+        self.id = id
+        self.text = text
+        self.isComplete = isComplete
+    }
+}
+
+/// One file path or URL the agent referenced (Read/Grep/Glob/WebFetch/etc.).
+/// Sortable by `count` for "most-cited" surfacing.
+public struct SourceEntry: Identifiable, Hashable, Sendable, Codable {
+    public enum Kind: String, Sendable, Codable {
+        case file
+        case url
+    }
+    public let id: String       // "f:<label>" or "u:<label>"
+    public let kind: Kind
+    public let label: String
+    /// Absolute path (files) or URL string. For files this may differ
+    /// from `label` when the agent wrote a relative path; the renderer
+    /// uses `payload` to open in Finder.
+    public let payload: String
+    public let count: Int
+
+    public init(id: String, kind: Kind, label: String, payload: String, count: Int) {
+        self.id = id
+        self.kind = kind
+        self.label = label
+        self.payload = payload
+        self.count = count
+    }
+}
+
+/// One artifact the agent wrote (PDF, image, doc, spreadsheet, etc.).
+/// Stored as an absolute path; the renderer derives extension + filename
+/// + QuickLook thumbnail on demand.
+public struct ArtifactEntry: Identifiable, Hashable, Sendable, Codable {
+    public let id: String   // absolute path
+    public let path: String
+    public let filename: String
+
+    public init(path: String) {
+        self.id = path
+        self.path = path
+        self.filename = (path as NSString).lastPathComponent
+    }
+}
+
 /// Incremental items builder. The staging parser pushes parsed
 /// `ChatMessage` values in arrival order; the builder maintains the
 /// `items` array such that consecutive tool_use + tool_result messages

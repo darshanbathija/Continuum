@@ -1,6 +1,7 @@
 import Foundation
 import ClawdmeterShared
 import OSLog
+import os.signpost
 
 private let repoIndexLogger = Logger(subsystem: "com.clawdmeter.mac", category: "RepoIndex")
 
@@ -97,6 +98,15 @@ public actor RepoIndex {
     private static let maxRecentSessionsPerRepo: Int = 50
 
     private nonisolated func buildSnapshot() async -> [AgentRepo] {
+        // T14 signpost: brackets the entire refresh so Instruments can
+        // show how long a snapshot build takes (especially on cold cache).
+        let signpostID = OSSignpostID(log: chatPerfLog)
+        os_signpost(.begin, log: chatPerfLog, name: "repo-refresh",
+                    signpostID: signpostID)
+        defer {
+            os_signpost(.end, log: chatPerfLog, name: "repo-refresh",
+                        signpostID: signpostID)
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser
         var keysSeen = Set<String>()
         var displayNames: [String: String] = [:]
@@ -133,7 +143,7 @@ public actor RepoIndex {
                                 liveCounts[key, default: 0] += 1
                             }
                             if mtime > recentCutoff {
-                                let prompt = Self.readFirstUserPrompt(from: jsonl)
+                                let prompt = Self.cachedFirstUserPrompt(at: jsonl, mtime: mtime)
                                 recentByRepo[key, default: []].append(
                                     RecentSession(
                                         path: jsonl.path,
@@ -161,7 +171,9 @@ public actor RepoIndex {
             if meta.mtime > liveCutoff {
                 liveCounts[key, default: 0] += 1
             }
-            let prompt = Self.readFirstUserPrompt(from: URL(fileURLWithPath: meta.path))
+            let prompt = Self.cachedFirstUserPrompt(
+                at: URL(fileURLWithPath: meta.path), mtime: meta.mtime
+            )
             recentByRepo[key, default: []].append(
                 RecentSession(
                     path: meta.path,
@@ -222,7 +234,15 @@ public actor RepoIndex {
         }
         let liveTotal = liveCounts.values.reduce(0, +)
         let recentTotal = recentByRepo.values.reduce(0) { $0 + $1.count }
-        repoIndexLogger.info("Snapshot built: \(repos.count) repos, \(liveTotal) live, \(recentTotal) recent (30d)")
+        // T12: persist any cache mutations we picked up during this
+        // refresh, then sweep entries whose JSONLs no longer exist on
+        // disk. Both are cheap (sync writes < 50 ms even with thousands
+        // of entries) and run AFTER the snapshot is ready so we never
+        // hold the user's click waiting on a save.
+        let pruned = FirstPromptCache.shared.pruneDeadFiles()
+        FirstPromptCache.shared.save()
+        let cacheSize = FirstPromptCache.shared.count
+        repoIndexLogger.info("Snapshot built: \(repos.count) repos, \(liveTotal) live, \(recentTotal) recent (30d); first-prompt cache: \(cacheSize) entries, \(pruned) pruned")
         return repos
     }
 
@@ -362,6 +382,31 @@ public actor RepoIndex {
             }
         }
         return nil
+    }
+
+    /// T12 cached wrapper around `readFirstUserPrompt`. Hits the on-disk
+    /// FirstPromptCache first; only reads from the JSONL when mtime+size
+    /// have changed. Misses populate the cache for next refresh.
+    nonisolated static func cachedFirstUserPrompt(at url: URL, mtime: Date) -> String? {
+        let path = url.path
+        // Stat for current size; if we can't stat, skip cache + just read.
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = (attrs[.size] as? NSNumber)?.int64Value
+        else {
+            return readFirstUserPrompt(from: url)
+        }
+        let mtimeEpoch = mtime.timeIntervalSince1970
+        if let entry = FirstPromptCache.shared.lookup(path: path),
+           entry.mtime == mtimeEpoch, entry.size == size {
+            return entry.prompt
+        }
+        // Cache miss / stale — read + store.
+        let prompt = readFirstUserPrompt(from: url)
+        FirstPromptCache.shared.set(
+            path: path,
+            entry: .init(mtime: mtimeEpoch, size: size, prompt: prompt)
+        )
+        return prompt
     }
 
     /// Extract the first real user prompt from a JSONL. Used as the
