@@ -1,0 +1,152 @@
+# Sessions v2 T27 — Clawdmeter release pipeline.
+#
+# Targets: Mac DMG + iOS Archive (+ Watch embedded) + TestFlight upload.
+# Single-source-of-truth for version: apple/project.yml
+# (`CURRENT_PROJECT_VERSION` field). The bump_version lane updates the
+# yml + regens the .xcodeproj; release lanes never bump on their own.
+#
+# Common invocations:
+#   bundle exec fastlane match_dev      — sync development certs locally
+#   bundle exec fastlane build_mac_dmg  — package the Mac DMG (no signing tier)
+#   bundle exec fastlane release        — full release: bumps build, archives Mac,
+#                                          archives iOS, uploads to TestFlight,
+#                                          drafts a GitHub release with the DMG.
+#
+# Required env vars for `release`:
+#   CLAWDMETER_APPLE_ID                       Apple ID email
+#   CLAWDMETER_TEAM_ID                        10-char Developer team ID
+#   CLAWDMETER_MATCH_REPO_URL                 git URL of the certs repo
+#   CLAWDMETER_APP_STORE_CONNECT_API_KEY_PATH path to .p8 (CI-friendly,
+#                                             no 2FA prompt). Optional in dev.
+#   CLAWDMETER_GH_RELEASE_TOKEN               GitHub PAT with `contents: write`
+#                                             scope for the public repo.
+
+fastlane_version "2.219.0"
+default_platform :ios
+
+# ---------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------
+
+# Read CURRENT_PROJECT_VERSION from apple/project.yml. This is the
+# source of truth for the build number; matches what /ship's version
+# bump logic already targets.
+def current_build_number
+  yml = File.read("../project.yml")
+  match = yml.match(/CURRENT_PROJECT_VERSION:\s*"(\d+)"/)
+  raise "Could not parse CURRENT_PROJECT_VERSION from project.yml" unless match
+  match[1].to_i
+end
+
+def current_marketing_version
+  yml = File.read("../project.yml")
+  match = yml.match(/MARKETING_VERSION:\s*"([^"]+)"/)
+  raise "Could not parse MARKETING_VERSION from project.yml" unless match
+  match[1]
+end
+
+# Write a new build number back to project.yml and re-run xcodegen so
+# the .xcodeproj picks it up. Release lanes call this before archiving.
+def bump_build_number(new_build)
+  path = "../project.yml"
+  yml = File.read(path)
+  yml.sub!(/CURRENT_PROJECT_VERSION:\s*"\d+"/, %(CURRENT_PROJECT_VERSION: "#{new_build}"))
+  File.write(path, yml)
+  sh("cd .. && xcodegen")
+end
+
+# ---------------------------------------------------------------------
+# Cert / profile sync
+# ---------------------------------------------------------------------
+
+platform :ios do
+  desc "Sync development certs + profiles for all 5 targets."
+  lane :match_dev do
+    match(type: "development")
+  end
+
+  desc "Sync App Store certs + profiles. Run before `release`."
+  lane :match_release do
+    match(type: "appstore")
+  end
+end
+
+# ---------------------------------------------------------------------
+# Mac DMG build
+# ---------------------------------------------------------------------
+
+desc "Package the Mac app into a DMG. Uses tools/build-mac-dmg.sh which
+already drives xcodegen + xcodebuild archive + hdiutil. Output:
+`dist/Clawdmeter-<version>-arm64.dmg`."
+lane :build_mac_dmg do
+  build = current_build_number
+  market = current_marketing_version
+  UI.message "Packaging Mac DMG for v#{market} (build #{build})"
+  sh("cd ../.. && ./tools/build-mac-dmg.sh")
+  UI.success "Mac DMG built. Look in dist/."
+end
+
+# ---------------------------------------------------------------------
+# iOS archive + TestFlight
+# ---------------------------------------------------------------------
+
+platform :ios do
+  desc "Archive the iOS app + Watch extension and upload to TestFlight.
+The Watch app rides along in the same .xcarchive since it's embedded
+in the iOS bundle."
+  lane :ios_testflight do
+    match(type: "appstore", readonly: true)
+    build_app(
+      project: "Clawdmeter.xcodeproj",
+      scheme: "Clawdmeter (iOS)",
+      destination: "generic/platform=iOS",
+      output_directory: "./build",
+      output_name: "Clawdmeter-iOS.ipa",
+      include_symbols: true,
+      include_bitcode: false
+    )
+    upload_to_testflight(
+      skip_waiting_for_build_processing: true,
+      api_key_path: ENV["CLAWDMETER_APP_STORE_CONNECT_API_KEY_PATH"]
+    )
+  end
+end
+
+# ---------------------------------------------------------------------
+# Full release lane
+# ---------------------------------------------------------------------
+
+desc "Full release: bump build number, archive Mac + iOS, ship TestFlight,
+draft a GitHub release with the DMG attached."
+lane :release do
+  ensure_git_status_clean(show_uncommitted_changes: true)
+  build = current_build_number + 1
+  market = current_marketing_version
+  UI.header "Releasing v#{market} (build #{build})"
+
+  bump_build_number(build)
+
+  # Commit the bump so the release lane can reference a clean SHA.
+  sh("git add ../project.yml ../Clawdmeter.xcodeproj && git commit -m 'release: bump build to #{build}'")
+
+  # Mac DMG.
+  build_mac_dmg
+
+  # iOS + Watch → TestFlight.
+  Fastlane::LaneManager.cruise_lane("ios", "ios_testflight")
+
+  # GitHub release with the DMG attached.
+  dmg = Dir["../../dist/Clawdmeter-*-arm64.dmg"].sort.last
+  raise "DMG not found in dist/" unless dmg
+  set_github_release(
+    repository_name: "darshanbathija/Clawdmeter",
+    api_token: ENV["CLAWDMETER_GH_RELEASE_TOKEN"],
+    name: "v#{market}-build#{build}",
+    tag_name: "v#{market}-build#{build}",
+    description: "Build #{build}. See CHANGELOG.md for details.",
+    is_draft: true,
+    upload_assets: [dmg]
+  )
+
+  UI.success "Release v#{market} build #{build} drafted on GitHub. TestFlight upload in flight."
+end

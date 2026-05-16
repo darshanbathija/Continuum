@@ -21,6 +21,9 @@ struct SessionsListView: View {
                             sessionRow(summary)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(rowAccessibilityLabel(summary))
+                        .accessibilityHint("Double-tap to open this session.")
                     }
                 }
             }
@@ -84,6 +87,24 @@ struct SessionsListView: View {
         default:         return .secondary
         }
     }
+
+    private func rowAccessibilityLabel(_ summary: WatchSessionSummary) -> String {
+        var parts = [
+            summary.repoDisplayName,
+            "agent \(summary.agent.rawValue)",
+            "status \(summary.status)",
+        ]
+        if let model = summary.modelDisplay {
+            parts.append("model \(model)")
+        }
+        if summary.needsAttention {
+            parts.append("needs attention")
+        }
+        if let goal = summary.goalSnippet, !goal.isEmpty {
+            parts.append("goal \(goal)")
+        }
+        return parts.joined(separator: ", ")
+    }
 }
 
 /// Per-session detail view on watchOS — agent + model + status + actions
@@ -142,6 +163,8 @@ struct WatchSessionDetailView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(SessionsV2Theme.accent)
+                .accessibilityLabel("Approve plan for \(summary.repoDisplayName)")
+                .accessibilityHint("Tells the agent to start running the proposed plan.")
             }
             Button(role: .destructive) {
                 bridge.interrupt(sessionId: summary.id)
@@ -150,6 +173,8 @@ struct WatchSessionDetailView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .accessibilityLabel("Interrupt session")
+            .accessibilityHint("Stops the agent. Same as pressing escape on the Mac.")
 
             Button {
                 bridge.requestVoiceReply(sessionId: summary.id)
@@ -159,6 +184,8 @@ struct WatchSessionDetailView: View {
             }
             .buttonStyle(.bordered)
             .tint(SessionsV2Theme.codexBlue)
+            .accessibilityLabel("Send a voice reply")
+            .accessibilityHint("Records a short message and sends it to the agent.")
         }
     }
 }

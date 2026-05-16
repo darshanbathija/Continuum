@@ -199,17 +199,31 @@ struct AuditEntry {
         case "send":
             let bytes = (dict["textBytes"] as? Int) ?? 0
             let hash = (dict["textHash"] as? String) ?? ""
-            let head = String(hash.prefix(12))
             if let text = dict["text"] as? String {
                 self.summary = "\(bytes)B  \(text.prefix(120))"
             } else {
+                let head = String(hash.prefix(12))
                 self.summary = "\(bytes)B  hash=\(head)"
             }
-        case "swap":
+        case "swap-model", "swap":  // "swap" kept for back-compat with v2.0.1 rows
             let from = (dict["oldModel"] as? String) ?? "?"
             let to = (dict["newModel"] as? String) ?? "?"
+            let eff = (dict["effort"] as? String) ?? "(unchanged)"
+            self.summary = "model: \(from) → \(to)  effort=\(eff)"
+        case "swap-effort":
+            let model = (dict["model"] as? String) ?? "?"
             let eff = (dict["effort"] as? String) ?? "?"
-            self.summary = "\(from) → \(to)  effort=\(eff)"
+            self.summary = "effort=\(eff)  on=\(model)"
+        case "swap-mode":
+            let mode = (dict["mode"] as? String) ?? "?"
+            if let pm = dict["planMode"] as? Bool {
+                self.summary = "mode=\(mode)  plan=\(pm ? "on" : "off")"
+            } else {
+                self.summary = "mode=\(mode)"
+            }
+        case "plan-approve":
+            let agent = (dict["agent"] as? String) ?? "?"
+            self.summary = "plan approved → run (agent=\(agent))"
         case "autopilot":
             let enabled = (dict["enabled"] as? Bool) ?? false
             let repo = (dict["repoKey"] as? String) ?? "?"
@@ -264,7 +278,7 @@ struct WireInspectorPane: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Toggle(isOn: $enabled) {
-                    Text("Record HTTP/WS payloads")
+                    Text("Record HTTP payloads")
                 }
                 .toggleStyle(.switch)
                 .onChange(of: enabled) { _, on in
@@ -278,7 +292,7 @@ struct WireInspectorPane: View {
             }
             TextField("Filter path or peer", text: $query)
                 .textFieldStyle(.roundedBorder)
-            Text("Capped at 500 entries (~5MB). Bodies under 16KB sniff JSON; larger payloads stub as `NB <content-type>`.")
+            Text("Capped at 500 entries (~5MB). Body text appears only when Privacy → Audit log: include plaintext is on; otherwise the inspector shows shape + byte count only.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

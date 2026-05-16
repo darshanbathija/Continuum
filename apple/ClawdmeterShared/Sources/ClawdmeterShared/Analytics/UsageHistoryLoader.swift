@@ -358,25 +358,22 @@ public actor UsageHistoryLoader {
         dedup: inout Set<String>,
         unpriced: inout [String: TokenTotals]
     ) {
-        // If ANY of this file's dedup keys was already seen, we need to
-        // reparse to know which records to drop — but per-file totals are
-        // already aggregated. For the common case (no cross-file collisions)
-        // we just union the keys and add the totals. The "rare duplicate"
-        // case currently overcounts but is bounded by what Claude actually
-        // logs; in practice Claude's session-resume duplicates land in the
-        // same file. Codex doesn't produce dedup keys.
-        var newKeyCount = 0
-        for key in result.dedupKeys {
-            if dedup.insert(key).inserted {
-                newKeyCount += 1
+        // Cached files store already-aggregated totals, but Claude can
+        // duplicate individual `(messageId, requestId)` rows across files.
+        // If this file collides with anything already seen, reparse it and
+        // apply the global dedup row-by-row instead of guessing at a whole-
+        // file skip/accept heuristic.
+        if !result.dedupKeys.isDisjoint(with: dedup) {
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: result.path)) {
+                for rawLine in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
+                    guard let record = ClaudeUsageParser.parse(line: Data(rawLine)) else { continue }
+                    Self.accumulateGlobal(record: record, into: &byDayByRepo, dedup: &dedup, unpriced: &unpriced)
+                }
             }
-        }
-        // Heuristic: when the file's dedupKeys are entirely fresh, accept the
-        // file's totals as-is. When MORE than 50% are already-seen, skip the
-        // file's totals (likely a session-resume duplicate-file scenario).
-        if !result.dedupKeys.isEmpty && newKeyCount * 2 < result.dedupKeys.count {
             return
         }
+
+        dedup.formUnion(result.dedupKeys)
 
         for (day, repoMap) in result.byDayByRepo {
             var existing = byDayByRepo[day, default: [:]]
@@ -388,6 +385,30 @@ public actor UsageHistoryLoader {
         for (model, totals) in result.unpricedModelTokens {
             unpriced[model, default: .zero] += totals
         }
+    }
+
+    private nonisolated static func accumulateGlobal(
+        record: UsageRecord,
+        into byDayByRepo: inout [Date: [RepoKey: TokenTotals]],
+        dedup: inout Set<String>,
+        unpriced: inout [String: TokenTotals]
+    ) {
+        if let key = record.dedupKey, !dedup.insert(key).inserted {
+            return
+        }
+
+        let day = Calendar.current.startOfDay(for: record.timestamp)
+        let repo = record.repo ?? RepoKey.unknown
+        let cost = Pricing.shared.cost(for: record.model, tokens: record.tokens)
+        var tokensWithCost = record.tokens
+        tokensWithCost.costUSD = cost
+        if !Pricing.shared.isPriced(record.model), record.tokens.totalTokens > 0 {
+            unpriced[record.model, default: .zero] += tokensWithCost
+        }
+
+        var dayMap = byDayByRepo[day, default: [:]]
+        dayMap[repo, default: .zero] += tokensWithCost
+        byDayByRepo[day] = dayMap
     }
 
     // MARK: - Window rollups

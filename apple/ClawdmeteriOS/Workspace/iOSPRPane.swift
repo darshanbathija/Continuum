@@ -40,6 +40,7 @@ struct iOSPRPane: View {
                     .foregroundStyle(.white)
                     .padding(.top, 4)
                     .transition(.move(edge: .top).combined(with: .opacity))
+                    .accessibilityAddTraits(.updatesFrequently)
             }
         }
     }
@@ -50,6 +51,7 @@ struct iOSPRPane: View {
             Image(systemName: "arrow.triangle.pull")
                 .font(.system(size: 48))
                 .foregroundStyle(SessionsV2Theme.textTertiary)
+                .accessibilityHidden(true)
             Text("No PR yet")
                 .font(.headline)
             Button {
@@ -65,6 +67,9 @@ struct iOSPRPane: View {
             .buttonStyle(.borderedProminent)
             .tint(SessionsV2Theme.accent)
             .disabled(isCreating)
+            .frame(minHeight: 44)
+            .accessibilityLabel("Create pull request")
+            .accessibilityHint("Runs gh pr create on the Mac and opens the PR.")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -99,8 +104,11 @@ struct iOSPRPane: View {
                 }
 
                 if let checks = pr.checksRollup, !checks.isEmpty {
-                    Label("CI: \(checks)", systemImage: checks == "success" ? "checkmark.circle" : "xmark.circle")
-                        .foregroundStyle(checks == "success" ? .green : .red)
+                    // Partial-state per Pass 2 table: "checks pending" is
+                    // a distinct render from success/failure so the user
+                    // can tell at a glance whether to wait or react.
+                    Label("CI: \(checks)", systemImage: checksGlyph(checks))
+                        .foregroundStyle(checksColor(checks))
                 }
 
                 Divider()
@@ -115,6 +123,8 @@ struct iOSPRPane: View {
                     Link(destination: URL(string: pr.url) ?? URL(string: "https://github.com")!) {
                         Label("Open in GitHub", systemImage: "safari")
                     }
+                    .frame(minHeight: 44)
+                    .accessibilityHint("Opens the pull request in Safari.")
                     Spacer()
                     Button(role: .destructive) {
                         showingMergeConfirm = true
@@ -123,6 +133,9 @@ struct iOSPRPane: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(SessionsV2Theme.accent)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Merge pull request to main")
+                    .accessibilityHint("Asks for confirmation before merging.")
                 }
                 .alert("Merge to main?", isPresented: $showingMergeConfirm) {
                     Button("Merge anyway", role: .destructive) { Task { await merge() } }
@@ -150,6 +163,27 @@ struct iOSPRPane: View {
         case .merged: return .purple
         case .closed: return .red
         case .draft:  return .secondary
+        }
+    }
+
+    private func checksGlyph(_ rollup: String) -> String {
+        switch rollup.lowercased() {
+        case "success", "passed":        return "checkmark.circle"
+        case "failure", "failed", "error": return "xmark.circle"
+        case "pending", "running", "in_progress", "queued":
+            return "clock.arrow.circlepath"
+        case "neutral", "skipped":       return "minus.circle"
+        default:                          return "questionmark.circle"
+        }
+    }
+
+    private func checksColor(_ rollup: String) -> Color {
+        switch rollup.lowercased() {
+        case "success", "passed":        return .green
+        case "failure", "failed", "error": return .red
+        case "pending", "running", "in_progress", "queued":
+            return SessionsV2Theme.warn
+        default:                          return .secondary
         }
     }
 

@@ -28,8 +28,35 @@ struct iOSModelPicker: View {
                     iOSBadgePill(label: badge, isPrimary: badge == "New")
                 }
             }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }
-        .accessibilityLabel("Model picker, currently \(selectedEntry?.displayName ?? "default model")")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Model picker")
+        .accessibilityValue(selectedAccessibilityValue)
+        .accessibilityHint("Double-tap to choose a different model.")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    /// VoiceOver should read e.g. "Opus 4.7, 1 million context window,
+    /// new" instead of dropping the badge + context entirely.
+    private var selectedAccessibilityValue: String {
+        guard let entry = selectedEntry else { return "default model" }
+        var parts = [entry.displayName]
+        if let cw = entry.contextWindow {
+            if cw >= 1_000_000 {
+                parts.append("\(cw / 1_000_000) million context window")
+            } else if cw >= 1_000 {
+                parts.append("\(cw / 1_000) thousand context window")
+            }
+        }
+        if let badge = entry.badge {
+            parts.append(badge.lowercased())
+        }
+        if let recommended = entry.recommendedFor {
+            parts.append("recommended for \(recommended.lowercased())")
+        }
+        return parts.joined(separator: ", ")
     }
 
     private var selectedEntry: ModelCatalogEntry? {
@@ -74,7 +101,12 @@ struct iOSModelPickerList: View {
                                     .foregroundStyle(SessionsV2Theme.accent)
                             }
                         }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(rowAccessibilityLabel(entry: entry))
+                    .accessibilityAddTraits(entry.id == selectedModelId ? [.isButton, .isSelected] : .isButton)
                 }
             }
         }
@@ -84,6 +116,24 @@ struct iOSModelPickerList: View {
 
     private var entries: [ModelCatalogEntry] {
         agent == .claude ? catalog.claude : catalog.codex
+    }
+
+    private func rowAccessibilityLabel(entry: ModelCatalogEntry) -> String {
+        var parts = [entry.displayName]
+        if let cw = entry.contextWindow {
+            if cw >= 1_000_000 {
+                parts.append("\(cw / 1_000_000) million context window")
+            } else if cw >= 1_000 {
+                parts.append("\(cw / 1_000) thousand context window")
+            }
+        }
+        if let badge = entry.badge {
+            parts.append("\(badge.lowercased())")
+        }
+        if let recommended = entry.recommendedFor {
+            parts.append("recommended for \(recommended.lowercased())")
+        }
+        return parts.joined(separator: ", ")
     }
 }
 

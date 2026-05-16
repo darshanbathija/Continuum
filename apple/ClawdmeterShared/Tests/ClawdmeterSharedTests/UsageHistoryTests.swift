@@ -97,6 +97,25 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertEqual(records[1].tokens.totalTokens, 150, "Drop in cumulative should be treated as new baseline, not negative delta")
     }
 
+    func test_codexParse_perFieldDropTreatedAsBaseline() throws {
+        // A reset can show up as one counter dropping while total_tokens
+        // still increases. The parser must not silently clamp the dropped
+        // field to zero and keep subtracting from the stale baseline.
+        let lines = [
+            #"{"timestamp":"2026-05-15T10:00:00Z","type":"session_meta","payload":{"cwd":"/r"}}"#,
+            #"{"timestamp":"2026-05-15T10:00:01Z","type":"turn_context","payload":{"model":"gpt-5","cwd":"/r"}}"#,
+            #"{"timestamp":"2026-05-15T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":900,"total_tokens":1900}}}}"#,
+            #"{"timestamp":"2026-05-15T10:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1200,"cached_input_tokens":0,"output_tokens":100,"total_tokens":1300}}}}"#,
+        ]
+        let url = try writeTempFile(name: "rollout-field-reset.jsonl", lines: lines)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let records = try CodexUsageParser.parse(file: url)
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(records[1].tokens.inputTokens, 1200)
+        XCTAssertEqual(records[1].tokens.outputTokens, 100)
+    }
+
     func test_codexParse_missingSessionMeta() throws {
         // No session_meta → records have repo: nil → aggregator → "(unknown)"
         let lines = [
@@ -249,6 +268,52 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertEqual(RepoIdentity.normalize(b), "/Users/fake/work/myrepo")
     }
 
+    /// T30 — exercises the .claude/worktrees pattern with a real `.git`
+    /// in the parent on disk. Sessions v2 spawns each session inside a
+    /// `<repo>/.claude/worktrees/<slug-uuid>/` directory; the analytics
+    /// pipeline must bucket those JSONLs back to the parent repo, not
+    /// "(other)". The no-git fallback above guards the path-shape
+    /// heuristic; this guards the canonical-resolution path the live
+    /// daemon actually hits.
+    func test_canonicalRepo_claudeWorktreeWithRealGitParent() throws {
+        RepoIdentity._resetCacheForTesting()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let repo = temp.appendingPathComponent("axtior-platform")
+        let worktree = repo
+            .appendingPathComponent(".claude")
+            .appendingPathComponent("worktrees")
+            .appendingPathComponent("fix-auth-7f3a2c")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        // Real .git directory on the parent — the analytics layer
+        // canonicalizes by walking up from a `cwd` until it finds one.
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        // A session spawned inside the worktree dir should bucket to the
+        // parent repo's canonical path. RepoKey is the canonicalized
+        // absolute path; compare via standardizedFileURL to handle the
+        // `/private/var` ↔ `/var` symlink macOS injects in temp paths.
+        let normalized = RepoIdentity.normalize(worktree.path)
+        let expected = repo.standardizedFileURL.path
+        let normalizedStandardized = URL(fileURLWithPath: normalized).standardizedFileURL.path
+        XCTAssertEqual(normalizedStandardized, expected,
+                       "Worktree sessions must bucket to parent repo, not \(normalized)")
+        // Sibling worktrees collapse to the same bucket.
+        let sibling = repo
+            .appendingPathComponent(".claude")
+            .appendingPathComponent("worktrees")
+            .appendingPathComponent("refactor-redis-9b1c")
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        let siblingNormalized = URL(fileURLWithPath: RepoIdentity.normalize(sibling.path))
+            .standardizedFileURL.path
+        XCTAssertEqual(siblingNormalized, expected)
+        // Display name comes from the repo's basename, not the worktree's.
+        XCTAssertEqual(RepoIdentity.displayName(for: normalized), "axtior-platform")
+    }
+
     func test_canonicalRepo_descendsToSoleGitChild() throws {
         // `wrapper/` has no `.git`, but contains exactly one git child
         // (`Clawdmeter/`). cwd=wrapper/ should bucket as `wrapper/Clawdmeter`
@@ -384,6 +449,35 @@ final class UsageHistoryTests: XCTestCase {
         let repos = Set(byRepo.map(\.repo))
         XCTAssertTrue(repos.contains(repoA.path))
         XCTAssertTrue(repos.contains(repoB.path))
+    }
+
+    func test_loaderDedupsPartialClaudeDuplicatesAcrossFiles() async throws {
+        RepoIdentity._resetCacheForTesting()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let claudeDir = temp.appendingPathComponent("claude").appendingPathComponent("proj")
+        let codexDir = temp.appendingPathComponent("codex")
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        let first = """
+        {"message":{"id":"m1","model":"claude-sonnet-4-5","usage":{"input_tokens":100,"output_tokens":0}},"timestamp":"\(isoNow())","requestId":"r1","cwd":"/Users/x/repo"}
+        {"message":{"id":"m2","model":"claude-sonnet-4-5","usage":{"input_tokens":200,"output_tokens":0}},"timestamp":"\(isoNow())","requestId":"r2","cwd":"/Users/x/repo"}
+        """
+        let second = """
+        {"message":{"id":"m1","model":"claude-sonnet-4-5","usage":{"input_tokens":100,"output_tokens":0}},"timestamp":"\(isoNow())","requestId":"r1","cwd":"/Users/x/repo"}
+        {"message":{"id":"m3","model":"claude-sonnet-4-5","usage":{"input_tokens":300,"output_tokens":0}},"timestamp":"\(isoNow())","requestId":"r3","cwd":"/Users/x/repo"}
+        """
+        try first.write(to: claudeDir.appendingPathComponent("session1.jsonl"), atomically: true, encoding: .utf8)
+        try second.write(to: claudeDir.appendingPathComponent("session2.jsonl"), atomically: true, encoding: .utf8)
+
+        let loader = UsageHistoryLoader(
+            claudeDir: claudeDir.deletingLastPathComponent(),
+            codexDir: codexDir
+        )
+        let snapshot = await loader.loadAll()
+
+        XCTAssertEqual(snapshot.claude.today.totals.inputTokens, 600)
     }
 
     func test_loaderReentrancyCoalesces() async throws {

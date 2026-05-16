@@ -144,5 +144,16 @@ public enum SessionsV2Theme {
         let dur = agent == .claude ? claudePulseDuration : codexFadeDuration
         return .easeInOut(duration: dur).repeatForever(autoreverses: true)
     }
+
+    /// Standard disclosure / expand-collapse animation. Used by
+    /// collapsible sidebar sections, the controls-strip toggle, and
+    /// any `withAnimation` that flips a `@State` boolean. Replaces the
+    /// ad-hoc `easeInOut(duration: 0.18)` calls scattered across v2
+    /// surfaces. Honors Reduce Motion.
+    public static func disclosureToggle(reduceMotion: Bool) -> Animation {
+        reduceMotion
+            ? .linear(duration: AnimationDuration.instant)
+            : .easeInOut(duration: AnimationDuration.fast)
+    }
     #endif
 }

@@ -1,0 +1,23 @@
+# Sessions v2 T27 — Clawdmeter fastlane Appfile
+#
+# `match` reads these as the per-target app identifiers it needs to
+# generate / fetch certs and provisioning profiles for. Update the team
+# IDs once you have an Apple Developer paid account; until then, the
+# release lane below short-circuits before any signing occurs.
+
+app_identifier([
+  "com.clawdmeter.mac",
+  "com.clawdmeter.ios",
+  "com.clawdmeter.ios.widgets",
+  "com.clawdmeter.watch",
+  "com.clawdmeter.watch.widgets",
+  "com.clawdmeter.mac.widget",
+])
+
+apple_id(ENV["CLAWDMETER_APPLE_ID"] || "set CLAWDMETER_APPLE_ID env var")
+team_id(ENV["CLAWDMETER_TEAM_ID"]   || "set CLAWDMETER_TEAM_ID env var")
+
+# itc_team_id is only needed for TestFlight / App Store Connect upload.
+# Most of the time it matches team_id; if your account has multiple
+# teams, set it via ENV.
+itc_team_id(ENV["CLAWDMETER_ITC_TEAM_ID"] || ENV["CLAWDMETER_TEAM_ID"] || "")

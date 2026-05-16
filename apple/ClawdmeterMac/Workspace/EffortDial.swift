@@ -29,6 +29,9 @@ struct EffortDial: View {
         .help(supportsEffort
               ? "Reasoning effort — Opt+E cycles up, Shift+Opt+E down"
               : "This model doesn't take an effort level (e.g. Haiku)")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(supportsEffort ? "Effort dial" : "Effort dial unavailable for the selected model")
+        .accessibilityValue(supportsEffort ? longLabel(for: selected ?? .medium) : "")
     }
 
     @ViewBuilder
@@ -64,6 +67,16 @@ struct EffortDial: View {
         case .medium:  return "Med"
         case .high:    return "High"
         case .xhigh:   return "xHigh"
+        }
+    }
+
+    private func longLabel(for effort: ReasoningEffort) -> String {
+        switch effort {
+        case .minimal: return "minimal"
+        case .low:     return "low"
+        case .medium:  return "medium"
+        case .high:    return "high"
+        case .xhigh:   return "extra high"
         }
     }
 }

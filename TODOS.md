@@ -3,31 +3,31 @@
 Deferred work from Sessions v2 (2026-05-17). Each entry is a self-contained
 follow-up that didn't make the v2.0 ship but is worth picking up.
 
-> **2026-05-17 update**: T17 + T18 (Diagnostics: audit-log viewer + wire
-> inspector), T33 (iOS multi-pane terminal), and the iOS artifacts pane
-> all shipped in the autonomous-execution pass. Plus T12 + T13
-> (RateLimiter + AuditLog wired into daemon handlers — the
-> infrastructure was already in place; this pass closed the call sites).
+> **2026-05-17 update (build 15)**: T17 + T18 (Diagnostics), T33 (iOS
+> multi-pane terminal), iOS artifacts pane, T12 + T13 (RateLimiter +
+> AuditLog wired), Phase 8 cost banner (real math), and Phase 10
+> APNS Live Activity push (with .p8 setup wizard) all SHIPPED in this
+> session's autonomous-execution pass. Remaining deferred: Phase 5
+> iOS UX polish, T35 full WCAG AA, T36 motion polish, T37 full
+> interaction states, T16 e2e smoke test, T27 fastlane, plus the
+> v2.1 P3 items (per-repo defaults, voice-first session).
 
 ## v2.0.1 — visible-polish follow-ups
 
-### iOS Live Activity APNS push (D9 narrow scope)
+### iOS Live Activity APNS push (D9 narrow scope) — SHIPPED 2026-05-17 build 15
 - **What**: One-time setup wizard in Mac Settings → Live Activities
-  that takes a `.p8` APNS auth-key file, stores it in macOS Keychain
-  (`com.clawdmeter.apns.p8`), deletes the source file. Mac daemon signs
-  JWTs and pushes ActivityKit content-state updates to `api.push.apple.com`
-  whenever a session's status changes.
-- **Why**: Without APNS push, the aggregate Live Activity only refreshes
-  when the iOS app is foregrounded OR when BGAppRefreshTask fires
-  (every 15-30 min). Background staleness defeats the wedge.
-- **Status**: `SessionLiveActivityAttributes` + `LiveActivityCoordinator`
-  shipped in v2.0. iOS app starts/updates activities in-process.
-  Push tokens require D9 narrow-scope APNS wiring.
-- **Context**: D9 decision in CEO review reopened the D15 APNS rejection
-  narrowly — ActivityKit push tokens are per-activity, ephemeral, scoped
-  (can't send arbitrary notifications). Keychain custody is the
-  load-bearing mitigation.
-- **Effort**: ~6hr CC.
+  ingests a `.p8` auth-key file, stores it in Keychain
+  (`com.clawdmeter.apns.p8`), deletes the source. `MacAPNSPusher`
+  signs ES256 JWTs via CryptoKit and POSTs ActivityKit content-state
+  updates to `api.push.apple.com` / `api.sandbox.push.apple.com`.
+  iOS `LiveActivityCoordinator` observes `Activity.pushTokenUpdates`
+  and registers each new token with the paired Mac via the new
+  `POST /live-activities/push-token` daemon endpoint. `AppRuntime`
+  fingerprints session state and pushes on changes that matter.
+- **Status**: SHIPPED. See
+  `apple/ClawdmeterMac/AgentControl/APNSCredentialStore.swift`,
+  `apple/ClawdmeterMac/AgentControl/MacAPNSPusher.swift`,
+  `apple/ClawdmeterMac/LiveActivitySetupView.swift`.
 
 ### Multi-pane terminal tab strip on iOS (T33) — SHIPPED 2026-05-17
 - **What**: iOSTerminalView now accepts an optional `paneId` parameter
@@ -88,16 +88,19 @@ follow-up that didn't make the v2.0 ship but is worth picking up.
   next-best step toward this.
 - **Effort**: ~1 day CC (NLP parse is the real work; Speech is easy).
 
-### Cost-banner full calculation (Phase 8)
-- **What**: Wire `LiveCostCalculator` to read per-repo per-model
-  historical `TokenTotals` from `UsageHistorySnapshot.totals(for: .anthropic)`,
-  apply effort multiplier, compute estimated USD via
-  `Pricing.shared.cost(for: model, tokens: scaled)`. Wire
-  `RateLimitChecker` to read live `UsageData` and project the weekly
-  cap. Show soft-warn banner in iOS new-session sheet.
-- **Why**: D3 expansion accepted in CEO review. v2.0 ships the wire
-  shape + stub; this lands the real math.
-- **Effort**: ~4hr CC.
+### Cost-banner full calculation (Phase 8) — SHIPPED 2026-05-17 build 15
+- **What**: `LiveCostCalculator.estimate` reads per-repo past-7d
+  `TokenTotals` from `UsageHistorySnapshot.totals(for:).past7d.byRepo`,
+  derives average per-session tokens from `ProviderTotals.byDay`
+  (past-7d filter), scales by effort multiplier, adds prompt tokens
+  from goal length, prices via `Pricing.shared.cost(for:tokens:)`.
+  `RateLimitChecker.projectedWeeklyCap` reads live `UsageData.weeklyPct`.
+  Daemon `GET /sessions/preflight` parses every query param and emits a
+  full `PreflightResponse`. iOS `CostBannerView` (Components/) renders
+  estimate + projected weekly + Switch CTA when `wouldCap` at 95%.
+- **Status**: SHIPPED. See
+  `apple/ClawdmeterMac/AgentControl/LiveCostCalculator.swift`,
+  `apple/ClawdmeteriOS/Components/CostBannerView.swift`.
 
 ### Full WCAG AA across all 12 surfaces (T35)
 - **What**: VoiceOver labels + Dynamic Type + Reduce Motion +

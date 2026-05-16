@@ -157,4 +157,13 @@ public enum AgentSpawner {
         if missing.isEmpty { return nil }
         return "Agent CLI not found on PATH: \(missing.joined(separator: ", ")). Configure in Settings → Diagnostics."
     }
+
+    /// Agent-specific preflight for starting a single selected runtime.
+    public static func preflight(agent: AgentKind) -> String? {
+        let binary = agent.rawValue
+        if ShellRunner.locateBinary(binary) == nil {
+            return "Agent CLI not found on PATH: \(binary). Configure in Settings → Diagnostics."
+        }
+        return nil
+    }
 }

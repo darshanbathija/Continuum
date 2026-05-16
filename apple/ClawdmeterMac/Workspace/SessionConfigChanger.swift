@@ -83,12 +83,12 @@ public final class SessionConfigChanger {
             case .worktree: cwd = session.worktreePath ?? session.repoKey
             case .cloud:    cwd = session.repoKey  // not supported v1; fall through
             }
-            let newWindowId = try await tmux.newWindow(cwd: cwd, child: newArgv)
+            let newWindow = try await tmux.newWindow(cwd: cwd, child: newArgv)
             registry.updateRuntime(
                 id: sessionId,
                 worktreePath: session.worktreePath,
-                tmuxWindowId: newWindowId,
-                tmuxPaneId: nil,
+                tmuxWindowId: newWindow.windowId,
+                tmuxPaneId: newWindow.paneId,
                 mode: newMode ?? session.mode
             )
             if let newModel { registry.setModel(id: sessionId, model: newModel, effort: newEffort ?? session.effort) }
@@ -100,7 +100,7 @@ public final class SessionConfigChanger {
                 kind: .statusChanged,
                 payload: ["status": "running", "reason": "config-swap-complete"]
             )
-            return .swapped(newPaneId: newWindowId)
+            return .swapped(newPaneId: newWindow.paneId)
         } catch {
             swapLogger.error("Swap failed for session \(sessionId.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
             // D12 resume-fail rescue: try to restore original config in the same window.
@@ -109,8 +109,8 @@ public final class SessionConfigChanger {
                 registry.updateRuntime(
                     id: sessionId,
                     worktreePath: session.worktreePath,
-                    tmuxWindowId: restoreWindow,
-                    tmuxPaneId: nil,
+                    tmuxWindowId: restoreWindow.windowId,
+                    tmuxPaneId: restoreWindow.paneId,
                     mode: session.mode
                 )
                 registry.updateStatus(id: sessionId, status: .running)

@@ -9,6 +9,10 @@ struct iOSSessionsView: View {
     @State private var showingNewSession: Bool = false
     @State private var searchQuery: String = ""
     @State private var showArchived: Bool = false
+    /// Phase 5 sidebar grouping. `byRepo` (default) keeps the v2.0
+    /// repo-section UX; `byStatus` swaps in Conductor-style Backlog /
+    /// In Progress / Review / Done buckets across all repos.
+    @State private var grouping: SidebarGrouping = .byRepo
     /// Repos the user has manually toggled. Wins over the default
     /// "expanded if live/active, collapsed otherwise" heuristic — once
     /// the user makes a choice for a repo, it sticks for the session.
@@ -91,18 +95,59 @@ struct iOSSessionsView: View {
         .padding(28)
     }
 
+    @ViewBuilder
     private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No sessions yet", systemImage: "tray")
-        } description: {
-            Text("Tap ＋ to start one. Repos appear after you run Claude or Codex in them on your Mac.")
+        if isMacLikelyUnreachable {
+            ContentUnavailableView {
+                Label("Mac unreachable", systemImage: "wifi.exclamationmark")
+            } description: {
+                Text("Couldn't reach the paired Mac. Open the Clawdmeter Mac app and confirm you're on the same Tailnet.")
+            } actions: {
+                Button("Retry") {
+                    Task { await client.refreshAll() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(SessionsV2Theme.accent)
+            }
+        } else {
+            ContentUnavailableView {
+                Label("No sessions yet", systemImage: "tray")
+            } description: {
+                Text("Tap ＋ to start one. Repos appear after you run Claude or Codex in them on your Mac.")
+            }
         }
     }
 
+    /// Heuristic: if the client is configured but the last successful
+    /// poll is more than 60 seconds old (or never happened), the daemon
+    /// is probably unreachable. Surface as a distinct error state so
+    /// "no sessions" doesn't disguise a connectivity bug.
+    private var isMacLikelyUnreachable: Bool {
+        guard client.isConfigured else { return false }
+        guard let last = client.lastPolledAt else { return true }
+        return Date().timeIntervalSince(last) > 60
+    }
+
     private var repoList: some View {
-        List {
-            ForEach(filteredRepos, id: \.key) { repo in
-                repoSection(for: repo)
+        VStack(spacing: 0) {
+            Picker("View", selection: $grouping) {
+                ForEach(SidebarGrouping.allCases) { g in
+                    Text(g.label).tag(g)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .accessibilityLabel("Sidebar grouping")
+            switch grouping {
+            case .byRepo:
+                List {
+                    ForEach(filteredRepos, id: \.key) { repo in
+                        repoSection(for: repo)
+                    }
+                }
+            case .byStatus:
+                statusGroupedList
             }
         }
         .searchable(text: $searchQuery, placement: .navigationBarDrawer(displayMode: .automatic),
@@ -149,6 +194,25 @@ struct iOSSessionsView: View {
                 } label: {
                     SessionRow(session: session)
                 }
+                // Phase 5 swipe-leading: positive-intent quick actions.
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                    if session.planText != nil && session.status == .planning {
+                        Button {
+                            Task { await client.approvePlan(sessionId: session.id) }
+                        } label: {
+                            Label("Approve", systemImage: "checkmark.seal.fill")
+                        }
+                        .tint(SessionsV2Theme.accent)
+                    }
+                    if session.status == .running {
+                        Button {
+                            Task { await client.interruptSession(sessionId: session.id) }
+                        } label: {
+                            Label("Interrupt", systemImage: "stop.fill")
+                        }
+                        .tint(SessionsV2Theme.warn)
+                    }
+                }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     if session.archivedAt == nil {
                         Button {
@@ -190,11 +254,13 @@ struct iOSSessionsView: View {
     /// Whole-row tap target. `Section(isExpanded:)` already animates
     /// the disclosure on header tap, but adding a `Button` over the
     /// chevron gives an explicit affordance + a row-count badge.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     @ViewBuilder
     private func repoSectionHeader(for repo: AgentRepo, isExpanded: Binding<Bool>) -> some View {
         let count = sessionsForRepo(repo).count + repo.recentSessions.count
         Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(SessionsV2Theme.disclosureToggle(reduceMotion: reduceMotion)) {
                 isExpanded.wrappedValue.toggle()
             }
         } label: {
@@ -266,6 +332,134 @@ struct iOSSessionsView: View {
 
     private var terraCotta: Color {
         Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
+    }
+
+    // MARK: - Phase 5 status-grouped list
+
+    enum SidebarGrouping: String, CaseIterable, Identifiable {
+        case byRepo
+        case byStatus
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .byRepo:   return "By repo"
+            case .byStatus: return "By status"
+            }
+        }
+    }
+
+    /// Buckets adopted from Conductor's Backlog / In Progress / Review /
+    /// Done / Archived split. iOS skips Backlog (we don't have a queued
+    /// state pre-spawn). "Needs attention" wraps sessions waiting on a
+    /// plan approval — the highest-priority bucket on a phone where the
+    /// user is glancing not scrolling.
+    enum StatusBucket: String, CaseIterable, Identifiable {
+        case needsAttention
+        case inProgress
+        case idle
+        case done
+        case archived
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .needsAttention: return "Needs attention"
+            case .inProgress:     return "In progress"
+            case .idle:           return "Idle / paused"
+            case .done:           return "Done"
+            case .archived:       return "Archived"
+            }
+        }
+    }
+
+    private func bucket(for session: AgentSession) -> StatusBucket {
+        if session.archivedAt != nil { return .archived }
+        if session.planText != nil && session.status == .planning { return .needsAttention }
+        switch session.status {
+        case .running:        return .inProgress
+        case .planning:       return .inProgress
+        case .paused:         return .idle
+        case .done:           return .done
+        case .degraded:       return .needsAttention
+        }
+    }
+
+    private var statusGroupedList: some View {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let visible = client.sessions.filter { s in
+            // Archived bucket is gated by showArchived toggle.
+            if s.archivedAt != nil && !showArchived { return false }
+            // Search across goal + repo display name.
+            if !q.isEmpty {
+                let inGoal = (s.goal ?? "").lowercased().contains(q)
+                let inRepo = s.repoDisplayName.lowercased().contains(q)
+                if !inGoal && !inRepo { return false }
+            }
+            return true
+        }
+        let bucketed = Dictionary(grouping: visible, by: { bucket(for: $0) })
+        return List {
+            ForEach(StatusBucket.allCases) { b in
+                if let sessions = bucketed[b], !sessions.isEmpty {
+                    Section(b.label) {
+                        ForEach(sessions) { session in
+                            NavigationLink {
+                                SessionDetailView(session: session, client: client)
+                            } label: {
+                                SessionRow(session: session)
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                if session.planText != nil && session.status == .planning {
+                                    Button {
+                                        Task { await client.approvePlan(sessionId: session.id) }
+                                    } label: {
+                                        Label("Approve", systemImage: "checkmark.seal.fill")
+                                    }
+                                    .tint(SessionsV2Theme.accent)
+                                }
+                                if session.status == .running {
+                                    Button {
+                                        Task { await client.interruptSession(sessionId: session.id) }
+                                    } label: {
+                                        Label("Interrupt", systemImage: "stop.fill")
+                                    }
+                                    .tint(SessionsV2Theme.warn)
+                                }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if session.archivedAt == nil {
+                                    Button {
+                                        Task { await client.archiveSession(id: session.id) }
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
+                                    .tint(.orange)
+                                } else {
+                                    Button {
+                                        Task { await client.unarchiveSession(id: session.id) }
+                                    } label: {
+                                        Label("Unarchive", systemImage: "archivebox.fill")
+                                    }
+                                    .tint(.blue)
+                                }
+                                Button(role: .destructive) {
+                                    Task { await client.deleteSession(id: session.id) }
+                                } label: {
+                                    Label("End", systemImage: "stop.circle")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if bucketed.allSatisfy({ $0.value.isEmpty }) {
+                Text("No sessions match the current filter.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding()
+            }
+        }
+        .listStyle(.insetGrouped)
     }
 }
 
@@ -665,6 +859,11 @@ private struct NewSessionSheet: View {
     @State private var planMode: Bool = true
     @State private var runAsABPair: Bool = false
     @State private var isStarting: Bool = false
+    /// Phase 8: pre-flight cost + weekly-cap estimate. Refreshes when
+    /// any input the daemon would care about changes (repo, agent,
+    /// model, effort, goal length). Debounced via the .task(id:) below.
+    @State private var preflight: PreflightResponse?
+    @State private var preflightLoading: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -716,6 +915,8 @@ private struct NewSessionSheet: View {
                         .tint(SessionsV2Theme.accent)
                 }
 
+                preflightSection
+
                 if client.hasWireVersionMismatch {
                     Section {
                         Label("Mac is running a different version. Update the Mac app.",
@@ -750,6 +951,67 @@ private struct NewSessionSheet: View {
                 await client.refreshModelCatalog()
                 if repoKey.isEmpty, let first = client.repos.first {
                     repoKey = first.key
+                }
+            }
+            .task(id: preflightInputs) {
+                await refreshPreflight()
+            }
+        }
+    }
+
+    /// Tuple of every input the preflight estimate depends on. Used as
+    /// the `.task(id:)` key so SwiftUI re-runs the refresh whenever any
+    /// input changes (Form binding edits invalidate the task naturally).
+    private var preflightInputs: String {
+        "\(repoKey)|\(agent.rawValue)|\(modelId ?? "")|\(effort.rawValue)|\(goal.count)"
+    }
+
+    @MainActor
+    private func refreshPreflight() async {
+        // Need all three keys before the daemon can answer.
+        guard !repoKey.isEmpty,
+              let modelId, !modelId.isEmpty,
+              client.isConfigured else {
+            preflight = nil
+            return
+        }
+        preflightLoading = true
+        defer { preflightLoading = false }
+        let query = PreflightQuery(
+            repoKey: repoKey,
+            agent: agent,
+            model: modelId,
+            effort: currentModelSupportsEffort ? effort : nil,
+            goalLength: goal.count
+        )
+        preflight = await client.fetchPreflight(query: query)
+    }
+
+    @ViewBuilder
+    private var preflightSection: some View {
+        if let preflight {
+            Section {
+                CostBannerView(
+                    response: preflight,
+                    currentModel: modelId ?? "",
+                    onSwap: { newModel in
+                        modelId = newModel
+                    }
+                )
+            } header: {
+                Text("Estimated cost")
+            } footer: {
+                if preflight.staleData {
+                    Text("Estimate based on cached usage; may be off until the next analytics refresh.")
+                }
+            }
+        } else if preflightLoading {
+            Section {
+                HStack {
+                    ProgressView()
+                    Text("Calculating estimate…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

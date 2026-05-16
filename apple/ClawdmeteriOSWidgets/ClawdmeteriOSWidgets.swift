@@ -1,6 +1,9 @@
 import WidgetKit
 import SwiftUI
 import ClawdmeterShared
+#if canImport(ActivityKit)
+import ActivityKit
+#endif
 
 /// iPhone widget bundle.
 ///
@@ -12,6 +15,46 @@ import ClawdmeterShared
 struct ClawdmeteriOSWidgetsBundle: WidgetBundle {
     var body: some Widget {
         ClaudeUsageWidget()
+        SessionLiveActivityWidget()
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+struct SessionLiveActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: SessionLiveActivityAttributes.self) { context in
+            HStack(spacing: 10) {
+                Text(context.state.agentEmoji)
+                    .font(.title3.weight(.bold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(context.state.headlineText)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(context.state.needsAttention ? "Needs attention" : context.state.latestState.capitalized)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .containerBackground(.fill.tertiary, for: .widget)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Text(context.state.agentEmoji)
+                }
+                DynamicIslandExpandedRegion(.center) {
+                    Text(context.state.headlineText).lineLimit(1)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Text(context.state.activeSessionCount.formatted())
+                }
+            } compactLeading: {
+                Text(context.state.agentEmoji)
+            } compactTrailing: {
+                Text(context.state.activeSessionCount.formatted())
+            } minimal: {
+                Text(context.state.agentEmoji)
+            }
+        }
     }
 }
 

@@ -61,9 +61,25 @@ struct iOSDiffView: View {
                         .font(.caption.monospacedDigit())
                     }
                 }
+                .frame(minHeight: 44)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(rowAccessibilityLabel(file))
+            .accessibilityHint("Double-tap to view the hunks.")
         }
         .listStyle(.plain)
+    }
+
+    private func rowAccessibilityLabel(_ file: GitDiffFile) -> String {
+        let kind: String
+        switch file.status {
+        case "A": kind = "Added"
+        case "D": kind = "Deleted"
+        case "M": kind = "Modified"
+        case "R": kind = "Renamed"
+        default:  kind = "Changed"
+        }
+        return "\(kind) \(file.path). \(file.additions) lines added, \(file.deletions) lines removed."
     }
 
     private func statusGlyph(_ s: String) -> some View {

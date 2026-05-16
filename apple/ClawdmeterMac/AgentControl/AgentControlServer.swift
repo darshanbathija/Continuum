@@ -44,6 +44,13 @@ public final class AgentControlServer {
     private let registry: AgentSessionRegistry
     private let tmux: TmuxControlClient
     private let notifications: NotificationDispatcher
+    /// T18 Wire Inspector: per-connection request context so the
+    /// outgoing-response recorder can tag entries with the original
+    /// method+path. Each NWConnection serves one request before
+    /// `connection.cancel()` runs in sendResponse's completion handler,
+    /// so the dict never has more than one entry per connection at a
+    /// time. Cleared in sendResponse after the response is queued.
+    private var pendingRequests: [ObjectIdentifier: (method: String, path: String)] = [:]
     /// Wired by AppRuntime after construction so the iPhone can pull live
     /// Claude/Codex usage AND the historical analytics snapshot over
     /// Tailscale instead of needing iCloud KV sync. Nil-tolerant — the
@@ -303,13 +310,17 @@ public final class AgentControlServer {
                 return
             }
             // G12: envelope can target a specific pane within the session
-            // (multi-terminal tab strip). Falls back to the session's
-            // primary pane / window for the single-terminal case.
+            // (multi-terminal tab strip). Only actual pane ids owned by the
+            // session are accepted; tmux output is keyed by "%pane", not
+            // "@window".
             let paneId: String? = {
                 if let explicit = envelope.paneId, !explicit.isEmpty {
+                    guard Self.isValidTmuxPaneId(explicit),
+                          explicit == session.tmuxPaneId || session.terminalPanes.contains(where: { $0.paneId == explicit })
+                    else { return nil }
                     return explicit
                 }
-                return session.tmuxPaneId ?? session.tmuxWindowId
+                return session.tmuxPaneId
             }()
             guard let paneId else {
                 sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
@@ -465,9 +476,25 @@ public final class AgentControlServer {
             }
             if let data, !data.isEmpty {
                 buffer.append(data)
-                if let request = buffer.tryParse() {
+                do {
+                    if let request = try buffer.tryParse() {
+                        Task { @MainActor in
+                            await self?.dispatch(request: request, connection: connection)
+                        }
+                        return
+                    }
+                } catch HTTPRequestBuffer.ParseError.payloadTooLarge {
                     Task { @MainActor in
-                        await self?.dispatch(request: request, connection: connection)
+                        self?.sendResponse(HTTPResponse(
+                            status: 413, reason: "Payload Too Large",
+                            contentType: "text/plain",
+                            body: Data("Payload Too Large\n".utf8)
+                        ), on: connection)
+                    }
+                    return
+                } catch {
+                    Task { @MainActor in
+                        self?.sendResponse(.badRequest, on: connection)
                     }
                     return
                 }
@@ -507,12 +534,19 @@ public final class AgentControlServer {
         }
 
         // T18 Wire Inspector: record the incoming request body when enabled.
-        let peerString = Self.endpointString(connection.endpoint)
-        await WireInspector.shared.recordRequest(
-            method: request.method, path: request.path, peer: peerString,
-            body: request.body.isEmpty ? nil : request.body,
-            contentType: request.headers["content-type"]
-        )
+        // Also stash the request context so sendResponse can tag the
+        // matching outbound entry with the right method+path. Check
+        // isEnabledFast first to avoid the actor hop + body retain on
+        // the hot path when the inspector is off (the common case).
+        if WireInspector.isEnabledFast {
+            let peerString = Self.endpointString(connection.endpoint)
+            pendingRequests[ObjectIdentifier(connection)] = (request.method, request.path)
+            await WireInspector.shared.recordRequest(
+                method: request.method, path: request.path, peer: peerString,
+                body: request.body.isEmpty ? nil : request.body,
+                contentType: request.headers["content-type"]
+            )
+        }
 
         if let match = routes.match(method: request.method, path: request.path) {
             await match.handler(request, connection, match.params)
@@ -621,6 +655,15 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions/:id/terminals") { [weak self] req, conn, params in
             await self?.handleAddTerminal(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
+        t.register(method: "POST", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
+            await self?.handleRegisterPushToken(request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/devices/ack-notifications") { [weak self] req, conn, _ in
+            await self?.handleAckNotifications(request: req, connection: conn)
+        }
+        t.register(method: "DELETE", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
+            await self?.handleUnregisterPushToken(request: req, connection: conn)
+        }
 
         // --- DELETEs ---
         // Specific delete first so /sessions/:id/terminals/:paneId beats /sessions/:id.
@@ -669,10 +712,18 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection); return
         }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
-            sendResponse(.tooManyRequests, on: connection); return
+            sendResponse(.tooManyRequestsSwap, on: connection); return
         }
         let oldModel = session.model
-        registry.setModel(id: uuid, model: req.model, effort: req.effort)
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux)
+        let result = await changer.swap(
+            sessionId: uuid,
+            newModel: req.model,
+            newEffort: req.effort == nil ? nil : .some(req.effort)
+        )
+        guard isSuccessfulSwap(result) else {
+            sendResponse(.internalError, on: connection); return
+        }
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordSwap(
             sessionId: uuid, sourcePeer: peer,
@@ -689,14 +740,17 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection); return
         }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
-            sendResponse(.tooManyRequests, on: connection); return
+            sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        registry.setEffort(id: uuid, effort: req.effort)
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux)
+        let result = await changer.swap(sessionId: uuid, newEffort: .some(req.effort))
+        guard isSuccessfulSwap(result) else {
+            sendResponse(.internalError, on: connection); return
+        }
         let peer = Self.endpointString(connection.endpoint)
-        await AuditLog.shared.recordSwap(
+        await AuditLog.shared.recordEffortChange(
             sessionId: uuid, sourcePeer: peer,
-            from: session.model, to: session.model ?? "(default)",
-            effort: req.effort.rawValue
+            model: session.model, effort: req.effort.rawValue
         )
         await respondWithSession(uuid: uuid, connection: connection)
     }
@@ -712,28 +766,21 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection); return
         }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
-            sendResponse(.tooManyRequests, on: connection); return
+            sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        registry.updateRuntime(
-            id: uuid,
-            worktreePath: session.worktreePath,
-            tmuxWindowId: session.tmuxWindowId,
-            tmuxPaneId: session.tmuxPaneId,
-            mode: req.mode
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux)
+        let result = await changer.swap(
+            sessionId: uuid,
+            newPlanMode: req.planMode,
+            newMode: req.mode
         )
-        if let planMode = req.planMode {
-            // Plan mode applies to both agents now. Claude maps it to
-            // `--permission-mode plan`; Codex maps it to
-            // `--sandbox read-only`. Mid-session toggle is handled by
-            // the same registry call — the actual respawn happens on
-            // `approve-plan` or via the mode picker.
-            registry.setPlanMode(id: uuid, planMode: planMode)
+        guard isSuccessfulSwap(result) else {
+            sendResponse(.internalError, on: connection); return
         }
         let peer = Self.endpointString(connection.endpoint)
-        await AuditLog.shared.recordSwap(
+        await AuditLog.shared.recordModeChange(
             sessionId: uuid, sourcePeer: peer,
-            from: session.model, to: session.model ?? "(default)",
-            effort: "(mode=\(req.mode.rawValue))"
+            mode: req.mode.rawValue, planMode: req.planMode
         )
         await respondWithSession(uuid: uuid, connection: connection)
     }
@@ -753,7 +800,7 @@ public final class AgentControlServer {
             sendResponse(.internalError, on: connection); return
         }
         guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
-            sendResponse(.tooManyRequests, on: connection); return
+            sendResponse(.tooManyRequestsSend, on: connection); return
         }
         do {
             let data = Data(bytes)
@@ -790,6 +837,11 @@ public final class AgentControlServer {
         }
         guard let req = try? JSONDecoder().decode(AutopilotRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
+        }
+        // Autopilot crosses a real security boundary (per-repo trust list).
+        // Throttle the toggle so a misbehaving client can't flap it.
+        guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
+            sendResponse(.tooManyRequestsSwap, on: connection); return
         }
         AutopilotState.shared.setEnabled(req.enabled, sessionId: uuid)
         let peer = Self.endpointString(connection.endpoint)
@@ -981,14 +1033,32 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection); return
         }
         let repoCwd = session.worktreePath ?? session.repoKey
+        // Defense-in-depth: refuse to anchor on an empty or non-absolute
+        // repoCwd. If the worktree/repo path is missing the prefix check
+        // below degenerates (`hasPrefix("/")` matches every absolute
+        // path) and the symlink resolve can't constrain anything either.
+        guard !repoCwd.isEmpty, repoCwd.hasPrefix("/") else {
+            sendResponse(.internalError, on: connection); return
+        }
         let absolute: String = pathArg.hasPrefix("/")
             ? pathArg
             : (repoCwd as NSString).appendingPathComponent(pathArg)
-        // Resolve symlinks + canonicalize, then require the path to live
-        // under repoCwd. Prevents `?path=../../../etc/passwd` shenanigans.
-        let resolved = (absolute as NSString).standardizingPath
+        // Two-stage path safety:
+        //   1. Canonicalize `..` / `~` / `//` via standardizingPath, then
+        //      require the result to live under the repo root. Blocks
+        //      `?path=../../../etc/passwd`.
+        //   2. Resolve symlinks via `resolvingSymlinksInPath` and re-check
+        //      the prefix. Blocks an agent (or anyone with worktree write
+        //      access) from planting a symlink inside the worktree that
+        //      points outside it. standardizingPath alone does NOT resolve
+        //      symlinks, so without step 2 the read would follow the link.
         let repoStandard = (repoCwd as NSString).standardizingPath
-        guard resolved.hasPrefix(repoStandard + "/") || resolved == repoStandard else {
+        let canonical = (absolute as NSString).standardizingPath
+        let resolved = (canonical as NSString).resolvingSymlinksInPath
+        let repoResolved = (repoStandard as NSString).resolvingSymlinksInPath
+        let underCanonicalRepo = canonical.hasPrefix(repoStandard + "/") || canonical == repoStandard
+        let underResolvedRepo = resolved.hasPrefix(repoResolved + "/") || resolved == repoResolved
+        guard underCanonicalRepo && underResolvedRepo else {
             sendResponse(HTTPResponse(
                 status: 403, reason: "Forbidden",
                 contentType: "text/plain",
@@ -1033,6 +1103,17 @@ public final class AgentControlServer {
               let windowId = session.tmuxWindowId else {
             sendResponse(.notFound, on: connection); return
         }
+        guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
+            sendResponse(.tooManyRequestsSwap, on: connection); return
+        }
+        guard session.terminalPanes.count < 7 else {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"terminal pane limit reached"}"#.utf8)
+            ), on: connection)
+            return
+        }
         struct AddTerminalRequest: Codable { let title: String? }
         let req = (try? JSONDecoder().decode(AddTerminalRequest.self, from: request.body)) ?? AddTerminalRequest(title: nil)
         do {
@@ -1076,11 +1157,22 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
-        // Phase 0: return an empty snapshot so iOS can subscribe + render
-        // gracefully. Phase 4 (T40) wires up the SessionChatStore mirror.
+        let cwd = session.worktreePath ?? session.repoKey
+        let url: URL?
+        if session.agent == .claude {
+            url = SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
+        } else {
+            url = newestCodexJSONL()
+        }
+        let messages = url.map { TranscriptLoader.load(from: $0, maxMessages: 500) } ?? []
+        var builder = ChatItemBuilder()
+        for message in messages {
+            builder.ingest(message)
+        }
+        builder.flushPending()
         let snapshot = WireChatSnapshot(
             sessionId: session.id,
-            items: [],
+            items: builder.items,
             planSteps: [],
             sourceEntries: [],
             artifactEntries: [],
@@ -1099,13 +1191,74 @@ public final class AgentControlServer {
     }
 
     private func handleGetPreflight(request: HTTPRequest, connection: NWConnection) async {
-        // Phase 0 stub; Phase 8 wires LiveCostCalculator + RateLimitChecker.
+        guard let comps = URLComponents(string: request.path),
+              let items = comps.queryItems else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        func qp(_ name: String) -> String? {
+            items.first(where: { $0.name == name })?.value
+        }
+        guard let repoKey = qp("repoKey"),
+              let agentRaw = qp("agent"), let agent = AgentKind(rawValue: agentRaw),
+              let model = qp("model") else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let effort: ReasoningEffort? = qp("effort").flatMap { ReasoningEffort(rawValue: $0) }
+        let goalLength = Int(qp("goalLength") ?? "0") ?? 0
+
+        // Cost estimate from the analytics snapshot.
+        let snapshot = usageHistory?.snapshot ?? UsageHistorySnapshot.empty
+        let estimatedCost = LiveCostCalculator.shared.estimate(
+            snapshot: snapshot,
+            repoKey: repoKey,
+            agent: agent,
+            model: model,
+            effort: effort,
+            goalLength: goalLength
+        )
+
+        // Weekly-cap projection from live usage. Pick the provider's
+        // poller matching the requested agent.
+        let liveUsage: UsageData? = (agent == .claude)
+            ? claudeModel?.usage
+            : codexModel?.usage
+        let currentWeeklyPct = liveUsage?.weeklyPct ?? 0
+
+        // Reverse the per-model cost back to a token estimate so the
+        // projection has the right units. Falls back to a conservative
+        // 50k tokens when pricing is unknown (unpriced model).
+        let estimatedTokens: Int = {
+            guard let dollars = estimatedCost, dollars > 0 else { return 50_000 }
+            let perTokenInput = Pricing.shared.cost(
+                for: model,
+                tokens: TokenTotals(inputTokens: 1, outputTokens: 0)
+            )
+            if perTokenInput > 0 {
+                let perTokenDouble = NSDecimalNumber(decimal: perTokenInput).doubleValue
+                return max(1, Int(dollars / perTokenDouble))
+            }
+            return 50_000
+        }()
+        let projected = RateLimitChecker.shared.projectedWeeklyCap(
+            currentWeeklyPct: currentWeeklyPct,
+            estimatedTokens: estimatedTokens
+        )
+        let wouldCap = projected >= 0.95  // D11 soft-warn threshold
+        let suggested = wouldCap
+            ? RateLimitChecker.shared.suggestedSwap(currentModel: model)
+            : nil
+
+        let staleData: Bool = {
+            let age = Date().timeIntervalSince(snapshot.computedAt)
+            return age > 3600
+        }()
+
         let response = PreflightResponse(
-            estimatedCostUSD: nil,
-            weeklyCapPct: nil,
-            wouldCap: false,
-            suggestedSwap: nil,
-            staleData: false
+            estimatedCostUSD: estimatedCost,
+            weeklyCapPct: liveUsage == nil ? nil : projected,
+            wouldCap: wouldCap,
+            suggestedSwap: suggested,
+            staleData: staleData
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -1114,6 +1267,35 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    // MARK: - Phase 10: ActivityKit push-token registration
+
+    private struct RegisterPushTokenBody: Codable {
+        let token: String
+        let bundleId: String
+    }
+
+    private struct UnregisterPushTokenBody: Codable {
+        let token: String
+    }
+
+    private func handleRegisterPushToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(RegisterPushTokenBody.self, from: request.body),
+              !req.token.isEmpty, !req.bundleId.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        await MacAPNSPusher.shared.register(token: req.token, bundleId: req.bundleId)
+        sendJSON(["ok": true, "registered": true], on: connection)
+    }
+
+    private func handleUnregisterPushToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(UnregisterPushTokenBody.self, from: request.body),
+              !req.token.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        await MacAPNSPusher.shared.unregister(token: req.token)
+        sendJSON(["ok": true], on: connection)
     }
 
     private func respondWithSession(uuid: UUID, connection: NWConnection) async {
@@ -1127,6 +1309,11 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    private func isSuccessfulSwap(_ result: SessionConfigChanger.SwapResult) -> Bool {
+        if case .swapped = result { return true }
+        return false
     }
 
     // MARK: - Usage / Analytics endpoints
@@ -1279,11 +1466,19 @@ public final class AgentControlServer {
 
         // Build agent argv per E4.
         let argv = AgentSpawner.argv(for: req)
+        guard !argv.isEmpty else {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
+            ), on: connection)
+            return
+        }
 
         // Spawn into a new tmux window.
         do {
             try await tmux.start()  // idempotent
-            let windowId = try await tmux.newWindow(cwd: cwd, child: argv)
+            let window = try await tmux.newWindow(cwd: cwd, child: argv)
             // Phase 2 simplification: pane id = first pane of the new window.
             // tmux's `list-windows -F '#{pane_id}'` would tell us, but we
             // derive it lazily for now.
@@ -1294,8 +1489,8 @@ public final class AgentControlServer {
                 model: req.model,
                 goal: req.goal,
                 worktreePath: worktreePath,
-                tmuxWindowId: windowId,
-                tmuxPaneId: nil,
+                tmuxWindowId: window.windowId,
+                tmuxPaneId: window.paneId,
                 planMode: req.planMode
             )
             // Wire up JSONL tail + done-detector + plan-watcher for this
@@ -1357,7 +1552,8 @@ public final class AgentControlServer {
                     sessionId: session.id,
                     sessionFileURL: url,
                     goal: session.goal,
-                    registry: self.registry
+                    registry: self.registry,
+                    notifications: self.notifications
                 )
                 wiring.start()
                 self.sessionWiring[session.id] = wiring
@@ -1380,12 +1576,46 @@ public final class AgentControlServer {
         }
     }
 
+    private nonisolated func newestCodexJSONL() -> URL? {
+        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sessions", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: sessionsDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        var newest: URL?
+        var newestDate = Date.distantPast
+        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if date > newestDate {
+                newestDate = date
+                newest = url
+            }
+        }
+        return newest
+    }
+
     private func handleApprovePlan(sessionId: String, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId),
               let session = registry.session(id: uuid),
               let windowId = session.tmuxWindowId else {
             sendResponse(.notFound, on: connection)
             return
+        }
+        guard session.status == .planning,
+              session.planText?.isEmpty == false || session.agent == .codex else {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"session is not awaiting plan approval"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        // Approve-plan is functionally a swap (kill pane + respawn). Use
+        // the swap rate-limit so a misbehaving client can't flap approval.
+        guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
+            sendResponse(.tooManyRequestsSwap, on: connection); return
         }
         // Per D13: kill the plan-mode pane, spawn a fresh execution pane
         // in the same window. Overlay covers the swap UI-side.
@@ -1429,6 +1659,13 @@ public final class AgentControlServer {
             try await tmux.killWindow(windowId)
             let cwd = session.worktreePath ?? session.repoKey
             let newWindow = try await tmux.newWindow(cwd: cwd, child: replacementArgv)
+            registry.updateRuntime(
+                id: uuid,
+                worktreePath: session.worktreePath,
+                tmuxWindowId: newWindow.windowId,
+                tmuxPaneId: newWindow.paneId,
+                mode: session.mode
+            )
             // Clear the plan card and flip status to running so the
             // approve button disappears from the chat UI.
             registry.updateStatus(id: uuid, status: .running)
@@ -1436,7 +1673,16 @@ public final class AgentControlServer {
             AgentEventStream.recordEvent(
                 sessionId: uuid,
                 kind: .statusChanged,
-                payload: ["status": "running", "newWindowId": newWindow]
+                payload: ["status": "running", "newWindowId": newWindow.windowId]
+            )
+            // T13: plan approval is a mid-session respawn that exits plan
+            // mode and gives the agent edit permission. Recorded AFTER the
+            // respawn succeeds — a failed approval shouldn't leave an
+            // audit entry implying it landed.
+            let peer = Self.endpointString(connection.endpoint)
+            await AuditLog.shared.recordPlanApprove(
+                sessionId: uuid, sourcePeer: peer,
+                agent: session.agent.rawValue
             )
             sendResponse(.ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)), on: connection)
         } catch {
@@ -1515,6 +1761,11 @@ public final class AgentControlServer {
         return false
     }
 
+    static func isValidTmuxPaneId(_ paneId: String) -> Bool {
+        guard paneId.first == "%", paneId.count > 1 else { return false }
+        return paneId.dropFirst().allSatisfy { $0.isNumber }
+    }
+
     static func endpointString(_ endpoint: NWEndpoint) -> String {
         switch endpoint {
         case .hostPort(let host, let port):
@@ -1538,8 +1789,7 @@ public final class AgentControlServer {
     }
 
     private func handleGetNeedsAttention(connection: NWConnection) async {
-        // Phase 1: empty queue. NotificationDispatcher (Phase 4) fills this in.
-        let response = NeedsAttentionResponse(events: [], serverTime: Date())
+        let response = NeedsAttentionResponse(events: await notifications.snapshotEvents(), serverTime: Date())
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(response) {
@@ -1547,6 +1797,14 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    private func handleAckNotifications(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(AckNotificationsRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        await notifications.ack(through: req.ackId)
+        sendResponse(.ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)), on: connection)
     }
 
     // MARK: - Response sending
@@ -1561,12 +1819,17 @@ public final class AgentControlServer {
         let reason: String
         let contentType: String
         let body: Data
+        /// Extra response headers (e.g. `Retry-After`). Emitted verbatim
+        /// after the standard headers in `httpResponseBytes`. Empty for
+        /// most responses; the static `tooManyRequests` factories set it.
+        let extraHeaders: [(String, String)]
 
-        init(status: Int, reason: String, contentType: String, body: Data) {
+        init(status: Int, reason: String, contentType: String, body: Data, extraHeaders: [(String, String)] = []) {
             self.status = status
             self.reason = reason
             self.contentType = contentType
             self.body = body
+            self.extraHeaders = extraHeaders
         }
 
         static func ok(contentType: String, body: Data) -> HTTPResponse {
@@ -1588,10 +1851,22 @@ public final class AgentControlServer {
             status: 500, reason: "Internal Server Error",
             contentType: "text/plain", body: Data("Internal Server Error\n".utf8)
         )
-        static let tooManyRequests = HTTPResponse(
+        /// Generic 429 (kept for the dispatch-time auth/peer rejection
+        /// path). Prefer `tooManyRequestsSend` / `tooManyRequestsSwap` from
+        /// the per-handler call sites — those set a real `Retry-After`.
+        static let tooManyRequests = tooManyRequestsSwap
+
+        static let tooManyRequestsSend = HTTPResponse(
             status: 429, reason: "Too Many Requests",
             contentType: "application/json",
-            body: Data(#"{"error":"rate_limited","retryAfter":"see Retry-After"}"#.utf8)
+            body: Data(#"{"error":"rate_limited","retryAfterSeconds":1}"#.utf8),
+            extraHeaders: [("Retry-After", "1")]
+        )
+        static let tooManyRequestsSwap = HTTPResponse(
+            status: 429, reason: "Too Many Requests",
+            contentType: "application/json",
+            body: Data(#"{"error":"rate_limited","retryAfterSeconds":5}"#.utf8),
+            extraHeaders: [("Retry-After", "5")]
         )
     }
 
@@ -1600,22 +1875,39 @@ public final class AgentControlServer {
             status: response.status,
             statusText: response.reason,
             contentType: response.contentType,
-            body: response.body
+            body: response.body,
+            extraHeaders: response.extraHeaders
         )
         // T18 Wire Inspector: record outgoing response on a best-effort
         // Task; bypassing the actor would let the inspector skew under
-        // load. The detached Task here is fine — outbound recording is
-        // pure observation, not load-bearing.
-        let peerString = Self.endpointString(connection.endpoint)
-        let status = response.status
-        let contentType = response.contentType
-        let body = response.body
-        Task.detached { @Sendable in
-            await WireInspector.shared.recordResponse(
-                method: "—", path: "—", peer: peerString,
-                status: status, body: body.isEmpty ? nil : body,
-                contentType: contentType
-            )
+        // load. Read the request context stashed in dispatch() so the
+        // outbound row carries the original method+path (without this,
+        // every response showed `— —`, useless for request/response
+        // correlation).
+        //
+        // Hot-path gate: only build the closure + retain the body when
+        // the inspector is on. For the /artifact endpoint (up to 50MB)
+        // this avoids pinning the full Data behind a detached Task that
+        // the actor would just drop inside.
+        if WireInspector.isEnabledFast {
+            let peerString = Self.endpointString(connection.endpoint)
+            let ctx = pendingRequests.removeValue(forKey: ObjectIdentifier(connection))
+            let method = ctx?.method ?? "—"
+            let path = ctx?.path ?? "—"
+            let status = response.status
+            let contentType = response.contentType
+            let body = response.body
+            Task.detached { @Sendable in
+                await WireInspector.shared.recordResponse(
+                    method: method, path: path, peer: peerString,
+                    status: status, body: body.isEmpty ? nil : body,
+                    contentType: contentType
+                )
+            }
+        } else {
+            // Still drop the per-connection map entry so it can't leak
+            // if the inspector flips on between request and response.
+            pendingRequests.removeValue(forKey: ObjectIdentifier(connection))
         }
         connection.send(content: bytes, completion: .contentProcessed { _ in
             connection.cancel()  // HTTP/1.1 keep-alive is not implemented; close after each response
@@ -1634,13 +1926,17 @@ public final class AgentControlServer {
         status: Int,
         statusText: String,
         contentType: String,
-        body: Data
+        body: Data,
+        extraHeaders: [(String, String)] = []
     ) -> Data {
         var out = Data()
         out.append(Data("HTTP/1.1 \(status) \(statusText)\r\n".utf8))
         out.append(Data("Content-Type: \(contentType)\r\n".utf8))
         out.append(Data("Content-Length: \(body.count)\r\n".utf8))
         out.append(Data("Connection: close\r\n".utf8))
+        for (name, value) in extraHeaders {
+            out.append(Data("\(name): \(value)\r\n".utf8))
+        }
         out.append(Data("\r\n".utf8))
         out.append(body)
         return out
@@ -1665,6 +1961,14 @@ struct HTTPRequest {
 /// single NWConnection.receive callback chain; the callback shape isn't
 /// quite Sendable-checkable but the runtime invariant holds.
 private final class HTTPRequestBuffer: @unchecked Sendable {
+    enum ParseError: Error {
+        case badRequest
+        case payloadTooLarge
+    }
+
+    private static let maxHeaderBytes = 32 * 1024
+    private static let maxBodyBytes = 1_000_000
+
     var data = Data()
 
     func append(_ chunk: Data) {
@@ -1673,15 +1977,24 @@ private final class HTTPRequestBuffer: @unchecked Sendable {
 
     /// Attempt to extract a complete HTTP request. Returns nil if more bytes
     /// are needed.
-    func tryParse() -> HTTPRequest? {
+    func tryParse() throws -> HTTPRequest? {
+        guard data.count <= Self.maxHeaderBytes + Self.maxBodyBytes else {
+            throw ParseError.payloadTooLarge
+        }
         // Find headers/body boundary.
-        guard let headerEndRange = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+        guard let headerEndRange = data.range(of: Data("\r\n\r\n".utf8)) else {
+            if data.count > Self.maxHeaderBytes { throw ParseError.payloadTooLarge }
+            return nil
+        }
+        guard headerEndRange.lowerBound <= Self.maxHeaderBytes else {
+            throw ParseError.payloadTooLarge
+        }
         let headerBytes = data[..<headerEndRange.lowerBound]
         let headerText = String(decoding: headerBytes, as: UTF8.self)
         let lines = headerText.split(separator: "\r\n", omittingEmptySubsequences: false).map(String.init)
-        guard let requestLine = lines.first else { return nil }
+        guard let requestLine = lines.first else { throw ParseError.badRequest }
         let parts = requestLine.split(separator: " ").map(String.init)
-        guard parts.count >= 3 else { return nil }
+        guard parts.count >= 3 else { throw ParseError.badRequest }
         let method = parts[0]
         let path = parts[1]
 
@@ -1693,7 +2006,14 @@ private final class HTTPRequestBuffer: @unchecked Sendable {
             headers[name] = value
         }
 
-        let contentLength = Int(headers["content-length"] ?? "0") ?? 0
+        let contentLengthRaw = headers["content-length"] ?? "0"
+        guard let contentLength = Int(contentLengthRaw),
+              contentLength >= 0 else {
+            throw ParseError.badRequest
+        }
+        guard contentLength <= Self.maxBodyBytes else {
+            throw ParseError.payloadTooLarge
+        }
         let bodyStart = headerEndRange.upperBound
         let availableBody = data.count - bodyStart
         if availableBody < contentLength {

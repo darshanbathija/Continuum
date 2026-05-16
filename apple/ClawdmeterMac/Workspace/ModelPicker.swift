@@ -33,6 +33,8 @@ struct ModelPicker: View {
                     } label: {
                         modelRow(entry: entry, isSelected: entry.id == selectedModelId)
                     }
+                    .accessibilityLabel(rowAccessibilityLabel(entry: entry))
+                    .accessibilityAddTraits(entry.id == selectedModelId ? [.isButton, .isSelected] : .isButton)
                 }
             }
         } label: {
@@ -40,6 +42,35 @@ struct ModelPicker: View {
         }
         .menuStyle(.borderlessButton)
         .help("Switch model — Cmd+Opt+M")
+        .accessibilityLabel("Model picker")
+        .accessibilityValue(chipAccessibilityValue)
+        .accessibilityHint("Click to choose a different model.")
+    }
+
+    private var chipAccessibilityValue: String {
+        guard let entry = selectedEntry else { return "default model" }
+        var parts = [entry.displayName]
+        if let cw = entry.contextWindow, cw >= 1_000_000 {
+            parts.append("\(cw / 1_000_000) million context window")
+        }
+        if let badge = entry.badge {
+            parts.append(badge.lowercased())
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private func rowAccessibilityLabel(entry: ModelCatalogEntry) -> String {
+        var parts = [entry.displayName]
+        if let cw = entry.contextWindow, cw >= 1_000_000 {
+            parts.append("\(cw / 1_000_000) million context")
+        }
+        if let badge = entry.badge {
+            parts.append(badge.lowercased())
+        }
+        if let recommended = entry.recommendedFor {
+            parts.append("recommended for \(recommended.lowercased())")
+        }
+        return parts.joined(separator: ", ")
     }
 
     private var modelsForAgent: [ModelCatalogEntry] {

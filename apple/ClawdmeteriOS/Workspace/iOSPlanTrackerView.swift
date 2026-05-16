@@ -49,7 +49,10 @@ struct iOSPlanTrackerView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(SessionsV2Theme.accent)
                             .disabled(isApproving)
+                            .frame(minHeight: 44)
                             .padding(.top, 12)
+                            .accessibilityLabel("Approve plan and run")
+                            .accessibilityHint("Switches the agent out of plan mode into edit mode.")
                         }
                     }
                     .padding(16)
@@ -77,31 +80,40 @@ struct iOSPlanTrackerView: View {
 
     @ViewBuilder
     private func stepRow(index: Int, text: String) -> some View {
+        let completed = manuallyCompleted.contains(text)
         Button {
-            if manuallyCompleted.contains(text) {
+            if completed {
                 manuallyCompleted.remove(text)
             } else {
                 manuallyCompleted.insert(text)
             }
         } label: {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: manuallyCompleted.contains(text) ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(manuallyCompleted.contains(text) ? SessionsV2Theme.accent : .secondary)
+                Image(systemName: completed ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(completed ? SessionsV2Theme.accent : .secondary)
                     .font(.title3)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Step \(index + 1)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Text(text)
                         .font(.callout)
-                        .strikethrough(manuallyCompleted.contains(text))
+                        .strikethrough(completed)
                         .foregroundStyle(.primary)
                 }
                 Spacer()
             }
             .padding(.vertical, 4)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Step \(index + 1). \(text)")
+        .accessibilityValue(completed ? "Completed" : "Not completed")
+        .accessibilityHint("Double-tap to toggle completion.")
+        .accessibilityAddTraits(completed ? [.isButton, .isSelected] : .isButton)
     }
 
     @MainActor

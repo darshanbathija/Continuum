@@ -1,0 +1,8 @@
+# Sessions v2 T27 — fastlane Gemfile.
+#
+# Run `bundle install` once before `bundle exec fastlane <lane>`.
+# Pinned to a recent stable fastlane; bump intentionally.
+
+source "https://rubygems.org"
+
+gem "fastlane", "~> 2.219"

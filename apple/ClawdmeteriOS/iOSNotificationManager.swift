@@ -88,6 +88,7 @@ public final class iOSNotificationManager: ObservableObject {
         if maxId > lastAckId {
             lastAckId = maxId
             UserDefaults.standard.set(Int(maxId), forKey: ackIdKey)
+            await client.ackNotifications(through: maxId)
         }
         return true
     }

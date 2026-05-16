@@ -191,10 +191,15 @@ public actor TmuxControlClient {
         }
     }
 
+    public struct WindowRef: Sendable, Hashable {
+        public let windowId: String
+        public let paneId: String
+    }
+
     /// Convenience: create a new window in the control session, running
-    /// the given child command in the given cwd. Returns the new window id
-    /// (e.g. "@4").
-    public func newWindow(cwd: String, child: [String]) async throws -> String {
+    /// the given child command in the given cwd. Returns both the new window
+    /// id (e.g. "@4") and primary pane id (e.g. "%5").
+    public func newWindow(cwd: String, child: [String]) async throws -> WindowRef {
         // E4: tmux's `new-window` accepts `-c <cwd>` natively — no shell
         // concat. The child argv is joined for tmux's own parser; tmux
         // then re-tokenizes for execve.
@@ -205,19 +210,20 @@ public actor TmuxControlClient {
         let quoted = child.map { Self.tmuxQuote($0) }.joined(separator: " ")
         let result = try await command([
             "new-window",
-            "-P",  // print the new window id
-            "-F", "'#{window_id}'",
+            "-P",  // print the new window + primary pane ids
+            "-F", "'#{window_id} #{pane_id}'",
             "-t", "control",
             "-c", Self.tmuxQuote(cwd),
             "--",
             quoted,
         ])
-        // Response body is the printed window id, e.g. "@4".
-        let windowId = result.lines.first?.trimmingCharacters(in: .whitespaces) ?? ""
-        guard windowId.hasPrefix("@") else {
-            throw TmuxError.commandFailed("new-window returned unexpected: \(windowId)")
+        // Response body is the printed ids, e.g. "@4 %5".
+        let line = result.lines.first?.trimmingCharacters(in: .whitespaces) ?? ""
+        let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
+        guard parts.count == 2, parts[0].hasPrefix("@"), parts[1].hasPrefix("%") else {
+            throw TmuxError.commandFailed("new-window returned unexpected: \(line)")
         }
-        return windowId
+        return WindowRef(windowId: parts[0], paneId: parts[1])
     }
 
     /// Split an existing window vertically (a new pane below the current).

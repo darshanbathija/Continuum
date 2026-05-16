@@ -1,0 +1,24 @@
+# Sessions v2 T27 — Match config.
+#
+# Match keeps a private git repo of code-signing certs + provisioning
+# profiles for the whole team. For a solo-dev project this is still the
+# right shape: it pins the certs so you don't have to fumble Keychain
+# Access every time Apple rotates them.
+#
+# Setup once:
+#   1. Create an empty private GitHub repo, e.g. darshanbathija/clawdmeter-certs
+#   2. Set CLAWDMETER_MATCH_REPO_URL in your shell to git@github.com:darshanbathija/clawdmeter-certs.git
+#   3. `cd apple && bundle exec fastlane match development`
+#   4. Match generates everything; commits encrypted to the certs repo.
+#
+# The Fastfile's `release` lane assumes Match has already been run at least
+# once. CI environments use the read-only API key path (set
+# CLAWDMETER_APP_STORE_CONNECT_API_KEY_PATH) so they don't need 2FA.
+
+git_url(ENV["CLAWDMETER_MATCH_REPO_URL"] || "https://github.com/darshanbathija/clawdmeter-certs.git")
+storage_mode("git")
+
+type("development")  # default; the release lane overrides with appstore
+
+# `match` runs against the per-platform app identifier set from Appfile.
+# No per-platform overrides here.

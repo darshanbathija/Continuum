@@ -56,7 +56,8 @@ struct iOSArtifactsPane: View {
     }
 
     private func row(for entry: ArtifactEntry) -> some View {
-        Button {
+        let isDownloading = downloading == entry.path
+        return Button {
             Task { await open(entry) }
         } label: {
             HStack(spacing: 12) {
@@ -64,6 +65,7 @@ struct iOSArtifactsPane: View {
                     .font(.title3)
                     .foregroundStyle(SessionsV2Theme.accent)
                     .frame(width: 32)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.filename)
                         .font(.callout)
@@ -76,18 +78,25 @@ struct iOSArtifactsPane: View {
                         .truncationMode(.head)
                 }
                 Spacer()
-                if downloading == entry.path {
+                if isDownloading {
                     ProgressView()
                 } else {
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.vertical, 4)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(downloading != nil)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(entry.filename)
+        .accessibilityValue(isDownloading ? "Downloading" : entry.path)
+        .accessibilityHint("Double-tap to preview.")
     }
 
     private func icon(for filename: String) -> String {
@@ -120,46 +129,3 @@ struct iOSArtifactsPane: View {
     }
 }
 
-extension AgentControlClient {
-    enum ArtifactError: LocalizedError {
-        case notPaired
-        case badStatus(Int)
-        case ioError(String)
-        var errorDescription: String? {
-            switch self {
-            case .notPaired: return "Not paired to a Mac"
-            case .badStatus(let code): return "Daemon returned HTTP \(code)"
-            case .ioError(let msg): return msg
-            }
-        }
-    }
-
-    /// Fetch artifact bytes via GET /sessions/:id/artifact?path=… and
-    /// write them to a tempdir for QLPreviewController. Caches under
-    /// the file's basename so reopening the same artifact is fast.
-    @MainActor
-    func downloadArtifact(sessionId: UUID, remotePath: String) async throws -> URL {
-        guard let host, let token else { throw ArtifactError.notPaired }
-        var comps = URLComponents()
-        comps.scheme = "http"
-        comps.host = host
-        comps.port = httpPort
-        comps.path = "/sessions/\(sessionId.uuidString)/artifact"
-        comps.queryItems = [URLQueryItem(name: "path", value: remotePath)]
-        guard let url = comps.url else { throw ArtifactError.ioError("bad URL") }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 30
-        let (data, response) = try await URLSession.shared.data(for: req)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw ArtifactError.badStatus(http.statusCode)
-        }
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("clawdmeter-artifacts/\(sessionId.uuidString)")
-        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        let basename = (remotePath as NSString).lastPathComponent
-        let localURL = cacheDir.appendingPathComponent(basename)
-        try data.write(to: localURL, options: .atomic)
-        return localURL
-    }
-}

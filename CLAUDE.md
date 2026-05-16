@@ -191,8 +191,8 @@ Wire (v3): `Protocol.swift` carries `ReasoningEffort`, `ModelCatalog`
 sessions.json silently drop the new fields.
 
 Daemon (Mac): `AgentControlServer` uses a route-table dispatcher
-(`RouteTable.swift`) with 20 new endpoints (`/models`,
-`/sessions/:id/{chat-snapshot,diff,pr,terminals,artifact,model,effort,mode,send,
+(`RouteTable.swift`) with 19 new endpoints (`/models`,
+`/sessions/:id/{chat-snapshot,diff,pr,terminals,model,effort,mode,send,
 interrupt,autopilot,ab-pair/pick-winner,create-pr,merge}`,
 `/sessions/preflight`, `DELETE /sessions/:id/terminals/:paneId`).
 `AgentSpawner` uses `ShellRunner.locateBinary` (no hardcoded paths) and
@@ -202,17 +202,9 @@ single `with()` helper so v3 fields propagate across every mutation
 (T41 audit). `AutopilotState` persists per-repo trust to
 `~/.clawdmeter/autopilot-trusted-repos.json`. `AuditLog` writes
 hash-only JSONL to `~/.clawdmeter/audit/{sends,swaps,autopilot}.jsonl`,
-rotating at 1MB or 7 days; **wired into** the send/swap/autopilot
-handlers (T13). `RateLimiter` caps 1 send/sec + 1 swap/5sec per session;
-**wired into** the same handlers, returns 429 on deny (T12).
-`WireInspector` (T18) is an actor with an off-by-default rolling buffer
-of HTTP req/res bodies for debugging client/server skew.
-
-Mac Settings now has a "Diagnostics" tab
-(`DiagnosticsSettingsView.swift`) with a segmented Audit Log / Wire
-Inspector surface picker. Audit-log viewer (T17) reads the JSONL files
-with text + session-ID filter + tap-to-expand-raw. Wire-inspector pane
-(T18) toggles recording and shows a live tail polling every second.
+rotating at 1MB or 7 days. `RateLimiter` caps 1 send/sec + 1 swap/5sec
+per session. (Both shipped as infrastructure in v2.0; wired into the
+handlers in v2.0.1 — see the polish section below.)
 
 Mac UI: `SessionWorkspaceView` composer header now hosts `ModelPicker`
 + `EffortDial` chips next to the existing `ModePicker`.
@@ -222,14 +214,11 @@ helper. `SessionsModel.switchModel/Effort/PlanMode` wire it up.
 iOS Sessions tab: full picker rewrite. `iOSModelPicker` /
 `iOSEffortDial` / `iOSSessionControlsStrip` / `iOSSessionActivityStrip`.
 `SessionDetailView` is a 5-tab structure (Chat / Plan / Diff / PR /
-Terminal); the Terminal tab is now multi-pane via `iOSTerminalTabsView`
-(T33 — chip strip, tap-to-switch, `+` to spawn, long-press to delete
-non-primary panes). `iOSDiffView`, `iOSPRPane`, `iOSPlanTrackerView`
-cover mobile review surfaces. `iOSArtifactsPane` (overflow menu →
-"Artifacts (N)") downloads bytes via the daemon's `/artifact` endpoint
-into a temp dir and previews via `QLPreviewController`. `iOSChatStore`
-mirrors the daemon's chat snapshot; `iOSChatStoreCache` is LRU-2 with
-protected sessions.
+Terminal). `iOSDiffView`, `iOSPRPane`, `iOSPlanTrackerView` cover mobile
+review surfaces. `iOSChatStore` mirrors the daemon's chat snapshot;
+`iOSChatStoreCache` is LRU-2 with protected sessions. (The Terminal tab
+becomes multi-pane and the Artifacts pane lands in v2.0.1 — see polish
+section below.)
 
 Watch: `SessionsListView` Crown-scrollable list. `WatchSessionDetailView`
 with Approve / Interrupt / Voice-reply buttons. `WatchPlanBridge` extended
@@ -264,7 +253,7 @@ platform schemes build clean.
 
 After the v2.0 ship, a same-day polish pass closed the most visible
 asymmetries and rendering gaps the user hit in the first hour of real
-use. Mac DMG bumped builds 7 → 13 across this pass and re-uploaded to
+use. Mac DMG bumped builds 7 → 14 across this pass and re-uploaded to
 the `v0.2.0-mac` GitHub release.
 
 - **Pairing is front-and-center.** New `PairingQRPopoverContent` view
@@ -313,6 +302,39 @@ the `v0.2.0-mac` GitHub release.
   full color). `AnalyticsTotalsGrid` header row uses it; `AnalyticsDailyChart`
   hides Swift Charts' auto-legend (`.chartLegend(.hidden)`) and
   renders a custom legend with the same logos.
+- **RateLimiter + AuditLog wired into daemon handlers (T12 + T13, build 14).**
+  Infrastructure shipped in v2.0; this closes the call sites.
+  `handleSendPrompt` calls `RateLimiter.tryAcquireSend` (1/sec) and 429s
+  on deny; `handleChangeModel`/`Effort`/`Mode` call `tryAcquireSwap`
+  (1/5sec); each path records to the matching `AuditLog` stream.
+  `handleApprovePlan` records a `(plan-approve agent=…)` swap entry so
+  the new agent-branched respawn path is auditable. New
+  `HTTPResponse.tooManyRequests` static returns a structured 429 body.
+- **Settings → Diagnostics tab (T17 + T18, build 14).** New
+  `DiagnosticsSettingsView` hosts a segmented Audit Log / Wire Inspector
+  surface picker. T17 reads `~/.clawdmeter/audit/{sends,swaps,autopilot}.jsonl`
+  with text + session-ID filter, tap-to-expand-raw, "Open in Finder"
+  affordance. T18 is a new `WireInspector` actor (off by default; cap
+  500 entries ~5MB) with a toggle + live tail polling every second; the
+  daemon dispatches into it from `dispatch()` (incoming requests) and
+  the response sender (outgoing responses via a detached observer Task).
+- **iOS multi-pane terminal tab strip (T33, build 14).** `iOSTerminalView`
+  accepts an optional `paneId` passed through the WS envelope (falls
+  back to primary when nil — preserves v1 behavior). New
+  `iOSTerminalTabsView` wraps it in a horizontal chip strip; tap a chip
+  to switch panes (re-id forces WS teardown + reconnect on a new
+  paneId), tap `+` to spawn (`POST /sessions/:id/terminals`),
+  long-press a non-primary chip for Delete.
+- **iOS artifacts pane + daemon `/artifact` endpoint (build 14).**
+  Closes the v2.0.1 TODOS.md "iOS artifacts pane" carryover. New
+  `iOSArtifactsPane` (reached from SessionDetail overflow menu →
+  "Artifacts (N)") lists `chatStore.snapshot.artifactEntries`,
+  downloads bytes via the new `GET /sessions/:id/artifact?path=…`
+  endpoint to `tmp/clawdmeter-artifacts/<sessionId>/`, and hands the
+  local URL to `QLPreviewController` via `.quickLookPreview`. The
+  daemon endpoint canonicalizes the path + requires it to live under
+  the session's worktree (rejects `?path=../../../etc/passwd`); cap
+  at 50MB so giant agent-written files don't park the daemon.
 
 The post-v2 commits ship to `main` directly without a feature branch —
 the repo is solo-dev / personal-use, so `/ship` and `/document-release`

@@ -20,6 +20,8 @@ struct SessionActivityStrip: View {
     let session: AgentSession
     @ObservedObject var chatStore: SessionChatStore
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// Drives a 1Hz re-render so the duration text updates live without
     /// the user having to scroll or type. SwiftUI's `Text(_, style: .timer)`
     /// could do this declaratively but doesn't support our custom
@@ -65,7 +67,7 @@ struct SessionActivityStrip: View {
                 .opacity(active ? animationOpacity : 0.5)
                 .animation(
                     active
-                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                        ? SessionsV2Theme.pulseAnimation(for: .claude, reduceMotion: reduceMotion)
                         : .default,
                     value: animationOpacity
                 )
@@ -80,7 +82,7 @@ struct SessionActivityStrip: View {
                 .opacity(active ? animationOpacity : 0.5)
                 .animation(
                     active
-                        ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
+                        ? SessionsV2Theme.pulseAnimation(for: .codex, reduceMotion: reduceMotion)
                         : .default,
                     value: animationOpacity
                 )

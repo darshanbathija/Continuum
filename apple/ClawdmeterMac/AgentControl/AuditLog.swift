@@ -17,7 +17,20 @@ public actor AuditLog {
     private let rootDir: URL = {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let dir = home.appendingPathComponent(".clawdmeter/audit", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(
+            at: dir,
+            withIntermediateDirectories: true,
+            // Owner-only — keeps peer IPs + repo paths private on a
+            // multi-user Mac. macOS's default umask is 0o022 (others
+            // can read), and the audit JSONL contains identifying
+            // metadata even when prompt text is hashed.
+            attributes: [.posixPermissions: 0o700]
+        )
+        // The directory may already exist from a prior run on default
+        // umask. Tighten its mode unconditionally.
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: dir.path
+        )
         return dir
     }()
 
@@ -49,15 +62,62 @@ public actor AuditLog {
         append(entry: entry, kind: "sends")
     }
 
+    /// Model swap — distinct from effort/mode/plan-approve. Use the
+    /// dedicated `recordEffortChange` / `recordModeChange` /
+    /// `recordPlanApprove` methods for those event kinds so the swaps
+    /// stream stays parseable by event-kind discriminator.
     public func recordSwap(sessionId: UUID, sourcePeer: String, from oldModel: String?, to newModel: String, effort: String?) {
         let entry: [String: Any] = [
             "at": ISO8601DateFormatter().string(from: Date()),
-            "kind": "swap",
+            "kind": "swap-model",
             "sessionId": sessionId.uuidString,
             "sourcePeer": sourcePeer,
             "oldModel": oldModel ?? "(default)",
             "newModel": newModel,
             "effort": effort ?? "(unchanged)",
+        ]
+        append(entry: entry, kind: "swaps")
+    }
+
+    public func recordEffortChange(
+        sessionId: UUID, sourcePeer: String, model: String?, effort: String
+    ) {
+        let entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "swap-effort",
+            "sessionId": sessionId.uuidString,
+            "sourcePeer": sourcePeer,
+            "model": model ?? "(default)",
+            "effort": effort,
+        ]
+        append(entry: entry, kind: "swaps")
+    }
+
+    public func recordModeChange(
+        sessionId: UUID, sourcePeer: String, mode: String, planMode: Bool?
+    ) {
+        var entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "swap-mode",
+            "sessionId": sessionId.uuidString,
+            "sourcePeer": sourcePeer,
+            "mode": mode,
+        ]
+        if let planMode {
+            entry["planMode"] = planMode
+        }
+        append(entry: entry, kind: "swaps")
+    }
+
+    public func recordPlanApprove(
+        sessionId: UUID, sourcePeer: String, agent: String
+    ) {
+        let entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "plan-approve",
+            "sessionId": sessionId.uuidString,
+            "sourcePeer": sourcePeer,
+            "agent": agent,
         ]
         append(entry: entry, kind: "swaps")
     }
@@ -100,6 +160,12 @@ public actor AuditLog {
             }
         } else {
             try? line.write(to: url, options: [.atomic])
+            // Owner-only — tighten on first create. Matches the rootDir
+            // 0o700 so a multi-user Mac can't sidestep the directory's
+            // permission via the file.
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: url.path
+            )
         }
     }
 

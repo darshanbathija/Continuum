@@ -20,13 +20,21 @@ struct iOSSessionControlsStrip: View {
                 statusDot
                 Text(session.status.rawValue.capitalized)
                     .font(.caption.weight(.semibold))
+                    .accessibilityLabel("Session status \(session.status.rawValue)")
                 if let modelEntry = currentModelEntry {
-                    chip(modelEntry.displayName) { showingModelPicker = true }
+                    chip(modelEntry.displayName, accessibilityLabel: "Model: \(modelEntry.displayName). Double-tap to change.") {
+                        showingModelPicker = true
+                    }
                 }
                 if let effort = session.effort {
-                    chip(effortLabel(effort)) { showingEffortSheet = true }
+                    chip(effortLabel(effort), accessibilityLabel: "Effort: \(longEffortLabel(effort)). Double-tap to change.") {
+                        showingEffortSheet = true
+                    }
                 }
-                chip(session.mode == .worktree ? "Worktree" : "Local") { /* mode toggle handled by picker UI later */ }
+                chip(
+                    session.mode == .worktree ? "Worktree" : "Local",
+                    accessibilityLabel: "Mode: \(session.mode == .worktree ? "worktree" : "local")"
+                ) { /* mode toggle handled by picker UI later */ }
                 Spacer()
             }
 
@@ -43,6 +51,9 @@ struct iOSSessionControlsStrip: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .tint(SessionsV2Theme.accent)
+                .frame(minHeight: 44)
+                .accessibilityLabel(session.status == .planning ? "Plan mode on" : "Plan mode off")
+                .accessibilityHint("Double-tap to switch between plan and code mode.")
 
                 Button(role: .destructive, action: { Task { await client.interruptSession(sessionId: session.id) } }) {
                     Label("Interrupt", systemImage: "stop.fill")
@@ -50,6 +61,9 @@ struct iOSSessionControlsStrip: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Interrupt session")
+                .accessibilityHint("Sends an escape key to stop the agent.")
                 Spacer()
             }
 
@@ -58,6 +72,7 @@ struct iOSSessionControlsStrip: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .transition(.opacity)
+                    .accessibilityAddTraits(.updatesFrequently)
             }
         }
         .padding(.horizontal, 12)
@@ -129,16 +144,20 @@ struct iOSSessionControlsStrip: View {
     // MARK: - Chip
 
     @ViewBuilder
-    private func chip(_ label: String, action: @escaping () -> Void) -> some View {
+    private func chip(_ label: String, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
                 .font(.caption2.weight(.medium))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
+                .frame(minHeight: 44)
                 .background(SessionsV2Theme.surfaceElev1, in: RoundedRectangle(cornerRadius: SessionsV2Theme.Radius.chip))
                 .foregroundStyle(.primary)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(.isButton)
     }
 
     // MARK: - Helpers
@@ -155,6 +174,18 @@ struct iOSSessionControlsStrip: View {
         case .medium:  return "Med"
         case .high:    return "High"
         case .xhigh:   return "xHigh"
+        }
+    }
+
+    /// Long form for VoiceOver readouts so "xHigh" doesn't get
+    /// mispronounced.
+    private func longEffortLabel(_ effort: ReasoningEffort) -> String {
+        switch effort {
+        case .minimal: return "minimal"
+        case .low:     return "low"
+        case .medium:  return "medium"
+        case .high:    return "high"
+        case .xhigh:   return "extra high"
         }
     }
 

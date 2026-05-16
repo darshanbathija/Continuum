@@ -186,6 +186,10 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
     // MARK: - Receiver (Watch-side)
 
 #if os(watchOS)
+    public func receive(context: [String: Any]) {
+        handleContext(context)
+    }
+
     private func handleContext(_ ctx: [String: Any]) {
         if let token = ctx["token"] as? String {
             let payload: String? = token.isEmpty ? nil : token
