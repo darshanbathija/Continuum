@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.clawdmeter.ios.refresh</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
@@ -15,18 +19,18 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Allow plaintext HTTP/WS to the Mac daemon on the Tailscale
+	     interface. The daemon binds to a Tailscale CGNAT IP (filtered
+	     on accept) and the tunnel itself is WireGuard-encrypted — adding
+	     TLS on top would add cert management with no security gain for
+	     the personal-use scope. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- Allow plaintext HTTP/WS to the Mac daemon on the Tailscale
-		     interface. The daemon binds to a Tailscale CGNAT IP (filtered
-		     on accept) and the tunnel itself is WireGuard-encrypted —
-		     adding TLS on top would add cert management with no security
-		     gain for the personal-use scope. -->
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
@@ -35,10 +39,6 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
-	</array>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>com.clawdmeter.ios.refresh</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
