@@ -24,12 +24,35 @@ public struct RecentSession: Codable, Hashable, Sendable, Identifiable {
     public let lastModified: Date
     /// Which provider wrote this JSONL.
     public let provider: AgentKind
+    /// First user prompt extracted from the JSONL. Used as the sidebar row
+    /// title so a list of past sessions reads like a list of intents
+    /// instead of "Claude session" five times in a row. Optional —
+    /// empty / parse-failed JSONLs fall back to the generic label.
+    public let firstPrompt: String?
     public var id: String { path }
 
-    public init(path: String, lastModified: Date, provider: AgentKind) {
+    public init(
+        path: String,
+        lastModified: Date,
+        provider: AgentKind,
+        firstPrompt: String? = nil
+    ) {
         self.path = path
         self.lastModified = lastModified
         self.provider = provider
+        self.firstPrompt = firstPrompt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.path = try c.decode(String.self, forKey: .path)
+        self.lastModified = try c.decode(Date.self, forKey: .lastModified)
+        self.provider = try c.decode(AgentKind.self, forKey: .provider)
+        self.firstPrompt = try c.decodeIfPresent(String.self, forKey: .firstPrompt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path, lastModified, provider, firstPrompt
     }
 }
 

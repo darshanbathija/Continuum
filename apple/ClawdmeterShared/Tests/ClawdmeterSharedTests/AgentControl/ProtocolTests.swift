@@ -22,12 +22,14 @@ final class AgentControlProtocolTests: XCTestCase {
             RecentSession(
                 path: "/Users/d/.claude/projects/foo/abc.jsonl",
                 lastModified: Date(timeIntervalSince1970: 1747000000),
-                provider: .claude
+                provider: .claude,
+                firstPrompt: "fix the auth bug"
             ),
             RecentSession(
                 path: "/Users/d/.codex/sessions/2026/05/16/def.jsonl",
                 lastModified: Date(timeIntervalSince1970: 1747100000),
-                provider: .codex
+                provider: .codex,
+                firstPrompt: nil
             ),
         ]
         let repo = AgentRepo(

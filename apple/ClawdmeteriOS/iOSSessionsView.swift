@@ -276,6 +276,9 @@ private struct RecentSessionRow: View {
     }
 
     private var title: String {
+        if let prompt = recent.firstPrompt, !prompt.isEmpty {
+            return prompt
+        }
         let provider = recent.provider == .claude ? "Claude" : "Codex"
         return isLive ? "\(provider) · live now" : "\(provider) session"
     }
@@ -283,7 +286,13 @@ private struct RecentSessionRow: View {
     private var subtitle: String {
         let rel = RelativeDateTimeFormatter()
         rel.unitsStyle = .short
-        return "\(rel.localizedString(for: recent.lastModified, relativeTo: Date())) · read-only"
+        let provider = recent.provider == .claude ? "Claude" : "Codex"
+        let when = rel.localizedString(for: recent.lastModified, relativeTo: Date())
+        if recent.firstPrompt != nil {
+            let live = isLive ? " · live now" : ""
+            return "\(provider) · \(when)\(live) · read-only"
+        }
+        return "\(when) · read-only"
     }
 }
 

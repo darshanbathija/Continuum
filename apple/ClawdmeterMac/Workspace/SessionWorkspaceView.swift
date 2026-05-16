@@ -467,6 +467,12 @@ private struct SidebarPane: View {
     }
 
     private func recentTitle(_ recent: RecentSession) -> String {
+        // Prefer the first user prompt — that's what the session was for.
+        // Fall back to the generic label when we couldn't extract one
+        // (empty JSONL, unparseable, all system meta).
+        if let prompt = recent.firstPrompt, !prompt.isEmpty {
+            return prompt
+        }
         let provider = recent.provider == .claude ? "Claude" : "Codex"
         if isRecentLive(recent) {
             return "\(provider) · live now"
@@ -478,6 +484,13 @@ private struct SidebarPane: View {
         let rel = Self.relativeTimestampFormatter.localizedString(
             for: recent.lastModified, relativeTo: Date()
         )
+        let provider = recent.provider == .claude ? "Claude" : "Codex"
+        // When we used the prompt as the title, surface the provider here
+        // so the user can still tell Claude / Codex sessions apart.
+        if recent.firstPrompt != nil {
+            let live = isRecentLive(recent) ? " · live now" : ""
+            return "\(provider) · \(rel)\(live) · read-only"
+        }
         return "\(rel) · read-only"
     }
 
