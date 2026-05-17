@@ -131,6 +131,9 @@ final class ComposerStoreTests: XCTestCase {
     }
 
     func test_resetChipsForRepo_4A() {
+        // ChipDefaults.default seeds claude-opus-4-7-1m + max effort to
+        // match Claude Code's defaults — new sessions ride the 1M window
+        // at max reasoning unless the user manually downshifts.
         let s = ComposerStore(mode: .emptyState(repoKey: "/r1", agent: .claude))
         s.modelId = "claude-opus-4-7"
         s.effort = .high
@@ -138,8 +141,8 @@ final class ComposerStoreTests: XCTestCase {
         s.planMode = true
         s.resetChipsForRepo("/r2", defaults: .default)
         XCTAssertEqual(s.repoKey, "/r2")
-        XCTAssertEqual(s.modelId, nil)
-        XCTAssertEqual(s.effort, .medium)
+        XCTAssertEqual(s.modelId, "claude-opus-4-7-1m")
+        XCTAssertEqual(s.effort, .max)
         XCTAssertEqual(s.mode, .worktree)
         XCTAssertFalse(s.planMode)
     }

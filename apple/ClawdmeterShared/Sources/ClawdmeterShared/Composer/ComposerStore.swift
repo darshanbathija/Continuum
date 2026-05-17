@@ -77,6 +77,12 @@ public final class ComposerStore: ObservableObject {
     @Published public var mode: SessionMode = .local
     @Published public var planMode: Bool = false
     @Published public var autopilotEnabled: Bool = false
+    /// Claude-Code-style permission mode for the empty-state composer.
+    /// Drives the NewSessionRequest's spawn flags. Mirrored to
+    /// `planMode`/`autopilotEnabled` via `permissionMode.didSet`-style
+    /// glue in callers, so existing code paths keep working without
+    /// having to be ported to the new enum.
+    @Published public var permissionMode: PermissionMode = .ask
     @Published public var agent: AgentKind = .claude
     @Published public var repoKey: String?
     @Published public private(set) var isSending: Bool = false
@@ -166,8 +172,8 @@ public final class ComposerStore: ObservableObject {
         public let planMode: Bool
         public init(
             agent: AgentKind = .claude,
-            modelId: String? = nil,
-            effort: ReasoningEffort? = .medium,
+            modelId: String? = "claude-opus-4-7-1m",
+            effort: ReasoningEffort? = .max,
             mode: SessionMode = .worktree,
             planMode: Bool = false
         ) {

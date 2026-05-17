@@ -25,12 +25,76 @@ final class SessionsV2Tests: XCTestCase {
         XCTAssertEqual(ReasoningEffort.medium.claudeFlagValue, "medium")
         XCTAssertEqual(ReasoningEffort.high.claudeFlagValue, "high")
         XCTAssertEqual(ReasoningEffort.xhigh.claudeFlagValue, "xhigh")
+        XCTAssertEqual(ReasoningEffort.max.claudeFlagValue, "max")
     }
 
     func testReasoningEffortCodexConfigValues() {
-        for effort in ReasoningEffort.allCases {
-            XCTAssertEqual(effort.codexConfigValue, effort.rawValue)
+        // Codex exposes low/medium/high/xhigh but not max — `.max` folds
+        // into xhigh on the codex CLI side. All other levels pass through
+        // unchanged as their raw value.
+        XCTAssertEqual(ReasoningEffort.minimal.codexConfigValue, "minimal")
+        XCTAssertEqual(ReasoningEffort.low.codexConfigValue, "low")
+        XCTAssertEqual(ReasoningEffort.medium.codexConfigValue, "medium")
+        XCTAssertEqual(ReasoningEffort.high.codexConfigValue, "high")
+        XCTAssertEqual(ReasoningEffort.xhigh.codexConfigValue, "xhigh")
+        XCTAssertEqual(ReasoningEffort.max.codexConfigValue, "xhigh")
+    }
+
+    func testReasoningEffortLenientDecode() throws {
+        // Older Macs that wrote a `max` value should round-trip into the
+        // new case; future unknown values fall back to `xhigh` rather
+        // than failing the whole AgentSession Codable round-trip.
+        let maxJson = "\"max\"".data(using: .utf8)!
+        XCTAssertEqual(try JSONDecoder().decode(ReasoningEffort.self, from: maxJson), .max)
+        let bogusJson = "\"future-effort\"".data(using: .utf8)!
+        XCTAssertEqual(try JSONDecoder().decode(ReasoningEffort.self, from: bogusJson), .xhigh)
+    }
+
+    // MARK: - PermissionMode
+
+    func testPermissionModeRoundTrip() throws {
+        for mode in PermissionMode.allCases {
+            let encoded = try JSONEncoder().encode(mode)
+            let decoded = try JSONDecoder().decode(PermissionMode.self, from: encoded)
+            XCTAssertEqual(decoded, mode)
         }
+    }
+
+    func testPermissionModeLenientDecode() throws {
+        // Future Mac writes `customMode` that this build doesn't know about;
+        // we'd rather fall back to `.ask` than fail the whole session
+        // Codable round-trip.
+        let bogus = "\"customMode\"".data(using: .utf8)!
+        XCTAssertEqual(try JSONDecoder().decode(PermissionMode.self, from: bogus), .ask)
+    }
+
+    func testPermissionModeDisplayLabels() {
+        XCTAssertEqual(PermissionMode.ask.displayName, "Ask permissions")
+        XCTAssertEqual(PermissionMode.acceptEdits.displayName, "Accept edits")
+        XCTAssertEqual(PermissionMode.plan.displayName, "Plan mode")
+        XCTAssertEqual(PermissionMode.bypass.displayName, "Bypass permissions")
+        // Bypass is the only trust-gated mode.
+        XCTAssertTrue(PermissionMode.bypass.requiresTrust)
+        XCTAssertFalse(PermissionMode.ask.requiresTrust)
+        XCTAssertFalse(PermissionMode.acceptEdits.requiresTrust)
+        XCTAssertFalse(PermissionMode.plan.requiresTrust)
+    }
+
+    // MARK: - Sidebar grouping / sorting / filter
+
+    func testSessionGroupingCases() {
+        let names = SessionGrouping.allCases.map(\.displayName)
+        XCTAssertEqual(names, ["Repo", "Date", "Status", "Agent", "None"])
+    }
+
+    func testSessionSortingCases() {
+        let names = SessionSorting.allCases.map(\.displayName)
+        XCTAssertEqual(names, ["Recency", "Created", "Name"])
+    }
+
+    func testSessionStatusFilterCases() {
+        let names = SessionStatusFilter.allCases.map(\.displayName)
+        XCTAssertEqual(names, ["All", "Active", "Done", "Archived"])
     }
 
     // MARK: - Model catalog
