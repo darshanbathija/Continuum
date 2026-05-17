@@ -10,8 +10,10 @@ struct iOSSessionsView: View {
     @State private var searchQuery: String = ""
     @State private var showArchived: Bool = false
     /// Phase 5 sidebar grouping. `byRepo` (default) keeps the v2.0
-    /// repo-section UX; `byStatus` swaps in Conductor-style Backlog /
-    /// In Progress / Review / Done buckets across all repos.
+    /// repo-section UX; `byDate` flattens across repos and buckets by
+    /// the latest activity timestamp — Today, Yesterday, Earlier this
+    /// week, Last 30 days, Older. Recent JSONLs (outside Clawdmeter)
+    /// surface in the same buckets via their `lastModified`.
     @State private var grouping: SidebarGrouping = .byRepo
     /// Repos the user has manually toggled. Wins over the default
     /// "expanded if live/active, collapsed otherwise" heuristic — once
@@ -162,8 +164,8 @@ struct iOSSessionsView: View {
                         repoSection(for: repo)
                     }
                 }
-            case .byStatus:
-                statusGroupedList
+            case .byDate:
+                dateGroupedList
             }
         }
         .searchable(text: $searchQuery, placement: .navigationBarDrawer(displayMode: .automatic),
@@ -350,61 +352,83 @@ struct iOSSessionsView: View {
         Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
     }
 
-    // MARK: - Phase 5 status-grouped list
+    // MARK: - Phase 5 date-grouped list
 
     enum SidebarGrouping: String, CaseIterable, Identifiable {
         case byRepo
-        case byStatus
+        case byDate
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .byRepo:   return "By repo"
-            case .byStatus: return "By status"
+            case .byRepo: return "By repo"
+            case .byDate: return "By date"
             }
         }
     }
 
-    /// Buckets adopted from Conductor's Backlog / In Progress / Review /
-    /// Done / Archived split. iOS skips Backlog (we don't have a queued
-    /// state pre-spawn). "Needs attention" wraps sessions waiting on a
-    /// plan approval — the highest-priority bucket on a phone where the
-    /// user is glancing not scrolling.
-    enum StatusBucket: String, CaseIterable, Identifiable {
-        case needsAttention
-        case inProgress
-        case idle
-        case done
-        case archived
+    /// Date buckets — newest at the top so Today is the first thing
+    /// you see when opening the tab on a phone. Recent JSONLs (outside
+    /// Clawdmeter) participate via `lastModified`. `older` only renders
+    /// when something falls past the 30-day window, which is rare since
+    /// `RepoIndex` itself caps recents at 30 days.
+    enum DateBucket: String, CaseIterable, Identifiable {
+        case today
+        case yesterday
+        case earlierThisWeek
+        case lastThirtyDays
+        case older
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .needsAttention: return "Needs attention"
-            case .inProgress:     return "In progress"
-            case .idle:           return "Idle / paused"
-            case .done:           return "Done"
-            case .archived:       return "Archived"
+            case .today:            return "Today"
+            case .yesterday:        return "Yesterday"
+            case .earlierThisWeek:  return "Earlier this week"
+            case .lastThirtyDays:   return "Last 30 days"
+            case .older:            return "Older"
             }
         }
     }
 
-    private func bucket(for session: AgentSession) -> StatusBucket {
-        if session.archivedAt != nil { return .archived }
-        if session.planText != nil && session.status == .planning { return .needsAttention }
-        switch session.status {
-        case .running:        return .inProgress
-        case .planning:       return .inProgress
-        case .paused:         return .idle
-        case .done:           return .done
-        case .degraded:       return .needsAttention
+    /// Drives both AgentSession (by `lastEventAt`) and RecentSession
+    /// (by `lastModified`) into the same bucket so live and outside
+    /// sessions interleave correctly under each header.
+    private func dateBucket(for date: Date, now: Date, calendar: Calendar) -> DateBucket {
+        if calendar.isDateInToday(date)     { return .today }
+        if calendar.isDateInYesterday(date) { return .yesterday }
+        let days = calendar.dateComponents([.day], from: date, to: now).day ?? 0
+        if days < 7  { return .earlierThisWeek }
+        if days < 30 { return .lastThirtyDays }
+        return .older
+    }
+
+    /// One row in the date-grouped list. Wraps either a live AgentSession
+    /// (with full chat/composer NavigationLink + swipe actions) or a
+    /// Recent JSONL (continue-readonly tap target).
+    private enum DateRow: Identifiable {
+        case live(AgentSession)
+        case recent(RecentSession, AgentRepo)
+        var id: String {
+            switch self {
+            case .live(let s):     return "live:\(s.id.uuidString)"
+            case .recent(let r, _): return "recent:\(r.path)"
+            }
+        }
+        var activityTimestamp: Date {
+            switch self {
+            case .live(let s):     return s.lastEventAt
+            case .recent(let r, _): return r.lastModified
+            }
         }
     }
 
-    private var statusGroupedList: some View {
+    private var dateGroupedList: some View {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let visible = client.sessions.filter { s in
-            // Archived bucket is gated by showArchived toggle.
+        let now = Date()
+        let calendar = Calendar.current
+
+        // Visible live sessions (matches sessionsForRepo's filters + search).
+        let visibleLive = client.sessions.filter { s in
             if s.archivedAt != nil && !showArchived { return false }
-            // Search across goal + repo display name.
             if !q.isEmpty {
                 let inGoal = (s.goal ?? "").lowercased().contains(q)
                 let inRepo = s.repoDisplayName.lowercased().contains(q)
@@ -412,62 +436,52 @@ struct iOSSessionsView: View {
             }
             return true
         }
-        let bucketed = Dictionary(grouping: visible, by: { bucket(for: $0) })
+
+        // Recent JSONLs — flatten across all repos + match search. Recents
+        // never participate in `showArchived` (they're outside Clawdmeter).
+        let visibleRecents: [(RecentSession, AgentRepo)] = client.repos.flatMap { repo in
+            repo.recentSessions.compactMap { r -> (RecentSession, AgentRepo)? in
+                if !q.isEmpty {
+                    let inPrompt = (r.firstPrompt ?? "").lowercased().contains(q)
+                    let inRepo = repo.displayName.lowercased().contains(q)
+                    if !inPrompt && !inRepo { return nil }
+                }
+                return (r, repo)
+            }
+        }
+
+        // Merge into a single typed row stream, then bucket.
+        let rows: [DateRow] =
+            visibleLive.map { DateRow.live($0) }
+            + visibleRecents.map { DateRow.recent($0.0, $0.1) }
+        let bucketed = Dictionary(grouping: rows) { row in
+            dateBucket(for: row.activityTimestamp, now: now, calendar: calendar)
+        }
+        let hasAnything = !rows.isEmpty
+
         return List {
-            ForEach(StatusBucket.allCases) { b in
-                if let sessions = bucketed[b], !sessions.isEmpty {
-                    Section(b.label) {
-                        ForEach(sessions) { session in
-                            NavigationLink {
-                                SessionDetailView(session: session, client: client)
-                            } label: {
-                                SessionRow(session: session)
-                            }
-                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                if session.planText != nil && session.status == .planning {
-                                    Button {
-                                        Task { await client.approvePlan(sessionId: session.id) }
-                                    } label: {
-                                        Label("Approve", systemImage: "checkmark.seal.fill")
-                                    }
-                                    .tint(SessionsV2Theme.accent)
-                                }
-                                if session.status == .running {
-                                    Button {
-                                        Task { await client.interruptSession(sessionId: session.id) }
-                                    } label: {
-                                        Label("Interrupt", systemImage: "stop.fill")
-                                    }
-                                    .tint(SessionsV2Theme.warn)
-                                }
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if session.archivedAt == nil {
-                                    Button {
-                                        Task { await client.archiveSession(id: session.id) }
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
-                                    }
-                                    .tint(.orange)
-                                } else {
-                                    Button {
-                                        Task { await client.unarchiveSession(id: session.id) }
-                                    } label: {
-                                        Label("Unarchive", systemImage: "archivebox.fill")
-                                    }
-                                    .tint(.blue)
-                                }
-                                Button(role: .destructive) {
-                                    Task { await client.deleteSession(id: session.id) }
-                                } label: {
-                                    Label("End", systemImage: "stop.circle")
-                                }
-                            }
+            ForEach(DateBucket.allCases) { b in
+                if let bucketRows = bucketed[b], !bucketRows.isEmpty {
+                    let sorted = bucketRows.sorted { $0.activityTimestamp > $1.activityTimestamp }
+                    Section {
+                        ForEach(sorted) { row in
+                            dateRowView(row)
+                        }
+                    } header: {
+                        HStack {
+                            Text(b.label)
+                            Spacer()
+                            Text("\(sorted.count)")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.18), in: Capsule())
                         }
                     }
                 }
             }
-            if bucketed.allSatisfy({ $0.value.isEmpty }) {
+            if !hasAnything {
                 Text("No sessions match the current filter.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -476,6 +490,64 @@ struct iOSSessionsView: View {
             }
         }
         .listStyle(.insetGrouped)
+    }
+
+    @ViewBuilder
+    private func dateRowView(_ row: DateRow) -> some View {
+        switch row {
+        case .live(let session):
+            NavigationLink {
+                SessionDetailView(session: session, client: client)
+            } label: {
+                SessionRow(session: session)
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                if session.planText != nil && session.status == .planning {
+                    Button {
+                        Task { await client.approvePlan(sessionId: session.id) }
+                    } label: {
+                        Label("Approve", systemImage: "checkmark.seal.fill")
+                    }
+                    .tint(SessionsV2Theme.accent)
+                }
+                if session.status == .running {
+                    Button {
+                        Task { await client.interruptSession(sessionId: session.id) }
+                    } label: {
+                        Label("Interrupt", systemImage: "stop.fill")
+                    }
+                    .tint(SessionsV2Theme.warn)
+                }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if session.archivedAt == nil {
+                    Button {
+                        Task { await client.archiveSession(id: session.id) }
+                    } label: {
+                        Label("Archive", systemImage: "archivebox")
+                    }
+                    .tint(.orange)
+                } else {
+                    Button {
+                        Task { await client.unarchiveSession(id: session.id) }
+                    } label: {
+                        Label("Unarchive", systemImage: "archivebox.fill")
+                    }
+                    .tint(.blue)
+                }
+                Button(role: .destructive) {
+                    Task { await client.deleteSession(id: session.id) }
+                } label: {
+                    Label("End", systemImage: "stop.circle")
+                }
+            }
+        case .recent(let recent, let repo):
+            NavigationLink {
+                OutsideSessionDetailView(recent: recent, repo: repo, client: client)
+            } label: {
+                RecentSessionRow(recent: recent)
+            }
+        }
     }
 }
 
