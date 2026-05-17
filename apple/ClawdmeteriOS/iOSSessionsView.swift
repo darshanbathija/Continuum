@@ -545,7 +545,10 @@ struct iOSSessionsView: View {
             NavigationLink {
                 OutsideSessionDetailView(recent: recent, repo: repo, client: client)
             } label: {
-                RecentSessionRow(recent: recent)
+                // Pass `repo` so the row's subtitle surfaces the folder
+                // chip — the date-grouped list has no repo section
+                // header to lean on.
+                RecentSessionRow(recent: recent, repo: repo)
             }
         }
     }
@@ -593,27 +596,113 @@ private struct SessionRow: View {
 
 /// One row in the iOS sidebar for a JSONL outside-Clawdmeter session
 /// (Conductor / Cursor / Terminal-launched) found within the last 30
-/// days. Tap opens a read-only chat — composer hidden, swipe actions
-/// stripped, "Read-only" badge in the detail header.
+/// days. Tap opens the chat — composer pre-loaded so the user can send
+/// a prompt to promote it to a live `--resume` session in place.
+///
+/// v0.4.5: provider logo badge + repo chip surface in the subtitle.
+/// "Read-only" copy + eye-icon trailing badge are gone — the v0.4.1
+/// composer made the row continuable, so calling it read-only was
+/// misleading.
 private struct RecentSessionRow: View {
     let recent: RecentSession
+    /// Repo context for the row's subtitle. Optional because the
+    /// `By repo` list already surfaces the repo via the section header
+    /// (caller passes nil there to avoid stutter).
+    var repo: AgentRepo? = nil
 
     var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(isLive ? Color.green : Color.secondary.opacity(0.5))
-                .frame(width: 7, height: 7)
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .top, spacing: 10) {
+            providerBadge
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.subheadline.weight(.medium))
-                Text(subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                metaRow
             }
-            Spacer()
-            Image(systemName: "eye")
+            Spacer(minLength: 6)
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// Circular provider badge: Claude (terra-cotta burst) or Codex
+    /// (template silhouette). Sits on the leading edge — high-contrast
+    /// at a glance, no row stutter against the title.
+    private var providerBadge: some View {
+        ZStack {
+            Circle()
+                .fill(badgeBackground)
+                .frame(width: 28, height: 28)
+            ProviderBadgeImage(
+                assetName: recent.provider == .claude ? "ClaudeLogo" : "CodexLogo",
+                isTemplate: recent.provider == .codex,
+                size: 16
+            )
+            .foregroundStyle(badgeForeground)
+            if isLive {
+                // Pulsing live dot in the corner — same green the Mac
+                // sidebar uses for "active in the last 5 minutes".
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 8, height: 8)
+                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
+                    .offset(x: 11, y: -11)
+            }
+        }
+    }
+
+    private var badgeBackground: Color {
+        switch recent.provider {
+        case .claude: return Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255).opacity(0.18)
+        case .codex:  return Color.secondary.opacity(0.20)
+        }
+    }
+
+    private var badgeForeground: Color {
+        switch recent.provider {
+        case .claude: return Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255)
+        case .codex:  return .primary
+        }
+    }
+
+    /// Compact secondary line: provider name (color-tinted) · repo chip
+    /// (when given) · relative timestamp. Live sessions get a `Now`
+    /// badge in green at the end.
+    @ViewBuilder
+    private var metaRow: some View {
+        HStack(spacing: 6) {
+            Text(providerLabel)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(providerLabelColor)
+            if let repo {
+                Text("·")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                HStack(spacing: 3) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(repo.displayName)
+                        .font(.caption2.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 .foregroundStyle(.secondary)
-                .font(.caption)
+            }
+            Text("·")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(relativeTime)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            if isLive {
+                Text("Now")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.green.opacity(0.16), in: Capsule())
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -621,24 +710,28 @@ private struct RecentSessionRow: View {
         Date().timeIntervalSince(recent.lastModified) < 5 * 60
     }
 
+    private var providerLabel: String {
+        recent.provider == .claude ? "Claude" : "Codex"
+    }
+
+    private var providerLabelColor: Color {
+        switch recent.provider {
+        case .claude: return Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255)
+        case .codex:  return .primary
+        }
+    }
+
+    private var relativeTime: String {
+        let rel = RelativeDateTimeFormatter()
+        rel.unitsStyle = .short
+        return rel.localizedString(for: recent.lastModified, relativeTo: Date())
+    }
+
     private var title: String {
         if let prompt = recent.firstPrompt, !prompt.isEmpty {
             return prompt
         }
-        let provider = recent.provider == .claude ? "Claude" : "Codex"
-        return isLive ? "\(provider) · live now" : "\(provider) session"
-    }
-
-    private var subtitle: String {
-        let rel = RelativeDateTimeFormatter()
-        rel.unitsStyle = .short
-        let provider = recent.provider == .claude ? "Claude" : "Codex"
-        let when = rel.localizedString(for: recent.lastModified, relativeTo: Date())
-        if recent.firstPrompt != nil {
-            let live = isLive ? " · live now" : ""
-            return "\(provider) · \(when)\(live) · read-only"
-        }
-        return "\(when) · read-only"
+        return "\(providerLabel) session"
     }
 }
 

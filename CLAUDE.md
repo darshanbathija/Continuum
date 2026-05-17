@@ -28,12 +28,35 @@ This codebase has TWO upstream sources you must credit and respect:
 Clawdmeter/
 ├── README.md                          download + install + build instructions
 ├── CLAUDE.md                          this file
+├── VERSION                            single source-of-truth: Mac DMG + Linux AppImage + .deb
 ├── tools/
 │   ├── build-mac-dmg.sh               idempotent DMG packager — runs xcodegen
 │   │                                   + xcodebuild archive + hdiutil
+│   ├── build-linux-appimage.sh        AppImage packager — linuxdeploy + appimagetool
+│   ├── build-linux-deb.sh             .deb packager — dpkg-deb
 │   └── refresh-pricing.sh             curls LiteLLM pricing, filters to
 │                                       claude-* / gpt-* / o[0-9]+*, writes
 │                                       Analytics/pricing.json
+├── docs/
+│   └── linux/                         Linux-specific docs: INSTALL, PAIRING,
+│                                       TROUBLESHOOTING, QA-CHECKLIST (release gate)
+├── linux/                             Linux desktop port (new — branch `linux-app`)
+│   ├── Package.swift                  swift-tools-version 6.0; deps on Hummingbird (Phase 3)
+│   │                                   + SwiftCrossUI (Phase 3.5) + shared via path
+│   ├── Sources/
+│   │   ├── ClawdmeterDaemon/          @main headless daemon binary
+│   │   ├── ClawdmeterLinux/           desktop app (tray + UI + storage)
+│   │   │   ├── Transport/             Hummingbird transport + peer-filter + bearer-auth
+│   │   │   ├── Storage/               XDG paths + libsecret + LinuxUsageStore
+│   │   │   ├── Tray/                  AppIndicator + Cairo gauge + SNI detector
+│   │   │   └── UI/                    SwiftCrossUI primary + direct CGtk4 (Sessions IDE)
+│   │   └── C*/                        9 C shim module maps (pkg-config-resolved)
+│   ├── Tests/ClawdmeterLinuxTests/    34 tests (security + storage + UI + visual)
+│   ├── scripts/configure-c-shims.sh   pkg-config validation
+│   └── resources/                     .desktop + .appdata.xml + systemd unit +
+│                                       packaging/appimage/ + packaging/deb/
+├── .github/workflows/linux.yml        Linux CI matrix + AppImage/.deb build + install tests
+├── .github/PULL_REQUEST_TEMPLATE.md   Manual VM gate sign-off checklist
 └── apple/                             Xcode workspace + Swift package
     ├── project.yml                    xcodegen spec — regenerates .xcodeproj
     ├── README.md                      apps engineering doc (architecture,

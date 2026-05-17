@@ -1,0 +1,17 @@
+#!/bin/sh
+# Pre-remove hook for the clawdmeter .deb.
+# - Stop any running daemon (systemd user service + foreground processes).
+
+set -e
+
+# Stop systemd-user service if running (best-effort).
+for user_uid in $(ls /run/user 2>/dev/null); do
+    XDG_RUNTIME_DIR="/run/user/$user_uid" \
+        sudo -u "#$user_uid" systemctl --user stop clawdmeter.service 2>/dev/null || true
+done
+
+# Kill foreground clawdmeterd processes (started via desktop launcher).
+pkill -f clawdmeterd 2>/dev/null || true
+pkill -f /usr/bin/clawdmeter 2>/dev/null || true
+
+exit 0

@@ -139,24 +139,12 @@ struct iOSChatTranscriptView: View {
 
     @ViewBuilder
     private func bannerView(_ style: BannerStyle) -> some View {
-        switch style {
-        case .readOnlyOutside:
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "eye")
-                    .foregroundStyle(.green)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Read-only")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.green)
-                    Text("Started outside Clawdmeter (Conductor, Cursor, or a Terminal-launched agent). The transcript streams from your Mac over Tailscale.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(10)
-            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal, 12)
-        }
+        // v0.4.5: the read-only banner is gone. Outside JSONLs are
+        // continuable from the composer at the bottom of the screen, so
+        // the "Read-only" badge was misleading the user. Anything we
+        // need to say about provenance shows in the row subtitle / Mac
+        // detail header instead.
+        EmptyView()
     }
 
     // MARK: - Items

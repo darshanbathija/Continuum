@@ -1,0 +1,27 @@
+[Unit]
+Description=Clawdmeter daemon (Claude / Codex rate-limit + analytics + iPhone pairing)
+Documentation=https://github.com/darshanbathija/Clawdmeter/blob/main/docs/linux/INSTALL.md
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/clawdmeterd --headless
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=10s
+
+# Environment hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-write
+ReadWritePaths=%h/.local/share/clawdmeter %h/.config/clawdmeter %h/.cache/clawdmeter %t/clawdmeter
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Daemon listens on 21731/21732; binds to all interfaces but the peer
+# filter middleware restricts to loopback + Tailscale CGNAT.
+
+[Install]
+WantedBy=default.target
