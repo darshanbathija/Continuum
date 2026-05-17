@@ -95,6 +95,7 @@ struct iOSEffortDial: View {
         case .medium:  return "Med"
         case .high:    return "High"
         case .xhigh:   return "xHigh"
+        case .max:     return "Max"
         }
     }
 
@@ -107,6 +108,7 @@ struct iOSEffortDial: View {
         case .medium:  return "Medium"
         case .high:    return "High"
         case .xhigh:   return "Extra high"
+        case .max:     return "Max"
         }
     }
 

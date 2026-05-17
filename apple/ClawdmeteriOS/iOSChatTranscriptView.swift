@@ -23,6 +23,11 @@ struct iOSChatTranscriptView: View {
     @State private var truncated: Bool = false
     @State private var isLoading: Bool = true
     @State private var errorMessage: String?
+    /// Whether the user is currently watching the tail of the chat.
+    /// Toggled by the per-row `.onAppear`/`.onDisappear` on the last item.
+    /// When false the "Jump to latest" floating CTA appears and a reload
+    /// won't auto-scroll the user out of history.
+    @State private var userPinnedToBottom: Bool = true
 
     enum BannerStyle {
         case readOnlyOutside
@@ -54,27 +59,82 @@ struct iOSChatTranscriptView: View {
     }
 
     private var chatList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if let banner { bannerView(banner) }
-                if truncated {
-                    Label(
-                        "Showing the most recent 500 messages — older history stays on your Mac.",
-                        systemImage: "rectangle.compress.vertical"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        if let banner { bannerView(banner) }
+                        if truncated {
+                            Label(
+                                "Showing the most recent 500 messages — older history stays on your Mac.",
+                                systemImage: "rectangle.compress.vertical"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                        }
+                        ForEach(items) { item in
+                            itemRow(item)
+                                .id(item.id)
+                                .padding(.horizontal, 12)
+                                .onAppear {
+                                    if item.id == items.last?.id {
+                                        userPinnedToBottom = true
+                                    }
+                                }
+                                .onDisappear {
+                                    if item.id == items.last?.id {
+                                        userPinnedToBottom = false
+                                    }
+                                }
+                        }
+                        Color.clear.frame(height: 12).id("bottom-anchor")
+                    }
+                    .padding(.vertical, 12)
                 }
-                ForEach(items) { item in
-                    itemRow(item)
-                        .padding(.horizontal, 12)
+                .background(Color(.systemGroupedBackground))
+                .onAppear {
+                    jumpToLatest(proxy, animated: false)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        jumpToLatest(proxy, animated: false)
+                    }
                 }
-                Color.clear.frame(height: 12)
+                .onChange(of: messages.count) { _, _ in
+                    guard userPinnedToBottom else { return }
+                    jumpToLatest(proxy, animated: true)
+                }
+
+                if !userPinnedToBottom, !messages.isEmpty {
+                    Button(action: {
+                        userPinnedToBottom = true
+                        jumpToLatest(proxy, animated: true)
+                    }) {
+                        Label("Latest", systemImage: "arrow.down.circle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.thinMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 16)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
             }
-            .padding(.vertical, 12)
+            .animation(.easeOut(duration: 0.18), value: userPinnedToBottom)
         }
-        .background(Color(.systemGroupedBackground))
+    }
+
+    private func jumpToLatest(_ proxy: ScrollViewProxy, animated: Bool) {
+        let target: AnyHashable = items.last?.id ?? "bottom-anchor"
+        if animated {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(target, anchor: .bottom)
+            }
+        } else {
+            proxy.scrollTo(target, anchor: .bottom)
+        }
     }
 
     @ViewBuilder

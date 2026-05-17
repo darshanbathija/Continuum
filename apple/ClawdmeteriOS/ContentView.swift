@@ -1,6 +1,13 @@
 import SwiftUI
 import ClawdmeterShared
 
+/// Provider toggled on the Live tab. Tapping the header logo swaps which
+/// provider's analytics fill the screen — no scrolling between them.
+private enum LiveProvider: String, CaseIterable, Hashable {
+    case claude
+    case codex
+}
+
 /// Two stacked provider sections: Claude (live-polled on iOS via the synced
 /// Keychain token) and Codex (cloud-mirrored from the Mac via iCloud KV).
 /// Each section mirrors the macOS dashboard's `ProviderColumn` shape.
@@ -9,6 +16,12 @@ struct ContentView: View {
     @StateObject private var agentClient = AgentControlClient()
     @StateObject private var notifManager: iOSNotificationManager
     @State private var showingSettings: Bool = false
+    /// Persists across launches so a Codex-first user keeps landing on
+    /// Codex. Default is Claude (matches the prior stacked layout's order).
+    @AppStorage("clawdmeter.live.selectedProvider") private var selectedProviderRaw: String = LiveProvider.claude.rawValue
+    /// Tracks horizontal swipe so we can derive a direction for the
+    /// transition (swipe left → next provider slides in from the right).
+    @State private var swipeDirection: Edge = .trailing
 
     init(model: UsageModel) {
         self.model = model
@@ -54,33 +67,39 @@ struct ContentView: View {
         }
     }
 
+    private var selectedProvider: LiveProvider {
+        LiveProvider(rawValue: selectedProviderRaw) ?? .claude
+    }
+
     private var liveTab: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    if !model.tokenProvider.hasToken {
-                        VStack(spacing: 14) {
-                            ClaudeProviderHeader()
-                            UnauthenticatedCard(showingSettings: $showingSettings, model: model)
-                        }
-                    } else if model.needsReauth {
-                        VStack(spacing: 14) {
-                            ClaudeProviderHeader()
-                            ReauthCard(showingSettings: $showingSettings)
-                        }
-                    } else {
-                        ClaudeSection(model: model)
-                    }
-
-                    Divider()
-                        .padding(.horizontal, 4)
-
-                    CodexSection(snapshot: model.codexSnapshot, agentClient: agentClient)
-                }
+            VStack(spacing: 14) {
+                ProviderToggleHeader(
+                    selected: selectedProvider,
+                    onToggle: { toggleProvider(direction: .trailing) }
+                )
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
-                .padding(.bottom, 32)
+
+                ScrollView {
+                    Group {
+                        switch selectedProvider {
+                        case .claude: claudePane
+                        case .codex:  codexPane
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 32)
+                    .id(selectedProvider)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: swipeDirection).combined(with: .opacity),
+                        removal: .move(edge: swipeDirection == .leading ? .trailing : .leading).combined(with: .opacity)
+                    ))
+                }
+                .scrollIndicators(.hidden)
+                .refreshable { model.forcePoll() }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Clawdmeter")
             .navigationBarTitleDisplayMode(.inline)
@@ -92,8 +111,46 @@ struct ContentView: View {
                     .accessibilityLabel("Settings")
                 }
             }
-            .refreshable { model.forcePoll() }
+            // Horizontal swipe between providers — power-user shortcut
+            // alongside tapping the logo. Drag threshold matches iOS's
+            // standard "page swipe" feel.
+            .gesture(
+                DragGesture(minimumDistance: 30)
+                    .onEnded { value in
+                        let horizontal = value.translation.width
+                        let vertical = abs(value.translation.height)
+                        guard abs(horizontal) > 50, abs(horizontal) > vertical else { return }
+                        toggleProvider(direction: horizontal < 0 ? .leading : .trailing)
+                    }
+            )
         }
+    }
+
+    /// Toggle between Claude and Codex. `direction` controls which edge
+    /// the new content slides in from (`leading` = came from the right,
+    /// `trailing` = came from the left).
+    private func toggleProvider(direction: Edge = .trailing) {
+        swipeDirection = direction
+        let next: LiveProvider = (selectedProvider == .claude) ? .codex : .claude
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            selectedProviderRaw = next.rawValue
+        }
+    }
+
+    @ViewBuilder
+    private var claudePane: some View {
+        if !model.tokenProvider.hasToken {
+            UnauthenticatedCard(showingSettings: $showingSettings, model: model)
+        } else if model.needsReauth {
+            ReauthCard(showingSettings: $showingSettings)
+        } else {
+            ClaudeSection(model: model)
+        }
+    }
+
+    @ViewBuilder
+    private var codexPane: some View {
+        CodexSection(snapshot: model.codexSnapshot, agentClient: agentClient)
     }
 }
 
@@ -106,8 +163,6 @@ private struct ClaudeSection: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            ClaudeProviderHeader()
-
             if let usage = model.usage {
                 SessionCard(
                     title: "Current session",
@@ -220,8 +275,6 @@ private struct CodexSection: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            providerHeader
-
             if let snap = snapshot {
                 let notStarted = snap.usage.status == .notStarted
                 let usage = snap.usage
@@ -247,15 +300,6 @@ private struct CodexSection: View {
             } else {
                 WaitingForMacCard(agentClient: agentClient)
             }
-        }
-    }
-
-    private var providerHeader: some View {
-        HStack(spacing: 10) {
-            ProviderLogo(asset: "CodexLogo", size: 28)
-            Text("Codex")
-                .font(.system(size: 22, weight: .bold))
-            Spacer()
         }
     }
 }
@@ -452,15 +496,58 @@ private struct ReauthCard: View {
 
 // MARK: - Header + logo
 
-private struct ClaudeProviderHeader: View {
+/// Tappable provider header. The logo + name behave as one button; tapping
+/// swaps to the other provider. A pair of dots underneath communicates the
+/// current selection at a glance. The whole row is a button — large hit
+/// target, single accessibility action.
+private struct ProviderToggleHeader: View {
+    let selected: LiveProvider
+    let onToggle: () -> Void
+
     var body: some View {
-        HStack(spacing: 10) {
-            ProviderLogo(asset: "ClaudeLogo", size: 28)
-            Text("Claude")
-                .font(.system(size: 22, weight: .bold))
-            Spacer()
+        Button(action: onToggle) {
+            HStack(spacing: 12) {
+                ProviderLogo(asset: logoAsset, size: 32)
+                Text(label)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                pageDots
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .background(Color(.tertiarySystemGroupedBackground), in: Circle())
+            }
+            .contentShape(Rectangle())
         }
-        .padding(.top, 4)
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label) usage — tap to switch provider")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var logoAsset: String {
+        switch selected {
+        case .claude: return "ClaudeLogo"
+        case .codex:  return "CodexLogo"
+        }
+    }
+
+    private var label: String {
+        switch selected {
+        case .claude: return "Claude"
+        case .codex:  return "Codex"
+        }
+    }
+
+    private var pageDots: some View {
+        HStack(spacing: 4) {
+            ForEach(LiveProvider.allCases, id: \.self) { provider in
+                Circle()
+                    .fill(provider == selected ? Color.primary : Color.secondary.opacity(0.35))
+                    .frame(width: 6, height: 6)
+            }
+        }
     }
 }
 
