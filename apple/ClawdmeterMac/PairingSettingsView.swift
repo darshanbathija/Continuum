@@ -25,6 +25,7 @@ struct PairingSettingsView: View {
     @State private var qrImage: NSImage?
     @State private var tokenForDisplay: String = ""
     @State private var didCopy: Bool = false
+    @State private var resolvedHost: TailscaleHost.Resolved = TailscaleHost.Resolved(host: "127.0.0.1", kind: .loopback)
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
@@ -52,7 +53,7 @@ struct PairingSettingsView: View {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 6) {
                         LabeledContent("Host") {
-                            Text(macHost())
+                            Text(resolvedHost.host)
                                 .font(.system(size: 12, design: .monospaced))
                                 .textSelection(.enabled)
                         }
@@ -80,6 +81,7 @@ struct PairingSettingsView: View {
                             }
                         }
                         .padding(.top, 4)
+                        hostReachabilityNote
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     qrTile
@@ -95,6 +97,30 @@ struct PairingSettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder
+    private var hostReachabilityNote: some View {
+        switch resolvedHost.kind {
+        case .loopback:
+            warningRow("No Tailscale address detected. Pairing only works for the iOS simulator on this Mac. Install Tailscale and sign in to pair a real iPhone.")
+        case .tailscaleDNSBackendDown(let state):
+            warningRow("Tailscale is installed but not running (\(state)). Open the Tailscale menu bar and turn the tunnel on — the iPhone can't reach this Mac until it's up.")
+        case .tailscaleIPv4, .tailscaleIPv6, .tailscaleDNS:
+            EmptyView()
+        }
+    }
+
+    private func warningRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.caption)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 4)
     }
 
     private var qrTile: some View {
@@ -256,7 +282,7 @@ struct PairingSettingsView: View {
     private func copyPairingURL() {
         guard let httpPort = runtime.agentControlServer.boundPort,
               let wsPort = runtime.agentControlServer.boundWsPort else { return }
-        let url = "clawdmeter://\(macHost()):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
+        let url = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(url, forType: .string)
         didCopy = true
@@ -269,36 +295,15 @@ struct PairingSettingsView: View {
 
     private func refreshQR() {
         tokenForDisplay = PairingTokenStore.shared.currentToken()
+        resolvedHost = TailscaleHost.resolve()
         guard let httpPort = runtime.agentControlServer.boundPort,
               let wsPort = runtime.agentControlServer.boundWsPort
         else {
             qrImage = nil
             return
         }
-        let challenge = PairingChallenge(
-            host: macHost(),
-            port: Int(httpPort),
-            wsPort: Int(wsPort),
-            token: tokenForDisplay
-        )
-        let urlString = "clawdmeter://\(challenge.host):\(challenge.port)?token=\(challenge.token)&ws=\(challenge.wsPort)"
+        let urlString = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
         qrImage = generateQR(from: urlString)
-    }
-
-    /// Best-effort: read the Tailscale MagicDNS name from `tailscale status`.
-    /// Falls back to `127.0.0.1` (works from iOS Simulator on the same Mac;
-    /// real iPhones reach the Mac via the MagicDNS name over Tailscale).
-    private func macHost() -> String {
-        if let result = try? Process.runAndCapture(
-            "/opt/homebrew/bin/tailscale", ["status", "--json"]
-        ),
-           let json = try? JSONSerialization.jsonObject(with: result) as? [String: Any],
-           let selfNode = json["Self"] as? [String: Any],
-           let dnsName = selfNode["DNSName"] as? String,
-           !dnsName.isEmpty {
-            return dnsName.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        }
-        return "127.0.0.1"
     }
 
     private func generateQR(from string: String) -> NSImage? {
@@ -315,19 +320,3 @@ struct PairingSettingsView: View {
     }
 }
 
-/// Process helper for the host-name lookup. Throwing variant that returns
-/// stdout Data.
-private extension Process {
-    static func runAndCapture(_ executable: String, _ args: [String]) throws -> Data {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: executable)
-        p.arguments = args
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        try p.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return data
-    }
-}

@@ -174,6 +174,7 @@ struct iOSSessionControlsStrip: View {
         case .medium:  return "Med"
         case .high:    return "High"
         case .xhigh:   return "xHigh"
+        case .max:     return "Max"
         }
     }
 
@@ -186,6 +187,7 @@ struct iOSSessionControlsStrip: View {
         case .medium:  return "medium"
         case .high:    return "high"
         case .xhigh:   return "extra high"
+        case .max:     return "max"
         }
     }
 

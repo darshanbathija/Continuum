@@ -25,22 +25,25 @@ The Clawdmeter icon appears in the menu bar. Click it to view your Claude / Code
 | Surface | What it does |
 |---|---|
 | **Mac menu bar** | Live session % + reset countdown for Claude and Codex side-by-side. Click → popover with the same data + an "Open dashboard" link. |
-| **Mac dashboard window** | Side-by-side Claude + Codex live cards (session %, weekly %, auto-revive controls) plus the **Token usage** row: totals grid (4 windows × 2 providers, dollars primary), stacked daily-spend chart, by-repo breakdown with its own window picker. A **Sessions** tab is the read+write control plane for live Claude Code + Codex CLI sessions (see below). A "Sync with iPhone" button in the header opens a pairing QR + Copy URL popover. |
+| **Mac dashboard window** | Side-by-side Claude + Codex live cards (session %, weekly %, auto-revive controls) plus the **Token usage** row: totals grid (4 windows × 2 providers, dollars primary), stacked daily-spend chart, by-repo breakdown with its own window picker. A **Sessions** tab is a first-class chat workbench for live Claude Code + Codex CLI sessions — slash-command palette, `@`-mention picker, attachments (drag-drop / file-picker / paste image), running-session cost ticker, autopilot trust gate, and a `Cmd+T` overlay for raw tmux when you need it (see below). A "Sync with iPhone" button in the header opens a pairing QR + Copy URL popover. |
 | **iPhone app** | TabView: **Live** (Claude live-polled, Codex mirrored from Mac), **Analytics** (totals + by-repo, synced from the Mac over Tailscale once paired), and **Sessions** (start / monitor / approve plans / view diffs / merge PRs on Mac sessions from your phone). |
 | **Apple Watch app** | Wrist meter showing session + weekly usage, plus a session list + Approve / Interrupt / Voice-reply controls for the paired Mac's live agents. |
 | **Widgets** | Lock Screen + Home Screen widgets on iOS, complications on watchOS (four families), and a Mac menu bar widget that ships with the Mac app. |
 
-## Sessions: mobile-native control plane for Claude Code + Codex
+## Sessions: a Mac chat IDE for Claude Code + Codex, paired to your phone
 
-The Sessions tab on Mac (and the matching tab on iPhone) turns Clawdmeter into a read+write control plane for the CLIs themselves.
+The Sessions tab on Mac is a first-class chat workbench for the CLIs themselves. The matching iPhone tab is the mobile control plane against the same daemon.
 
-- Start a Claude or Codex session in any repo with a model picker, effort dial, plan-or-code mode, and worktree-or-local cwd — from the Mac dashboard or directly from your phone.
-- Plan mode works for both agents: Claude maps it to `--permission-mode plan`, Codex maps it to `--sandbox read-only`. Approve & run flips the permission/sandbox afterwards.
-- The Sessions sidebar groups live sessions and recent JSONLs by repo; iOS sections collapse to keep the screen scannable.
-- Pairing is QR + Tailscale: tap "Sync with iPhone" on the Mac, scan or paste the URL on the phone. No iCloud, no APNS, no `.p8` key custody.
-- The Mac daemon (`Network.framework` HTTP + WS on ports 21731 / 21732, bound to loopback + Tailscale CGNAT) exposes the full control surface to the iPhone and Watch.
+- **Mac chat IDE (v0.3.0).** The Sessions tab is a chat workspace, not a session manager. Send turns from a powerful composer: slash-command palette (`/` lists every installed Claude Code skill walked from `~/.claude/skills/` and the project's `.claude/skills/`), `@`-mention picker (open sessions, agent-cited files, recent JSONLs), attachments (drag-drop from Finder, file picker, paste image as PNG, `QLThumbnailGenerator` previews, 50MB cap), voice dictation (Ctrl+M), and a running-session cost ticker fed by `Pricing.shared`. The send button transforms into a stop button while the session runs. Raw tmux is one keystroke away via the `Cmd+T` overlay.
+- **Continue here.** Right-click a recent JSONL row in the sidebar to spawn a fresh tmux pane with `--resume <cli-id>` (Claude) or `resume <cli-id>` (Codex) — the new pane reads the CLI's own session id out of the JSONL header so the chat history stays continuous.
+- **Autopilot chip with per-repo trust.** A chip in the composer row toggles `--dangerously-skip-permissions` (Claude) or `--dangerously-bypass-approvals-and-sandbox` (Codex). Untrusted repos hit a confirm sheet that flips the chip CTA to "Trust repo + enable autopilot" and the daemon enforces the trust list at the wire — a bearer-token-holding peer can't bypass it.
+- **Cross-Apple compose-draft handoff.** New iPhone "Open on Mac" button on the new-session sheet posts a `compose-draft` envelope over the existing pairing WebSocket; the Mac dashboard pre-fills the centered empty-state composer (text + suggested repo / agent / model / effort). Wire version bumped 3 → 4; iOS shows "Update Clawdmeter on the Mac" if the paired Mac is on the older protocol.
+- **Pairing host resolution rewritten.** `TailscaleHost.resolve()` reads the Tailscale interface address directly via `getifaddrs(3)` and falls back to `tailscale status --json` across three known install paths. Old code only checked `/opt/homebrew/bin/tailscale` and silently fell back to `127.0.0.1` — iPhones couldn't reach the Mac. The pairing popover and Settings → Sessions pane now show the resolved host kind and warn explicitly when the host is loopback or the Tailscale backend is down.
+- **Plan mode works for both agents.** Claude maps to `--permission-mode plan`, Codex maps to `--sandbox read-only`. Approve & run flips the permission / sandbox afterwards.
+- **Pairing is QR + Tailscale.** Tap "Sync with iPhone" on the Mac, scan or paste the URL on the phone. No iCloud, no APNS, no `.p8` key custody.
+- **The Mac daemon** (`Network.framework` HTTP + WS on ports 21731 / 21732, bound to loopback + Tailscale CGNAT) exposes the full control surface to the iPhone and Watch.
 
-See `docs/designs/sessions-v2.md` for the full ship details and `TODOS.md` for deferred work.
+See `docs/designs/sessions-v2.md` for the v2.0 control-plane ship, `CHANGELOG.md` for the v0.3.0 chat-IDE rewrite, and `TODOS.md` for deferred work.
 
 ## Building from source
 
@@ -51,7 +54,7 @@ brew install xcodegen            # one-time
 git clone https://github.com/darshanbathija/Clawdmeter
 cd Clawdmeter/apple
 xcodegen                         # regenerate Clawdmeter.xcodeproj from project.yml
-( cd ClawdmeterShared && swift test )   # 153 tests, ~0.3s
+( cd ClawdmeterShared && swift test )   # 250 tests, ~0.4s
 xcodebuild -scheme "Clawdmeter (Mac)"   -destination 'platform=macOS,arch=arm64' build
 xcodebuild -scheme "Clawdmeter (iOS)"   -destination 'generic/platform=iOS Simulator' build
 xcodebuild -scheme "Clawdmeter (Watch)" -destination 'generic/platform=watchOS Simulator' build

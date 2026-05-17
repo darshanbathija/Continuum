@@ -46,6 +46,12 @@ apple/
 │   │   │   ├── UsageHistoryStore.swift      @MainActor ObservableObject; 60s timer
 │   │   │   ├── pricing.json                 embedded LiteLLM snapshot (~145 models)
 │   │   │   └── Views/                       TotalsGrid, DailyChart, RepoList
+│   │   ├── AgentControl/                       v1 daemon DTOs + v0.3.0 helpers
+│   │   │   ├── Protocol.swift                  wire DTOs (v4: adds compose-draft)
+│   │   │   └── JSONLSessionId.swift            Claude `sessionId` / Codex `payload.id` extractor
+│   │   ├── Composer/                           v0.3.0 chat-composer state
+│   │   │   ├── ComposerStore.swift             text + attachments + chips; locked semantics
+│   │   │   └── SkillFrontmatter.swift          YAML frontmatter parser for SkillCatalog
 │   │   ├── Model/UsageData.swift            rate-limit snapshot struct (epoch tuple)
 │   │   ├── Predictor/BurnRatePredictor.swift
 │   │   ├── Theme/Theme.swift                colors, fonts, layout tokens
@@ -61,7 +67,7 @@ apple/
 │   │       ├── UsageCloudMirror.swift          iCloud KV sync (Mac → iOS)
 │   │       ├── WatchTokenBridge.swift          WCSession iPhone → Watch
 │   │       └── AutoReviver.swift
-│   └── Tests/ClawdmeterSharedTests/            XCTest, 59 tests, all passing
+│   └── Tests/ClawdmeterSharedTests/            XCTest, 250 tests, all passing
 ├── ClawdmeterMac/                              macOS app
 │   ├── ClawdmeterMacApp.swift                  @main, Window + Settings
 │   ├── AppRuntime.swift                        owns AppModel × 2 + analytics
@@ -71,6 +77,17 @@ apple/
 │   ├── PopoverView.swift                       menu-bar popover (per-provider)
 │   ├── MenuBarGaugeView.swift                  16pt status-bar gauge
 │   ├── AppDelegate.swift                       NSStatusItem + NSPopover wiring
+│   ├── AgentControl/                           v1/v2 daemon (Sessions tab)
+│   │   └── TailscaleHost.swift                 v0.3.0 getifaddrs(3) + status JSON fallback
+│   ├── Workspace/Composer/                     v0.3.0 Mac chat IDE module
+│   │   ├── ComposerInputCore.swift             SwiftUI composer bound to ComposerStore
+│   │   ├── EmptyStateCenteredComposer.swift    Codex-style centered first-send composer
+│   │   ├── AttachmentChip.swift                per-attachment chip with QL preview
+│   │   ├── AttachmentStaging.swift             writes to attachments/ or worktree sandbox
+│   │   ├── AutopilotChip.swift                 confirm sheet + per-repo trust gate
+│   │   ├── CommandPalette.swift                slash-command palette (SkillCatalog)
+│   │   ├── MentionPicker.swift                 @-mention picker
+│   │   └── MacComposerSender.swift             loopback HTTP → daemon /sessions/:id/send
 │   └── Assets.xcassets/AppIcon.appiconset/     10 sizes (16 → 1024@2x)
 ├── ClawdmeteriOS/                              iPhone app
 │   ├── ContentView.swift                       TabView: Live / Analytics

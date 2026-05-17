@@ -69,7 +69,7 @@ public final class AgentControlClient: ObservableObject {
 
     private func makeRequest(path: String, method: String = "GET", body: Data? = nil) -> URLRequest? {
         guard let host, let token else { return nil }
-        guard let url = URL(string: "http://\(host):\(httpPort)\(path)") else { return nil }
+        guard let url = URL(string: "http://\(Self.urlHostLiteral(host)):\(httpPort)\(path)") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -79,6 +79,17 @@ public final class AgentControlClient: ObservableObject {
         }
         req.timeoutInterval = 8
         return req
+    }
+
+    /// Wrap raw IPv6 literals in brackets so `URL(string:)` parses the
+    /// authority correctly. RFC 3986 requires `[fd7a:...]:port` form, but
+    /// the Tailscale `tailscale ip -6` output and the pairing URL's
+    /// `url.host` field are both unbracketed. Hostnames and IPv4 are
+    /// returned untouched.
+    static func urlHostLiteral(_ host: String) -> String {
+        if host.hasPrefix("[") { return host }
+        if host.contains(":") { return "[\(host)]" }
+        return host
     }
 
     private enum ClientHTTPError: LocalizedError {
@@ -415,6 +426,7 @@ public final class AgentControlClient: ObservableObject {
                 latestSessionId: latest?.id
             )
         } catch {
+            self.lastError = error.localizedDescription
             clientLogger.debug("refreshSessions failed: \(error.localizedDescription)")
         }
     }
@@ -580,6 +592,78 @@ public final class AgentControlClient: ObservableObject {
         } catch {
             clientLogger.debug("analytics fetch failed: \(error.localizedDescription)")
             return nil
+        }
+    }
+
+    /// Outcome of an X1 compose-draft post. Lets the caller surface the
+    /// right UX (toast vs upgrade-Mac prompt vs silent success).
+    public enum ComposeDraftResult: Equatable {
+        case delivered
+        /// Mac is too old to understand `compose-draft`. The user should
+        /// see an "Update your Mac for Open-on-Mac" affordance.
+        case macUnsupported(serverWireVersion: Int)
+        /// Daemon unreachable or refused (peer/auth/policy).
+        case failed(message: String)
+    }
+
+    /// X1 cross-Apple handoff: post a compose draft to the paired Mac via
+    /// a short-lived WebSocket using op `compose-draft`. The Mac's empty-
+    /// state composer listens via NotificationCenter and pre-fills its
+    /// text + chip suggestions. We wait for the daemon's 1-byte ACK before
+    /// cancelling (no more 200ms-sleep race — review §10 finding).
+    @MainActor
+    @discardableResult
+    public func postComposeDraft(_ draft: ComposeDraft) async -> ComposeDraftResult {
+        guard let host, let token else { return .failed(message: "Not paired with a Mac.") }
+        // Wire-version gate: older Macs would reject the unknown op via
+        // `.unsupportedData` close and the user would get zero feedback.
+        // We require a /health refresh to have populated serverWireVersion;
+        // if it's missing or too low, fail fast with a recoverable result.
+        if let serverWire = serverWireVersion, serverWire < AgentControlWireVersion.composeDraftMinimum {
+            return .macUnsupported(serverWireVersion: serverWire)
+        }
+        guard let url = URL(string: "ws://\(Self.urlHostLiteral(host)):\(wsPort)/") else {
+            return .failed(message: "Bad daemon URL.")
+        }
+        let task = URLSession.shared.webSocketTask(with: URLRequest(url: url, timeoutInterval: 8))
+        task.resume()
+        defer { task.cancel(with: .goingAway, reason: nil) }
+        let envelope: [String: Any] = [
+            "op": "compose-draft",
+            "token": token,
+            "draft": draft.encodedJSONObject()
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: envelope) else {
+            return .failed(message: "Couldn't encode draft.")
+        }
+        do {
+            try await task.send(.data(data))
+            // Wait for the daemon's single-byte ACK. 5s ceiling so a stuck
+            // daemon doesn't pin the UI; otherwise we trust the receive.
+            let ack: URLSessionWebSocketTask.Message
+            do {
+                ack = try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
+                    group.addTask { try await task.receive() }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 5_000_000_000)
+                        throw URLError(.timedOut)
+                    }
+                    let first = try await group.next()!
+                    group.cancelAll()
+                    return first
+                }
+            } catch {
+                clientLogger.warning("compose-draft ACK wait failed: \(error.localizedDescription)")
+                return .failed(message: "Mac didn't acknowledge the draft within 5s.")
+            }
+            switch ack {
+            case .string(let s) where s == "ok": return .delivered
+            case .data(let d) where d == Data("ok".utf8): return .delivered
+            default: return .failed(message: "Mac sent an unexpected ack.")
+            }
+        } catch {
+            clientLogger.warning("compose-draft post failed: \(error.localizedDescription)")
+            return .failed(message: error.localizedDescription)
         }
     }
 

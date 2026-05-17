@@ -137,10 +137,12 @@ public final class AgentSessionRegistry: ObservableObject {
         }
     }
 
-    /// Sessions v2: swap model on a live session (Phase 0).
+    /// Sessions v2: swap model on a live session (Phase 0). `effort: nil`
+    /// means "leave effort unchanged" — pass the existing value through so
+    /// `with()`'s double-optional override semantics don't null it out.
     public func setModel(id: UUID, model: String, effort: ReasoningEffort?) {
         update(id: id) { s in
-            with(s, model: model, effort: effort ?? s.effort)
+            with(s, model: model, effort: .some(effort ?? s.effort))
         }
     }
 

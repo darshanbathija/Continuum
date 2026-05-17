@@ -53,6 +53,12 @@ Clawdmeter/
     │   │   │   ├── UsageHistoryStore.swift     @MainActor ObservableObject
     │   │   │   ├── pricing.json                embedded LiteLLM snapshot
     │   │   │   └── Views/                      TotalsGrid, DailyChart, RepoList
+    │   │   ├── AgentControl/                   shared CLI-session helpers
+    │   │   │   ├── Protocol.swift              v4 wire DTOs (compose-draft)
+    │   │   │   └── JSONLSessionId.swift        Claude `sessionId` / Codex `payload.id`
+    │   │   ├── Composer/                       chat-composer state model
+    │   │   │   ├── ComposerStore.swift         text + attachments + chips; locked semantics
+    │   │   │   └── SkillFrontmatter.swift      YAML frontmatter parser for SkillCatalog
     │   │   ├── Model/UsageData.swift           rate-limit snapshot struct
     │   │   ├── Predictor/BurnRatePredictor.swift
     │   │   ├── Theme/Theme.swift               colors, fonts, layout tokens
@@ -67,7 +73,7 @@ Clawdmeter/
     │   │       ├── UsageCloudMirror.swift          iCloud KV (Mac → iOS)
     │   │       ├── WatchTokenBridge.swift          WCSession iPhone → Watch
     │   │       └── AutoReviver.swift               "keep the 5h timer warm"
-    │   └── Tests/ClawdmeterSharedTests/            XCTest, 59 tests
+    │   └── Tests/ClawdmeterSharedTests/            XCTest, 250 tests
     ├── ClawdmeterMac/                     macOS app
     │   ├── ClawdmeterMacApp.swift             @main, Window + Settings
     │   ├── AppRuntime.swift                   owns AppModel × 2 + analytics
@@ -77,6 +83,18 @@ Clawdmeter/
     │   ├── PopoverView.swift                  menu-bar popover
     │   ├── MenuBarGaugeView.swift             16pt status-bar gauge
     │   ├── AppDelegate.swift                  NSStatusItem + NSPopover wiring
+    │   ├── AgentControl/                      v1 daemon + v0.3.0 Tailscale host
+    │   │   ├── TailscaleHost.swift            getifaddrs(3) + status JSON fallback
+    │   │   └── … (see "Sessions feature v1/v2" below for the full set)
+    │   ├── Workspace/Composer/                v0.3.0 Mac chat IDE module
+    │   │   ├── ComposerInputCore.swift        SwiftUI composer bound to ComposerStore
+    │   │   ├── EmptyStateCenteredComposer.swift   Codex-style centered first-send composer
+    │   │   ├── AttachmentChip.swift           per-attachment chip with QL preview
+    │   │   ├── AttachmentStaging.swift        writes to attachments/ or worktree sandbox
+    │   │   ├── AutopilotChip.swift            confirm sheet + per-repo trust gate
+    │   │   ├── CommandPalette.swift           slash-command palette (SkillCatalog)
+    │   │   ├── MentionPicker.swift            @-mention picker (sessions / sources / JSONLs)
+    │   │   └── MacComposerSender.swift        loopback HTTP client → daemon /sessions/:id/send
     │   └── Assets.xcassets/AppIcon.appiconset/   10 sizes (16 → 1024@2x)
     ├── ClawdmeteriOS/                     iPhone app
     │   ├── ContentView.swift                  TabView: Live / Analytics
@@ -181,14 +199,16 @@ in worktrees, with Conductor-grade model picker + effort dial + plan/code
 toggle + mid-session swap. See `docs/designs/sessions-v2.md` for the
 full v2 ship details and `TODOS.md` for deferred work.
 
-Wire (v3): `Protocol.swift` carries `ReasoningEffort`, `ModelCatalog`
+Wire (v4 as of v0.3.0): `Protocol.swift` carries `ReasoningEffort`, `ModelCatalog`
 (5 Claude + 5 Codex models bundled), `HealthResponse` with `wireVersion`,
 `ChangeModel/Effort/Mode/Send/Autopilot/PickWinner` DTOs, `PRStatus`,
 `CreatePRRequest`, `GitDiffFile` + `GitDiffHunk`, `PreflightQuery/Response`,
-`WireChatSnapshot`. `AgentSession` schema v3 adds `effort`,
-`abPairSessionId`, `abPairDecidedAt`. v2 decoders accept new fields via
-`decodeIfPresent` — back-compat preserved. v2 readers reading a v3
-sessions.json silently drop the new fields.
+`WireChatSnapshot`. v4 adds the `compose-draft` WS op for X1 cross-Apple
+handoff with `composeDraftMinimum=4`; older Macs return `.unsupportedData`
+close so iOS gates the post on `serverWireVersion`. `AgentSession`
+schema v3 adds `effort`, `abPairSessionId`, `abPairDecidedAt`. v2 decoders
+accept new fields via `decodeIfPresent` — back-compat preserved. v2 readers
+reading a v3 sessions.json silently drop the new fields.
 
 Daemon (Mac): `AgentControlServer` uses a route-table dispatcher
 (`RouteTable.swift`) with 19 new endpoints (`/models`,
@@ -242,12 +262,13 @@ Fanfare). Quiet-hours window default 22:00→07:00. Falls back to
 AudioToolbox `AudioServicesPlaySystemSound(1336)` when bundled `.caf`
 assets are missing.
 
-Tests: 153/153 (was 133) in `ClawdmeterShared` after adding
+Tests at v2.0 ship: 153/153 (was 133) in `ClawdmeterShared` after adding
 `SessionsV2Tests` covering schema v3 round-trip + back-compat,
 `ReasoningEffort` flag mapping, `ModelCatalog.bundled` consistency,
 mid-session change DTOs, `HealthResponse`, `WireChatSnapshot`, `CityPool`,
 `WatchSessionSummary`. 19/19 in `tools/tmux-cc-probe`. All three
-platform schemes build clean.
+platform schemes build clean. (Subsequent polish + the v0.3.0 chat-IDE
+rewrite carry the suite to 250 — see CHANGELOG.md.)
 
 ## Sessions v2.0.1 polish (2026-05-17 same-day follow-up)
 
@@ -340,6 +361,103 @@ The post-v2 commits ship to `main` directly without a feature branch —
 the repo is solo-dev / personal-use, so `/ship` and `/document-release`
 abort their PR-flow scaffolding. The build version (`CURRENT_PROJECT_VERSION`
 in `apple/project.yml`) is the source of truth for what's in the DMG.
+
+## Sessions Mac chat IDE (v0.3.0 build 17, 2026-05-18)
+
+Five-wave rewrite of the Sessions tab into a chat workbench. The tab is
+no longer a session manager that hosts a `[Chat | Terminal]` segmented
+picker; chat is the only mode and raw tmux is demoted to a `Cmd+T` overlay
+reusing `TerminalTabContainer`. The composer is the surface that took the
+biggest jump.
+
+- **Wave A — Continuable sessions.** Right-click a recent JSONL row → "Continue here"
+  parses the CLI's own session id from the file header via the new
+  `JSONLSessionId` helper (Claude `sessionId` / Codex `payload.id`) and
+  spawns a tmux pane with `--resume <id>` / `resume <id>`. The new
+  session pins to the same JSONL so chat history is continuous.
+  `SessionsModel.spawnSession` gains `resumeSessionId`, `model`,
+  `effort`, and `pinnedJSONLURL` parameters.
+- **Wave B — Tmux-as-chat first-class.** Mac send path moves from
+  direct `tmuxClient.pasteBytes` to the daemon's `POST /sessions/:id/send`
+  via the new `MacComposerSender` loopback HTTP client, so the daemon's
+  audit + rate-limit + `sendKeys`/`paste-buffer` heuristics apply
+  uniformly across Mac and iOS. Send button transforms into a stop
+  button (`/sessions/:id/interrupt`) when the session is running.
+- **Wave C — Powerful composer.** New shared `ComposerStore`
+  (`ClawdmeterShared/Composer/`) owns text/attachments/chip state with
+  a `SendError` enum and locked semantics: text preserved on error,
+  attachments preserved on error, trailing-newline always appended for
+  tmux `paste-buffer`. `ComposerInputCore` SwiftUI view binds it.
+  Paperclip is wired to `.fileImporter` + `.onDrop` + `NSPasteboard`
+  clipboard image paste. Image-paste-as-PNG, drag-drop from Finder, and
+  the file picker all route through `AttachmentStaging` which writes
+  to `~/Library/Application Support/Clawdmeter/attachments/<sessionId>/`
+  for Claude or Codex local, or into `<worktree>/.clawdmeter-attachments/`
+  when Codex is in worktree mode (so files live inside its sandbox root).
+  `QLThumbnailGenerator` previews on each chip; 50MB hard cap.
+- **Wave D — Centered empty state.** "Pick a session to open it here"
+  replaced by `EmptyStateCenteredComposer` with `What should we work on
+  in <repo>?`, a repo picker chip, and full Mode/Model/Effort/Plan chips.
+  First send spawns a session via `model.spawnSession`, waits for pane
+  readiness, then posts the prompt as the opening user turn.
+- **Wave E — Polish.** Worktree-branch chip on the chat header.
+  Tool-run groups default-collapsed. Read-only footer points at the new
+  Continue-here context-menu.
+
+Composer chip extensions:
+
+- **Slash-command palette (X4).** Typing `/` opens a popover that lists
+  installed Claude Code skills walked from `~/.claude/skills/<name>/SKILL.md`
+  (global) + `<repo>/.claude/skills/<name>/SKILL.md` (project-local) for
+  Claude sessions, or a built-in `/clear`/`/compact`/`/model`/`/help`/`/quit`
+  list for Codex. `SkillCatalog` runs the 127-file scan + YAML frontmatter
+  parse on a `Task.detached` background thread with a 30s TTL + dir-mtime
+  invalidation, so the palette opens without ever stalling the main thread.
+  Frontmatter parser lives in shared `SkillFrontmatter` for testability.
+- **`@`-mention picker.** Typing `@` opens a popover listing open sessions +
+  agent-cited files in this session (`SourceEntry`) + recent JSONLs across
+  sessions. Full repo-file walker deferred to follow-up (see TODOS.md).
+- **Autopilot chip (T12).** Confirm sheet warns the toggle interrupts the
+  current turn. Repos not on the autopilot trust list show
+  "Trust this repo for autopilot?" and the CTA flips to "Trust repo + enable
+  autopilot" calling `AutopilotState.trustRepo(repoKey)` before
+  `setAutopilot`. Daemon's `handleSetAutopilot` enforces per-repo trust at
+  the wire: HTTP 403 when `req.enabled` is true and the repo is not on
+  `trustedRepoKeys`. Bearer-token-holding peers can't bypass the UI.
+- **Running-session cost ticker.** Composer footer shows `~$X • Y K tokens`
+  from `SessionChatStore.snapshot` × `Pricing.shared.cost(for:tokens:)`.
+  Soft-red `⚠︎ weekly cap N%` badge at ≥95% for Claude sessions;
+  Codex sessions get no cap badge (Anthropic's weekly cap doesn't map).
+
+Cross-Apple compose-draft handoff (X1):
+
+- New WS op `compose-draft` on the daemon dispatcher. iOS new-session
+  sheet ships an "Open on Mac" button that opens a one-shot WebSocket,
+  posts a `ComposeDraft` envelope (text + suggested repo/agent/model/effort),
+  awaits the 1-byte ACK, closes. Mac dashboard listens via `NotificationCenter`
+  and pre-fills `EmptyStateCenteredComposer`. Wire version bumped 3 → 4
+  with `composeDraftMinimum=4`; iOS gates `postComposeDraft` on
+  `serverWireVersion >= composeDraftMinimum` and surfaces "Update
+  Clawdmeter on the Mac" for older Macs. Inbound text capped at 64KB;
+  `AuditLog` records every draft.
+
+Pairing host resolution rewritten:
+
+- `TailscaleHost.resolve()` reads the Tailscale interface address
+  directly via `getifaddrs(3)` — no shell-out, no path assumptions.
+  Falls back to `tailscale status --json` across three known install
+  locations (`/opt/homebrew/bin/`, `/usr/local/bin/`, App Store install).
+  Detects `BackendState != "Running"` so the Mac surface warns "Tailscale
+  installed but not running" instead of letting you scan a dead URL.
+- Old code shelled out to `/opt/homebrew/bin/tailscale` only; when the
+  binary lived elsewhere, the pairing URL silently fell back to `127.0.0.1`
+  and iPhones couldn't reach the Mac. This was the root cause of the
+  "I paired but nothing works" symptom.
+
+Tests: 250/250 in `ClawdmeterShared` (was 215). Added
+`JSONLSessionIdTests` (10), `SkillFrontmatterTests` (10),
+`ComposerStoreTests` (+15 cases for state/render/error/empty-state
+behavior). `SessionsV2Tests` wire-version assertion bumped 3 → 4.
 
 ## Sessions feature v1 (added 2026-05-16, extended through Phase G3)
 

@@ -21,7 +21,14 @@ import Foundation
 /// iOS reads this on pair-test or session-list refresh and compares to its
 /// own constant. Mismatch surfaces a banner. New endpoints return HTTP 426.
 public enum AgentControlWireVersion {
-    public static let current: Int = 3
+    /// Wire version. Bump when adding a new WS op, REST endpoint, or DTO that
+    /// older Macs won't recognize so iOS can fall back gracefully.
+    /// v4 (2026-05-18) adds `compose-draft` WS op (X1 cross-Apple handoff).
+    public static let current: Int = 4
+    /// Minimum wire version that supports the `compose-draft` WS op.
+    /// iOS guards `postComposeDraft` on this — older Macs would reject
+    /// the unknown op via `.unsupportedData` close (review §10 finding).
+    public static let composeDraftMinimum: Int = 4
 }
 
 /// `GET /health` response. Old clients tolerate the extra fields; new
@@ -49,9 +56,10 @@ public enum ReasoningEffort: String, Codable, Hashable, Sendable, CaseIterable {
     case medium
     case high
     case xhigh
+    case max
 
     /// Claude CLI flag value (`claude --effort <value>`, verified against
-    /// claude --help 2.1.141).
+    /// claude --help 2.1.141 — exposes low/medium/high/xhigh/max).
     public var claudeFlagValue: String {
         switch self {
         case .minimal: return "low"   // claude CLI does not expose minimal — fold into low
@@ -59,14 +67,88 @@ public enum ReasoningEffort: String, Codable, Hashable, Sendable, CaseIterable {
         case .medium:  return "medium"
         case .high:    return "high"
         case .xhigh:   return "xhigh"
+        case .max:     return "max"
         }
     }
 
     /// Codex CLI config value (`codex -c model_reasoning_effort="<value>"`).
     /// Codex exposes the same five levels via TOML override; codex CLI does
     /// NOT have a `--reasoning-effort` flag, only this config-override path.
+    /// `max` folds into `xhigh` for Codex (no equivalent override).
     public var codexConfigValue: String {
-        rawValue
+        switch self {
+        case .max: return "xhigh"
+        default:   return rawValue
+        }
+    }
+
+    /// Lenient decoder: unknown raw values (older Macs reading a `max`
+    /// effort written by a newer Mac) decode to `.xhigh` rather than
+    /// failing the whole AgentSession Codable round-trip.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        self = ReasoningEffort(rawValue: raw) ?? .xhigh
+    }
+}
+
+// MARK: - Permission mode
+
+/// Claude-Code-style permission tiers. Each tier maps cleanly to a
+/// supported CLI flag — we DON'T expose modes the CLIs can't enforce.
+///
+/// - `ask`: default. Agent asks before every tool call.
+///   - Claude: no flag.
+///   - Codex: no flag (defaults to workspace-write asking before non-trivial ops).
+/// - `acceptEdits`: agent auto-accepts file edits/writes, still asks for
+///   Bash and other non-edit tool calls.
+///   - Claude: `--permission-mode acceptEdits`.
+///   - Codex: no exact equivalent; folds into `ask` (default workspace-write
+///     already auto-accepts in-workspace writes).
+/// - `plan`: agent runs read-only until the user approves the plan.
+///   - Claude: `--permission-mode plan`.
+///   - Codex: `-s read-only`.
+/// - `bypass`: skip every permission check. Per-repo trust required.
+///   - Claude: `--dangerously-skip-permissions`.
+///   - Codex: `--dangerously-bypass-approvals-and-sandbox`.
+public enum PermissionMode: String, Codable, Hashable, Sendable, CaseIterable {
+    case ask
+    case acceptEdits
+    case plan
+    case bypass
+
+    /// User-facing label, matches the wording in the Mac composer's
+    /// mode menu.
+    public var displayName: String {
+        switch self {
+        case .ask:         return "Ask permissions"
+        case .acceptEdits: return "Accept edits"
+        case .plan:        return "Plan mode"
+        case .bypass:      return "Bypass permissions"
+        }
+    }
+
+    /// Short label used on the chip itself.
+    public var shortLabel: String {
+        switch self {
+        case .ask:         return "Ask"
+        case .acceptEdits: return "Accept edits"
+        case .plan:        return "Plan"
+        case .bypass:      return "Bypass"
+        }
+    }
+
+    /// Whether picking this mode requires a per-repo trust grant
+    /// (handled by the existing `AutopilotState.trustRepo` path).
+    public var requiresTrust: Bool {
+        self == .bypass
+    }
+
+    /// Lenient decoder for forward-compat with future-Mac modes.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        self = PermissionMode(rawValue: raw) ?? .ask
     }
 }
 
@@ -189,6 +271,63 @@ public struct RecentSession: Codable, Hashable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case path, lastModified, provider, firstPrompt
+    }
+}
+
+// MARK: - Sidebar grouping / sorting
+
+/// How the Sessions sidebar buckets rows. Repo is the legacy default
+/// (one section per cwd). Date / Status / Agent flatten across repos and
+/// re-bucket by the chosen field. None renders a flat list.
+public enum SessionGrouping: String, Codable, CaseIterable, Sendable {
+    case repo
+    case date
+    case status
+    case agent
+    case none
+
+    public var displayName: String {
+        switch self {
+        case .repo:   return "Repo"
+        case .date:   return "Date"
+        case .status: return "Status"
+        case .agent:  return "Agent"
+        case .none:   return "None"
+        }
+    }
+}
+
+/// Sort order within each group.
+public enum SessionSorting: String, Codable, CaseIterable, Sendable {
+    case recency
+    case created
+    case name
+
+    public var displayName: String {
+        switch self {
+        case .recency: return "Recency"
+        case .created: return "Created"
+        case .name:    return "Name"
+        }
+    }
+}
+
+/// Status filter. `.all` shows everything; `.active` keeps planning + running +
+/// paused; `.done` keeps done; `.archived` keeps archived-only (the existing
+/// `showArchived` toggle still wins for backwards compat).
+public enum SessionStatusFilter: String, Codable, CaseIterable, Sendable {
+    case all
+    case active
+    case done
+    case archived
+
+    public var displayName: String {
+        switch self {
+        case .all:      return "All"
+        case .active:   return "Active"
+        case .done:     return "Done"
+        case .archived: return "Archived"
+        }
     }
 }
 
@@ -471,7 +610,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.lastEventSeq = try c.decode(UInt64.self, forKey: .lastEventSeq)
         // mode: if absent, infer from worktreePath (back-compat with v1).
         if let decoded = try? c.decodeIfPresent(SessionMode.self, forKey: .mode) {
-            self.mode = decoded ?? (self.worktreePath != nil ? .worktree : .local)
+            self.mode = decoded
         } else {
             self.mode = self.worktreePath != nil ? .worktree : .local
         }
@@ -1104,5 +1243,49 @@ public struct UsageEnvelope: Codable, Sendable {
         self.claude = claude
         self.codex = codex
         self.lastChecked = lastChecked
+    }
+}
+
+// MARK: - Compose-draft (X1 cross-Apple handoff)
+
+/// Cross-Apple draft posted by iPhone "Open on Mac". The Mac dashboard
+/// listens for these on the daemon's `compose-draft` WS op (added to
+/// `AgentControlServer`'s first-message dispatcher 2026-05-18), and the
+/// new empty-state centered composer pre-fills its fields. No new session
+/// is created until the user actually hits send on the Mac side.
+public struct ComposeDraft: Codable, Sendable, Equatable, Hashable {
+    public let text: String
+    public let repoKey: String?
+    public let suggestedAgent: AgentKind?
+    public let suggestedModel: String?
+    public let suggestedEffort: ReasoningEffort?
+    public let createdAt: Date
+
+    public init(
+        text: String,
+        repoKey: String? = nil,
+        suggestedAgent: AgentKind? = nil,
+        suggestedModel: String? = nil,
+        suggestedEffort: ReasoningEffort? = nil,
+        createdAt: Date = Date()
+    ) {
+        self.text = text
+        self.repoKey = repoKey
+        self.suggestedAgent = suggestedAgent
+        self.suggestedModel = suggestedModel
+        self.suggestedEffort = suggestedEffort
+        self.createdAt = createdAt
+    }
+
+    /// Serialize for inclusion as a nested JSON object inside the WS
+    /// envelope's `draft` field. Returns `[:]` on encode failure (which
+    /// shouldn't happen for an all-primitives struct).
+    public func encodedJSONObject() -> [String: Any] {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(self),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        return obj
     }
 }

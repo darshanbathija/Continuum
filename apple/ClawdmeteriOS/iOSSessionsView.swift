@@ -101,13 +101,29 @@ struct iOSSessionsView: View {
             ContentUnavailableView {
                 Label("Mac unreachable", systemImage: "wifi.exclamationmark")
             } description: {
-                Text("Couldn't reach the paired Mac. Open the Clawdmeter Mac app and confirm you're on the same Tailnet.")
-            } actions: {
-                Button("Retry") {
-                    Task { await client.refreshAll() }
+                VStack(spacing: 6) {
+                    Text("Couldn't reach the paired Mac at \(client.host ?? "—"). Open the Clawdmeter Mac app and confirm you're on the same Tailnet.")
+                    if let host = client.host, host == "127.0.0.1" {
+                        Text("Stored host is `127.0.0.1` — re-pair from the Mac so the iPhone gets a routable Tailscale address.")
+                            .font(.caption)
+                            .foregroundStyle(SessionsV2Theme.accent)
+                    } else if let err = client.lastError, !err.isEmpty {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(SessionsV2Theme.accent)
+            } actions: {
+                VStack(spacing: 8) {
+                    Button("Retry") {
+                        Task { await client.refreshAll() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(SessionsV2Theme.accent)
+                    Button("Re-pair…") { showingPairing = true }
+                        .buttonStyle(.bordered)
+                }
             }
         } else {
             ContentUnavailableView {
@@ -859,6 +875,7 @@ private struct NewSessionSheet: View {
     @State private var planMode: Bool = true
     @State private var runAsABPair: Bool = false
     @State private var isStarting: Bool = false
+    @State private var openOnMacUnsupportedAlert: String?
     /// Phase 8: pre-flight cost + weekly-cap estimate. Refreshes when
     /// any input the daemon would care about changes (repo, agent,
     /// model, effort, goal length). Debounced via the .task(id:) below.
@@ -932,19 +949,29 @@ private struct NewSessionSheet: View {
                     Button("Cancel") { isPresented = false }
                 }
                 ToolbarItem(placement: .bottomBar) {
-                    Button(action: startSession) {
-                        if isStarting {
-                            ProgressView()
-                        } else {
-                            Label("Start", systemImage: "play.fill")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
+                    HStack(spacing: 8) {
+                        Button(action: openOnMac) {
+                            Label("Open on Mac", systemImage: "desktopcomputer")
+                                .font(.subheadline)
                         }
+                        .buttonStyle(.bordered)
+                        .disabled(goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !client.isConfigured)
+                        .help("Send the prompt to the paired Mac's empty-state composer instead of starting a session here.")
+                        .accessibilityLabel("Send draft to Mac")
+                        Button(action: startSession) {
+                            if isStarting {
+                                ProgressView()
+                            } else {
+                                Label("Start", systemImage: "play.fill")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(SessionsV2Theme.accent)
+                        .disabled(repoKey.isEmpty || isStarting)
+                        .accessibilityLabel("Start new session")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(SessionsV2Theme.accent)
-                    .disabled(repoKey.isEmpty || isStarting)
-                    .accessibilityLabel("Start new session")
                 }
             }
             .task {
@@ -956,6 +983,13 @@ private struct NewSessionSheet: View {
             .task(id: preflightInputs) {
                 await refreshPreflight()
             }
+            .alert("Couldn't open on Mac",
+                   isPresented: Binding(
+                    get: { openOnMacUnsupportedAlert != nil },
+                    set: { if !$0 { openOnMacUnsupportedAlert = nil } }
+                   ),
+                   actions: { Button("OK", role: .cancel) { openOnMacUnsupportedAlert = nil } },
+                   message: { Text(openOnMacUnsupportedAlert ?? "") })
         }
     }
 
@@ -1042,6 +1076,36 @@ private struct NewSessionSheet: View {
             await MainActor.run {
                 isStarting = false
                 isPresented = false
+            }
+        }
+    }
+
+    /// X1 cross-Apple handoff: post the current composer state as a
+    /// `compose-draft` WS envelope to the paired Mac. The Mac's empty-state
+    /// composer pre-fills with this text + chip suggestions. No session is
+    /// spawned here — the user finishes on the Mac.
+    private func openOnMac() {
+        let draft = ComposeDraft(
+            text: goal.trimmingCharacters(in: .whitespacesAndNewlines),
+            repoKey: repoKey.isEmpty ? nil : repoKey,
+            suggestedAgent: agent,
+            suggestedModel: modelId,
+            suggestedEffort: currentModelSupportsEffort ? effort : nil
+        )
+        Task {
+            // Refresh /health first so the wire-version gate inside
+            // postComposeDraft has fresh data to consult.
+            await client.refreshHealth()
+            let result = await client.postComposeDraft(draft)
+            await MainActor.run {
+                switch result {
+                case .delivered:
+                    isPresented = false
+                case .macUnsupported(let v):
+                    openOnMacUnsupportedAlert = "Your Mac is on wire version \(v); Open on Mac needs ≥\(AgentControlWireVersion.composeDraftMinimum). Update Clawdmeter on the Mac."
+                case .failed(let msg):
+                    openOnMacUnsupportedAlert = msg
+                }
             }
         }
     }

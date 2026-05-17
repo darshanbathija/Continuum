@@ -114,6 +114,16 @@ struct NewSessionMacSheet: View {
             errorMessage = "Daemon not started — relaunch Clawdmeter."
             return
         }
+        // Seed model + effort from ComposerStore.ChipDefaults so the New
+        // Session sheet picks up the same Opus 4.7 1M + Max defaults the
+        // empty-state composer uses. Codex sessions fall back to the
+        // first Codex catalog entry (gpt-5.5) — no effort default.
+        let defaults = ComposerStore.ChipDefaults.default
+        let modelDefault: String?
+        switch agent {
+        case .claude: modelDefault = defaults.modelId
+        case .codex:  modelDefault = ModelCatalog.bundled.codex.first?.id
+        }
         do {
             _ = try await model.spawnSession(
                 repoPath: repoPath,
@@ -121,7 +131,9 @@ struct NewSessionMacSheet: View {
                 planMode: planMode,
                 goal: goal.isEmpty ? nil : goal,
                 mode: mode,
-                tmux: runtime.tmuxClient
+                tmux: runtime.tmuxClient,
+                model: modelDefault,
+                effort: defaults.effort
             )
             dismiss()
         } catch {
@@ -492,7 +504,12 @@ public final class SessionsModel: ObservableObject {
         planMode: Bool,
         goal: String?,
         mode: SessionMode,
-        tmux: TmuxControlClient
+        tmux: TmuxControlClient,
+        resumeSessionId: String? = nil,
+        model: String? = nil,
+        effort: ReasoningEffort? = nil,
+        acceptEdits: Bool = false,
+        pinnedJSONLURL: URL? = nil
     ) async throws -> AgentSession {
         // Fail fast on missing CLIs rather than spawning tmux + the
         // worktree only to error in the agent's pane (where the user
@@ -503,21 +520,38 @@ public final class SessionsModel: ObservableObject {
         try await tmux.start()
         var cwd = repoPath
         var worktreePath: String? = nil
-        if mode == .worktree {
+        // Skip worktree creation for resumes — the CLI handles cwd from JSONL.
+        if mode == .worktree, resumeSessionId == nil {
             let slug = WorktreeManager.slug(goal: goal, sessionId: UUID())
             worktreePath = try await WorktreeManager.shared.add(
                 repoRoot: repoPath, slug: slug
             )
             cwd = worktreePath!
         }
-        let argv = AgentSpawner.argv(for: NewSessionRequest(
-            repoKey: repoPath,
-            agent: agent,
-            model: nil,
-            planMode: planMode,
-            goal: goal,
-            useWorktree: mode == .worktree
-        ))
+        // Build argv per agent. Use direct argv-builders for the resume
+        // path so we can pass the CLI session id (the JSONL `sessionId`
+        // / payload `id`, NOT the Clawdmeter UUID — Codex P0 fix).
+        let argv: [String]
+        switch agent {
+        case .claude:
+            argv = AgentSpawner.claudeArgv(
+                model: model,
+                planMode: planMode,
+                effort: effort,
+                autopilot: false,
+                acceptEdits: acceptEdits,
+                resumeSessionId: resumeSessionId
+            ) ?? []
+        case .codex:
+            argv = AgentSpawner.codexArgv(
+                model: model,
+                planMode: planMode,
+                effort: effort,
+                autopilot: false,
+                acceptEdits: acceptEdits,
+                resumeSessionId: resumeSessionId
+            ) ?? []
+        }
         guard !argv.isEmpty else {
             throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
         }
@@ -526,7 +560,7 @@ public final class SessionsModel: ObservableObject {
             repoKey: repoPath,
             repoDisplayName: (repoPath as NSString).lastPathComponent,
             agent: agent,
-            model: nil,
+            model: model,
             goal: goal,
             worktreePath: worktreePath,
             tmuxWindowId: window.windowId,
@@ -534,10 +568,108 @@ public final class SessionsModel: ObservableObject {
             planMode: planMode,
             mode: mode
         )
+        if let pinned = pinnedJSONLURL {
+            forcedChatStoreURLs[session.id] = pinned
+        }
         expandedRepoKeys.insert(repoPath)
         openSessionId = session.id
         await self.refresh()
         return session
+    }
+
+    /// Promote the currently-open read-only synthetic session into a live
+    /// Clawdmeter-owned session by spawning a fresh tmux pane with the
+    /// CLI's `--resume`/`resume` flag. Returns the new live AgentSession,
+    /// or nil if the JSONL can't be resumed (caller surfaces the failure
+    /// in the composer's inline error banner).
+    ///
+    /// Used by the send-triggers-continue flow: in read-only mode the
+    /// composer is always visible; sending invokes this helper, then
+    /// posts the user's prompt to the now-live session. Avoids needing
+    /// the user to find the right-click context menu (which had silent
+    /// failure modes when the JSONL parser couldn't pull out the CLI id).
+    @discardableResult
+    public func continueCurrentReadOnly() async -> AgentSession? {
+        guard let path = openOutsideJSONLPath,
+              let synthetic = syntheticOutsideSessions[path]
+        else { return nil }
+        let jsonlURL = URL(fileURLWithPath: path)
+        let provider: JSONLSessionId.Provider = (synthetic.agent == .codex) ? .codex : .claude
+        guard let cliSessionId = JSONLSessionId.extract(from: jsonlURL, provider: provider) else {
+            return nil
+        }
+        guard let runtime = AppDelegate.runtime else { return nil }
+        // Continued sessions inherit the same Opus 4.7 1M + Max defaults
+        // as freshly-created ones (per Claude Code's standard).
+        let defaults = ComposerStore.ChipDefaults.default
+        let modelDefault: String?
+        switch synthetic.agent {
+        case .claude: modelDefault = defaults.modelId
+        case .codex:  modelDefault = ModelCatalog.bundled.codex.first?.id
+        }
+        do {
+            let session = try await spawnSession(
+                repoPath: synthetic.repoKey,
+                agent: synthetic.agent,
+                planMode: false,
+                goal: synthetic.goal,
+                mode: .local,
+                tmux: runtime.tmuxClient,
+                resumeSessionId: cliSessionId,
+                model: modelDefault,
+                effort: defaults.effort,
+                pinnedJSONLURL: jsonlURL
+            )
+            // Migrate open-state away from the synthetic; clean up the
+            // synthetic entry so the chat-store cache doesn't keep two
+            // entries pointing at the same JSONL.
+            openOutsideJSONLPath = nil
+            openSessionId = session.id
+            syntheticOutsideSessions.removeValue(forKey: path)
+            return session
+        } catch {
+            return nil
+        }
+    }
+
+    /// Wave A: turn a read-only Recent JSONL row into a live continuable
+    /// session. Parses the CLI session id from the JSONL header and spawns
+    /// a fresh tmux pane with `--resume <cli-id>` (Claude) or
+    /// `resume <cli-id>` (Codex). Falls back to the read-only view if the
+    /// JSONL has no usable id.
+    @discardableResult
+    public func continueOutsideSession(
+        recent: RecentSession,
+        repoKey: String,
+        repoDisplayName: String
+    ) async -> AgentSession? {
+        let jsonlURL = URL(fileURLWithPath: recent.path)
+        let provider: JSONLSessionId.Provider = (recent.provider == .codex) ? .codex : .claude
+        guard let cliSessionId = JSONLSessionId.extract(from: jsonlURL, provider: provider) else {
+            // No id → keep the read-only synthetic session open.
+            openOutsideSession(recent: recent, repoKey: repoKey, repoDisplayName: repoDisplayName)
+            return nil
+        }
+        guard let runtime = AppDelegate.runtime else { return nil }
+        do {
+            let session = try await spawnSession(
+                repoPath: repoKey,
+                agent: recent.provider,
+                planMode: false,
+                goal: recent.firstPrompt,
+                mode: .local,
+                tmux: runtime.tmuxClient,
+                resumeSessionId: cliSessionId,
+                pinnedJSONLURL: jsonlURL
+            )
+            // Migrate open-state away from the synthetic read-only row.
+            openOutsideJSONLPath = nil
+            openSessionId = session.id
+            return session
+        } catch {
+            openOutsideSession(recent: recent, repoKey: repoKey, repoDisplayName: repoDisplayName)
+            return nil
+        }
     }
 
     /// G2: switch a live session's mode (Local ↔ Worktree). Kills the
@@ -623,6 +755,35 @@ public final class SessionsModel: ObservableObject {
         guard let runtime = AppDelegate.runtime else { return }
         let changer = SessionConfigChanger(registry: registry, tmux: runtime.tmuxClient)
         _ = await changer.swap(sessionId: sessionId, newPlanMode: planMode)
+    }
+
+    /// Apply a new `PermissionMode` to a live session. Resolves to the
+    /// (planMode, autopilot, acceptEdits) tuple and triggers a respawn.
+    /// Caller is responsible for trust-gating `.bypass` BEFORE calling
+    /// this — by the time we reach here, AutopilotState.trustRepo has
+    /// already been recorded for that path.
+    public func setPermissionMode(sessionId: UUID, to newMode: PermissionMode) async {
+        guard let runtime = AppDelegate.runtime else { return }
+        // Update the Mac-side stores so the next respawn picks up the
+        // right argv. Order matters: write state first, then respawn —
+        // SessionConfigChanger reads the stores when building newArgv.
+        let store = PermissionModeStore.shared
+        switch newMode {
+        case .ask:
+            store.setAcceptEdits(false, sessionId: sessionId)
+            store.setBypass(false, sessionId: sessionId)
+        case .acceptEdits:
+            store.setAcceptEdits(true, sessionId: sessionId)
+            store.setBypass(false, sessionId: sessionId)
+        case .plan:
+            store.setAcceptEdits(false, sessionId: sessionId)
+            store.setBypass(false, sessionId: sessionId)
+        case .bypass:
+            store.setAcceptEdits(false, sessionId: sessionId)
+            store.setBypass(true, sessionId: sessionId)
+        }
+        let changer = SessionConfigChanger(registry: registry, tmux: runtime.tmuxClient)
+        _ = await changer.swap(sessionId: sessionId, newPlanMode: newMode == .plan)
     }
 
     public func endSession(id: UUID) async {

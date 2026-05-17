@@ -20,6 +20,7 @@ struct PairingQRPopoverContent: View {
     @State private var tokenForDisplay: String = ""
     @State private var didCopy: Bool = false
     @State private var hostName: String = "127.0.0.1"
+    @State private var hostKind: TailscaleHost.Resolved.Kind = .loopback
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -61,6 +62,8 @@ struct PairingQRPopoverContent: View {
                         labelRow("Token", value: String(tokenForDisplay.prefix(8)) + "…")
                     }
                     .padding(.top, 4)
+
+                    hostWarning
                 }
             } else {
                 Label("Daemon not running", systemImage: "exclamationmark.triangle.fill")
@@ -97,6 +100,32 @@ struct PairingQRPopoverContent: View {
         )
     }
 
+    @ViewBuilder
+    private var hostWarning: some View {
+        switch hostKind {
+        case .loopback:
+            warningRow("No Tailscale address detected. Pairing will only work for the iOS simulator on this Mac. Install Tailscale and sign in to pair a real iPhone.")
+        case .tailscaleDNSBackendDown(let state):
+            warningRow("Tailscale is installed but not running (\(state)). Open the Tailscale menu bar and turn the tunnel on — the iPhone can't reach this Mac until it's up.")
+        case .tailscaleIPv4, .tailscaleIPv6, .tailscaleDNS:
+            EmptyView()
+        }
+    }
+
+    private func warningRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.system(size: 11))
+                .padding(.top, 1)
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
+    }
+
     private func labelRow(_ label: String, value: String) -> some View {
         HStack {
             Text(label)
@@ -131,7 +160,9 @@ struct PairingQRPopoverContent: View {
 
     private func refresh() {
         tokenForDisplay = PairingTokenStore.shared.currentToken()
-        hostName = macHost()
+        let resolved = TailscaleHost.resolve()
+        hostName = resolved.host
+        hostKind = resolved.kind
         qrImage = pairingURLString().flatMap { generateQR(from: $0) }
     }
 
@@ -139,22 +170,6 @@ struct PairingQRPopoverContent: View {
         guard let httpPort = runtime.agentControlServer.boundPort,
               let wsPort = runtime.agentControlServer.boundWsPort else { return nil }
         return "clawdmeter://\(hostName):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
-    }
-
-    /// Best-effort: read the Tailscale MagicDNS name from `tailscale status`.
-    /// Falls back to `127.0.0.1` (works from iOS Simulator on the same Mac;
-    /// real iPhones reach the Mac via the MagicDNS name over Tailscale).
-    private func macHost() -> String {
-        if let result = try? Process.runAndCaptureForPairing(
-            "/opt/homebrew/bin/tailscale", ["status", "--json"]
-        ),
-           let json = try? JSONSerialization.jsonObject(with: result) as? [String: Any],
-           let selfNode = json["Self"] as? [String: Any],
-           let dnsName = selfNode["DNSName"] as? String,
-           !dnsName.isEmpty {
-            return dnsName.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        }
-        return "127.0.0.1"
     }
 
     private func generateQR(from string: String) -> NSImage? {
@@ -170,19 +185,3 @@ struct PairingQRPopoverContent: View {
     }
 }
 
-/// Local `Process` helper kept fileprivate so it doesn't collide with the
-/// identically named extension in `PairingSettingsView`.
-fileprivate extension Process {
-    static func runAndCaptureForPairing(_ executable: String, _ args: [String]) throws -> Data {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: executable)
-        p.arguments = args
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        try p.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return data
-    }
-}

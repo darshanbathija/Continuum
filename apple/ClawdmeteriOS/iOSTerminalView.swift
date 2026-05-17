@@ -90,7 +90,7 @@ struct iOSTerminalView: UIViewRepresentable {
         }
 
         func connect() {
-            guard let url = URL(string: "ws://\(host):\(wsPort)/") else { return }
+            guard let url = URL(string: "ws://\(AgentControlClient.urlHostLiteral(host)):\(wsPort)/") else { return }
             var request = URLRequest(url: url)
             request.timeoutInterval = 10
             let task = URLSession.shared.webSocketTask(with: request)

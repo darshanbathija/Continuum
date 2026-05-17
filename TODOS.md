@@ -172,3 +172,63 @@ follow-up that didn't make the v2.0 ship but is worth picking up.
   still unimplemented.
 - **Why**: v1 D10 deferred. Different watch faces want different
   complication shapes.
+
+## v0.3 — Mac chat-IDE follow-ups (2026-05-18)
+
+Captured during /plan-ceo-review of the Mac chat-IDE rewrite. The rewrite
+itself landed on `feat/mac-chat-ide-2026-05-18`; these are explicitly
+deferred items the CEO review identified.
+
+### Cmd+/ tmux→chat selection bridge (X3 deferral)
+- **What**: When the user opens the Cmd+T raw-tmux overlay and makes a
+  SwiftTerm text selection, Cmd+/ wraps the selection in a fenced code
+  block and inserts it into the chat composer ready to send.
+- **Why**: Closes the loop between raw tmux and chat without copy-paste
+  gymnastics. Easy to backfill now that the Cmd+T overlay is in place.
+- **Effort**: ~80 LOC; hooks into SwiftTerm's selection delegate +
+  posts to ComposerStore via NotificationCenter.
+
+### SharedComposerKit cross-platform refactor
+- **What**: Lift `ComposerInputCore` (currently Mac-only at
+  `apple/ClawdmeterMac/Workspace/Composer/`) into the shared package so
+  iOS can reuse it instead of maintaining a parallel composer.
+- **Why**: iOS already has a richer composer than Mac shipped in this
+  PR. Converging the two prevents drift and prepares for the
+  cross-Apple compose-draft handoff to feel like the same control.
+- **Effort**: ~1 day; requires NSImage/UIImage + NSPasteboard/UIPasteboard
+  + onDrop platform splits.
+
+### MentionPicker full repo-file walker
+- **What**: The shipped MentionPicker is scope-cut to open sessions +
+  agent-cited SourceEntries + recent JSONLs (Codex P1 finding —
+  `RepoIndex` doesn't index repo files). Build a proper repo-file walker
+  with .gitignore-aware traversal so `@` lists every file in the repo.
+- **Why**: Conductor/Codex/Claude Desktop all do full file mention; ours
+  is the smaller surface today. The picker's empty state already names
+  this limitation.
+- **Effort**: ~3hr — add `RepoFileIndex` actor with mtime-cached
+  enumeration + .gitignore parsing.
+
+### Per-repo composer chip memory (D7 follow-up)
+- **What**: Persist last-used agent/model/effort/mode per repo so
+  `EmptyStateCenteredComposer` and `BoundComposerView` pre-fill chips
+  with the user's per-repo preference instead of generic defaults.
+- **Why**: 4A CEO-review decision picked "reset to repo defaults" rather
+  than "remember per repo" to keep this PR bounded; D7 in CLAUDE.md
+  TODOS predates this and asks for the same thing.
+- **Effort**: ~2hr CC. Store as `~/.clawdmeter/repo-defaults.json`.
+
+### CLI session-id resume bug in SessionConfigChanger
+- **What**: `SessionConfigChanger.swap(sessionId:)` passes
+  `sessionId.uuidString` (the Clawdmeter UUID) as `--resume <id>` /
+  `resume <id>` to the agent CLI. The CLI expects its OWN session id
+  (Claude: JSONL `sessionId` field; Codex: rollout `payload.id`), so
+  every model/effort/mode swap silently starts a *fresh* session.
+  Caught by Codex outside-voice during the chat-IDE plan review.
+- **Why**: This is a pre-existing bug that this PR didn't introduce —
+  but it's now glaringly visible because the new autopilot chip uses
+  the same code path to respawn. Wave A's "Continue here" path fixes
+  it for outside JSONL rows; this is fixing the same bug for in-Mac
+  swap paths.
+- **Effort**: ~1hr CC. Wire `JSONLSessionId.extract(...)` into the
+  swap path using the chat store's pinned JSONL URL.

@@ -1,0 +1,101 @@
+import Foundation
+import ClawdmeterShared
+import OSLog
+
+private let senderLogger = Logger(subsystem: "com.clawdmeter.mac", category: "MacComposerSender")
+
+/// Loopback HTTP client that the Mac composer uses instead of poking
+/// `tmuxClient.pasteBytes` directly. Going through the daemon gives us
+/// rate-limit + audit-log + `sendKeys`/`paste-buffer` heuristics for free
+/// (Codex P0 finding: Mac send was bypassing all of these).
+///
+/// All calls hit `http://127.0.0.1:<boundPort>/...` with `Authorization:
+/// Bearer <token>` — same auth as iOS but local-only.
+@MainActor
+final class MacComposerSender {
+
+    let host: String
+    let port: Int
+    let token: String
+
+    init(host: String = "127.0.0.1", port: Int, token: String) {
+        self.host = host
+        self.port = port
+        self.token = token
+    }
+
+    enum Error: Swift.Error, LocalizedError {
+        case badURL
+        case http(status: Int, retryAfter: Int?)
+        case transport(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .badURL: return "Bad daemon URL"
+            case .http(let s, _): return "Daemon HTTP \(s)"
+            case .transport(let m): return m
+            }
+        }
+    }
+
+    func send(sessionId: UUID, body: String, asFollowUp: Bool = false) async throws {
+        let req = try makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/send",
+            jsonBody: SendPromptRequest(text: body, asFollowUp: asFollowUp)
+        )
+        _ = try await execute(req)
+    }
+
+    func interrupt(sessionId: UUID) async throws {
+        let req = try makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/interrupt",
+            method: "POST"
+        )
+        _ = try await execute(req)
+    }
+
+    func setAutopilot(sessionId: UUID, enabled: Bool) async throws {
+        let req = try makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/autopilot",
+            jsonBody: AutopilotRequest(enabled: enabled)
+        )
+        _ = try await execute(req)
+    }
+
+    // MARK: - HTTP
+
+    private func makeRequest<Body: Encodable>(path: String, jsonBody: Body) throws -> URLRequest {
+        guard let url = URL(string: "http://\(host):\(port)\(path)") else { throw Error.badURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 8
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        req.httpBody = try enc.encode(jsonBody)
+        return req
+    }
+
+    private func makeRequest(path: String, method: String) throws -> URLRequest {
+        guard let url = URL(string: "http://\(host):\(port)\(path)") else { throw Error.badURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        req.timeoutInterval = 8
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return req
+    }
+
+    private func execute(_ req: URLRequest) async throws -> Data {
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                let retry = http.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init)
+                throw Error.http(status: http.statusCode, retryAfter: retry)
+            }
+            return data
+        } catch let urlError as URLError {
+            throw Error.transport(urlError.localizedDescription)
+        }
+    }
+}

@@ -57,6 +57,7 @@ struct SessionWorkspaceView: View {
         case artifacts = "Artifacts"
         case browser = "Browser"
         case pr = "PR"
+        case terminal = "Terminal"
         var id: String { rawValue }
 
         var systemImage: String {
@@ -67,6 +68,7 @@ struct SessionWorkspaceView: View {
             case .artifacts: return "paperclip"
             case .browser:   return "safari"
             case .pr:        return "arrow.triangle.pull"
+            case .terminal:  return "terminal"
             }
         }
     }
@@ -207,29 +209,11 @@ struct SessionWorkspaceView: View {
         }
     }
 
-    // MARK: - Center empty state
+    // MARK: - Center empty state — Codex-style centered composer
 
     private var centerEmpty: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "ellipsis.bubble")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text("Pick a session to open it here")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.primary)
-            Text("Or create a new one ↗")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Button(action: { model.showingNewSessionSheet = true }) {
-                Label("New session", systemImage: "plus.circle.fill")
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(terraCotta)
-            .keyboardShortcut("n", modifiers: [.command])
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        EmptyStateCenteredComposer(model: model)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Mode-switch overlay (D13)
@@ -286,6 +270,22 @@ private struct SidebarPane: View {
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var searchFocused: Bool
 
+    /// Persisted sidebar grouping + sorting + status-filter preferences.
+    /// All three are local to the Mac UI — iOS has its own equivalents.
+    @AppStorage("clawdmeter.sidebar.grouping") private var groupingRaw: String = SessionGrouping.repo.rawValue
+    @AppStorage("clawdmeter.sidebar.sorting")  private var sortingRaw: String  = SessionSorting.recency.rawValue
+    @AppStorage("clawdmeter.sidebar.status")   private var statusRaw: String   = SessionStatusFilter.all.rawValue
+
+    private var grouping: SessionGrouping {
+        SessionGrouping(rawValue: groupingRaw) ?? .repo
+    }
+    private var sorting: SessionSorting {
+        SessionSorting(rawValue: sortingRaw) ?? .recency
+    }
+    private var statusFilter: SessionStatusFilter {
+        SessionStatusFilter(rawValue: statusRaw) ?? .all
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             sidebarHeader
@@ -309,6 +309,7 @@ private struct SidebarPane: View {
             if model.isRefreshing {
                 ProgressView().controlSize(.mini)
             }
+            filterMenu
             Button(action: { Task { await model.refresh() } }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 10, weight: .semibold))
@@ -318,6 +319,56 @@ private struct SidebarPane: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// Linear-style filter / group / sort menu. Active non-default
+    /// selections paint the chip terra-cotta so the user knows the
+    /// sidebar is filtered without opening the menu.
+    @ViewBuilder
+    private var filterMenu: some View {
+        let isCustomised =
+            grouping != .repo
+            || sorting != .recency
+            || statusFilter != .all
+        Menu {
+            Section("Status") {
+                ForEach(SessionStatusFilter.allCases, id: \.self) { option in
+                    Button(action: { statusRaw = option.rawValue }) {
+                        Label(option.displayName, systemImage: statusFilter == option ? "checkmark" : "")
+                    }
+                }
+            }
+            Section("Group by") {
+                ForEach(SessionGrouping.allCases, id: \.self) { option in
+                    Button(action: { groupingRaw = option.rawValue }) {
+                        Label(option.displayName, systemImage: grouping == option ? "checkmark" : "")
+                    }
+                }
+            }
+            Section("Sort by") {
+                ForEach(SessionSorting.allCases, id: \.self) { option in
+                    Button(action: { sortingRaw = option.rawValue }) {
+                        Label(option.displayName, systemImage: sorting == option ? "checkmark" : "")
+                    }
+                }
+            }
+            if isCustomised {
+                Divider()
+                Button("Reset filters") {
+                    statusRaw = SessionStatusFilter.all.rawValue
+                    groupingRaw = SessionGrouping.repo.rawValue
+                    sortingRaw = SessionSorting.recency.rawValue
+                }
+            }
+        } label: {
+            Image(systemName: isCustomised ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isCustomised ? terraCotta : .secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Group, sort, and filter sessions")
     }
 
     private var searchField: some View {
@@ -362,11 +413,93 @@ private struct SidebarPane: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(model.filteredRepos, id: \.key) { repo in
-                        repoSection(repo)
+                    if grouping == .repo {
+                        // Legacy repo-grouped path — preserves the existing
+                        // expand/collapse + "Recent (last 30 days)" + empty-
+                        // state CTA chrome that's threaded through SessionsModel.
+                        ForEach(filteredReposForGrouping, id: \.key) { repo in
+                            repoSection(repo)
+                        }
+                    } else {
+                        // Date / Status / Agent / None — flatten across repos
+                        // and let the grouper bucket by the chosen field.
+                        let groups = SessionSidebarGrouper.group(
+                            sessions: filteredVisibleSessions,
+                            repos: filteredReposForGrouping,
+                            grouping: grouping,
+                            sorting: sorting,
+                            statusFilter: statusFilter
+                        )
+                        ForEach(groups) { group in
+                            groupSection(group)
+                        }
                     }
                 }
                 .padding(.vertical, 6)
+            }
+        }
+    }
+
+    /// Search + showArchived already filter the repos via the model.
+    /// The status filter is applied in the grouper for non-repo paths;
+    /// for repo grouping we still want to honour it by post-filtering.
+    private var filteredReposForGrouping: [AgentRepo] {
+        model.filteredRepos
+    }
+
+    private var filteredVisibleSessions: [AgentSession] {
+        let all = model.registry.sessions.filter { s in
+            // Match the existing search behaviour: search filters apply
+            // to both sessions AND repos. SessionsModel.filter handles
+            // archive visibility based on `showArchived`.
+            if !model.showArchived, s.archivedAt != nil { return false }
+            return true
+        }
+        return model.filter(sessions: all)
+    }
+
+    /// Generic group renderer for non-Repo groupings. Header is a plain
+    /// label (no expand toggle — flatter taxonomy than repos). Session
+    /// rows reuse `sessionRow`; recent rows reuse `recentSessionRow`.
+    @ViewBuilder
+    private func groupSection(_ group: SessionSidebarGroup) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Text(group.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                let count = group.sessions.count + group.recents.count
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+            ForEach(group.sessions) { s in
+                sessionRow(s, isOpen: model.openSessionId == s.id, depth: 0)
+            }
+            ForEach(group.recents) { recent in
+                Button(action: {
+                    // Resolve the repo display name from the recent's path.
+                    let repo = model.repos.first(where: { $0.recentSessions.contains(recent) })
+                    model.openOutsideSession(
+                        recent: recent,
+                        repoKey: repo?.key ?? recent.path,
+                        repoDisplayName: repo?.displayName ?? "Recent"
+                    )
+                }) {
+                    recentSessionRow(
+                        recent,
+                        isOpen: model.openOutsideJSONLPath == recent.path,
+                        repo: model.repos.first(where: { $0.recentSessions.contains(recent) })
+                            ?? AgentRepo(key: recent.path, displayName: "Recent", hasActiveSessions: false)
+                    )
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -399,7 +532,7 @@ private struct SidebarPane: View {
                                 repoDisplayName: repo.displayName
                             )
                         }) {
-                            recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path)
+                            recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
                         }
                         .buttonStyle(.plain)
                     }
@@ -429,8 +562,8 @@ private struct SidebarPane: View {
 
     /// One row per JSONL surfaced from `repo.recentSessions` — these were
     /// not spawned by Clawdmeter (Conductor / Cursor / Terminal). Click
-    /// opens them as read-only chat.
-    private func recentSessionRow(_ recent: RecentSession, isOpen: Bool) -> some View {
+    /// opens them as read-only chat; "Continue here" resumes them live.
+    private func recentSessionRow(_ recent: RecentSession, isOpen: Bool, repo: AgentRepo) -> some View {
         HStack(spacing: 8) {
             Circle()
                 .fill(isRecentLive(recent) ? Color.green : Color.secondary.opacity(0.5))
@@ -459,6 +592,14 @@ private struct SidebarPane: View {
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
         .help("Read-only — opens the JSONL at \(recent.path)")
+        .contextMenu {
+            Button("Continue here", systemImage: "play.fill") {
+                Task { _ = await model.continueOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName) }
+            }
+            Button("Open read-only", systemImage: "eye") {
+                model.openOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName)
+            }
+        }
     }
 
     private func isRecentLive(_ recent: RecentSession) -> Bool {
@@ -708,15 +849,41 @@ private struct CenterThread: View {
     @ObservedObject var model: SessionsModel
     let onModeSwitch: (SessionMode) -> Void
 
-    @State private var composerText: String = ""
-    @State private var composerTextBeforeDictation: String = ""
-    @State private var viewMode: ViewMode = .chat
+    @StateObject private var composerStore: ComposerStore
+    /// PR mirror for the open session — drives the header branch chip's
+    /// color (open/merged/closed). Synthetic read-only sessions get a
+    /// mirror too; it just never resolves a PR URL.
+    @ObservedObject private var prMirror: PRMirror
+    /// Observed so the permission-mode chip re-renders when the user
+    /// flips bypass or accept-edits from another surface. AutopilotState
+    /// is a singleton without ObservableObject conformance; all autopilot
+    /// flips go through `PermissionModeStore.setBypass` below so this one
+    /// observer is enough.
+    @ObservedObject private var permissionModeStore = PermissionModeStore.shared
     @State private var showingScheduler = false
-    @StateObject private var dictation = SpeechDictation()
+    @State private var showingTerminalOverlay = false
+    @State private var showingAutopilotConfirm = false
+    /// Captured target mode for the bypass-mode trust-grant confirm sheet.
+    /// When the user picks `.bypass` from the chip we stash it here and
+    /// surface the existing autopilot confirm sheet, then commit on
+    /// approval.
+    @State private var pendingBypassMode = false
 
-    enum ViewMode: String, CaseIterable {
-        case chat = "Chat"
-        case terminal = "Terminal"
+    init(session: AgentSession, isReadOnly: Bool, model: SessionsModel, onModeSwitch: @escaping (SessionMode) -> Void) {
+        self.session = session
+        self.isReadOnly = isReadOnly
+        self.model = model
+        self.onModeSwitch = onModeSwitch
+        let store = ComposerStore(mode: .bound(sessionId: session.id))
+        store.modelId = session.model
+        store.effort = session.effort
+        store.mode = session.mode
+        store.agent = session.agent
+        store.planMode = session.status == .planning
+        store.repoKey = session.repoKey
+        store.autopilotEnabled = AutopilotState.shared.isEnabled(sessionId: session.id)
+        _composerStore = StateObject(wrappedValue: store)
+        _prMirror = ObservedObject(wrappedValue: model.prMirror(for: session))
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -725,15 +892,21 @@ private struct CenterThread: View {
         VStack(spacing: 0) {
             header
             Divider()
-            ZStack {
-                switch viewMode {
-                case .chat:     chatPane
-                case .terminal: terminalPane
-                }
-            }
+            chatPane
         }
         .sheet(isPresented: $showingScheduler) {
             FollowUpSchedulerSheet(session: session, registry: model.registry)
+        }
+        .sheet(isPresented: $showingTerminalOverlay) {
+            terminalOverlay
+        }
+        .sheet(isPresented: $showingAutopilotConfirm) {
+            autopilotConfirm
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showRawTerminal)) { note in
+            if let id = note.userInfo?["sessionId"] as? UUID, id == session.id {
+                showingTerminalOverlay = true
+            }
         }
     }
 
@@ -745,10 +918,24 @@ private struct CenterThread: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text("\(session.repoDisplayName) · \(session.agent.rawValue.capitalized) · \(session.status.rawValue)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text("\(session.repoDisplayName) · \(session.agent.rawValue.capitalized) · \(session.status.rawValue)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let branch = branchLabel {
+                        HStack(spacing: 3) {
+                            Image(systemName: prBranchIcon)
+                                .font(.system(size: 9, weight: .semibold))
+                            Text(branch)
+                                .font(.system(size: 10))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .foregroundStyle(prBranchColor)
+                        .help(branchTooltip)
+                    }
+                }
             }
             Spacer()
             if isReadOnly {
@@ -758,16 +945,9 @@ private struct CenterThread: View {
                     .background(.green.opacity(0.15), in: Capsule())
                     .foregroundStyle(.green)
             } else {
-                Picker("", selection: $viewMode) {
-                    ForEach(ViewMode.allCases, id: \.self) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 150)
-                .labelsHidden()
-
                 Menu {
+                    Button("Show raw terminal (⌘T)") { showingTerminalOverlay = true }
+                        .keyboardShortcut("t", modifiers: [.command])
                     Button("Schedule follow-up…", systemImage: "clock") {
                         showingScheduler = true
                     }
@@ -783,11 +963,19 @@ private struct CenterThread: View {
                     if session.archivedAt == nil {
                         Button("Archive") {
                             model.registry.archive(id: session.id)
+                            AttachmentStaging.cleanup(sessionId: session.id)
+                            if let wt = session.worktreePath {
+                                AttachmentStaging.cleanupWorktree(at: wt)
+                            }
                         }
                     }
                     Button("End session", role: .destructive) {
                         Task {
                             await model.endSession(id: session.id)
+                            AttachmentStaging.cleanup(sessionId: session.id)
+                            if let wt = session.worktreePath {
+                                AttachmentStaging.cleanupWorktree(at: wt)
+                            }
                         }
                     }
                 } label: {
@@ -802,25 +990,115 @@ private struct CenterThread: View {
         .padding(.vertical, 10)
     }
 
+    @ViewBuilder
+    private var terminalOverlay: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Raw terminal — \(session.goal ?? session.repoDisplayName)")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Button("Close (Esc)") { showingTerminalOverlay = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(10)
+            Divider()
+            if let runtime = AppDelegate.runtime,
+               let port = runtime.agentControlServer.boundWsPort {
+                TerminalTabContainer(
+                    session: session,
+                    model: model,
+                    wsPort: Int(port),
+                    token: PairingTokenStore.shared.currentToken()
+                )
+            } else {
+                ContentUnavailableView(
+                    "Daemon offline",
+                    systemImage: "wifi.exclamationmark",
+                    description: Text("Restart Clawdmeter to reconnect.")
+                )
+            }
+        }
+        .frame(minWidth: 700, minHeight: 500)
+    }
+
+    @ViewBuilder
+    private var autopilotConfirm: some View {
+        // The sheet is only invoked when the user picks `.bypass` from the
+        // PermissionModeChip — we're always asking to ENABLE bypass here.
+        // Disabling is a safe direct setPermissionMode call (no sheet).
+        let repoTrusted = AutopilotState.shared.isRepoTrusted(session.repoKey)
+        let needsTrustGrant = !repoTrusted
+        VStack(alignment: .leading, spacing: 12) {
+            Label(
+                needsTrustGrant ? "Trust this repo for bypass mode?" : "Enable bypass mode?",
+                systemImage: needsTrustGrant ? "lock.shield.fill" : "bolt.fill"
+            )
+            .font(.system(size: 14, weight: .semibold))
+            Text(autopilotConfirmBody(willEnable: true, needsTrustGrant: needsTrustGrant))
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if needsTrustGrant {
+                Text("Repo: \((session.repoKey as NSString).lastPathComponent)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    showingAutopilotConfirm = false
+                    pendingBypassMode = false
+                }
+                .keyboardShortcut(.cancelAction)
+                Button(autopilotConfirmCTA(willEnable: true, needsTrustGrant: needsTrustGrant)) {
+                    showingAutopilotConfirm = false
+                    pendingBypassMode = false
+                    if needsTrustGrant {
+                        AutopilotState.shared.trustRepo(session.repoKey)
+                    }
+                    Task { await model.setPermissionMode(sessionId: session.id, to: .bypass) }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(terraCotta)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+
+    private func autopilotConfirmBody(willEnable: Bool, needsTrustGrant: Bool) -> String {
+        if needsTrustGrant {
+            return "Bypass mode respawns the CLI with --dangerously-skip-permissions (Claude) or --dangerously-bypass-approvals-and-sandbox (Codex). It skips every tool-call approval prompt in this session, and any future session in this repo can be flipped to bypass with one click. Grant trust only if you intend to give agents free rein in this repo."
+        }
+        return "This will interrupt the current turn to respawn the CLI with the dangerously-* flags. The repo is already on your trust list."
+    }
+
+    private func autopilotConfirmCTA(willEnable: Bool, needsTrustGrant: Bool) -> String {
+        if needsTrustGrant { return "Trust repo + enable bypass" }
+        return "Enable + respawn"
+    }
+
     private var chatPane: some View {
         VStack(spacing: 0) {
             messageList
             // Activity strip — time / tokens / cost / live indicator.
-            // Sits between the message list and the composer (or the
-            // read-only footer for outside-Clawdmeter sessions) so the
-            // user always knows what the agent is doing without having
-            // to switch to the Analytics tab.
+            // Sits between the message list and the composer so the user
+            // always knows what the agent is doing without having to
+            // switch to the Analytics tab.
             if let store = model.chatStore(for: session) {
                 Divider()
                 SessionActivityStrip(session: session, chatStore: store)
             }
-            if !isReadOnly {
-                Divider()
-                composerArea
-            } else {
-                Divider()
-                readOnlyFooter
-            }
+            // Always render the composer — even for read-only synthetic
+            // Recent-JSONL rows. Sending text on a read-only row
+            // implicitly promotes it to a live `--resume`/`resume` spawn
+            // via SessionsModel.continueCurrentReadOnly (Wave A redesign).
+            Divider()
+            composerArea
         }
     }
 
@@ -848,154 +1126,218 @@ private struct CenterThread: View {
     }
 
     private var composerArea: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                ModePicker(mode: session.mode, agent: session.agent, onChange: onModeSwitch)
-                ModelPicker(
-                    selectedModelId: session.model,
-                    catalog: .bundled,
-                    agent: session.agent
-                ) { entry in
-                    Task { await model.switchModel(sessionId: session.id, to: entry, effort: session.effort) }
-                }
-                EffortDial(
-                    selected: session.effort,
-                    supportsEffort: modelSupportsEffort
-                ) { newEffort in
-                    Task { await model.switchEffort(sessionId: session.id, to: newEffort) }
-                }
-                Spacer()
-                if session.planText != nil {
-                    Button(action: {
-                        Task { await model.approvePlan(id: session.id) }
-                    }) {
-                        Label("Approve plan", systemImage: "checkmark.seal.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(terraCotta)
-                    .controlSize(.small)
-                }
-            }
-            HStack(alignment: .bottom, spacing: 8) {
-                Button(action: {}) {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .disabled(true)
-                .help("Attach (not yet wired)")
-
-                Button(action: toggleDictation) {
-                    Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
-                        .font(.system(size: 14))
-                        .foregroundStyle(dictation.state == .recording ? terraCotta : .secondary)
-                        .symbolEffect(.pulse, isActive: dictation.state == .recording)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut("m", modifiers: [.control])
-                .help(dictationTooltip)
-
-                TextField("Message the agent…", text: $composerText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(composerBg, in: RoundedRectangle(cornerRadius: 8))
-                    .lineLimit(1...6)
-                    .onSubmit { sendComposer() }
-
-                Button(action: sendComposer) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(composerText.isEmpty ? .secondary : terraCotta)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(composerText.isEmpty)
-                .help("Send (⌘↩)")
-            }
-            if case let .denied(reason) = dictation.state {
-                Text(reason)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.red)
-            } else if case let .unavailable(reason) = dictation.state {
-                Text(reason)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
+        ComposerInputCore(
+            store: composerStore,
+            catalog: .bundled,
+            agentForModelPicker: session.agent,
+            modelSupportsEffort: modelSupportsEffort,
+            onSend: { Task { await performBoundSend() } },
+            onInterrupt: { Task { await performInterrupt() } },
+            onToggleAutopilot: { showingAutopilotConfirm = true },
+            onChangePermissionMode: { newMode in
+                Task { await changePermissionMode(to: newMode) }
+            },
+            permissionMode: PermissionModeStore.shared.currentMode(for: session),
+            onApprovePlan: { Task { await model.approvePlan(id: session.id) } },
+            showApprovePlan: session.planText != nil,
+            sessionIsRunning: session.status == .running && !composerStore.isSending,
+            isReadOnly: isReadOnly,
+            mentionSourceProvider: {
+                let openSessions = model.registry.sessions.filter { $0.id != session.id && $0.archivedAt == nil }
+                let store = model.chatStore(for: session)
+                let sourceEntries = store?.snapshot.sourceEntries ?? []
+                let recents = model.repos.flatMap { $0.recentSessions }
+                return (openSessions, sourceEntries, Array(recents.prefix(30)))
+            },
+            usageStatus: usageStatusInfo,
+            projectSkillsRoot: URL(fileURLWithPath: session.repoKey).appendingPathComponent(".claude/skills", isDirectory: true)
+        )
+        // Read-only synthetic sessions have no live tmux pane to respawn,
+        // so we skip the swap-on-change handlers. The model/effort chips
+        // still update the local ComposerStore state for visual feedback,
+        // but no async respawn fires until the user actually sends —
+        // which calls `continueCurrentReadOnly()` first and promotes the
+        // synthetic into a real session. Keeps typing zero-overhead.
+        .onChange(of: composerStore.modelId) { _, new in
+            guard !isReadOnly, let new, new != session.model else { return }
+            if let entry = ModelCatalog.bundled.entry(forId: new) {
+                Task { await model.switchModel(sessionId: session.id, to: entry, effort: composerStore.effort) }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .onReceive(dictation.$partialTranscript) { newPartial in
-            guard dictation.state == .recording, !newPartial.isEmpty else { return }
-            let base = composerTextBeforeDictation
-            composerText = base.isEmpty ? newPartial : "\(base) \(newPartial)"
+        .onChange(of: composerStore.effort) { _, new in
+            guard !isReadOnly, let new, new != session.effort else { return }
+            Task { await model.switchEffort(sessionId: session.id, to: new) }
+        }
+        .onChange(of: composerStore.mode) { _, new in
+            guard !isReadOnly, new != session.mode else { return }
+            onModeSwitch(new)
         }
     }
 
-    private func toggleDictation() {
-        if dictation.state == .recording {
-            dictation.stop()
-        } else {
-            composerTextBeforeDictation = composerText
-            Task { await dictation.start() }
-        }
-    }
+    // MARK: - Send / interrupt / autopilot via daemon (P0 fixes)
 
-    private var dictationTooltip: String {
-        switch dictation.state {
-        case .recording: return "Stop dictation (Ctrl+M)"
-        case .requestingPermission: return "Requesting permission…"
-        case .denied(let r): return r
-        case .unavailable(let r): return r
-        case .idle: return "Dictate (Ctrl+M)"
-        }
-    }
-
-    private var readOnlyFooter: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "eye")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Text("Read-only — started outside Clawdmeter.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-
-    private func sendComposer() {
-        let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        composerText = ""
+    private func performBoundSend() async {
+        composerStore.beginSend()
         guard let runtime = AppDelegate.runtime,
-              let pane = session.tmuxPaneId ?? session.tmuxWindowId else { return }
-        let bytes = Data((text + "\n").utf8)
-        Task {
-            try? await runtime.tmuxClient.pasteBytes(paneId: pane, bytes: bytes)
+              let port = runtime.agentControlServer.boundPort
+        else {
+            composerStore.endSend(error: .offline)
+            return
+        }
+
+        // Read-only Recent-JSONL rows: implicitly promote the synthetic
+        // session to a live --resume spawn before sending. The model
+        // updates `openSessionId` to the new live session, the parent view
+        // re-renders, and the existing post-send `endSend()` clears this
+        // store. The new CenterThread mounts with a fresh empty composer.
+        let target: AgentSession
+        if isReadOnly {
+            guard let live = await model.continueCurrentReadOnly() else {
+                composerStore.endSend(error: .daemonError(message: "Couldn't resume this session — no session id in the JSONL header."))
+                return
+            }
+            // Match EmptyStateCenteredComposer's pane-readiness wait — tmux
+            // needs a beat to wire up the pane and the CLI to swallow the
+            // resume argv before paste-buffer hits.
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            target = live
+        } else {
+            target = session
+        }
+
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        var stagedPaths: [URL] = []
+        if let dir = AttachmentStaging.stagingDir(for: target) {
+            for att in composerStore.attachments {
+                do {
+                    let staged = try AttachmentStaging.stage(source: att.sourceURL, into: dir, attachmentId: att.id)
+                    stagedPaths.append(staged)
+                } catch {
+                    composerStore.endSend(error: .daemonError(message: "Couldn't stage \(att.displayName): \(error.localizedDescription)"))
+                    return
+                }
+            }
+        }
+        let body = composerStore.renderPromptBody(attachmentPaths: stagedPaths)
+        do {
+            try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
+            composerStore.endSend()
+        } catch MacComposerSender.Error.http(let status, let retry) {
+            switch status {
+            case 401: composerStore.endSend(error: .unauthorized)
+            case 404: composerStore.endSend(error: .sessionGone)
+            case 429: composerStore.endSend(error: .rateLimited(retryAfter: retry))
+            default: composerStore.endSend(error: .daemonError(message: "HTTP \(status)"))
+            }
+        } catch MacComposerSender.Error.transport(let m) {
+            composerStore.endSend(error: .daemonError(message: m))
+        } catch {
+            composerStore.endSend(error: .daemonError(message: error.localizedDescription))
         }
     }
 
-    @ViewBuilder
-    private var terminalPane: some View {
-        if let runtime = AppDelegate.runtime,
-           let port = runtime.agentControlServer.boundWsPort {
-            TerminalTabContainer(
-                session: session,
-                model: model,
-                wsPort: Int(port),
-                token: PairingTokenStore.shared.currentToken()
-            )
-        } else {
-            ContentUnavailableView(
-                "Daemon offline",
-                systemImage: "wifi.exclamationmark",
-                description: Text("Restart Clawdmeter to reconnect.")
-            )
+    private func performInterrupt() async {
+        guard let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort
+        else { return }
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        try? await sender.interrupt(sessionId: session.id)
+    }
+
+    /// Translate a `PermissionMode` pick into an argv respawn. Picks of
+    /// `.bypass` re-use the existing autopilot trust-grant sheet — for
+    /// untrusted repos we surface the same confirm UX before flipping
+    /// the daemon-side bypass flag.
+    private func changePermissionMode(to newMode: PermissionMode) async {
+        // `.bypass` is the trust-gated path; defer to the existing
+        // autopilot confirm sheet so the user explicitly opts in.
+        if newMode == .bypass {
+            // Only show the confirm if we're moving INTO bypass — flipping
+            // back out is always safe.
+            pendingBypassMode = true
+            showingAutopilotConfirm = true
+            return
+        }
+        await model.setPermissionMode(sessionId: session.id, to: newMode)
+    }
+
+    /// Right-side composer chip data: model + effort label, single-turn
+    /// context window utilisation, running session cost, and the live
+    /// Claude plan-window percentages from AppModel.
+    ///
+    /// **Context window math**: uses the SNAPSHOT's `contextWindowUsedTokens`
+    /// (single-turn `last*` fields) — NOT the cumulative `totalTokens`. A
+    /// long-running session re-counts cache reads on every turn, so the
+    /// cumulative totals balloon to 100s of M and produce 1500% readings
+    /// against a 1M window. The single-turn number is the model's actual
+    /// working-memory size for the next prompt.
+    ///
+    /// **Model resolution**: trusts `session.model` over `snapshot.modelHint`
+    /// because the user explicitly selected the session model — the JSONL
+    /// hint can lag the chip selection and may report `claude-opus-4-7`
+    /// (200K) when the user is actually running the 1M variant.
+    private var usageStatusInfo: UsageStatusInfo? {
+        let modelId = session.model ?? model.chatStore(for: session)?.snapshot.modelHint
+        guard let modelId, !modelId.isEmpty else { return nil }
+        let entry = ModelCatalog.bundled.entry(forId: modelId)
+        let snap = model.chatStore(for: session)?.snapshot
+        let used = snap?.contextWindowUsedTokens ?? 0
+        let totals = TokenTotals(
+            inputTokens: snap?.totalInputTokens ?? 0,
+            outputTokens: snap?.totalOutputTokens ?? 0,
+            cacheCreationTokens: snap?.totalCacheCreationTokens ?? 0,
+            cacheReadTokens: snap?.totalCacheReadTokens ?? 0
+        )
+        let dollar = Pricing.shared.cost(for: modelId, tokens: totals)
+        let claudePlan = (session.agent == .claude) ? AppDelegate.runtime?.claudeModel.usage : nil
+        return UsageStatusInfo(
+            modelDisplay: entry?.displayName ?? modelId,
+            effortDisplay: session.effort.map(effortLabel),
+            contextUsedTokens: used,
+            contextLimitTokens: entry?.contextWindow,
+            costDollar: dollar,
+            sessionPct: claudePlan?.sessionPct,
+            sessionResetMins: claudePlan?.sessionResetMins,
+            weeklyPct: claudePlan?.weeklyPct,
+            weeklyResetMins: claudePlan?.weeklyResetMins
+        )
+    }
+
+    /// Display label for a ReasoningEffort — friendlier than `.rawValue`
+    /// for `xhigh`/`max`. Matches Claude Code's "Extra high"/"Max" copy.
+    private func effortLabel(_ e: ReasoningEffort) -> String {
+        switch e {
+        case .minimal: return "Minimal"
+        case .low:     return "Low"
+        case .medium:  return "Medium"
+        case .high:    return "High"
+        case .xhigh:   return "Extra high"
+        case .max:     return "Max"
+        }
+    }
+
+    private func toggleAutopilot(enable: Bool, grantingTrust: Bool = false) async {
+        guard let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort
+        else { return }
+        // E7: enable requires the repo to be on the autopilot trust list.
+        // The confirm sheet asks for trust grant explicitly; if the user
+        // accepted, record it before the wire-level enforcement kicks in.
+        if grantingTrust {
+            AutopilotState.shared.trustRepo(session.repoKey)
+        }
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        // Daemon-side: flip state. We then respawn via SessionConfigChanger so
+        // the running CLI restarts with the appropriate --dangerously-* flags.
+        do {
+            try await sender.setAutopilot(sessionId: session.id, enabled: enable)
+            composerStore.autopilotEnabled = enable
+            let changer = SessionConfigChanger(registry: model.registry, tmux: runtime.tmuxClient)
+            _ = await changer.swap(sessionId: session.id)
+        } catch MacComposerSender.Error.http(let status, _) where status == 403 {
+            composerStore.endSend(error: .daemonError(message: "Repo not trusted for autopilot. (You can grant trust from this dialog.)"))
+        } catch {
+            composerStore.endSend(error: .daemonError(message: "Autopilot toggle failed: \(error.localizedDescription)"))
         }
     }
 
@@ -1009,10 +1351,54 @@ private struct CenterThread: View {
         }
     }
 
-    private var composerBg: Color {
-        colorScheme == .dark
-            ? Color.white.opacity(0.06)
-            : Color.black.opacity(0.04)
+    /// Header branch chip label. Falls back to the worktree segment when
+    /// `session.mode == .worktree`; otherwise hidden.
+    private var branchLabel: String? {
+        if let wt = session.worktreePath {
+            return (wt as NSString).lastPathComponent
+        }
+        return nil
+    }
+
+    /// Icon for the branch chip. Filled when a PR is open or merged so the
+    /// chip reads at a glance — empty branch glyph when no PR is linked.
+    private var prBranchIcon: String {
+        guard let state = prMirror.state?.state.uppercased() else {
+            return "arrow.triangle.branch"
+        }
+        switch state {
+        case "OPEN", "MERGED": return "arrow.triangle.pull"
+        default: return "arrow.triangle.branch"
+        }
+    }
+
+    /// Branch-chip color follows GitHub's PR badge palette: green for an
+    /// open PR, purple for a merged PR, dark red for a closed-without-merge
+    /// PR, and the Clawdmeter terra-cotta when no PR has been detected yet.
+    private var prBranchColor: Color {
+        guard let state = prMirror.state?.state.uppercased() else {
+            return terraCotta
+        }
+        switch state {
+        case "OPEN":   return .green
+        case "MERGED": return Color(red: 0x8A / 255.0, green: 0x3F / 255.0, blue: 0xFC / 255.0)
+        case "CLOSED": return .red
+        default:       return terraCotta
+        }
+    }
+
+    private var branchTooltip: String {
+        var pieces: [String] = []
+        if let wt = session.worktreePath {
+            pieces.append("Worktree: \(wt)")
+        }
+        if let pr = prMirror.state {
+            pieces.append("PR #\(pr.number) · \(pr.state.lowercased())")
+            if !pr.title.isEmpty {
+                pieces.append(pr.title)
+            }
+        }
+        return pieces.joined(separator: "\n")
     }
 
     /// Whether the current model supports an effort dial. Haiku 4.5 does
@@ -1046,69 +1432,105 @@ private struct ChatThreadScroll: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if store.snapshot.items.isEmpty && !store.isLoading {
-                        emptyState
-                    } else {
-                        ForEach(store.snapshot.items) { item in
-                            itemRow(item)
-                                .id(item.id)
-                                .padding(.horizontal, 16)
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        if store.snapshot.items.isEmpty && !store.isLoading {
+                            emptyState
+                        } else {
+                            ForEach(store.snapshot.items) { item in
+                                itemRow(item)
+                                    .id(item.id)
+                                    .padding(.horizontal, 16)
+                                    .onAppear {
+                                        if item.id == store.snapshot.items.last?.id {
+                                            userPinnedToBottom = true
+                                        }
+                                    }
+                                    .onDisappear {
+                                        if item.id == store.snapshot.items.last?.id {
+                                            userPinnedToBottom = false
+                                        }
+                                    }
+                            }
                         }
+                        Color.clear
+                            .frame(height: 12)
+                            .id("bottom-anchor")
                     }
-                    Color.clear
-                        .frame(height: 12)
-                        .id("bottom-anchor")
+                    .padding(.vertical, 12)
                 }
-                .padding(.vertical, 12)
-            }
-            // T13 scroll consolidation: single throttled subscriber on
-            // the snapshot's updateCounter. Replaces the four deferred
-            // `.onAppear` scrolls + dual `.onChange` handlers.
-            .onChange(of: store.snapshot.updateCounter) { _, _ in
-                stickToBottom(proxy, items: store.snapshot.items.count)
-            }
-            .onAppear {
-                // Initial mount: one immediate + one deferred scroll to
-                // cover LazyVStack's lay-out-then-layout-again pass.
-                proxy.scrollTo("bottom-anchor", anchor: .bottom)
-                lastScrollItemCount = store.snapshot.items.count
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                .onChange(of: store.snapshot.updateCounter) { _, _ in
+                    stickToBottomIfPinned(proxy, items: store.snapshot.items.count)
                 }
+                .onAppear {
+                    jumpToLatest(proxy, animated: false)
+                    lastScrollItemCount = store.snapshot.items.count
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        jumpToLatest(proxy, animated: false)
+                    }
+                }
+
+                // Jump-to-latest CTA. Visible whenever the user has
+                // scrolled away from the bottom (a new turn lands while
+                // they're reading history). Click → scroll-to-last-item.
+                if !userPinnedToBottom, !store.snapshot.items.isEmpty {
+                    Button(action: {
+                        userPinnedToBottom = true
+                        jumpToLatest(proxy, animated: true)
+                    }) {
+                        Label("Jump to latest", systemImage: "arrow.down.circle.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.thinMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.downArrow, modifiers: [.command])
+                    .help("Jump to latest message (⌘↓)")
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 12)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            .animation(.easeOut(duration: 0.18), value: userPinnedToBottom)
+        }
+    }
+
+    /// Tracks whether the user is reading the tail (last item visible).
+    /// When false, auto-scroll stops yanking on new turns and the "Jump
+    /// to latest" button surfaces. Updated by the per-row appear/disappear.
+    @State private var userPinnedToBottom: Bool = true
+
+    @State private var lastScrollItemCount: Int = 0
+
+    private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, items: Int) {
+        let delta = items - lastScrollItemCount
+        lastScrollItemCount = items
+        // Only auto-scroll when the user is currently watching the tail.
+        // Reading history shouldn't be interrupted by a new agent turn.
+        guard userPinnedToBottom else { return }
+        let animate = !(delta > 5 || store.isLoading)
+        jumpToLatest(proxy, animated: animate)
+        if animate {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                jumpToLatest(proxy, animated: true)
             }
         }
     }
 
-    /// Last-seen `items.count` at the most-recent stick-to-bottom call.
-    /// Used to detect a backfill burst — when many items arrive in a
-    /// single 16ms snapshot tick, we want to jump-scroll without
-    /// animation rather than fire an animated scroll for every tick.
-    @State private var lastScrollItemCount: Int = 0
-
-    private func stickToBottom(_ proxy: ScrollViewProxy, items: Int) {
-        let delta = items - lastScrollItemCount
-        lastScrollItemCount = items
-        if delta > 5 || store.isLoading {
-            // Backfill burst (>5 items appeared in one snapshot tick) OR
-            // initial-load phase: skip animation so we don't queue up
-            // hundreds of overlapping `withAnimation` transactions
-            // during the head/reverse-tail parse spike.
-            proxy.scrollTo("bottom-anchor", anchor: .bottom)
-            return
-        }
-        withAnimation(.easeOut(duration: 0.2)) {
-            proxy.scrollTo("bottom-anchor", anchor: .bottom)
-        }
-        // Some message renders settle a frame after the count change
-        // (markdown layout, disclosure-group height) — re-scroll once
-        // more after a short beat so we land at the new bottom. Only
-        // applies to steady-state ticks (delta ≤ 5).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.easeOut(duration: 0.15)) {
-                proxy.scrollTo("bottom-anchor", anchor: .bottom)
+    private func jumpToLatest(_ proxy: ScrollViewProxy, animated: Bool) {
+        // LazyVStack tip: scrolling to a sentinel "bottom-anchor" Color.clear
+        // is unreliable because the anchor may be culled before it's
+        // realised. Scrolling to the LAST ITEM's id works every time.
+        let target: AnyHashable = store.snapshot.items.last?.id ?? "bottom-anchor"
+        if animated {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(target, anchor: .bottom)
             }
+        } else {
+            proxy.scrollTo(target, anchor: .bottom)
         }
     }
 
@@ -1495,6 +1917,27 @@ private struct ReviewPane: View {
             InAppBrowser(session: session, model: model)
         case .pr:
             PRReviewPane(session: session, mirror: model.prMirror(for: session))
+        case .terminal:
+            terminalTab
+        }
+    }
+
+    /// Live tmux terminal in the review pane. Reuses the same
+    /// `TerminalTabContainer` that the Cmd+T overlay shows, but inline
+    /// so the user can keep the chat and the raw shell side-by-side
+    /// without juggling a sheet.
+    @ViewBuilder
+    private var terminalTab: some View {
+        if let runtime = AppDelegate.runtime,
+           let port = runtime.agentControlServer.boundWsPort {
+            TerminalTabContainer(
+                session: session,
+                model: model,
+                wsPort: Int(port),
+                token: PairingTokenStore.shared.currentToken()
+            )
+        } else {
+            placeholder(text: "Daemon offline — restart Clawdmeter.")
         }
     }
 
@@ -1646,6 +2089,12 @@ private struct TerminalTabContainer: View {
 extension Notification.Name {
     static let focusSidebarSearch = Notification.Name("clawdmeter.workspace.focusSidebarSearch")
     static let popOutSession = Notification.Name("clawdmeter.workspace.popOutSession")
+    /// Posted to open the raw tmux Cmd+T overlay on a specific session.
+    /// (Wave B: chat-first; terminal demoted to overlay.)
+    static let showRawTerminal = Notification.Name("clawdmeter.workspace.showRawTerminal")
+    /// Posted by iOS via the daemon's compose-draft WS event to seed the
+    /// Mac empty-state composer with iPhone-typed prompt text (X1).
+    static let composeDraftIncoming = Notification.Name("clawdmeter.workspace.composeDraftIncoming")
 }
 
 /// Workspace-level width preference. Drives responsive collapsing of the

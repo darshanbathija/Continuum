@@ -95,7 +95,11 @@ public final class LiveActivityCoordinator: ObservableObject {
         }
         let existing = Activity<SessionLiveActivityAttributes>.activities.first
         if let activity = existing {
-            Task { await activity.update(using: content) }
+            if #available(iOS 16.2, *) {
+                Task { await activity.update(ActivityContent(state: content, staleDate: nil)) }
+            } else {
+                Task { await activity.update(using: content) }
+            }
         } else {
             do {
                 let attrs = SessionLiveActivityAttributes()
@@ -130,7 +134,9 @@ public final class LiveActivityCoordinator: ObservableObject {
             }
             // Stream ends when the activity does — unregister the last
             // known token so the Mac doesn't keep pushing into the void.
-            if let last = await self?.lastSentToken {
+            // `Task` inherits this @MainActor class's isolation, so
+            // reading `lastSentToken` is sync from inside the closure.
+            if let last = self?.lastSentToken {
                 await self?.unregisterToken(last)
             }
         }
