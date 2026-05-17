@@ -207,29 +207,11 @@ struct SessionWorkspaceView: View {
         }
     }
 
-    // MARK: - Center empty state
+    // MARK: - Center empty state — Codex-style centered composer
 
     private var centerEmpty: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "ellipsis.bubble")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text("Pick a session to open it here")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.primary)
-            Text("Or create a new one ↗")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Button(action: { model.showingNewSessionSheet = true }) {
-                Label("New session", systemImage: "plus.circle.fill")
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(terraCotta)
-            .keyboardShortcut("n", modifiers: [.command])
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        EmptyStateCenteredComposer(model: model)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Mode-switch overlay (D13)
@@ -399,7 +381,7 @@ private struct SidebarPane: View {
                                 repoDisplayName: repo.displayName
                             )
                         }) {
-                            recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path)
+                            recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
                         }
                         .buttonStyle(.plain)
                     }
@@ -429,8 +411,8 @@ private struct SidebarPane: View {
 
     /// One row per JSONL surfaced from `repo.recentSessions` — these were
     /// not spawned by Clawdmeter (Conductor / Cursor / Terminal). Click
-    /// opens them as read-only chat.
-    private func recentSessionRow(_ recent: RecentSession, isOpen: Bool) -> some View {
+    /// opens them as read-only chat; "Continue here" resumes them live.
+    private func recentSessionRow(_ recent: RecentSession, isOpen: Bool, repo: AgentRepo) -> some View {
         HStack(spacing: 8) {
             Circle()
                 .fill(isRecentLive(recent) ? Color.green : Color.secondary.opacity(0.5))
@@ -459,6 +441,14 @@ private struct SidebarPane: View {
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
         .help("Read-only — opens the JSONL at \(recent.path)")
+        .contextMenu {
+            Button("Continue here", systemImage: "play.fill") {
+                Task { _ = await model.continueOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName) }
+            }
+            Button("Open read-only", systemImage: "eye") {
+                model.openOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName)
+            }
+        }
     }
 
     private func isRecentLive(_ recent: RecentSession) -> Bool {
@@ -708,15 +698,25 @@ private struct CenterThread: View {
     @ObservedObject var model: SessionsModel
     let onModeSwitch: (SessionMode) -> Void
 
-    @State private var composerText: String = ""
-    @State private var composerTextBeforeDictation: String = ""
-    @State private var viewMode: ViewMode = .chat
+    @StateObject private var composerStore: ComposerStore
     @State private var showingScheduler = false
-    @StateObject private var dictation = SpeechDictation()
+    @State private var showingTerminalOverlay = false
+    @State private var showingAutopilotConfirm = false
 
-    enum ViewMode: String, CaseIterable {
-        case chat = "Chat"
-        case terminal = "Terminal"
+    init(session: AgentSession, isReadOnly: Bool, model: SessionsModel, onModeSwitch: @escaping (SessionMode) -> Void) {
+        self.session = session
+        self.isReadOnly = isReadOnly
+        self.model = model
+        self.onModeSwitch = onModeSwitch
+        let store = ComposerStore(mode: .bound(sessionId: session.id))
+        store.modelId = session.model
+        store.effort = session.effort
+        store.mode = session.mode
+        store.agent = session.agent
+        store.planMode = session.status == .planning
+        store.repoKey = session.repoKey
+        store.autopilotEnabled = AutopilotState.shared.isEnabled(sessionId: session.id)
+        _composerStore = StateObject(wrappedValue: store)
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -725,15 +725,21 @@ private struct CenterThread: View {
         VStack(spacing: 0) {
             header
             Divider()
-            ZStack {
-                switch viewMode {
-                case .chat:     chatPane
-                case .terminal: terminalPane
-                }
-            }
+            chatPane
         }
         .sheet(isPresented: $showingScheduler) {
             FollowUpSchedulerSheet(session: session, registry: model.registry)
+        }
+        .sheet(isPresented: $showingTerminalOverlay) {
+            terminalOverlay
+        }
+        .sheet(isPresented: $showingAutopilotConfirm) {
+            autopilotConfirm
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showRawTerminal)) { note in
+            if let id = note.userInfo?["sessionId"] as? UUID, id == session.id {
+                showingTerminalOverlay = true
+            }
         }
     }
 
@@ -745,10 +751,24 @@ private struct CenterThread: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text("\(session.repoDisplayName) · \(session.agent.rawValue.capitalized) · \(session.status.rawValue)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text("\(session.repoDisplayName) · \(session.agent.rawValue.capitalized) · \(session.status.rawValue)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if session.mode == .worktree, let wt = session.worktreePath {
+                        HStack(spacing: 2) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 9))
+                            Text((wt as NSString).lastPathComponent)
+                                .font(.system(size: 10))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .foregroundStyle(terraCotta)
+                        .help("Worktree: \(wt)")
+                    }
+                }
             }
             Spacer()
             if isReadOnly {
@@ -758,16 +778,9 @@ private struct CenterThread: View {
                     .background(.green.opacity(0.15), in: Capsule())
                     .foregroundStyle(.green)
             } else {
-                Picker("", selection: $viewMode) {
-                    ForEach(ViewMode.allCases, id: \.self) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 150)
-                .labelsHidden()
-
                 Menu {
+                    Button("Show raw terminal (⌘T)") { showingTerminalOverlay = true }
+                        .keyboardShortcut("t", modifiers: [.command])
                     Button("Schedule follow-up…", systemImage: "clock") {
                         showingScheduler = true
                     }
@@ -783,11 +796,19 @@ private struct CenterThread: View {
                     if session.archivedAt == nil {
                         Button("Archive") {
                             model.registry.archive(id: session.id)
+                            AttachmentStaging.cleanup(sessionId: session.id)
+                            if let wt = session.worktreePath {
+                                AttachmentStaging.cleanupWorktree(at: wt)
+                            }
                         }
                     }
                     Button("End session", role: .destructive) {
                         Task {
                             await model.endSession(id: session.id)
+                            AttachmentStaging.cleanup(sessionId: session.id)
+                            if let wt = session.worktreePath {
+                                AttachmentStaging.cleanupWorktree(at: wt)
+                            }
                         }
                     }
                 } label: {
@@ -800,6 +821,66 @@ private struct CenterThread: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var terminalOverlay: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Raw terminal — \(session.goal ?? session.repoDisplayName)")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Button("Close (Esc)") { showingTerminalOverlay = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(10)
+            Divider()
+            if let runtime = AppDelegate.runtime,
+               let port = runtime.agentControlServer.boundWsPort {
+                TerminalTabContainer(
+                    session: session,
+                    model: model,
+                    wsPort: Int(port),
+                    token: PairingTokenStore.shared.currentToken()
+                )
+            } else {
+                ContentUnavailableView(
+                    "Daemon offline",
+                    systemImage: "wifi.exclamationmark",
+                    description: Text("Restart Clawdmeter to reconnect.")
+                )
+            }
+        }
+        .frame(minWidth: 700, minHeight: 500)
+    }
+
+    @ViewBuilder
+    private var autopilotConfirm: some View {
+        let willEnable = !composerStore.autopilotEnabled
+        VStack(alignment: .leading, spacing: 12) {
+            Label(willEnable ? "Enable autopilot?" : "Disable autopilot?", systemImage: "bolt.fill")
+                .font(.system(size: 14, weight: .semibold))
+            Text(willEnable
+                 ? "Autopilot respawns the agent CLI with --dangerously-skip-permissions (Claude) or --dangerously-bypass-approvals-and-sandbox (Codex). This interrupts the current turn and starts a fresh agent process. Use only in repos you trust."
+                 : "Disabling autopilot respawns the agent CLI without the dangerously-* flags. The current turn will be interrupted.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { showingAutopilotConfirm = false }
+                    .keyboardShortcut(.cancelAction)
+                Button(willEnable ? "Enable + respawn" : "Disable + respawn") {
+                    showingAutopilotConfirm = false
+                    Task { await toggleAutopilot(enable: willEnable) }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(terraCotta)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 
     private var chatPane: some View {
@@ -848,109 +929,31 @@ private struct CenterThread: View {
     }
 
     private var composerArea: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                ModePicker(mode: session.mode, agent: session.agent, onChange: onModeSwitch)
-                ModelPicker(
-                    selectedModelId: session.model,
-                    catalog: .bundled,
-                    agent: session.agent
-                ) { entry in
-                    Task { await model.switchModel(sessionId: session.id, to: entry, effort: session.effort) }
-                }
-                EffortDial(
-                    selected: session.effort,
-                    supportsEffort: modelSupportsEffort
-                ) { newEffort in
-                    Task { await model.switchEffort(sessionId: session.id, to: newEffort) }
-                }
-                Spacer()
-                if session.planText != nil {
-                    Button(action: {
-                        Task { await model.approvePlan(id: session.id) }
-                    }) {
-                        Label("Approve plan", systemImage: "checkmark.seal.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(terraCotta)
-                    .controlSize(.small)
-                }
-            }
-            HStack(alignment: .bottom, spacing: 8) {
-                Button(action: {}) {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .disabled(true)
-                .help("Attach (not yet wired)")
-
-                Button(action: toggleDictation) {
-                    Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
-                        .font(.system(size: 14))
-                        .foregroundStyle(dictation.state == .recording ? terraCotta : .secondary)
-                        .symbolEffect(.pulse, isActive: dictation.state == .recording)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut("m", modifiers: [.control])
-                .help(dictationTooltip)
-
-                TextField("Message the agent…", text: $composerText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(composerBg, in: RoundedRectangle(cornerRadius: 8))
-                    .lineLimit(1...6)
-                    .onSubmit { sendComposer() }
-
-                Button(action: sendComposer) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(composerText.isEmpty ? .secondary : terraCotta)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(composerText.isEmpty)
-                .help("Send (⌘↩)")
-            }
-            if case let .denied(reason) = dictation.state {
-                Text(reason)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.red)
-            } else if case let .unavailable(reason) = dictation.state {
-                Text(reason)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
+        ComposerInputCore(
+            store: composerStore,
+            catalog: .bundled,
+            agentForModelPicker: session.agent,
+            modelSupportsEffort: modelSupportsEffort,
+            onSend: { Task { await performBoundSend() } },
+            onInterrupt: { Task { await performInterrupt() } },
+            onToggleAutopilot: { showingAutopilotConfirm = true },
+            onApprovePlan: { Task { await model.approvePlan(id: session.id) } },
+            showApprovePlan: session.planText != nil,
+            sessionIsRunning: session.status == .running && composerStore.isSending == false && session.status != .planning
+        )
+        .onChange(of: composerStore.modelId) { _, new in
+            guard let new, new != session.model else { return }
+            if let entry = ModelCatalog.bundled.entry(forId: new) {
+                Task { await model.switchModel(sessionId: session.id, to: entry, effort: composerStore.effort) }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .onReceive(dictation.$partialTranscript) { newPartial in
-            guard dictation.state == .recording, !newPartial.isEmpty else { return }
-            let base = composerTextBeforeDictation
-            composerText = base.isEmpty ? newPartial : "\(base) \(newPartial)"
+        .onChange(of: composerStore.effort) { _, new in
+            guard let new, new != session.effort else { return }
+            Task { await model.switchEffort(sessionId: session.id, to: new) }
         }
-    }
-
-    private func toggleDictation() {
-        if dictation.state == .recording {
-            dictation.stop()
-        } else {
-            composerTextBeforeDictation = composerText
-            Task { await dictation.start() }
-        }
-    }
-
-    private var dictationTooltip: String {
-        switch dictation.state {
-        case .recording: return "Stop dictation (Ctrl+M)"
-        case .requestingPermission: return "Requesting permission…"
-        case .denied(let r): return r
-        case .unavailable(let r): return r
-        case .idle: return "Dictate (Ctrl+M)"
+        .onChange(of: composerStore.mode) { _, new in
+            guard new != session.mode else { return }
+            onModeSwitch(new)
         }
     }
 
@@ -959,7 +962,7 @@ private struct CenterThread: View {
             Image(systemName: "eye")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            Text("Read-only — started outside Clawdmeter.")
+            Text("Read-only — started outside Clawdmeter. Use the “Continue here” button in the sidebar to resume.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
@@ -968,34 +971,74 @@ private struct CenterThread: View {
         .padding(.vertical, 10)
     }
 
-    private func sendComposer() {
-        let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        composerText = ""
+    // MARK: - Send / interrupt / autopilot via daemon (P0 fixes)
+
+    private func performBoundSend() async {
+        composerStore.beginSend()
+        defer { /* endSend called by caller on success/failure */ }
+        // Stage attachments to disk + build path list before composing the body.
         guard let runtime = AppDelegate.runtime,
-              let pane = session.tmuxPaneId ?? session.tmuxWindowId else { return }
-        let bytes = Data((text + "\n").utf8)
-        Task {
-            try? await runtime.tmuxClient.pasteBytes(paneId: pane, bytes: bytes)
+              let port = runtime.agentControlServer.boundPort
+        else {
+            composerStore.endSend(error: .offline)
+            return
+        }
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        var stagedPaths: [URL] = []
+        if let dir = AttachmentStaging.stagingDir(for: session) {
+            for att in composerStore.attachments {
+                do {
+                    let staged = try AttachmentStaging.stage(source: att.sourceURL, into: dir, attachmentId: att.id)
+                    stagedPaths.append(staged)
+                } catch {
+                    composerStore.endSend(error: .daemonError(message: "Couldn't stage \(att.displayName): \(error.localizedDescription)"))
+                    return
+                }
+            }
+        }
+        let body = composerStore.renderPromptBody(attachmentPaths: stagedPaths)
+        do {
+            try await sender.send(sessionId: session.id, body: body, asFollowUp: true)
+            composerStore.endSend()
+        } catch MacComposerSender.Error.http(let status, let retry) {
+            switch status {
+            case 401: composerStore.endSend(error: .unauthorized)
+            case 404: composerStore.endSend(error: .sessionGone)
+            case 429: composerStore.endSend(error: .rateLimited(retryAfter: retry))
+            default: composerStore.endSend(error: .daemonError(message: "HTTP \(status)"))
+            }
+        } catch MacComposerSender.Error.transport(let m) {
+            composerStore.endSend(error: .daemonError(message: m))
+        } catch {
+            composerStore.endSend(error: .daemonError(message: error.localizedDescription))
         }
     }
 
-    @ViewBuilder
-    private var terminalPane: some View {
-        if let runtime = AppDelegate.runtime,
-           let port = runtime.agentControlServer.boundWsPort {
-            TerminalTabContainer(
-                session: session,
-                model: model,
-                wsPort: Int(port),
-                token: PairingTokenStore.shared.currentToken()
-            )
-        } else {
-            ContentUnavailableView(
-                "Daemon offline",
-                systemImage: "wifi.exclamationmark",
-                description: Text("Restart Clawdmeter to reconnect.")
-            )
+    private func performInterrupt() async {
+        guard let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort
+        else { return }
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        try? await sender.interrupt(sessionId: session.id)
+    }
+
+    private func toggleAutopilot(enable: Bool) async {
+        guard let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort
+        else { return }
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        // Daemon-side: flip state. We then respawn via SessionConfigChanger so
+        // the running CLI restarts with the appropriate --dangerously-* flags
+        // (Codex P1: state-only toggle is misleading without respawn).
+        do {
+            try await sender.setAutopilot(sessionId: session.id, enabled: enable)
+            composerStore.autopilotEnabled = enable
+            let changer = SessionConfigChanger(registry: model.registry, tmux: runtime.tmuxClient)
+            // Respawn into the same config; AgentSpawner.respawnArgv reads
+            // AutopilotState.shared.isEnabled and emits --dangerously-* flags.
+            _ = await changer.swap(sessionId: session.id)
+        } catch {
+            composerStore.endSend(error: .daemonError(message: "Autopilot toggle failed: \(error.localizedDescription)"))
         }
     }
 
@@ -1646,6 +1689,12 @@ private struct TerminalTabContainer: View {
 extension Notification.Name {
     static let focusSidebarSearch = Notification.Name("clawdmeter.workspace.focusSidebarSearch")
     static let popOutSession = Notification.Name("clawdmeter.workspace.popOutSession")
+    /// Posted to open the raw tmux Cmd+T overlay on a specific session.
+    /// (Wave B: chat-first; terminal demoted to overlay.)
+    static let showRawTerminal = Notification.Name("clawdmeter.workspace.showRawTerminal")
+    /// Posted by iOS via the daemon's compose-draft WS event to seed the
+    /// Mac empty-state composer with iPhone-typed prompt text (X1).
+    static let composeDraftIncoming = Notification.Name("clawdmeter.workspace.composeDraftIncoming")
 }
 
 /// Workspace-level width preference. Drives responsive collapsing of the

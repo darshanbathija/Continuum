@@ -492,7 +492,11 @@ public final class SessionsModel: ObservableObject {
         planMode: Bool,
         goal: String?,
         mode: SessionMode,
-        tmux: TmuxControlClient
+        tmux: TmuxControlClient,
+        resumeSessionId: String? = nil,
+        model: String? = nil,
+        effort: ReasoningEffort? = nil,
+        pinnedJSONLURL: URL? = nil
     ) async throws -> AgentSession {
         // Fail fast on missing CLIs rather than spawning tmux + the
         // worktree only to error in the agent's pane (where the user
@@ -503,21 +507,36 @@ public final class SessionsModel: ObservableObject {
         try await tmux.start()
         var cwd = repoPath
         var worktreePath: String? = nil
-        if mode == .worktree {
+        // Skip worktree creation for resumes — the CLI handles cwd from JSONL.
+        if mode == .worktree, resumeSessionId == nil {
             let slug = WorktreeManager.slug(goal: goal, sessionId: UUID())
             worktreePath = try await WorktreeManager.shared.add(
                 repoRoot: repoPath, slug: slug
             )
             cwd = worktreePath!
         }
-        let argv = AgentSpawner.argv(for: NewSessionRequest(
-            repoKey: repoPath,
-            agent: agent,
-            model: nil,
-            planMode: planMode,
-            goal: goal,
-            useWorktree: mode == .worktree
-        ))
+        // Build argv per agent. Use direct argv-builders for the resume
+        // path so we can pass the CLI session id (the JSONL `sessionId`
+        // / payload `id`, NOT the Clawdmeter UUID — Codex P0 fix).
+        let argv: [String]
+        switch agent {
+        case .claude:
+            argv = AgentSpawner.claudeArgv(
+                model: model,
+                planMode: planMode,
+                effort: effort,
+                autopilot: false,
+                resumeSessionId: resumeSessionId
+            ) ?? []
+        case .codex:
+            argv = AgentSpawner.codexArgv(
+                model: model,
+                planMode: planMode,
+                effort: effort,
+                autopilot: false,
+                resumeSessionId: resumeSessionId
+            ) ?? []
+        }
         guard !argv.isEmpty else {
             throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
         }
@@ -526,7 +545,7 @@ public final class SessionsModel: ObservableObject {
             repoKey: repoPath,
             repoDisplayName: (repoPath as NSString).lastPathComponent,
             agent: agent,
-            model: nil,
+            model: model,
             goal: goal,
             worktreePath: worktreePath,
             tmuxWindowId: window.windowId,
@@ -534,10 +553,53 @@ public final class SessionsModel: ObservableObject {
             planMode: planMode,
             mode: mode
         )
+        if let pinned = pinnedJSONLURL {
+            forcedChatStoreURLs[session.id] = pinned
+        }
         expandedRepoKeys.insert(repoPath)
         openSessionId = session.id
         await self.refresh()
         return session
+    }
+
+    /// Wave A: turn a read-only Recent JSONL row into a live continuable
+    /// session. Parses the CLI session id from the JSONL header and spawns
+    /// a fresh tmux pane with `--resume <cli-id>` (Claude) or
+    /// `resume <cli-id>` (Codex). Falls back to the read-only view if the
+    /// JSONL has no usable id.
+    @discardableResult
+    public func continueOutsideSession(
+        recent: RecentSession,
+        repoKey: String,
+        repoDisplayName: String
+    ) async -> AgentSession? {
+        let jsonlURL = URL(fileURLWithPath: recent.path)
+        let provider: JSONLSessionId.Provider = (recent.provider == .codex) ? .codex : .claude
+        guard let cliSessionId = JSONLSessionId.extract(from: jsonlURL, provider: provider) else {
+            // No id → keep the read-only synthetic session open.
+            openOutsideSession(recent: recent, repoKey: repoKey, repoDisplayName: repoDisplayName)
+            return nil
+        }
+        guard let runtime = AppDelegate.runtime else { return nil }
+        do {
+            let session = try await spawnSession(
+                repoPath: repoKey,
+                agent: recent.provider,
+                planMode: false,
+                goal: recent.firstPrompt,
+                mode: .local,
+                tmux: runtime.tmuxClient,
+                resumeSessionId: cliSessionId,
+                pinnedJSONLURL: jsonlURL
+            )
+            // Migrate open-state away from the synthetic read-only row.
+            openOutsideJSONLPath = nil
+            openSessionId = session.id
+            return session
+        } catch {
+            openOutsideSession(recent: recent, repoKey: repoKey, repoDisplayName: repoDisplayName)
+            return nil
+        }
     }
 
     /// G2: switch a live session's mode (Local ↔ Worktree). Kills the

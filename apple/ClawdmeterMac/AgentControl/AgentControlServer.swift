@@ -301,6 +301,22 @@ public final class AgentControlServer {
         }
 
         switch envelope.op {
+        case "compose-draft":
+            // X1 cross-Apple handoff. Phone POSTs a draft, daemon broadcasts
+            // to any Mac /events subscriber. Here on the *server* side, the
+            // initial WS message contains the draft itself (single-shot
+            // post-as-WS) — fan it out via NotificationCenter to the local
+            // Mac UI process. The connection is then closed; we don't keep
+            // a long-lived state.
+            if let payload = envelope.draft {
+                NotificationCenter.default.post(
+                    name: Notification.Name("clawdmeter.workspace.composeDraftIncoming"),
+                    object: nil,
+                    userInfo: ["draft": payload]
+                )
+                serverLogger.info("compose-draft received: text length=\(payload.text.count, privacy: .public), repo=\(payload.repoKey ?? "-", privacy: .public)")
+            }
+            sendWSClose(on: connection, code: .protocolCode(.normalClosure))
         case "terminal":
             guard let sessionIdString = envelope.sessionId,
                   let sessionId = UUID(uuidString: sessionIdString),
@@ -368,13 +384,16 @@ public final class AgentControlServer {
 
     /// Subscription envelope for WS connections.
     private struct WSSubscription: Codable {
-        let op: String           // "terminal" | "events"
+        let op: String           // "terminal" | "events" | "compose-draft"
         let token: String
         let sessionId: String?   // required for "terminal"
         let since: UInt64?       // optional for "events"
         /// G12: target a specific pane (multi-terminal tab strip). When nil,
         /// the server falls back to the session's primary pane.
         let paneId: String?
+        /// X1: compose-draft single-shot payload. Only populated when
+        /// `op == "compose-draft"`. The Mac UI consumes via NotificationCenter.
+        let draft: ComposeDraft?
     }
 
     // MARK: - Accept handling

@@ -1,0 +1,110 @@
+import XCTest
+@testable import ClawdmeterShared
+
+@MainActor
+final class ComposerStoreTests: XCTestCase {
+
+    func test_init_bound_emptyState() {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        XCTAssertEqual(s.text, "")
+        XCTAssertTrue(s.attachments.isEmpty)
+        XCTAssertFalse(s.canSend)
+        XCTAssertFalse(s.isSending)
+    }
+
+    func test_init_emptyState_seedsRepoAndAgent() {
+        let s = ComposerStore(mode: .emptyState(repoKey: "/Users/x/repo", agent: .codex))
+        XCTAssertEqual(s.repoKey, "/Users/x/repo")
+        XCTAssertEqual(s.agent, .codex)
+    }
+
+    func test_canSend_textOrAttachment() throws {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        XCTAssertFalse(s.canSend)
+        s.text = "hi"
+        XCTAssertTrue(s.canSend)
+        s.text = "   "
+        XCTAssertFalse(s.canSend, "whitespace-only text shouldn't enable send")
+        _ = try s.attach(url: URL(fileURLWithPath: "/tmp/x.png"), byteSize: 100, isImage: true)
+        XCTAssertTrue(s.canSend, "attachment alone should enable send")
+    }
+
+    func test_attach_rejectsAboveCap() {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        let oversized = ComposerStore.attachmentMaxBytes + 1
+        XCTAssertThrowsError(try s.attach(url: URL(fileURLWithPath: "/tmp/big.bin"), byteSize: oversized, isImage: false)) { err in
+            guard case ComposerStore.SendError.attachmentTooLarge(let name) = err else {
+                return XCTFail("expected attachmentTooLarge, got \(err)")
+            }
+            XCTAssertEqual(name, "big.bin")
+        }
+        XCTAssertTrue(s.attachments.isEmpty)
+    }
+
+    func test_attach_acceptsAtCap_andRemoves() throws {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        let id = try s.attach(url: URL(fileURLWithPath: "/tmp/at-cap.png"), byteSize: ComposerStore.attachmentMaxBytes, isImage: true)
+        XCTAssertEqual(s.attachments.count, 1)
+        s.removeAttachment(id: id)
+        XCTAssertTrue(s.attachments.isEmpty)
+    }
+
+    func test_renderPromptBody_includesAtPathsAndTerminalNewline() {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        s.text = "look at this"
+        let body = s.renderPromptBody(attachmentPaths: [URL(fileURLWithPath: "/tmp/a.png"), URL(fileURLWithPath: "/tmp/b.txt")])
+        XCTAssertEqual(body, "@/tmp/a.png\n@/tmp/b.txt\nlook at this\n", "tmux paste-buffer needs the trailing \\n to submit")
+    }
+
+    func test_renderPromptBody_textOnly_stillHasNewline() {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        s.text = "hello"
+        XCTAssertEqual(s.renderPromptBody(attachmentPaths: []), "hello\n")
+    }
+
+    func test_renderPromptBody_attachmentsOnly_noProse() {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        let body = s.renderPromptBody(attachmentPaths: [URL(fileURLWithPath: "/tmp/x.png")])
+        XCTAssertEqual(body, "@/tmp/x.png\n")
+    }
+
+    func test_clearAfterSend_resetsTextAndAttachments_keepsChips() throws {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        s.modelId = "claude-opus-4-7"
+        s.effort = .high
+        s.text = "stuff"
+        _ = try s.attach(url: URL(fileURLWithPath: "/tmp/y.png"), byteSize: 100, isImage: true)
+        s.beginSend()
+        s.endSend()
+        XCTAssertEqual(s.text, "")
+        XCTAssertTrue(s.attachments.isEmpty)
+        XCTAssertFalse(s.isSending)
+        XCTAssertNil(s.lastError)
+        // Chip state preserved.
+        XCTAssertEqual(s.modelId, "claude-opus-4-7")
+        XCTAssertEqual(s.effort, .high)
+    }
+
+    func test_endSend_withError_keepsTextForRetry() throws {
+        let s = ComposerStore(mode: .emptyState(repoKey: "/r", agent: .claude))
+        s.text = "important draft"
+        s.beginSend()
+        s.endSend(error: .spawnFailed(message: "tmux not started"))
+        XCTAssertEqual(s.text, "important draft", "2A locked: keep text for retry on send failure")
+        XCTAssertNotNil(s.lastError)
+    }
+
+    func test_resetChipsForRepo_4A() {
+        let s = ComposerStore(mode: .emptyState(repoKey: "/r1", agent: .claude))
+        s.modelId = "claude-opus-4-7"
+        s.effort = .high
+        s.mode = .local
+        s.planMode = true
+        s.resetChipsForRepo("/r2", defaults: .default)
+        XCTAssertEqual(s.repoKey, "/r2")
+        XCTAssertEqual(s.modelId, nil)
+        XCTAssertEqual(s.effort, .medium)
+        XCTAssertEqual(s.mode, .worktree)
+        XCTAssertFalse(s.planMode)
+    }
+}

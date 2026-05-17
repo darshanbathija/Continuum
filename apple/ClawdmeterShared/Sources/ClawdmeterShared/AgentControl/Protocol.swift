@@ -1106,3 +1106,35 @@ public struct UsageEnvelope: Codable, Sendable {
         self.lastChecked = lastChecked
     }
 }
+
+// MARK: - Compose-draft (X1 cross-Apple handoff)
+
+/// Cross-Apple draft posted by iPhone "Open on Mac". The Mac dashboard
+/// listens for these on the daemon's `compose-draft` WS op (added to
+/// `AgentControlServer`'s first-message dispatcher 2026-05-18), and the
+/// new empty-state centered composer pre-fills its fields. No new session
+/// is created until the user actually hits send on the Mac side.
+public struct ComposeDraft: Codable, Sendable, Equatable, Hashable {
+    public let text: String
+    public let repoKey: String?
+    public let suggestedAgent: AgentKind?
+    public let suggestedModel: String?
+    public let suggestedEffort: ReasoningEffort?
+    public let createdAt: Date
+
+    public init(
+        text: String,
+        repoKey: String? = nil,
+        suggestedAgent: AgentKind? = nil,
+        suggestedModel: String? = nil,
+        suggestedEffort: ReasoningEffort? = nil,
+        createdAt: Date = Date()
+    ) {
+        self.text = text
+        self.repoKey = repoKey
+        self.suggestedAgent = suggestedAgent
+        self.suggestedModel = suggestedModel
+        self.suggestedEffort = suggestedEffort
+        self.createdAt = createdAt
+    }
+}
