@@ -33,33 +33,58 @@ public struct AnalyticsDailyChart: View {
     }
 
     private var points: [Point] {
-        // Plan A6: "All time" hides the chart.
-        guard window != .allTime else { return [] }
-
         let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let length: Int
         switch window {
-        case .today: length = 1
-        case .past7d: length = 7
-        case .past30d: length = 30
-        case .allTime: length = 0
-        }
-        guard length > 0 else { return [] }
+        case .today, .past7d, .past30d:
+            // Fixed-length windows: walk the trailing N days ending today.
+            let today = cal.startOfDay(for: Date())
+            let length: Int
+            switch window {
+            case .today:   length = 1
+            case .past7d:  length = 7
+            case .past30d: length = 30
+            case .allTime: length = 0
+            }
+            var out: [Point] = []
+            for offset in 0..<length {
+                guard let day = cal.date(byAdding: .day, value: -(length - 1 - offset), to: today) else { continue }
+                if providerFilter != .codex {
+                    let c = snapshot.claude.byDay[day]?.costUSD ?? 0
+                    out.append(Point(id: "claude-\(day.timeIntervalSince1970)", day: day, cost: c, provider: "Claude"))
+                }
+                if providerFilter != .claude {
+                    let c = snapshot.codex.byDay[day]?.costUSD ?? 0
+                    out.append(Point(id: "codex-\(day.timeIntervalSince1970)", day: day, cost: c, provider: "Codex"))
+                }
+            }
+            return out
 
-        var out: [Point] = []
-        for offset in 0..<length {
-            guard let day = cal.date(byAdding: .day, value: -(length - 1 - offset), to: today) else { continue }
-            if providerFilter != .codex {
-                let c = snapshot.claude.byDay[day]?.costUSD ?? 0
-                out.append(Point(id: "claude-\(day.timeIntervalSince1970)", day: day, cost: c, provider: "Claude"))
+        case .allTime:
+            // Walk the union of days with activity across both providers,
+            // ascending. Zero-fill any internal gaps so the axis renders
+            // continuously instead of collapsing missing days — that keeps
+            // the visual cadence honest when the user takes a week off.
+            let claudeKeys = (providerFilter != .codex)  ? Set(snapshot.claude.byDay.keys) : Set<Date>()
+            let codexKeys  = (providerFilter != .claude) ? Set(snapshot.codex.byDay.keys)  : Set<Date>()
+            let allKeys = claudeKeys.union(codexKeys)
+            guard let earliest = allKeys.min(), let latest = allKeys.max() else { return [] }
+            var out: [Point] = []
+            var day = cal.startOfDay(for: earliest)
+            let end = cal.startOfDay(for: latest)
+            while day <= end {
+                if providerFilter != .codex {
+                    let c = snapshot.claude.byDay[day]?.costUSD ?? 0
+                    out.append(Point(id: "claude-\(day.timeIntervalSince1970)", day: day, cost: c, provider: "Claude"))
+                }
+                if providerFilter != .claude {
+                    let c = snapshot.codex.byDay[day]?.costUSD ?? 0
+                    out.append(Point(id: "codex-\(day.timeIntervalSince1970)", day: day, cost: c, provider: "Codex"))
+                }
+                guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
             }
-            if providerFilter != .claude {
-                let c = snapshot.codex.byDay[day]?.costUSD ?? 0
-                out.append(Point(id: "codex-\(day.timeIntervalSince1970)", day: day, cost: c, provider: "Codex"))
-            }
+            return out
         }
-        return out
     }
 
     // MARK: - Body
