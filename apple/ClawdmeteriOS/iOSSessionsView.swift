@@ -852,9 +852,12 @@ private struct SessionDetailView: View {
             iOSSessionActivityStrip(session: session, chatStore: chatStore)
             Divider()
 
-            // Sessions v2 Phase 3: control strip (model/effort/plan-code/interrupt).
-            iOSSessionControlsStrip(session: session, client: client)
-            Divider()
+            // v0.4.7: the model/effort/plan controls that used to live
+            // in `iOSSessionControlsStrip` here are now inside the
+            // composer (matches the Mac chat IDE pattern). The strip
+            // would be redundant + add another row between the activity
+            // strip and the tab picker — removed to keep the surface
+            // tight.
 
             Picker("View", selection: $viewMode) {
                 ForEach(ViewMode.allCases, id: \.self) { mode in
@@ -872,7 +875,7 @@ private struct SessionDetailView: View {
                 VStack(spacing: 0) {
                     liveChatList
                     iOSComposerBar(
-                        mode: .live(sessionId: session.id),
+                        mode: .live(session: session),
                         client: client
                     )
                 }
