@@ -752,6 +752,45 @@ public struct SendPromptRequest: Codable, Sendable {
     }
 }
 
+/// `POST /sessions/continue-readonly` body. Used by the iOS app to promote
+/// a Recent JSONL row (outside Clawdmeter) into a live Clawdmeter-owned
+/// session and optionally send a first prompt — the same flow the Mac runs
+/// inline via `SessionsModel.continueCurrentReadOnly`. The daemon parses
+/// the JSONL header for the CLI session id, spawns a fresh tmux pane with
+/// `--resume <id>` (Claude) or `resume <id>` (Codex), and returns the new
+/// AgentSession's id.
+public struct ContinueReadOnlyRequest: Codable, Sendable {
+    /// Absolute path to the JSONL on the Mac. Stable id for the outside
+    /// session (`RecentSession.path`).
+    public let jsonlPath: String
+    /// Repo key the session belongs to. Canonical normalized cwd.
+    public let repoKey: String
+    /// Which CLI wrote this JSONL — drives spawn argv + JSONL parser shape.
+    public let agent: AgentKind
+    /// Optional first prompt. When non-empty, the daemon posts it after the
+    /// pane is ready. Clients can also leave this nil and post separately
+    /// via `POST /sessions/:id/send` once the new session id is returned.
+    public let prompt: String?
+
+    public init(jsonlPath: String, repoKey: String, agent: AgentKind, prompt: String? = nil) {
+        self.jsonlPath = jsonlPath
+        self.repoKey = repoKey
+        self.agent = agent
+        self.prompt = prompt
+    }
+}
+
+/// `POST /sessions/continue-readonly` response. Carries the new live
+/// session id so the client can swap its open-state from the outside
+/// JSONL path to the live `AgentSession`.
+public struct ContinueReadOnlyResponse: Codable, Sendable {
+    public let sessionId: UUID
+
+    public init(sessionId: UUID) {
+        self.sessionId = sessionId
+    }
+}
+
 /// `POST /sessions/:id/autopilot` body. NO re-auth (D14). Each toggle
 /// writes an audit log entry. Per E7: enabling adds 15-min inactivity
 /// timeout + per-repo trust list + red banner across surfaces.

@@ -185,6 +185,43 @@ public final class AgentControlClient: ObservableObject {
                         body: SendPromptRequest(text: text, asFollowUp: asFollowUp))
     }
 
+    /// Promote a Recent (outside-Clawdmeter) JSONL into a live live
+    /// session and optionally post a first prompt. Mirrors the Mac's
+    /// `SessionsModel.continueCurrentReadOnly` over the wire so iOS can
+    /// initiate the same flow without being on the Mac. Returns the new
+    /// live session id, or nil on failure (no CLI session id in the
+    /// JSONL header, network error, agent CLI missing).
+    @MainActor
+    public func continueReadOnly(
+        jsonlPath: String,
+        repoKey: String,
+        agent: AgentKind,
+        prompt: String? = nil
+    ) async -> UUID? {
+        let body = ContinueReadOnlyRequest(
+            jsonlPath: jsonlPath,
+            repoKey: repoKey,
+            agent: agent,
+            prompt: prompt
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let bodyData = try? encoder.encode(body),
+              let request = makeRequest(path: "/sessions/continue-readonly", method: "POST", body: bodyData) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let response = try decoder.decode(ContinueReadOnlyResponse.self, from: data)
+            return response.sessionId
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     @MainActor
     public func interruptSession(sessionId: UUID) async {
         await postEmpty(path: "/sessions/\(sessionId.uuidString)/interrupt")

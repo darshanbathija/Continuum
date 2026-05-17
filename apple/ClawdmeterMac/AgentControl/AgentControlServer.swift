@@ -711,6 +711,9 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions/:id/terminals") { [weak self] req, conn, params in
             await self?.handleAddTerminal(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
+        t.register(method: "POST", pattern: "/sessions/continue-readonly") { [weak self] req, conn, _ in
+            await self?.handleContinueReadOnly(request: req, connection: conn)
+        }
         t.register(method: "POST", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
             await self?.handleRegisterPushToken(request: req, connection: conn)
         }
@@ -870,6 +873,133 @@ public final class AgentControlServer {
             sendJSON(["ok": true], on: connection)
         } catch {
             serverLogger.error("send-prompt failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// `POST /sessions/continue-readonly` — server-side equivalent of the
+    /// Mac UI's `SessionsModel.continueCurrentReadOnly`. Lets iOS promote
+    /// a Recent JSONL row into a live Clawdmeter session without having
+    /// to round-trip through the Mac UI.
+    ///
+    /// Flow: parse JSONL header for the CLI session id → spawn a fresh
+    /// tmux pane with `--resume`/`resume` argv → register the new session
+    /// → optionally paste the user's first prompt once the pane is ready.
+    /// JSONL wiring picks up the existing JSONL automatically because
+    /// `--resume` appends to the same file (it's the newest in the dir).
+    private func handleContinueReadOnly(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(ContinueReadOnlyRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let jsonlURL = URL(fileURLWithPath: req.jsonlPath)
+        guard FileManager.default.fileExists(atPath: req.jsonlPath) else {
+            let body = #"{"error":"jsonl_not_found","path":"\#(req.jsonlPath)"}"#
+            sendResponse(.notFound, on: connection)
+            serverLogger.warning("continue-readonly: jsonl missing at \(req.jsonlPath, privacy: .public)")
+            _ = body
+            return
+        }
+        let provider: JSONLSessionId.Provider = (req.agent == .codex) ? .codex : .claude
+        guard let cliSessionId = JSONLSessionId.extract(from: jsonlURL, provider: provider) else {
+            let body = #"{"error":"no_session_id_in_jsonl"}"#
+            sendResponse(HTTPResponse(
+                status: 422, reason: "Unprocessable Entity",
+                contentType: "application/json", body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+
+        // Build resume argv. New continued sessions inherit Claude Code
+        // defaults (Opus 4.7 1M + Max) to match the Mac promote path.
+        let defaults = ComposerStore.ChipDefaults.default
+        let modelDefault: String? = (req.agent == .claude)
+            ? defaults.modelId
+            : ModelCatalog.bundled.codex.first?.id
+        let argv: [String]
+        switch req.agent {
+        case .claude:
+            argv = AgentSpawner.claudeArgv(
+                model: modelDefault,
+                planMode: false,
+                effort: defaults.effort,
+                autopilot: false,
+                resumeSessionId: cliSessionId
+            ) ?? []
+        case .codex:
+            argv = AgentSpawner.codexArgv(
+                model: modelDefault,
+                planMode: false,
+                effort: defaults.effort,
+                autopilot: false,
+                resumeSessionId: cliSessionId
+            ) ?? []
+        }
+        guard !argv.isEmpty else {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
+            ), on: connection)
+            return
+        }
+
+        // Spawn into a new tmux window cwd'd to the repo. Local mode —
+        // outside JSONLs don't carry a worktree.
+        do {
+            try await tmux.start()
+            let window = try await tmux.newWindow(cwd: req.repoKey, child: argv)
+            let session = registry.create(
+                repoKey: req.repoKey,
+                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                agent: req.agent,
+                model: modelDefault,
+                goal: nil,
+                worktreePath: nil,
+                tmuxWindowId: window.windowId,
+                tmuxPaneId: window.paneId,
+                planMode: false
+            )
+            if req.agent == .claude {
+                attachClaudeWiring(for: session, cwd: req.repoKey)
+            }
+            AgentEventStream.recordEvent(
+                sessionId: session.id,
+                kind: .sessionCreated,
+                payload: [
+                    "repo": req.repoKey,
+                    "agent": req.agent.rawValue,
+                    "resumed_from": req.jsonlPath
+                ]
+            )
+
+            // If a prompt came along, paste it after the pane is ready.
+            // Fire-and-forget so the HTTP response returns quickly with
+            // the new session id; the client can also poll /sessions
+            // for status.
+            if let prompt = req.prompt, !prompt.isEmpty {
+                let bytes = prompt.hasSuffix("\n")
+                    ? Array(prompt.utf8)
+                    : Array((prompt + "\n").utf8)
+                Task { [tmux] in
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    try? await tmux.pasteBytes(paneId: window.paneId, bytes: Data(bytes))
+                    await AuditLog.shared.recordSend(
+                        sessionId: session.id,
+                        sourcePeer: Self.endpointString(connection.endpoint),
+                        text: prompt
+                    )
+                }
+            }
+
+            let response = ContinueReadOnlyResponse(sessionId: session.id)
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(response) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            serverLogger.error("continue-readonly failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
     }

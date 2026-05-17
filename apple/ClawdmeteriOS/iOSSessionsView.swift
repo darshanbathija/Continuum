@@ -580,17 +580,36 @@ private struct OutsideSessionDetailView: View {
     let repo: AgentRepo
     @ObservedObject var client: AgentControlClient
     @State private var showingPathInfo: Bool = false
+    /// When non-nil, the read-only row has been promoted into a live
+    /// session and we want to navigate into its detail view instead of
+    /// staying on the outside view. The promote happens server-side via
+    /// `POST /sessions/continue-readonly`.
+    @State private var promotedSession: AgentSession?
 
     var body: some View {
-        // Show the actual chat. The previous body showed only a "Read-only"
-        // pill + JSONL path + last write — useless. The new body fetches
-        // the parsed transcript from the Mac daemon's `/transcript`
-        // endpoint and renders it the same way the Mac chat view does.
-        iOSChatTranscriptView(
-            jsonlPath: recent.path,
-            banner: .readOnlyOutside,
-            client: client
-        )
+        VStack(spacing: 0) {
+            // Show the actual chat. Renders the parsed transcript from
+            // the Mac daemon's `/transcript` endpoint. The composer
+            // below promotes the session on send (continue-readonly).
+            iOSChatTranscriptView(
+                jsonlPath: recent.path,
+                banner: .readOnlyOutside,
+                client: client
+            )
+            iOSComposerBar(
+                mode: .outside(recent: recent, repo: repo),
+                client: client,
+                onPromoted: { newId in
+                    // Resolve the new live session from the refreshed list.
+                    if let live = client.sessions.first(where: { $0.id == newId }) {
+                        promotedSession = live
+                    }
+                }
+            )
+        }
+        .navigationDestination(item: $promotedSession) { session in
+            SessionDetailView(session: session, client: client)
+        }
         .navigationTitle(repo.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -642,6 +661,9 @@ private struct SessionDetailView: View {
     @State private var viewMode: ViewMode = .chat
     /// Sessions v2 T40: chat store mirrors the daemon's chat snapshot.
     @StateObject private var chatStore: iOSChatStore
+    /// Tracks whether the chat scroll is at the tail so we know when to
+    /// auto-scroll on new items vs. surface a "Jump to latest" CTA.
+    @State private var liveChatPinnedToBottom: Bool = true
 
     init(session: AgentSession, client: AgentControlClient) {
         self.session = session
@@ -684,7 +706,13 @@ private struct SessionDetailView: View {
 
             switch viewMode {
             case .chat:
-                structuredView
+                VStack(spacing: 0) {
+                    liveChatList
+                    iOSComposerBar(
+                        mode: .live(sessionId: session.id),
+                        client: client
+                    )
+                }
             case .plan:
                 iOSPlanTrackerView(session: session)
             case .diff:
@@ -730,6 +758,187 @@ private struct SessionDetailView: View {
                     Image(systemName: "ellipsis.circle")
                 }
             }
+        }
+    }
+
+    /// Live chat for an in-session SessionDetailView. Renders the items
+    /// already polled by `iOSChatStore` from the daemon's chat-snapshot
+    /// endpoint. Auto-scrolls to the latest item; floating "Jump to
+    /// latest" CTA mirrors the Mac chat thread.
+    @ViewBuilder
+    private var liveChatList: some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        if let planText = session.planText, !planText.isEmpty {
+                            PlanCardView(
+                                goal: session.goal,
+                                planSummary: planText,
+                                files: [],
+                                onApprove: {
+                                    Task { await client.approvePlan(sessionId: session.id) }
+                                }
+                            )
+                            .padding(.horizontal, 12)
+                            .padding(.top, 12)
+                        }
+                        if chatStore.snapshot.items.isEmpty {
+                            emptyChatPlaceholder
+                        } else {
+                            ForEach(chatStore.snapshot.items) { item in
+                                liveChatItemRow(item)
+                                    .id(item.id)
+                                    .padding(.horizontal, 12)
+                                    .onAppear {
+                                        if item.id == chatStore.snapshot.items.last?.id {
+                                            liveChatPinnedToBottom = true
+                                        }
+                                    }
+                                    .onDisappear {
+                                        if item.id == chatStore.snapshot.items.last?.id {
+                                            liveChatPinnedToBottom = false
+                                        }
+                                    }
+                            }
+                        }
+                        Color.clear.frame(height: 12).id("bottom-anchor")
+                    }
+                    .padding(.vertical, 12)
+                }
+                .background(Color(.systemGroupedBackground))
+                .onAppear {
+                    jumpLiveChatToLatest(proxy, animated: false)
+                }
+                .onChange(of: chatStore.snapshot.updateCounter) { _, _ in
+                    guard liveChatPinnedToBottom else { return }
+                    jumpLiveChatToLatest(proxy, animated: true)
+                }
+                if !liveChatPinnedToBottom, !chatStore.snapshot.items.isEmpty {
+                    Button(action: {
+                        liveChatPinnedToBottom = true
+                        jumpLiveChatToLatest(proxy, animated: true)
+                    }) {
+                        Label("Latest", systemImage: "arrow.down.circle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.thinMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.18), value: liveChatPinnedToBottom)
+        }
+    }
+
+    @ViewBuilder
+    private var emptyChatPlaceholder: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "ellipsis.bubble")
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+            Text("Waiting for the agent's first turn…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
+
+    @ViewBuilder
+    private func liveChatItemRow(_ item: ChatItem) -> some View {
+        switch item {
+        case .message(let msg):
+            liveMessageBubble(msg)
+        case .toolRun(_, let pairs):
+            liveToolRunCard(pairs: pairs)
+        }
+    }
+
+    @ViewBuilder
+    private func liveMessageBubble(_ msg: ChatMessage) -> some View {
+        switch msg.kind {
+        case .userText:
+            HStack {
+                Spacer(minLength: 40)
+                Text(msg.body)
+                    .font(.callout)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0),
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
+            }
+        case .assistantText:
+            HStack {
+                Text(msg.body)
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
+                Spacer(minLength: 40)
+            }
+        case .meta:
+            Text(msg.body)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .toolCall, .toolResult:
+            // Folded into .toolRun groups by ChatItemBuilder — never seen here.
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func liveToolRunCard(pairs: [ToolPair]) -> some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(pairs) { pair in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pair.call.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        if !pair.call.body.isEmpty {
+                            Text(pair.call.body)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.primary)
+                                .lineLimit(8)
+                        }
+                    }
+                    .padding(8)
+                    .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Label("Ran \(pairs.count) command\(pairs.count == 1 ? "" : "s")",
+                  systemImage: "terminal")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func jumpLiveChatToLatest(_ proxy: ScrollViewProxy, animated: Bool) {
+        let target: AnyHashable = chatStore.snapshot.items.last?.id ?? "bottom-anchor"
+        if animated {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(target, anchor: .bottom)
+            }
+        } else {
+            proxy.scrollTo(target, anchor: .bottom)
         }
     }
 
