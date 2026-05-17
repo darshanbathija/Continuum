@@ -76,7 +76,7 @@ struct ContentView: View {
             VStack(spacing: 14) {
                 ProviderToggleHeader(
                     selected: selectedProvider,
-                    onToggle: { toggleProvider(direction: .trailing) }
+                    onPick: { picked in pickProvider(picked) }
                 )
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -128,12 +128,26 @@ struct ContentView: View {
 
     /// Toggle between Claude and Codex. `direction` controls which edge
     /// the new content slides in from (`leading` = came from the right,
-    /// `trailing` = came from the left).
+    /// `trailing` = came from the left). Called by the horizontal swipe
+    /// gesture; the logo buttons call `pickProvider(_:)` directly.
     private func toggleProvider(direction: Edge = .trailing) {
         swipeDirection = direction
         let next: LiveProvider = (selectedProvider == .claude) ? .codex : .claude
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             selectedProviderRaw = next.rawValue
+        }
+    }
+
+    /// Direct-pick a specific provider from the header's logo buttons.
+    /// No-op when the user taps the already-selected logo. Slide
+    /// direction matches the physical side the picked logo sits on —
+    /// Claude (left) → slides in from the leading edge; Codex (right)
+    /// → slides in from the trailing edge.
+    private func pickProvider(_ provider: LiveProvider) {
+        guard provider != selectedProvider else { return }
+        swipeDirection = (provider == .claude) ? .leading : .trailing
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            selectedProviderRaw = provider.rawValue
         }
     }
 
@@ -496,58 +510,74 @@ private struct ReauthCard: View {
 
 // MARK: - Header + logo
 
-/// Tappable provider header. The logo + name behave as one button; tapping
-/// swaps to the other provider. A pair of dots underneath communicates the
-/// current selection at a glance. The whole row is a button — large hit
-/// target, single accessibility action.
+/// Provider toggle as a logo segmented control. Both Claude and Codex
+/// logos render side-by-side at the top of the Live tab. Tapping a logo
+/// switches to that provider; the active one is full-color + larger
+/// with a name underneath, the inactive one is dimmed + smaller. Direct
+/// affordance — no "swap" icon, no chevrons, the logos themselves are
+/// the control.
 private struct ProviderToggleHeader: View {
     let selected: LiveProvider
-    let onToggle: () -> Void
+    /// Called when the user taps a specific provider's logo. The caller
+    /// derives a slide direction from the picked side (left = leading
+    /// edge, right = trailing edge).
+    let onPick: (LiveProvider) -> Void
 
     var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: 12) {
-                ProviderLogo(asset: logoAsset, size: 32)
-                Text(label)
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(.primary)
-                Spacer()
-                pageDots
-                Image(systemName: "arrow.left.arrow.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-                    .background(Color(.tertiarySystemGroupedBackground), in: Circle())
+        HStack(spacing: 0) {
+            providerButton(.claude)
+            providerButton(.codex)
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
+    }
+
+    @ViewBuilder
+    private func providerButton(_ provider: LiveProvider) -> some View {
+        let isActive = (selected == provider)
+        Button(action: { onPick(provider) }) {
+            VStack(spacing: 6) {
+                ProviderLogo(asset: logoAsset(for: provider), size: isActive ? 48 : 32)
+                    .opacity(isActive ? 1.0 : 0.35)
+                    .scaleEffect(isActive ? 1.0 : 0.92)
+                Text(label(for: provider))
+                    .font(.system(size: isActive ? 20 : 14, weight: isActive ? .bold : .medium))
+                    .foregroundStyle(isActive ? .primary : .secondary)
+                    .opacity(isActive ? 1.0 : 0.55)
+                // Thin accent rule under the active logo — visual anchor
+                // for "this is the one you're looking at".
+                Rectangle()
+                    .fill(isActive ? accent : Color.clear)
+                    .frame(height: 2)
+                    .frame(maxWidth: 40)
+                    .padding(.top, 2)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(label) usage — tap to switch provider")
-        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("\(label(for: provider)) usage")
+        .accessibilityAddTraits(isActive ? [.isSelected, .isButton] : .isButton)
+        .accessibilityHint(isActive ? "Currently selected" : "Tap to switch")
     }
 
-    private var logoAsset: String {
-        switch selected {
+    private func logoAsset(for provider: LiveProvider) -> String {
+        switch provider {
         case .claude: return "ClaudeLogo"
         case .codex:  return "CodexLogo"
         }
     }
 
-    private var label: String {
-        switch selected {
+    private func label(for provider: LiveProvider) -> String {
+        switch provider {
         case .claude: return "Claude"
         case .codex:  return "Codex"
         }
     }
 
-    private var pageDots: some View {
-        HStack(spacing: 4) {
-            ForEach(LiveProvider.allCases, id: \.self) { provider in
-                Circle()
-                    .fill(provider == selected ? Color.primary : Color.secondary.opacity(0.35))
-                    .frame(width: 6, height: 6)
-            }
-        }
+    private var accent: Color {
+        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
     }
 }
 

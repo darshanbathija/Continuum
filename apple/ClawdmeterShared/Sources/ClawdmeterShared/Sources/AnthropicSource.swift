@@ -210,13 +210,6 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
     }
 }
 
-/// Indirection so OAuth token loading can be mocked in tests and varied per platform
-/// (iOS Keychain via ASWebAuthenticationSession, macOS Keychain via SecKeychain access,
-/// iCloud Keychain shared item for Mac/iOS cross-device).
-public protocol TokenProvider: Sendable {
-    var currentAccessToken: String? { get }
-    var hasToken: Bool { get }
-    /// Refresh if the cached token is near expiry.
-    /// - Returns: true on success, false if no refresh was needed; throws on hard failure.
-    func refreshIfNeeded() async throws -> Bool
-}
+// TokenProvider protocol moved to TokenProvider.swift (2026-05-18) so that
+// the Linux libsecret implementation can live alongside other implementations
+// without dragging in AnthropicSource's URLSession + ratelimit-parser surface.

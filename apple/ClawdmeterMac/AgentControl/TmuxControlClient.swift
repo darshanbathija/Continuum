@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import OSLog
 
 private let tmuxLogger = Logger(subsystem: "com.clawdmeter.mac", category: "TmuxControlClient")
@@ -30,10 +34,17 @@ public actor TmuxControlClient {
         public let socketName: String
 
         public init(
-            tmuxBinary: String = "/opt/homebrew/bin/tmux",
+            tmuxBinary: String? = nil,
             socketName: String = "clawdmeter"
         ) {
+            // Default: resolve via ShellRunner.locateBinary so the same code path
+            // works on Mac (Apple Silicon Homebrew /opt/homebrew/bin/tmux, Intel
+            // /usr/local/bin/tmux) and Linux (/usr/bin/tmux). Hardcoded
+            // /opt/homebrew/bin/tmux broke for Intel Macs and would have broken
+            // every Linux install. Caller can override for tests.
             self.tmuxBinary = tmuxBinary
+                ?? ShellRunner.locateBinary("tmux")
+                ?? "/usr/bin/tmux"
             self.socketName = socketName
         }
     }
