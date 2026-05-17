@@ -1,0 +1,5 @@
+module CLibUtil [system] {
+    header "shim.h"
+    link "util"
+    export *
+}
