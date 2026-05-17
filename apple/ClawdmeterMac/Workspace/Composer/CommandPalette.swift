@@ -23,6 +23,10 @@ struct PaletteCommand: Identifiable, Hashable {
 
 /// Walks installed skills and exposes them as a cached list. Cache TTL
 /// 30s + invalidation on `~/.claude/skills/` mtime change (§7 perf inline).
+///
+/// The walk + frontmatter parse runs on a background task so opening the
+/// palette never stalls the main thread, even on a cold cache miss
+/// (127 file reads on dev machines — review §7 finding 2026-05-18).
 @MainActor
 final class SkillCatalog: ObservableObject {
 
@@ -31,6 +35,7 @@ final class SkillCatalog: ObservableObject {
     @Published private(set) var commands: [PaletteCommand] = []
     private var lastLoad: Date = .distantPast
     private var lastGlobalMtime: Date?
+    private var refreshTask: Task<Void, Never>?
     private static let ttl: TimeInterval = 30
 
     /// Project-local override path. Set by the caller when a repo is in
@@ -39,18 +44,48 @@ final class SkillCatalog: ObservableObject {
         didSet { if oldValue != projectSkillsRoot { lastLoad = .distantPast } }
     }
 
+    /// Trigger an async refresh if the cache is stale. Returns immediately;
+    /// `commands` keeps serving the previous value (or empty on first run)
+    /// while the background task scans + parses. The Published commands
+    /// update on completion. Callers that need fresh data on first paint
+    /// should await `refreshIfStaleAsync()`.
     func refreshIfStale() {
+        guard shouldRefresh() else { return }
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            await self?.performRefresh()
+        }
+    }
+
+    /// Awaitable variant — useful for tests and for callers that need to
+    /// know when the catalog is fresh.
+    func refreshIfStaleAsync() async {
+        guard shouldRefresh() else { return }
+        await performRefresh()
+    }
+
+    private func shouldRefresh() -> Bool {
         let now = Date()
-        // mtime check first — cheap; lets us invalidate on user installing a skill.
         let globalRoot = URL(fileURLWithPath: NSString("~/.claude/skills").expandingTildeInPath)
         let mtime = (try? globalRoot.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
         let mtimeMoved = (mtime != lastGlobalMtime)
         if now.timeIntervalSince(lastLoad) < Self.ttl && !mtimeMoved && !commands.isEmpty {
-            return
+            return false
         }
         lastGlobalMtime = mtime
         lastLoad = now
-        commands = enumerate()
+        return true
+    }
+
+    private func performRefresh() async {
+        let projectRoot = projectSkillsRoot
+        // The heavy work — 127 file reads + frontmatter parse — moves off
+        // the main actor here. `enumerate` and helpers are nonisolated.
+        let fresh = await Task.detached(priority: .utility) {
+            Self.enumerateNonisolated(projectSkillsRoot: projectRoot)
+        }.value
+        // Hop back to main to publish.
+        commands = fresh
     }
 
     func filter(query: String, forAgent agent: AgentKind) -> [PaletteCommand] {
@@ -66,11 +101,14 @@ final class SkillCatalog: ObservableObject {
         }
     }
 
-    // MARK: - Walkers
+    // MARK: - Walkers (all `nonisolated static` so `Task.detached` can run them off main)
 
-    private func enumerate() -> [PaletteCommand] {
+    nonisolated static func enumerateNonisolated(projectSkillsRoot: URL?) -> [PaletteCommand] {
         var out: [PaletteCommand] = []
-        out.append(contentsOf: walkClaudeSkills(root: URL(fileURLWithPath: NSString("~/.claude/skills").expandingTildeInPath), source: .claudeGlobal))
+        out.append(contentsOf: walkClaudeSkills(
+            root: URL(fileURLWithPath: NSString("~/.claude/skills").expandingTildeInPath),
+            source: .claudeGlobal
+        ))
         if let projectSkillsRoot {
             out.append(contentsOf: walkClaudeSkills(root: projectSkillsRoot, source: .claudeProject))
         }
@@ -78,7 +116,7 @@ final class SkillCatalog: ObservableObject {
         return out.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
     }
 
-    private func walkClaudeSkills(root: URL, source: PaletteCommand.Source) -> [PaletteCommand] {
+    nonisolated private static func walkClaudeSkills(root: URL, source: PaletteCommand.Source) -> [PaletteCommand] {
         guard let entries = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else {
             return []
         }
@@ -87,17 +125,16 @@ final class SkillCatalog: ObservableObject {
             let skillFile = entry.appendingPathComponent("SKILL.md")
             guard FileManager.default.fileExists(atPath: skillFile.path) else { continue }
             guard let content = try? String(contentsOf: skillFile, encoding: .utf8) else { continue }
-            // Parse the YAML frontmatter (extremely permissive).
-            guard let (name, description) = parseFrontmatter(content) else {
+            guard let parsed = SkillFrontmatter.parse(content) else {
                 paletteLogger.warning("skipped \(skillFile.path, privacy: .public): malformed frontmatter")
                 continue
             }
-            out.append(PaletteCommand(id: name, label: name, description: description, source: source))
+            out.append(PaletteCommand(id: parsed.name, label: parsed.name, description: parsed.description, source: source))
         }
         return out
     }
 
-    private func codexBuiltins() -> [PaletteCommand] {
+    nonisolated private static func codexBuiltins() -> [PaletteCommand] {
         [
             PaletteCommand(id: "clear",   label: "clear",   description: "Clear the current conversation context.", source: .codexBuiltin),
             PaletteCommand(id: "compact", label: "compact", description: "Compact the conversation transcript.", source: .codexBuiltin),
@@ -107,47 +144,13 @@ final class SkillCatalog: ObservableObject {
         ]
     }
 
-    /// Pulls `name:` and `description:` from a Claude-Code-style YAML
-    /// frontmatter. Tolerant of single-line vs block-scalar descriptions.
-    /// Returns nil if the frontmatter is missing or unparseable.
-    private func parseFrontmatter(_ content: String) -> (String, String)? {
-        guard content.hasPrefix("---\n") else { return nil }
-        let body = content.dropFirst(4)
-        guard let endRange = body.range(of: "\n---") else { return nil }
-        let header = body[body.startIndex..<endRange.lowerBound]
-        var name: String?
-        var description: String?
-        var inDescriptionBlock = false
-        var descLines: [String] = []
-        for line in header.split(separator: "\n", omittingEmptySubsequences: false) {
-            let raw = String(line)
-            if inDescriptionBlock {
-                // Block-scalar continuation: indented content.
-                if raw.hasPrefix("  ") {
-                    descLines.append(raw.trimmingCharacters(in: .whitespaces))
-                    continue
-                }
-                inDescriptionBlock = false
-                description = descLines.joined(separator: " ")
-            }
-            if raw.hasPrefix("name:") {
-                name = String(raw.dropFirst("name:".count)).trimmingCharacters(in: .whitespaces)
-            } else if raw.hasPrefix("description:") {
-                let v = String(raw.dropFirst("description:".count)).trimmingCharacters(in: .whitespaces)
-                if v == "|" || v == ">" {
-                    inDescriptionBlock = true
-                    descLines = []
-                } else {
-                    description = v
-                }
-            }
-        }
-        if inDescriptionBlock {
-            description = descLines.joined(separator: " ")
-        }
-        guard let name, !name.isEmpty else { return nil }
-        return (name, description ?? "")
+    /// Re-exported for callers that still reference the old name. New
+    /// code should call `SkillFrontmatter.parse(_:)` directly.
+    nonisolated static func parseFrontmatter(_ content: String) -> (String, String)? {
+        guard let r = SkillFrontmatter.parse(content) else { return nil }
+        return (r.name, r.description)
     }
+
 }
 
 /// Anchored popover above the composer when the user types '/' at the

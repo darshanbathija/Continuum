@@ -279,7 +279,14 @@ public final class AgentControlServer {
             connection.cancel()
             return
         }
-        guard let envelope = try? JSONDecoder().decode(WSSubscription.self, from: firstMessage) else {
+        let wsDecoder = JSONDecoder()
+        // ComposeDraft carries an ISO-8601 `createdAt` field (X1 cross-Apple
+        // handoff). iOS encodes with `.iso8601` via `encodedJSONObject()`;
+        // without setting the strategy here, the default `.deferredToDate`
+        // would expect a Double and the whole envelope would silently fail
+        // to decode — X1 broken end-to-end (caught by review 2026-05-18).
+        wsDecoder.dateDecodingStrategy = .iso8601
+        guard let envelope = try? wsDecoder.decode(WSSubscription.self, from: firstMessage) else {
             serverLogger.debug("WS: malformed subscription envelope")
             sendWSClose(on: connection, code: .protocolCode(.protocolError))
             return
@@ -309,12 +316,32 @@ public final class AgentControlServer {
             // Mac UI process. The connection is then closed; we don't keep
             // a long-lived state.
             if let payload = envelope.draft {
+                // Cap inbound text length so a misbehaving / malicious paired
+                // device can't push a multi-MB blob into the SwiftUI TextField
+                // (review §3 finding 2026-05-18). 64KB ≈ ~10K tokens — far
+                // larger than any plausible composer prompt.
+                guard payload.text.count <= 64 * 1024 else {
+                    serverLogger.warning("compose-draft rejected: text length \(payload.text.count) > 64KB cap")
+                    sendWSClose(on: connection, code: .protocolCode(.policyViolation))
+                    return
+                }
                 NotificationCenter.default.post(
-                    name: Notification.Name("clawdmeter.workspace.composeDraftIncoming"),
+                    name: .composeDraftIncoming,
                     object: nil,
                     userInfo: ["draft": payload]
                 )
-                serverLogger.info("compose-draft received: text length=\(payload.text.count, privacy: .public), repo=\(payload.repoKey ?? "-", privacy: .public)")
+                let peer = Self.endpointString(connection.endpoint)
+                await AuditLog.shared.recordSend(
+                    sessionId: UUID(),  // synthetic — drafts don't belong to a session yet
+                    sourcePeer: peer,
+                    text: "[compose-draft] repo=\(payload.repoKey ?? "-") len=\(payload.text.count)"
+                )
+                serverLogger.info("compose-draft received: text length=\(payload.text.count, privacy: .public), repo=\(payload.repoKey ?? "-", privacy: .public), peer=\(peer, privacy: .public)")
+                // Send a 1-byte application-layer ACK before closing so the
+                // iOS caller can `task.receive()` instead of guessing a
+                // sleep duration. Replaces the prior 200ms hope-it-flushed
+                // race (review §10 finding 2026-05-18).
+                sendWSText("ok", on: connection)
             }
             sendWSClose(on: connection, code: .protocolCode(.normalClosure))
         case "terminal":
@@ -371,6 +398,16 @@ public final class AgentControlServer {
         let ctx = NWConnection.ContentContext(identifier: "close", metadata: [meta])
         connection.send(content: nil, contentContext: ctx, isComplete: true,
                         completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    /// Send a single text frame on the WS connection. Used as a tiny
+    /// application-layer ACK for one-shot ops like `compose-draft` so the
+    /// iOS caller can await receipt instead of guessing a sleep duration.
+    private func sendWSText(_ text: String, on connection: NWConnection) {
+        let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+        let ctx = NWConnection.ContentContext(identifier: "ws-text", metadata: [meta])
+        connection.send(content: Data(text.utf8), contentContext: ctx,
+                        isComplete: true, completion: .contentProcessed { _ in })
     }
 
     private func receiveOne(on connection: NWConnection) async throws -> Data {
@@ -861,6 +898,21 @@ public final class AgentControlServer {
         // Throttle the toggle so a misbehaving client can't flap it.
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
+        }
+        // E7 wire-level guard: enabling autopilot requires the repo to be on
+        // the trust list. A peer with the bearer token can't bypass the UI
+        // confirm-sheet by hitting this endpoint directly (review §3 finding
+        // 2026-05-18). Disabling autopilot is always allowed (kill switch).
+        if req.enabled, !AutopilotState.shared.isRepoTrusted(session.repoKey) {
+            let peer = Self.endpointString(connection.endpoint)
+            await AuditLog.shared.recordAutopilotToggle(
+                sessionId: uuid, sourcePeer: peer,
+                enabled: false, repoKey: session.repoKey
+            )
+            serverLogger.warning("autopilot enable rejected for untrusted repo \(session.repoKey, privacy: .public)")
+            let body = #"{"error":"repo not trusted for autopilot","repoKey":"\#(session.repoKey)"}"#
+            sendResponse(.forbidden(body: Data(body.utf8)), on: connection)
+            return
         }
         AutopilotState.shared.setEnabled(req.enabled, sessionId: uuid)
         let peer = Self.endpointString(connection.endpoint)
@@ -1870,6 +1922,14 @@ public final class AgentControlServer {
             status: 500, reason: "Internal Server Error",
             contentType: "text/plain", body: Data("Internal Server Error\n".utf8)
         )
+        /// 403 Forbidden with a JSON body for policy denials (e.g. autopilot
+        /// enable on an untrusted repo — review §3 finding 2026-05-18).
+        static func forbidden(body: Data) -> HTTPResponse {
+            HTTPResponse(
+                status: 403, reason: "Forbidden",
+                contentType: "application/json", body: body
+            )
+        }
         /// Generic 429 (kept for the dispatch-time auth/peer rejection
         /// path). Prefer `tooManyRequestsSend` / `tooManyRequestsSwap` from
         /// the per-handler call sites — those set a real `Retry-After`.

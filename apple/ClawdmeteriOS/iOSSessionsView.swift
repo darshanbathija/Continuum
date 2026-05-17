@@ -875,6 +875,7 @@ private struct NewSessionSheet: View {
     @State private var planMode: Bool = true
     @State private var runAsABPair: Bool = false
     @State private var isStarting: Bool = false
+    @State private var openOnMacUnsupportedAlert: String?
     /// Phase 8: pre-flight cost + weekly-cap estimate. Refreshes when
     /// any input the daemon would care about changes (repo, agent,
     /// model, effort, goal length). Debounced via the .task(id:) below.
@@ -982,6 +983,13 @@ private struct NewSessionSheet: View {
             .task(id: preflightInputs) {
                 await refreshPreflight()
             }
+            .alert("Couldn't open on Mac",
+                   isPresented: Binding(
+                    get: { openOnMacUnsupportedAlert != nil },
+                    set: { if !$0 { openOnMacUnsupportedAlert = nil } }
+                   ),
+                   actions: { Button("OK", role: .cancel) { openOnMacUnsupportedAlert = nil } },
+                   message: { Text(openOnMacUnsupportedAlert ?? "") })
         }
     }
 
@@ -1085,8 +1093,20 @@ private struct NewSessionSheet: View {
             suggestedEffort: currentModelSupportsEffort ? effort : nil
         )
         Task {
-            await client.postComposeDraft(draft)
-            await MainActor.run { isPresented = false }
+            // Refresh /health first so the wire-version gate inside
+            // postComposeDraft has fresh data to consult.
+            await client.refreshHealth()
+            let result = await client.postComposeDraft(draft)
+            await MainActor.run {
+                switch result {
+                case .delivered:
+                    isPresented = false
+                case .macUnsupported(let v):
+                    openOnMacUnsupportedAlert = "Your Mac is on wire version \(v); Open on Mac needs ≥\(AgentControlWireVersion.composeDraftMinimum). Update Clawdmeter on the Mac."
+                case .failed(let msg):
+                    openOnMacUnsupportedAlert = msg
+                }
+            }
         }
     }
 }

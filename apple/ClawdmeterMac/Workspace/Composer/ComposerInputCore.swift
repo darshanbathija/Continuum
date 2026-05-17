@@ -164,7 +164,8 @@ struct ComposerInputCore: View {
     }
 
     private func applyPaletteSelection(_ cmd: PaletteCommand) {
-        // Replace the current last line ("/foo") with "/<cmd.id>" + newline.
+        // Replace the current last line ("/foo") with "/<cmd.id>". onSend()
+        // below appends the terminal newline (ComposerStore.renderPromptBody).
         var lines = store.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if !lines.isEmpty {
             lines.removeLast()
@@ -439,7 +440,5 @@ struct ComposerInputCore: View {
             : Color.black.opacity(0.04)
     }
 
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var terraCotta: Color { SessionsV2Theme.accent }
 }

@@ -21,7 +21,14 @@ import Foundation
 /// iOS reads this on pair-test or session-list refresh and compares to its
 /// own constant. Mismatch surfaces a banner. New endpoints return HTTP 426.
 public enum AgentControlWireVersion {
-    public static let current: Int = 3
+    /// Wire version. Bump when adding a new WS op, REST endpoint, or DTO that
+    /// older Macs won't recognize so iOS can fall back gracefully.
+    /// v4 (2026-05-18) adds `compose-draft` WS op (X1 cross-Apple handoff).
+    public static let current: Int = 4
+    /// Minimum wire version that supports the `compose-draft` WS op.
+    /// iOS guards `postComposeDraft` on this — older Macs would reject
+    /// the unknown op via `.unsupportedData` close (review §10 finding).
+    public static let composeDraftMinimum: Int = 4
 }
 
 /// `GET /health` response. Old clients tolerate the extra fields; new

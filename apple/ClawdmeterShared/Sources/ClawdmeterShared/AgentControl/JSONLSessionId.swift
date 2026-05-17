@@ -23,9 +23,11 @@ public enum JSONLSessionId {
             return nil
         }
         defer { try? handle.close() }
-        // 16KB is enough for the largest known Codex session_meta line
-        // (which can carry a multi-KB base_instructions blob).
-        let data = handle.readData(ofLength: 16 * 1024)
+        // 64KB covers Codex session_meta lines that embed a multi-KB
+        // `base_instructions` blob (observed ~5KB, with headroom for the
+        // longer system prompts shipped in later CLI builds). Cheap to
+        // over-read; the file is small and we only read once.
+        let data = handle.readData(ofLength: 64 * 1024)
         guard let text = String(data: data, encoding: .utf8) else { return nil }
         // Scan line-by-line so we don't depend on the whole prefix being
         // valid JSON (Codex sometimes prepends a stray newline).

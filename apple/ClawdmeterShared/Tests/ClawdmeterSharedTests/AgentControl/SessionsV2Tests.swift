@@ -165,8 +165,12 @@ final class SessionsV2Tests: XCTestCase {
     }
 
     func testWireVersionConstant() {
-        // The current wire version should be a stable integer.
-        XCTAssertEqual(AgentControlWireVersion.current, 3)
+        // Bumped 3 → 4 on 2026-05-18 to cover the X1 `compose-draft` WS op.
+        // iOS gates `postComposeDraft` on `composeDraftMinimum` so older
+        // Macs surface an "Update Clawdmeter" alert instead of silently
+        // dropping the draft on `.unsupportedData` close.
+        XCTAssertEqual(AgentControlWireVersion.current, 4)
+        XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
     }
 
     // MARK: - Mid-session change requests

@@ -94,6 +94,42 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertNotNil(s.lastError)
     }
 
+    func test_renderPromptBody_whitespaceOnlyText_noAttachments_isJustNewline() {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        s.text = "   \t  "
+        // Whitespace-only text gets trimmed; no attachments; renderPromptBody
+        // returns "\n" so tmux paste-buffer commits (an empty body would not).
+        XCTAssertEqual(s.renderPromptBody(attachmentPaths: []), "\n")
+    }
+
+    func test_renderPromptBody_preservesInternalNewlines() {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        s.text = "line one\n\nline three"
+        XCTAssertEqual(s.renderPromptBody(attachmentPaths: []), "line one\n\nline three\n")
+    }
+
+    func test_endSend_withError_preservesAttachmentsForRetry() throws {
+        let s = ComposerStore(mode: .bound(sessionId: UUID()))
+        s.text = "ship it"
+        _ = try s.attach(url: URL(fileURLWithPath: "/tmp/z.png"), byteSize: 100, isImage: true)
+        s.beginSend()
+        s.endSend(error: .daemonError(message: "boom"))
+        // 2A locked: keep BOTH text AND attachments on send failure so the
+        // user's drag-drop work isn't lost.
+        XCTAssertEqual(s.text, "ship it")
+        XCTAssertEqual(s.attachments.count, 1, "attachments must survive a send error so the user can retry")
+    }
+
+    func test_emptyStateMode_canSend_mirrorsBound() throws {
+        let s = ComposerStore(mode: .emptyState(repoKey: "/r", agent: .claude))
+        XCTAssertFalse(s.canSend)
+        s.text = "go"
+        XCTAssertTrue(s.canSend)
+        s.text = ""
+        _ = try s.attach(url: URL(fileURLWithPath: "/tmp/y.png"), byteSize: 50, isImage: true)
+        XCTAssertTrue(s.canSend)
+    }
+
     func test_resetChipsForRepo_4A() {
         let s = ComposerStore(mode: .emptyState(repoKey: "/r1", agent: .claude))
         s.modelId = "claude-opus-4-7"

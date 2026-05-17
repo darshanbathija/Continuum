@@ -857,22 +857,34 @@ private struct CenterThread: View {
     @ViewBuilder
     private var autopilotConfirm: some View {
         let willEnable = !composerStore.autopilotEnabled
+        let repoTrusted = AutopilotState.shared.isRepoTrusted(session.repoKey)
+        let needsTrustGrant = willEnable && !repoTrusted
         VStack(alignment: .leading, spacing: 12) {
-            Label(willEnable ? "Enable autopilot?" : "Disable autopilot?", systemImage: "bolt.fill")
-                .font(.system(size: 14, weight: .semibold))
-            Text(willEnable
-                 ? "Autopilot respawns the agent CLI with --dangerously-skip-permissions (Claude) or --dangerously-bypass-approvals-and-sandbox (Codex). This interrupts the current turn and starts a fresh agent process. Use only in repos you trust."
-                 : "Disabling autopilot respawns the agent CLI without the dangerously-* flags. The current turn will be interrupted.")
+            Label(
+                needsTrustGrant ? "Trust this repo for autopilot?"
+                    : (willEnable ? "Enable autopilot?" : "Disable autopilot?"),
+                systemImage: needsTrustGrant ? "lock.shield.fill" : "bolt.fill"
+            )
+            .font(.system(size: 14, weight: .semibold))
+            Text(autopilotConfirmBody(willEnable: willEnable, needsTrustGrant: needsTrustGrant))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if needsTrustGrant {
+                Text("Repo: \((session.repoKey as NSString).lastPathComponent)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { showingAutopilotConfirm = false }
                     .keyboardShortcut(.cancelAction)
-                Button(willEnable ? "Enable + respawn" : "Disable + respawn") {
+                Button(autopilotConfirmCTA(willEnable: willEnable, needsTrustGrant: needsTrustGrant)) {
                     showingAutopilotConfirm = false
-                    Task { await toggleAutopilot(enable: willEnable) }
+                    Task { await toggleAutopilot(enable: willEnable, grantingTrust: needsTrustGrant) }
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
@@ -880,7 +892,23 @@ private struct CenterThread: View {
             }
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(width: 460)
+    }
+
+    private func autopilotConfirmBody(willEnable: Bool, needsTrustGrant: Bool) -> String {
+        if needsTrustGrant {
+            return "Autopilot respawns the CLI with --dangerously-skip-permissions (Claude) or --dangerously-bypass-approvals-and-sandbox (Codex). It bypasses every tool-call approval prompt in this session, and any session you spawn in this repo afterwards can be flipped to autopilot with one click. Grant trust only if you intend to give agents free rein in this repo."
+        }
+        if willEnable {
+            return "This will interrupt the current turn to respawn the CLI with the dangerously-* flags. The repo is already on your autopilot trust list."
+        }
+        return "Disabling autopilot respawns the CLI without the dangerously-* flags. The current turn will be interrupted."
+    }
+
+    private func autopilotConfirmCTA(willEnable: Bool, needsTrustGrant: Bool) -> String {
+        if needsTrustGrant { return "Trust repo + enable autopilot" }
+        if willEnable { return "Enable + respawn" }
+        return "Disable + respawn"
     }
 
     private var chatPane: some View {
@@ -939,7 +967,7 @@ private struct CenterThread: View {
             onToggleAutopilot: { showingAutopilotConfirm = true },
             onApprovePlan: { Task { await model.approvePlan(id: session.id) } },
             showApprovePlan: session.planText != nil,
-            sessionIsRunning: session.status == .running && composerStore.isSending == false && session.status != .planning,
+            sessionIsRunning: session.status == .running && !composerStore.isSending,
             mentionSourceProvider: {
                 let openSessions = model.registry.sessions.filter { $0.id != session.id && $0.archivedAt == nil }
                 let store = model.chatStore(for: session)
@@ -971,7 +999,7 @@ private struct CenterThread: View {
             Image(systemName: "eye")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            Text("Read-only — started outside Clawdmeter. Use the “Continue here” button in the sidebar to resume.")
+            Text("Read-only — started outside Clawdmeter. Right-click a Recent row in the sidebar and pick “Continue here” to resume.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
@@ -984,7 +1012,6 @@ private struct CenterThread: View {
 
     private func performBoundSend() async {
         composerStore.beginSend()
-        defer { /* endSend called by caller on success/failure */ }
         // Stage attachments to disk + build path list before composing the body.
         guard let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort
@@ -1036,6 +1063,24 @@ private struct CenterThread: View {
     /// already powers SessionActivityStrip) plus the live weekly cap from
     /// the AppModel. Returns nil if we have no model hint yet (chat hasn't
     /// surfaced an assistant turn) — caller hides the row.
+    /// Cached formatters: NumberFormatter init is non-trivial; this view
+    /// recomputes on every composer keystroke (review §7 perf finding).
+    private static let costFormatterSmall: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.currencyCode = "USD"
+        f.minimumFractionDigits = 4
+        f.maximumFractionDigits = 4
+        return f
+    }()
+    private static let costFormatterLarge: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.currencyCode = "USD"
+        f.minimumFractionDigits = 2
+        f.maximumFractionDigits = 2
+        return f
+    }()
     private var costSummaryText: String? {
         guard let store = model.chatStore(for: session) else { return nil }
         let snap = store.snapshot
@@ -1048,34 +1093,45 @@ private struct CenterThread: View {
         )
         let dollar = Pricing.shared.cost(for: modelId, tokens: totals)
         let kTokens = snap.totalTokens / 1_000
-        let costStr: String = {
-            let nf = NumberFormatter()
-            nf.numberStyle = .currency
-            nf.currencyCode = "USD"
-            nf.minimumFractionDigits = (dollar as NSDecimalNumber).doubleValue < 1 ? 4 : 2
-            nf.maximumFractionDigits = (dollar as NSDecimalNumber).doubleValue < 1 ? 4 : 2
-            return nf.string(from: dollar as NSDecimalNumber) ?? "$\(dollar)"
-        }()
-        let weekly = AppDelegate.runtime?.claudeModel.usage?.weeklyPct ?? 0
-        let weeklySuffix = weekly >= 95 ? "  ⚠︎ weekly cap \(weekly)%" : ""
+        let formatter = (dollar as NSDecimalNumber).doubleValue < 1
+            ? Self.costFormatterSmall
+            : Self.costFormatterLarge
+        let costStr = formatter.string(from: dollar as NSDecimalNumber) ?? "$\(dollar)"
+        // Weekly-cap badge only applies to Claude sessions — Codex sessions
+        // have their own usage gauge but the ⚠ here is driven by Anthropic's
+        // weekly cap, which doesn't map to Codex. Hide the badge for Codex
+        // to avoid the wrong-cap UX (review §7 finding 2026-05-18).
+        let weeklySuffix: String
+        if session.agent == .claude,
+           let weekly = AppDelegate.runtime?.claudeModel.usage?.weeklyPct,
+           weekly >= 95 {
+            weeklySuffix = "  ⚠︎ weekly cap \(weekly)%"
+        } else {
+            weeklySuffix = ""
+        }
         return "\(costStr) • \(kTokens)K tokens\(weeklySuffix)"
     }
 
-    private func toggleAutopilot(enable: Bool) async {
+    private func toggleAutopilot(enable: Bool, grantingTrust: Bool = false) async {
         guard let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort
         else { return }
+        // E7: enable requires the repo to be on the autopilot trust list.
+        // The confirm sheet asks for trust grant explicitly; if the user
+        // accepted, record it before the wire-level enforcement kicks in.
+        if grantingTrust {
+            AutopilotState.shared.trustRepo(session.repoKey)
+        }
         let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
         // Daemon-side: flip state. We then respawn via SessionConfigChanger so
-        // the running CLI restarts with the appropriate --dangerously-* flags
-        // (Codex P1: state-only toggle is misleading without respawn).
+        // the running CLI restarts with the appropriate --dangerously-* flags.
         do {
             try await sender.setAutopilot(sessionId: session.id, enabled: enable)
             composerStore.autopilotEnabled = enable
             let changer = SessionConfigChanger(registry: model.registry, tmux: runtime.tmuxClient)
-            // Respawn into the same config; AgentSpawner.respawnArgv reads
-            // AutopilotState.shared.isEnabled and emits --dangerously-* flags.
             _ = await changer.swap(sessionId: session.id)
+        } catch MacComposerSender.Error.http(let status, _) where status == 403 {
+            composerStore.endSend(error: .daemonError(message: "Repo not trusted for autopilot. (You can grant trust from this dialog.)"))
         } catch {
             composerStore.endSend(error: .daemonError(message: "Autopilot toggle failed: \(error.localizedDescription)"))
         }
@@ -1089,12 +1145,6 @@ private struct CenterThread: View {
         case .done: return terraCotta
         case .degraded: return .secondary
         }
-    }
-
-    private var composerBg: Color {
-        colorScheme == .dark
-            ? Color.white.opacity(0.06)
-            : Color.black.opacity(0.04)
     }
 
     /// Whether the current model supports an effort dial. Haiku 4.5 does
