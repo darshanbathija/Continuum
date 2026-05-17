@@ -8,6 +8,22 @@ The Mac app reads Claude Code's OAuth token from your local Keychain, polls Anth
 > - **[Clawdmeter (the original)](https://github.com/darshanbathija/Clawdmeter)** by [@darshanbathija](https://github.com/darshanbathija) — the ESP32 desk-side dashboard that started it all. Every gauge concept, color token (`#d97757` on `#000`), the `UsageData` JSON shape, the Anthropic rate-limit-header polling pattern, and the "send 1 token to keep the 5h timer warm" auto-revive idea were all prototyped there first. This repo is the native Apple port of that hardware project.
 > - **[ccusage](https://github.com/ryoppippi/ccusage)** by [@ryoppippi](https://github.com/ryoppippi) — the entire `$/token` analytics layer (`ClawdmeterShared/Sources/ClawdmeterShared/Analytics/`) is a Swift re-implementation of ccusage's TypeScript aggregation. We parse the same on-disk JSONL files ccusage parses, dedup the same way, and apply the same LiteLLM pricing snapshot. `ccusage daily` in your terminal is the ground-truth our numbers match.
 
+## Download for Linux (Ubuntu 22.04+ / ZorinOS 16+)
+
+**[➜ Download from Releases](https://github.com/darshanbathija/Clawdmeter/releases/latest)** — either `.AppImage` (works on any distro, ~200MB; bundles GTK4 + WebKitGTK 6.0 deps) or `.deb` (Ubuntu 24.04+ / ZorinOS 17+, ~30MB; uses system GTK4).
+
+```bash
+# AppImage — works on Ubuntu 22.04, 24.04, Zorin 16, Zorin 17, Debian 12+
+chmod +x Clawdmeter-*-x86_64.AppImage
+./Clawdmeter-*-x86_64.AppImage
+
+# .deb — Ubuntu 24.04+ / ZorinOS 17+ only
+sudo apt install ./clawdmeter_*_amd64.deb
+clawdmeter
+```
+
+The menu-bar gauge needs the GNOME AppIndicator extension on stock Ubuntu (ZorinOS preinstalls it). Clawdmeter detects the missing extension at first launch and offers to install it via `extensions.gnome.org`, or you can run `sudo apt install gnome-shell-extension-appindicator`. See [docs/linux/INSTALL.md](docs/linux/INSTALL.md), [PAIRING.md](docs/linux/PAIRING.md), [TROUBLESHOOTING.md](docs/linux/TROUBLESHOOTING.md).
+
 ## Download for Mac (Apple Silicon)
 
 **[➜ Download the latest Clawdmeter.dmg from Releases](https://github.com/darshanbathija/Clawdmeter/releases/latest)**

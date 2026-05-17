@@ -1,0 +1,45 @@
+#!/bin/sh
+# Post-install hook for the clawdmeter .deb.
+# - Reload xdg desktop cache so the launcher entry appears immediately.
+# - Reload gtk-update-icon-cache.
+# - Install the systemd-user service (daemon).
+# - Warn if appindicatorsupport extension is missing on stock GNOME.
+
+set -e
+
+# Reload desktop file database
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+
+# Reload icon cache
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t /usr/share/icons/hicolor 2>/dev/null || true
+fi
+
+# AppStream metadata
+if command -v appstreamcli >/dev/null 2>&1; then
+    appstreamcli refresh-cache --user 2>/dev/null || true
+fi
+
+# Systemd user service — enabled per-user, not system-wide.
+# User can opt in via: systemctl --user enable --now clawdmeter.service
+#
+# We don't auto-enable here because the user may prefer launching via
+# desktop entry (which spawns the daemon as a child of `clawdmeter --with-tray`)
+# rather than as a separate systemd-user job.
+
+# Detect if AppIndicator extension is enabled in GNOME for the post-install
+# user warning. (postinst runs as root; we check /usr/share for the extension.)
+EXT_PATH="/usr/share/gnome-shell/extensions/appindicatorsupport@rgcjonas.gmail.com"
+if [ ! -d "$EXT_PATH" ] && [ -d "/usr/share/gnome-shell" ]; then
+    echo ""
+    echo "==> Clawdmeter post-install: GNOME AppIndicator extension not found."
+    echo "    The menu-bar gauge needs the AppIndicator shell extension."
+    echo "    Install it via:"
+    echo "      sudo apt install -y gnome-shell-extension-appindicator"
+    echo "      (then log out + back in)"
+    echo "    Or skip the menu bar and use the dashboard window directly."
+fi
+
+exit 0
