@@ -627,26 +627,24 @@ private struct RecentSessionRow: View {
 
     /// Circular provider badge: Claude (terra-cotta burst) or Codex
     /// (template silhouette). Sits on the leading edge — high-contrast
-    /// at a glance, no row stutter against the title.
+    /// at a glance, no row stutter against the title. When the JSONL
+    /// was touched in the last 5 minutes, a green ring traces the
+    /// badge so liveness reads at a glance without a separate dot.
     private var providerBadge: some View {
         ZStack {
             Circle()
                 .fill(badgeBackground)
-                .frame(width: 28, height: 28)
+                .frame(width: 30, height: 30)
             ProviderBadgeImage(
                 assetName: recent.provider == .claude ? "ClaudeLogo" : "CodexLogo",
                 isTemplate: recent.provider == .codex,
-                size: 16
+                size: 17
             )
             .foregroundStyle(badgeForeground)
             if isLive {
-                // Pulsing live dot in the corner — same green the Mac
-                // sidebar uses for "active in the last 5 minutes".
                 Circle()
-                    .fill(Color.green)
-                    .frame(width: 8, height: 8)
-                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
-                    .offset(x: 11, y: -11)
+                    .stroke(Color.green, lineWidth: 2)
+                    .frame(width: 30, height: 30)
             }
         }
     }

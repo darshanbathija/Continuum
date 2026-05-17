@@ -492,11 +492,15 @@ private struct SidebarPane: View {
                         repoDisplayName: repo?.displayName ?? "Recent"
                     )
                 }) {
+                    // Non-Repo grouping (Date / Status / Agent / None):
+                    // no repo section header above this row, so surface
+                    // the repo as an inline chip in the subtitle.
                     recentSessionRow(
                         recent,
                         isOpen: model.openOutsideJSONLPath == recent.path,
                         repo: model.repos.first(where: { $0.recentSessions.contains(recent) })
-                            ?? AgentRepo(key: recent.path, displayName: "Recent", hasActiveSessions: false)
+                            ?? AgentRepo(key: recent.path, displayName: "Recent", hasActiveSessions: false),
+                        showRepoChip: true
                     )
                 }
                 .buttonStyle(.plain)
@@ -562,44 +566,108 @@ private struct SidebarPane: View {
 
     /// One row per JSONL surfaced from `repo.recentSessions` — these were
     /// not spawned by Clawdmeter (Conductor / Cursor / Terminal). Click
-    /// opens them as read-only chat; "Continue here" resumes them live.
-    private func recentSessionRow(_ recent: RecentSession, isOpen: Bool, repo: AgentRepo) -> some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(isRecentLive(recent) ? Color.green : Color.secondary.opacity(0.5))
-                .frame(width: 6, height: 6)
-            VStack(alignment: .leading, spacing: 1) {
+    /// promotes them via `Continue here`. v0.4.6: matches the iOS row
+    /// treatment — provider badge on the leading edge, color-tinted
+    /// provider name in the subtitle, optional repo chip (for the
+    /// non-Repo groupings where the row has no repo section header
+    /// above it), green ring around the badge when the JSONL was
+    /// touched in the last 5 minutes. The "Read-only" copy and eye
+    /// icon are gone — v0.4.1 made the row continuable from the
+    /// composer so calling it read-only was misleading.
+    private func recentSessionRow(_ recent: RecentSession, isOpen: Bool, repo: AgentRepo, showRepoChip: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            providerBadge(for: recent)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(recentTitle(recent))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(recentSubtitle(recent))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .truncationMode(.tail)
+                recentSubtitleRow(recent: recent, repo: repo, showRepoChip: showRepoChip)
             }
-            Spacer()
-            Image(systemName: "eye")
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
         }
-        .padding(.leading, 30)
-        .padding(.trailing, 24)
+        .padding(.leading, 14)
+        .padding(.trailing, 14)
         .padding(.vertical, 5)
         .background(isOpen ? terraCotta.opacity(0.15) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 5))
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
-        .help("Read-only — opens the JSONL at \(recent.path)")
+        .help(recent.path)
         .contextMenu {
             Button("Continue here", systemImage: "play.fill") {
                 Task { _ = await model.continueOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName) }
             }
-            Button("Open read-only", systemImage: "eye") {
-                model.openOutsideSession(recent: recent, repoKey: repo.key, repoDisplayName: repo.displayName)
+        }
+    }
+
+    /// 20pt circular provider badge with a tinted background, the
+    /// shared `ProviderBadgeImage` glyph, and a green ring overlay when
+    /// the JSONL is currently active.
+    @ViewBuilder
+    private func providerBadge(for recent: RecentSession) -> some View {
+        let isLive = isRecentLive(recent)
+        ZStack {
+            Circle()
+                .fill(recent.provider == .claude
+                      ? terraCotta.opacity(0.18)
+                      : Color.secondary.opacity(0.20))
+                .frame(width: 20, height: 20)
+            ProviderBadgeImage(
+                assetName: recent.provider == .claude ? "ClaudeLogo" : "CodexLogo",
+                isTemplate: recent.provider == .codex,
+                size: 12
+            )
+            .foregroundStyle(recent.provider == .claude ? terraCotta : .primary)
+            if isLive {
+                Circle()
+                    .stroke(Color.green, lineWidth: 1.5)
+                    .frame(width: 20, height: 20)
             }
         }
+    }
+
+    /// Subtitle: color-tinted provider name · optional repo chip ·
+    /// relative time · green `Now` capsule when live. Drops the
+    /// `read-only` suffix that used to live here.
+    @ViewBuilder
+    private func recentSubtitleRow(recent: RecentSession, repo: AgentRepo, showRepoChip: Bool) -> some View {
+        let providerName = recent.provider == .claude ? "Claude" : "Codex"
+        let providerColor: Color = recent.provider == .claude ? terraCotta : .primary
+        let rel = Self.relativeTimestampFormatter.localizedString(
+            for: recent.lastModified, relativeTo: Date()
+        )
+        HStack(spacing: 4) {
+            Text(providerName)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(providerColor)
+            if showRepoChip {
+                Text("·").font(.system(size: 10)).foregroundStyle(.tertiary)
+                HStack(spacing: 2) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text(repo.displayName)
+                        .font(.system(size: 10, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .foregroundStyle(.secondary)
+            }
+            Text("·").font(.system(size: 10)).foregroundStyle(.tertiary)
+            Text(rel)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            if isRecentLive(recent) {
+                Text("Now")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color.green.opacity(0.16), in: Capsule())
+            }
+        }
+        .lineLimit(1)
     }
 
     private func isRecentLive(_ recent: RecentSession) -> Bool {
@@ -614,24 +682,7 @@ private struct SidebarPane: View {
             return prompt
         }
         let provider = recent.provider == .claude ? "Claude" : "Codex"
-        if isRecentLive(recent) {
-            return "\(provider) · live now"
-        }
         return "\(provider) session"
-    }
-
-    private func recentSubtitle(_ recent: RecentSession) -> String {
-        let rel = Self.relativeTimestampFormatter.localizedString(
-            for: recent.lastModified, relativeTo: Date()
-        )
-        let provider = recent.provider == .claude ? "Claude" : "Codex"
-        // When we used the prompt as the title, surface the provider here
-        // so the user can still tell Claude / Codex sessions apart.
-        if recent.firstPrompt != nil {
-            let live = isRecentLive(recent) ? " · live now" : ""
-            return "\(provider) · \(rel)\(live) · read-only"
-        }
-        return "\(rel) · read-only"
     }
 
     private static let relativeTimestampFormatter: RelativeDateTimeFormatter = {
