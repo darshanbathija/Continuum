@@ -28,6 +28,7 @@ public final class LiveCostCalculator {
         case .medium, nil: return 1.0
         case .high: return 1.8
         case .xhigh: return 3.0
+        case .max: return 4.0
         }
     }
 

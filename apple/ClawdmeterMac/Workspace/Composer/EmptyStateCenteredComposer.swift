@@ -42,7 +42,12 @@ struct EmptyStateCenteredComposer: View {
                     catalog: .bundled,
                     agentForModelPicker: store.agent,
                     modelSupportsEffort: modelSupportsEffort,
-                    onSend: { Task { await firstSend() } }
+                    onSend: { Task { await firstSend() } },
+                    onChangePermissionMode: { newMode in
+                        store.permissionMode = newMode
+                        store.planMode = (newMode == .plan)
+                    },
+                    permissionMode: store.permissionMode
                 )
             }
             .frame(maxWidth: 760)
@@ -135,11 +140,18 @@ struct EmptyStateCenteredComposer: View {
             let session = try await model.spawnSession(
                 repoPath: repoKey,
                 agent: store.agent,
-                planMode: store.planMode,
+                planMode: store.permissionMode == .plan,
                 goal: goal,
                 mode: store.mode,
-                tmux: runtime.tmuxClient
+                tmux: runtime.tmuxClient,
+                acceptEdits: store.permissionMode == .acceptEdits
             )
+            // Record the empty-state composer's mode pick on the session
+            // so the chip in the bound view reflects it without needing
+            // an extra round-trip.
+            if store.permissionMode == .acceptEdits {
+                PermissionModeStore.shared.setAcceptEdits(true, sessionId: session.id)
+            }
             // Wait briefly for the pane to be ready, then post the first prompt.
             try await Task.sleep(nanoseconds: 600_000_000)
             if store.canSend, let port = runtime.agentControlServer.boundPort {

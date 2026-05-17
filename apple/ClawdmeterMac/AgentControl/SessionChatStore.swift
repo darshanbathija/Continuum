@@ -52,6 +52,16 @@ public final class SessionChatStore: ObservableObject {
         public let totalOutputTokens: Int
         public let totalCacheCreationTokens: Int
         public let totalCacheReadTokens: Int
+        /// MOST-RECENT turn's input/cache tokens — NOT cumulative. The sum
+        /// `lastInputTokens + lastCacheReadTokens + lastCacheCreationTokens`
+        /// is the model's working-memory size for the next turn, which is
+        /// what the composer's "context window" meter should display. The
+        /// cumulative `total*` values double-count cache reads across every
+        /// turn and grow to billions for long sessions.
+        public let lastInputTokens: Int
+        public let lastOutputTokens: Int
+        public let lastCacheCreationTokens: Int
+        public let lastCacheReadTokens: Int
         /// Last assistant message's `message.model` field. We use the
         /// latest one because users sometimes switch mid-session via
         /// `/model`; the most recent tokens are billed at the most
@@ -76,6 +86,10 @@ public final class SessionChatStore: ObservableObject {
             totalOutputTokens: Int = 0,
             totalCacheCreationTokens: Int = 0,
             totalCacheReadTokens: Int = 0,
+            lastInputTokens: Int = 0,
+            lastOutputTokens: Int = 0,
+            lastCacheCreationTokens: Int = 0,
+            lastCacheReadTokens: Int = 0,
             modelHint: String? = nil,
             lastEventAt: Date? = nil,
             updateCounter: UInt64
@@ -88,6 +102,10 @@ public final class SessionChatStore: ObservableObject {
             self.totalOutputTokens = totalOutputTokens
             self.totalCacheCreationTokens = totalCacheCreationTokens
             self.totalCacheReadTokens = totalCacheReadTokens
+            self.lastInputTokens = lastInputTokens
+            self.lastOutputTokens = lastOutputTokens
+            self.lastCacheCreationTokens = lastCacheCreationTokens
+            self.lastCacheReadTokens = lastCacheReadTokens
             self.modelHint = modelHint
             self.lastEventAt = lastEventAt
             self.updateCounter = updateCounter
@@ -100,6 +118,14 @@ public final class SessionChatStore: ObservableObject {
         public var totalTokens: Int {
             totalInputTokens + totalOutputTokens
                 + totalCacheCreationTokens + totalCacheReadTokens
+        }
+
+        /// Single-turn working-memory size — what the model actually sees
+        /// in its prompt for the next turn. Used by the composer's context
+        /// window meter (the cumulative totals overstate by Nx where N is
+        /// the turn count because cache reads are re-counted every turn).
+        public var contextWindowUsedTokens: Int {
+            lastInputTokens + lastCacheCreationTokens + lastCacheReadTokens
         }
     }
 
@@ -777,6 +803,19 @@ actor StagingParser {
     private var totalOutputTokens: Int = 0
     private var totalCacheCreationTokens: Int = 0
     private var totalCacheReadTokens: Int = 0
+    /// Most-recently ingested turn's tokens — overwritten (not summed) on
+    /// each ingest with non-zero usage. Drives the composer's context-
+    /// window meter; the cumulative totals overstate working memory size
+    /// by the turn count because cache reads are re-counted every turn.
+    private var lastInputTokens: Int = 0
+    private var lastOutputTokens: Int = 0
+    private var lastCacheCreationTokens: Int = 0
+    private var lastCacheReadTokens: Int = 0
+    /// Latest line timestamp that carried a non-zero usage. We use this
+    /// to disambiguate when reverse-tail backfill ingests historical lines
+    /// out of order — only the newest-by-timestamp usage wins for the
+    /// `last*` fields. Cumulative totals still sum every ingest as before.
+    private var lastUsageAt: Date? = nil
     /// Latest `message.model` value the staging parser saw. The activity
     /// strip's cost estimator uses this — sessions can switch mid-stream
     /// via `/model` and the most recent rate should apply going forward.
@@ -859,6 +898,24 @@ actor StagingParser {
             totalOutputTokens += line.deltaOutputTokens
             totalCacheCreationTokens += line.deltaCacheCreationTokens
             totalCacheReadTokens += line.deltaCacheReadTokens
+            // Track the newest-by-timestamp usage separately for the
+            // context-window meter. Only assistant turns carry usage on
+            // Claude — gating on a non-zero delta keeps tool-result and
+            // user lines from clobbering the last real turn.
+            let hasUsage =
+                line.deltaInputTokens != 0
+                || line.deltaOutputTokens != 0
+                || line.deltaCacheCreationTokens != 0
+                || line.deltaCacheReadTokens != 0
+            if hasUsage,
+               let stamp = line.messages.map(\.at).max(),
+               lastUsageAt == nil || stamp >= lastUsageAt! {
+                lastUsageAt = stamp
+                lastInputTokens = line.deltaInputTokens
+                lastOutputTokens = line.deltaOutputTokens
+                lastCacheCreationTokens = line.deltaCacheCreationTokens
+                lastCacheReadTokens = line.deltaCacheReadTokens
+            }
             // Take the latest non-empty model hint. Reverse-tail ingests
             // can arrive out of order, but the latest timestamp wins
             // because we re-walk this on every snapshot rebuild anyway.
@@ -891,6 +948,11 @@ actor StagingParser {
         totalOutputTokens = 0
         totalCacheCreationTokens = 0
         totalCacheReadTokens = 0
+        lastInputTokens = 0
+        lastOutputTokens = 0
+        lastCacheCreationTokens = 0
+        lastCacheReadTokens = 0
+        lastUsageAt = nil
         modelHint = nil
         lastEventAt = nil
         cachedSnapshot = .empty
@@ -960,6 +1022,10 @@ actor StagingParser {
             totalOutputTokens: totalOutputTokens,
             totalCacheCreationTokens: totalCacheCreationTokens,
             totalCacheReadTokens: totalCacheReadTokens,
+            lastInputTokens: lastInputTokens,
+            lastOutputTokens: lastOutputTokens,
+            lastCacheCreationTokens: lastCacheCreationTokens,
+            lastCacheReadTokens: lastCacheReadTokens,
             modelHint: modelHint,
             lastEventAt: lastEventAt,
             updateCounter: updateCounter

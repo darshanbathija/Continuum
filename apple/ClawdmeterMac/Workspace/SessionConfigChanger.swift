@@ -56,7 +56,8 @@ public final class SessionConfigChanger {
             model: session.model,
             planMode: session.status == .planning,
             effort: session.effort,
-            autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId)
+            autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId),
+            acceptEdits: PermissionModeStore.shared.acceptEdits(sessionId: sessionId)
         )
         let newArgv = AgentSpawner.respawnArgv(
             agent: session.agent,
@@ -64,7 +65,8 @@ public final class SessionConfigChanger {
             model: newModel ?? session.model,
             planMode: newPlanMode ?? (session.status == .planning),
             effort: (newEffort == nil ? session.effort : newEffort!),
-            autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId)
+            autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId),
+            acceptEdits: PermissionModeStore.shared.acceptEdits(sessionId: sessionId)
         )
         if newArgv.isEmpty {
             return .spawnError(message: "Could not locate agent binary on PATH")

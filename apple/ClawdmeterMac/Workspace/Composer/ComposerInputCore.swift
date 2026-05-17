@@ -26,13 +26,29 @@ struct ComposerInputCore: View {
     /// the send button transforms into a stop button that calls this.
     var onInterrupt: (() -> Void)?
     /// Toggle handler for autopilot (T12). Shown only when set.
+    /// Legacy hook — `onChangePermissionMode` supersedes it for the new
+    /// PermissionModeChip but the autopilot confirm sheet still routes
+    /// through this callback when `.bypass` is picked.
     var onToggleAutopilot: (() -> Void)?
+    /// Called when the user picks a new permission mode from the chip.
+    /// Bound sessions trigger a respawn via SessionConfigChanger;
+    /// empty-state composers just record the choice for the next spawn.
+    var onChangePermissionMode: ((PermissionMode) -> Void)?
+    /// Resolved permission mode for the chip. For bound sessions this
+    /// comes from `PermissionModeStore.currentMode(for:)`. For empty
+    /// state it's `store.permissionMode`.
+    var permissionMode: PermissionMode = .ask
     /// Approve-plan delegate (Wave A). Shown when the session has plan text.
     var onApprovePlan: (() -> Void)?
     /// "Approve plan" should appear iff the bound session has plan text.
     var showApprovePlan: Bool = false
     /// True when the bound session is actively running (drives stop button).
     var sessionIsRunning: Bool = false
+    /// True when the bound view is a synthetic read-only Recent-JSONL row.
+    /// The composer still renders, but the send path implicitly promotes
+    /// the synthetic to a live `--resume` spawn before posting. Hides
+    /// autopilot + approve-plan chips because the synthetic has no pane.
+    var isReadOnly: Bool = false
 
     @StateObject private var dictation = SpeechDictation()
     @ObservedObject private var skillCatalog = SkillCatalog.shared
@@ -46,16 +62,19 @@ struct ComposerInputCore: View {
     /// Optional: when set, MentionPicker uses these as the source of
     /// suggestions (parent passes session-derived sources + open sessions).
     var mentionSourceProvider: () -> (sessions: [AgentSession], sourceEntries: [SourceEntry], recents: [RecentSession]) = { ([], [], []) }
-    /// Optional: running-session cost ticker text (e.g. "~$0.12 \u{2022} 2.3K tokens").
-    /// When nil the cost row is hidden.
-    var costSummary: String?
+    /// Optional: structured context + plan-usage data for the right-side
+    /// status chip. When nil the chip is hidden.
+    var usageStatus: UsageStatusInfo?
     /// Project-local skill root, if any (`<repo>/.claude/skills/`).
     var projectSkillsRoot: URL?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        // Claude-Code-style stack: input box on top, attachments chip strip,
+        // then a single compact bottom bar with all controls + the usage
+        // chip on the right. The palette / mention popovers float ABOVE the
+        // input row (negative Y offset) as before.
         VStack(spacing: 6) {
-            chipRow
             if !store.attachments.isEmpty {
                 attachmentChipsRow
             }
@@ -88,18 +107,7 @@ struct ComposerInputCore: View {
                         .zIndex(2)
                     }
                 }
-            if let summary = costSummary {
-                HStack(spacing: 4) {
-                    Image(systemName: "chart.bar.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                    Text(summary)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 4)
-            }
+            chipRow
             if let err = store.lastError {
                 Text(err.localizedDescription)
                     .font(.system(size: 11))
@@ -197,41 +205,33 @@ struct ComposerInputCore: View {
 
     // MARK: - Chip row (mode-dependent)
 
+    /// Compact bottom bar — Claude-Code-style single line under the input.
+    /// Left cluster: per-turn tools (autopilot, attach, mic, mode, plan).
+    /// Right cluster: model + effort + usage in a single unified chip that
+    /// opens a Claude-Code-style "Models / Effort / Usage" popover.
     @ViewBuilder
     private var chipRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
+            if !isReadOnly, onChangePermissionMode != nil {
+                PermissionModeChip(
+                    mode: permissionMode,
+                    availableModes: availablePermissionModes,
+                    onChange: { newMode in
+                        onChangePermissionMode?(newMode)
+                    }
+                )
+            }
+            attachButton
+            micButton
+
+            Divider().frame(height: 16).padding(.horizontal, 2)
+
             switch store.modeKind {
             case .bound:
                 ModePicker(mode: store.mode, agent: store.agent) { newMode in
                     store.mode = newMode
                 }
-                ModelPicker(
-                    selectedModelId: store.modelId,
-                    catalog: catalog,
-                    agent: agentForModelPicker
-                ) { entry in
-                    store.modelId = entry.id
-                }
-                EffortDial(selected: store.effort, supportsEffort: modelSupportsEffort) { newEffort in
-                    store.effort = newEffort
-                }
-                if onToggleAutopilot != nil {
-                    AutopilotChip(isOn: store.autopilotEnabled) {
-                        onToggleAutopilot?()
-                    }
-                }
-                Spacer()
-                if showApprovePlan, let onApprovePlan {
-                    Button(action: onApprovePlan) {
-                        Label("Approve plan", systemImage: "checkmark.seal.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(terraCotta)
-                    .controlSize(.small)
-                }
             case .emptyState:
-                // Empty-state row: agent + model + effort + mode + plan toggle.
                 Picker("Agent", selection: $store.agent) {
                     Text("Claude").tag(AgentKind.claude)
                     Text("Codex").tag(AgentKind.codex)
@@ -239,26 +239,98 @@ struct ComposerInputCore: View {
                 .pickerStyle(.segmented)
                 .frame(width: 140)
                 .labelsHidden()
-                ModelPicker(
-                    selectedModelId: store.modelId,
-                    catalog: catalog,
-                    agent: store.agent
-                ) { entry in
-                    store.modelId = entry.id
-                }
-                EffortDial(selected: store.effort, supportsEffort: modelSupportsEffort) { newEffort in
-                    store.effort = newEffort
-                }
                 ModePicker(mode: store.mode, agent: store.agent) { newMode in
                     store.mode = newMode
                 }
-                Toggle("Plan", isOn: $store.planMode)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
-                    .help("Plan mode runs the agent read-only until you approve.")
-                Spacer()
             }
+
+            Spacer(minLength: 6)
+
+            if !isReadOnly, showApprovePlan, let onApprovePlan {
+                Button(action: onApprovePlan) {
+                    Label("Approve plan", systemImage: "checkmark.seal.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(terraCotta)
+                .controlSize(.small)
+            }
+            let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
+            // Two-chip split (left = context/usage, right = model/effort) —
+            // each opens an independent popover so the user can glance at
+            // window utilisation without committing to a model swap.
+            ContextUsageChip(info: resolvedInfo)
+            ModelEffortChip(
+                info: resolvedInfo,
+                catalog: catalog,
+                agent: { if case .bound = store.modeKind { return agentForModelPicker } else { return store.agent } }(),
+                selectedModelId: $store.modelId,
+                selectedEffort: $store.effort,
+                modelSupportsEffort: modelSupportsEffort
+            )
         }
+    }
+
+    /// Synthesise a `UsageStatusInfo` when the parent didn't supply one —
+    /// happens on the empty-state composer (no chat snapshot yet) and on
+    /// bound sessions before the first assistant turn lands. The chip still
+    /// needs to render so the user can change model/effort.
+    private static func placeholderUsage(modelId: String?, effort: ReasoningEffort?, catalog: ModelCatalog) -> UsageStatusInfo {
+        let entry = modelId.flatMap { catalog.entry(forId: $0) }
+        return UsageStatusInfo(
+            modelDisplay: entry?.displayName ?? modelId ?? "Select model",
+            effortDisplay: effort.map(effortLabel),
+            contextUsedTokens: 0,
+            contextLimitTokens: entry?.contextWindow,
+            costDollar: 0,
+            sessionPct: nil,
+            sessionResetMins: nil,
+            weeklyPct: nil,
+            weeklyResetMins: nil
+        )
+    }
+
+    private static func effortLabel(_ e: ReasoningEffort) -> String {
+        switch e {
+        case .minimal: return "Minimal"
+        case .low:     return "Low"
+        case .medium:  return "Medium"
+        case .high:    return "High"
+        case .xhigh:   return "Extra high"
+        case .max:     return "Max"
+        }
+    }
+
+    /// Permission modes available in this composer context. Bound
+    /// sessions get the full set; empty-state composers hide `.bypass`
+    /// (no session yet → nothing to trust-gate).
+    private var availablePermissionModes: [PermissionMode] {
+        switch store.modeKind {
+        case .bound:      return [.ask, .acceptEdits, .plan, .bypass]
+        case .emptyState: return [.ask, .acceptEdits, .plan]
+        }
+    }
+
+    private var attachButton: some View {
+        Button(action: { isShowingFileImporter = true }) {
+            Image(systemName: "paperclip")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Attach a file (drag-drop, paste, or click)")
+    }
+
+    private var micButton: some View {
+        Button(action: toggleDictation) {
+            Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
+                .font(.system(size: 13))
+                .foregroundStyle(dictation.state == .recording ? terraCotta : .secondary)
+                .symbolEffect(.pulse, isActive: dictation.state == .recording)
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("m", modifiers: [.control])
+        .help(dictationTooltip)
     }
 
     private var attachmentChipsRow: some View {
@@ -276,39 +348,27 @@ struct ComposerInputCore: View {
 
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Button(action: { isShowingFileImporter = true }) {
-                Image(systemName: "paperclip")
+            ZStack(alignment: .topLeading) {
+                TextField(textFieldPlaceholder, text: $store.text, axis: .vertical)
+                    .textFieldStyle(.plain)
                     .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+                    .lineLimit(4...24)
             }
-            .buttonStyle(.plain)
-            .help("Attach a file (drag-drop, paste, or click)")
-
-            Button(action: toggleDictation) {
-                Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
-                    .font(.system(size: 14))
-                    .foregroundStyle(dictation.state == .recording ? terraCotta : .secondary)
-                    .symbolEffect(.pulse, isActive: dictation.state == .recording)
+            .background(composerBg, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(
+                        dropTargetActive ? terraCotta : terraCotta.opacity(0.45),
+                        style: StrokeStyle(lineWidth: dropTargetActive ? 2 : 1, dash: dropTargetActive ? [] : [4, 4])
+                    )
+            )
+            .onDrop(of: [.fileURL, .image, .png, .jpeg, .pdf, .text], isTargeted: $dropTargetActive) { providers in
+                handleDrop(providers: providers)
+                return true
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut("m", modifiers: [.control])
-            .help(dictationTooltip)
-
-            TextField(textFieldPlaceholder, text: $store.text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(composerBg, in: RoundedRectangle(cornerRadius: 8))
-                .lineLimit(1...20)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(dropTargetActive ? terraCotta : Color.clear, lineWidth: 2)
-                )
-                .onDrop(of: [.fileURL, .image, .png, .jpeg, .pdf, .text], isTargeted: $dropTargetActive) { providers in
-                    handleDrop(providers: providers)
-                    return true
-                }
 
             sendOrStopButton
         }
@@ -316,7 +376,7 @@ struct ComposerInputCore: View {
 
     @ViewBuilder
     private var sendOrStopButton: some View {
-        if sessionIsRunning, let onInterrupt {
+        if !isReadOnly, sessionIsRunning, let onInterrupt {
             Button(action: onInterrupt) {
                 Image(systemName: "stop.circle.fill")
                     .font(.system(size: 22))
@@ -362,7 +422,8 @@ struct ComposerInputCore: View {
 
     private var textFieldPlaceholder: String {
         switch store.modeKind {
-        case .bound: return "Message the agent…  (⌘↩ send)"
+        case .bound:
+            return "Continue the session here   (⌘↩ to send)"
         case .emptyState:
             if let repo = store.repoKey, !repo.isEmpty {
                 let last = (repo as NSString).lastPathComponent

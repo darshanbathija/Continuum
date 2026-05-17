@@ -24,6 +24,7 @@ public enum AgentSpawner {
         planMode: Bool = false,
         effort: ReasoningEffort? = nil,
         autopilot: Bool = false,
+        acceptEdits: Bool = false,
         resumeSessionId: String? = nil,
         extraArgs: [String] = []
     ) -> [String]? {
@@ -35,11 +36,15 @@ public enum AgentSpawner {
         if let model, !model.isEmpty {
             argv += ["--model", model]
         }
+        // Permission mode precedence: plan > bypass (autopilot) > acceptEdits
+        // > ask (default). Only one --permission-mode flag may be set.
         if planMode {
             argv += ["--permission-mode", "plan"]
         } else if autopilot {
             // E7 guardrails wrap this with audit + timeout + per-repo trust.
             argv += ["--dangerously-skip-permissions"]
+        } else if acceptEdits {
+            argv += ["--permission-mode", "acceptEdits"]
         }
         if let effort {
             argv += ["--effort", effort.claudeFlagValue]
@@ -62,9 +67,15 @@ public enum AgentSpawner {
         planMode: Bool = false,
         effort: ReasoningEffort? = nil,
         autopilot: Bool = false,
+        acceptEdits: Bool = false,
         resumeSessionId: String? = nil,
         extraArgs: [String] = []
     ) -> [String]? {
+        // `acceptEdits` is a no-op on Codex — `workspace-write` is the
+        // default sandbox and already auto-accepts in-workspace writes
+        // while still gating Bash + network. Kept in the signature so
+        // callers don't need to branch.
+        _ = acceptEdits
         guard let codex = ShellRunner.locateBinary("codex") else { return nil }
         var argv = [codex]
         if let resumeSessionId, !resumeSessionId.isEmpty {
@@ -122,7 +133,8 @@ public enum AgentSpawner {
         model: String?,
         planMode: Bool,
         effort: ReasoningEffort?,
-        autopilot: Bool
+        autopilot: Bool,
+        acceptEdits: Bool = false
     ) -> [String] {
         switch agent {
         case .claude:
@@ -131,6 +143,7 @@ public enum AgentSpawner {
                 planMode: planMode,
                 effort: effort,
                 autopilot: autopilot,
+                acceptEdits: acceptEdits,
                 resumeSessionId: resumeSessionId
             ) ?? []
         case .codex:
@@ -139,6 +152,7 @@ public enum AgentSpawner {
                 planMode: planMode,
                 effort: effort,
                 autopilot: autopilot,
+                acceptEdits: acceptEdits,
                 resumeSessionId: resumeSessionId
             ) ?? []
         }
