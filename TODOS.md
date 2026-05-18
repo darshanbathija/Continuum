@@ -106,6 +106,41 @@ follow-up that didn't make the v2.0 ship but is worth picking up.
   AppKit so a single cross-platform container is the wrong boundary.
   Lift when duplication starts costing real bugs.
 
+### `/transcript` endpoint should use `DaemonChatStoreRegistry` (or a parallel parsed cache)
+- **What**: today `handleGetTranscript` (`AgentControlServer.swift:1695`)
+  calls `TranscriptLoader.load(from: url, maxMessages: maxMessages)`
+  on every request — no cache. iPhone outside-Clawdmeter session
+  views hit this endpoint via `iOSChatTranscriptView.load()` and pay
+  a fresh parse on every reload AND on every Mac restart cold-cache.
+- **Symptom that surfaced this**: 2026-05-19 user-reported "session
+  not loading on mobile" after Mac upgrade to v0.5.1 — was actually
+  a 10–30s wait while `/transcript` reparsed a 4–30MB JSONL on the
+  first request after Mac restart, then loaded fine. Phase 0a's
+  registry only covers `/chat-snapshot`.
+- **Fix**: extend `DaemonChatStoreRegistry` to also expose a
+  by-path lookup (`snapshotStore(forJSONLPath:)`) and route
+  `handleGetTranscript` through it. The store's `snapshot.items`
+  is already the same `[ChatItem]` shape the transcript envelope
+  serializes, plus the live JSONLTail keeps it warm for any
+  subsequent edit.
+- **Effort**: half a day. Want to do this before the v0.6 follow-ups
+  because it makes the iPhone outside-session view feel as fast as
+  the registered-session view.
+
+### Warm `DaemonChatStoreRegistry` on daemon startup for recent JSONLs
+- **What**: on `AgentControlServer.start()`, pre-warm the registry
+  with the N most-recently-modified JSONLs across
+  `~/.claude/projects/` and `~/.codex/sessions/`. Each store's
+  reverse-tail runs in the background; by the time the user's
+  iPhone hits its first `/chat-snapshot`, the snapshot is already
+  populated.
+- **Symptom**: same 2026-05-19 report. Phase 0a's registry helps for
+  warm sessions but the very first request after a Mac restart is
+  still cold.
+- **Trade-off**: a few seconds of startup CPU + ~20MB transient
+  memory for ~5 stores. Worth it for the perceived-perf win.
+- **Effort**: 1–2 hours.
+
 ### Mac + iOS XCTest test targets — gating for 9 plan-spec'd tests
 - **What**: add `apple/ClawdmeterMac/AgentControl/Tests/` and
   `apple/ClawdmeteriOS/Tests/` to `apple/project.yml` as XCTest test
