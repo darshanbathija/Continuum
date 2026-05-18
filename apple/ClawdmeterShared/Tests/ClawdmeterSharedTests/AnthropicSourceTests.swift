@@ -18,51 +18,82 @@ final class AnthropicSourceTests: XCTestCase {
         return AnthropicSource(tokenProvider: tokenProvider, urlSession: session)
     }
 
-    func test_poll_happyPath_parsesContractHeaders() async throws {
+    /// v0.4.11: source switched from `POST /v1/messages` + header parsing to
+    /// `GET /api/oauth/usage` + JSON body parsing. These tests exercise the
+    /// three response shapes the new decoder handles (multi-window object,
+    /// single-binding object, and the `{rate_limits:{…}}` envelope).
+
+    func test_poll_happyPath_multiWindowShape() async throws {
+        let body = """
+        {
+          "five_hour":  {"utilization": 0.05, "resets_at": "2026-05-14T11:00:00Z"},
+          "seven_day":  {"utilization": 0.26, "resets_at": "2026-05-20T01:00:00Z"},
+          "rate_limit_type": "five_hour",
+          "organization_uuid": "test-org"
+        }
+        """.data(using: .utf8)!
+
         MockURLProtocol.responder = { _ in
-            (
-                statusCode: 200,
-                headers: [
-                    "date": "Thu, 14 May 2026 07:40:31 GMT",
-                    "anthropic-ratelimit-unified-5h-utilization": "0.05",
-                    "anthropic-ratelimit-unified-5h-reset": "1778756400",
-                    "anthropic-ratelimit-unified-5h-status": "allowed",
-                    "anthropic-ratelimit-unified-7d-utilization": "0.26",
-                    "anthropic-ratelimit-unified-7d-reset": "1779238800",
-                    "anthropic-ratelimit-unified-7d-status": "allowed",
-                    "anthropic-ratelimit-unified-representative-claim": "five_hour",
-                    "anthropic-organization-id": "test-org",
-                ],
-                body: Data()
-            )
+            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT", "content-type": "application/json"], body)
         }
 
-        let source = makeSource()
-        let usage = try await source.poll()
+        let usage = try await makeSource().poll()
         XCTAssertEqual(usage.sessionPct, 5)
         XCTAssertEqual(usage.weeklyPct, 26)
-        XCTAssertEqual(usage.sessionEpoch, 1_778_756_400)
-        XCTAssertEqual(usage.weeklyEpoch, 1_779_238_800)
         XCTAssertEqual(usage.status, .allowed)
         XCTAssertEqual(usage.representativeClaim, .fiveHour)
         XCTAssertEqual(usage.organizationID, "test-org")
     }
 
-    func test_poll_compositeStatus_limitedIfEitherWindowLimited() async throws {
+    func test_poll_happyPath_statuslineShape() async throws {
+        // The shape `claude` itself feeds into the statusline JSON. Nested under
+        // `rate_limits` with `used_percentage` (0..100) on each window.
+        let body = """
+        {
+          "rate_limits": {
+            "five_hour": {"used_percentage": 14.0, "resets_at": "2026-05-14T11:00:00Z"},
+            "seven_day": {"used_percentage": 38.0, "resets_at": "2026-05-20T01:00:00Z"}
+          }
+        }
+        """.data(using: .utf8)!
+
         MockURLProtocol.responder = { _ in
-            (
-                statusCode: 200,
-                headers: [
-                    "date": "Thu, 14 May 2026 07:40:31 GMT",
-                    "anthropic-ratelimit-unified-5h-utilization": "0.95",
-                    "anthropic-ratelimit-unified-5h-reset": "1778756400",
-                    "anthropic-ratelimit-unified-5h-status": "limited",
-                    "anthropic-ratelimit-unified-7d-utilization": "0.50",
-                    "anthropic-ratelimit-unified-7d-reset": "1779238800",
-                    "anthropic-ratelimit-unified-7d-status": "allowed",
-                ],
-                body: Data()
-            )
+            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT", "content-type": "application/json"], body)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.sessionPct, 14)
+        XCTAssertEqual(usage.weeklyPct, 38)
+    }
+
+    func test_poll_singleBindingShape_fillsBoundWindowOnly() async throws {
+        // The minimal "current binding" shape. Only the weekly-7d window has a
+        // value; the 5h window should be 0 until we see it again.
+        let body = """
+        {"rate_limit_type": "seven_day", "utilization": 0.42, "resets_at": "2026-05-20T01:00:00Z"}
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT", "content-type": "application/json"], body)
+        }
+
+        let usage = try await makeSource().poll()
+        XCTAssertEqual(usage.weeklyPct, 42)
+        XCTAssertEqual(usage.sessionPct, 0)
+        XCTAssertEqual(usage.representativeClaim, .sevenDay)
+    }
+
+    func test_poll_compositeStatus_limitedAtOrAbove100() async throws {
+        let body = """
+        {
+          "five_hour":  {"utilization": 1.00, "resets_at": "2026-05-14T11:00:00Z"},
+          "seven_day":  {"utilization": 0.50, "resets_at": "2026-05-20T01:00:00Z"},
+          "rate_limit_type": "five_hour"
+        }
+        """.data(using: .utf8)!
+
+        MockURLProtocol.responder = { _ in
+            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT"], body)
         }
 
         let usage = try await makeSource().poll()
@@ -93,15 +124,17 @@ final class AnthropicSourceTests: XCTestCase {
         }
     }
 
-    func test_poll_missingContractHeaders_throwsContractViolation() async {
-        // 200 but no rate-limit headers — Phase 0 contract violated.
+    func test_poll_unparsableBody_throwsMalformedResponse() async {
+        // 200 but the body isn't JSON we can decode — surface as malformed
+        // rather than crashing. v0.4.11 reverse-engineered the shape from
+        // the Claude CLI's binary, so we want to fail loudly if it shifts.
         MockURLProtocol.responder = { _ in
-            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT"], Data())
+            (200, ["date": "Thu, 14 May 2026 07:40:31 GMT"], "<html/>".data(using: .utf8)!)
         }
         do {
             _ = try await makeSource().poll()
             XCTFail("Expected throw")
-        } catch AISourceError.dataSourceContractViolation {
+        } catch AISourceError.malformedResponse {
             // expected
         } catch {
             XCTFail("Wrong error: \(error)")

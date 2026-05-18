@@ -4,6 +4,20 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.4.11 build 29] - 2026-05-19
+
+### Fixed
+
+- **Mac dashboard "Connecting…" → working again** by moving the Claude rate-limit fetch off the now-blocked Messages API path.
+  - **Root cause.** Anthropic tightened the OAuth surface on `POST /v1/messages` to reject Pro/Max OAuth tokens (HTTP 403 `permission_error` "OAuth authentication is currently not allowed for this organization"). Every previous build of Clawdmeter polled exactly that endpoint with a 1-token Haiku request and parsed the `anthropic-ratelimit-unified-*` response headers — so this version of the data path is structurally broken at the API gateway, not on the client.
+  - **Fix.** `AnthropicSource` now calls `GET /api/oauth/usage` — the same endpoint the `claude` CLI itself uses (discovered by `strings`-grepping the bundled binary for `fetchUtilization: GET /api/oauth/usage`). The new path accepts the same Claude.ai OAuth token and returns a JSON body with `rate_limit_type`, `utilization`, and `resets_at` for the binding window. Richer multi-window envelopes (`{five_hour:{…}, seven_day:{…}}` and the statusline-style `{rate_limits:{…}}` wrapper) are decoded too. Per-window snapshots persist across polls so the un-binding window doesn't snap back to 0% on every tick when the API only reports the binding window.
+  - **Side-effect fixes still useful.** Two robustness changes ride along even though neither addresses today's outage on its own: (1) `KeychainTokenProvider` no longer caches the token in memory across polls — `currentAccessToken` re-reads the Keychain on each call so that whenever Claude Code rotates the token (every few hours), the next poll picks up the fresh copy without an app restart. (2) `AnthropicSource` routes both 401 and 403 through `AISourceError.unauthenticated` so future server-side auth changes trigger the existing refresh path instead of generic backoff.
+  - **Watch the back-off.** The first time you launch v0.4.11, you may briefly see `Connecting…` if the previous build's tight retry loop spent your hourly budget against the new endpoint — `Retry-After` is honored, so the dashboard recovers automatically once the window resets (typically within an hour).
+
+### Changed
+
+- 264 → 266 shared tests. New `AnthropicSourceTests` cover the three observed response shapes (multi-window, single-binding, statusline-wrapper) plus the malformed-body path; old header-parsing tests are gone because the endpoint no longer returns rate-limit headers.
+
 ## [0.4.10 build 28] - 2026-05-18
 
 ### Fixed
