@@ -43,7 +43,13 @@ public final class DaemonChatStoreRegistry {
     }
 
     private var entries: [UUID: Entry] = [:]
+    /// v0.5.3: parallel map keyed by absolute JSONL path. Used by the
+    /// daemon's `/transcript` endpoint which doesn't have a session id —
+    /// the path itself is the identity. Lifecycle semantics identical to
+    /// the session-id-keyed map (idle eviction, max cap).
+    private var pathEntries: [URL: Entry] = [:]
     private var sweepTask: Task<Void, Never>?
+    private var warmupTask: Task<Void, Never>?
 
     /// Idle window after the last subscriber drops before the entry is
     /// evicted. 5 minutes balances "warm enough for tab-back" against
@@ -135,12 +141,17 @@ public final class DaemonChatStoreRegistry {
     }
 
     /// Force-evict everything immediately. Used by tests and the daemon's
-    /// shutdown path so stop() runs cleanly on each held store.
+    /// shutdown path so stop() runs cleanly on each held store. Walks
+    /// both the session-id-keyed and path-keyed maps.
     public func evictAll() {
         for (_, entry) in entries {
             entry.store.stop()
         }
         entries.removeAll()
+        for (_, entry) in pathEntries {
+            entry.store.stop()
+        }
+        pathEntries.removeAll()
     }
 
     // MARK: - Introspection (tests + observability)
@@ -221,31 +232,68 @@ public final class DaemonChatStoreRegistry {
     /// Evict entries whose subscriber count is zero AND whose
     /// lastTouchedAt is older than the idle window. Subscribers always
     /// touch the timestamp on access so a busy WS subscriber never
-    /// becomes eligible for eviction.
+    /// becomes eligible for eviction. Walks BOTH the session-id-keyed
+    /// and path-keyed maps so /transcript path entries also evict
+    /// after the idle grace.
     private func sweep() {
         let cutoff = Date().addingTimeInterval(-Self.idleEvictionInterval)
-        let evictable = entries.compactMap { (id, entry) -> UUID? in
+        let evictableIds = entries.compactMap { (id, entry) -> UUID? in
             guard entry.subscriberCount == 0, entry.lastTouchedAt < cutoff else { return nil }
             return id
         }
-        for id in evictable {
+        for id in evictableIds {
             evict(sessionId: id)
+        }
+        let evictablePaths = pathEntries.compactMap { (url, entry) -> URL? in
+            guard entry.subscriberCount == 0, entry.lastTouchedAt < cutoff else { return nil }
+            return url
+        }
+        for url in evictablePaths {
+            evictPath(url)
         }
     }
 
-    /// Cap-driven eviction: when residentCount exceeds the hard limit,
-    /// drop the least-recently-touched entries that have zero subscribers
-    /// until we're back under the cap. Active-subscriber entries never
-    /// evict.
+    /// Cap-driven eviction: when (session + path) residentCount exceeds
+    /// the hard limit, drop the least-recently-touched entries with zero
+    /// subscribers until we're back under the cap. Active-subscriber
+    /// entries (live WS subscribers, etc.) never evict. Both maps share
+    /// the same cap because both reference SessionChatStores of the same
+    /// memory weight.
     private func enforceMaxResidentStores() {
-        guard entries.count > Self.maxResidentStores else { return }
-        let idleSorted = entries
-            .filter { $0.value.subscriberCount == 0 }
-            .sorted { $0.value.lastTouchedAt < $1.value.lastTouchedAt }
-        for (id, _) in idleSorted {
-            if entries.count <= Self.maxResidentStores { break }
-            evict(sessionId: id)
+        var totalResident = entries.count + pathEntries.count
+        guard totalResident > Self.maxResidentStores else { return }
+        // Build a unified eviction list across both maps, sorted by
+        // lastTouchedAt ascending. We use an enum to keep type-safety
+        // when calling the matching evictor.
+        enum Key {
+            case session(UUID)
+            case path(URL)
         }
+        var idleSorted: [(Key, Date)] = []
+        for (id, entry) in entries where entry.subscriberCount == 0 {
+            idleSorted.append((.session(id), entry.lastTouchedAt))
+        }
+        for (url, entry) in pathEntries where entry.subscriberCount == 0 {
+            idleSorted.append((.path(url), entry.lastTouchedAt))
+        }
+        idleSorted.sort { $0.1 < $1.1 }
+        for (key, _) in idleSorted {
+            if totalResident <= Self.maxResidentStores { break }
+            switch key {
+            case .session(let id):
+                evict(sessionId: id)
+            case .path(let url):
+                evictPath(url)
+            }
+            totalResident -= 1
+        }
+    }
+
+    private func evictPath(_ url: URL) {
+        guard let entry = pathEntries[url] else { return }
+        entry.store.stop()
+        pathEntries.removeValue(forKey: url)
+        registryLogger.info("evicted path=\(url.path, privacy: .public) pathResident=\(self.pathEntries.count)")
     }
 
     private func evict(sessionId: UUID) {
@@ -253,5 +301,128 @@ public final class DaemonChatStoreRegistry {
         entry.store.stop()
         entries.removeValue(forKey: sessionId)
         registryLogger.info("evicted session=\(sessionId.uuidString, privacy: .public) resident=\(self.entries.count)")
+    }
+
+    // MARK: - v0.5.3: by-path lookup for /transcript
+
+    /// Get or create a path-keyed store for the daemon's `/transcript`
+    /// endpoint. Mirrors `snapshotStore(for: AgentSession)` but uses the
+    /// JSONL URL as the identity — `/transcript` doesn't have a session
+    /// id, the path itself is the key. The store's internal `sessionId`
+    /// is synthesized deterministically from the path so log lines and
+    /// signposts have a stable identifier.
+    ///
+    /// Same idle eviction + max-cap semantics as the session-id-keyed
+    /// stores. A burst of `/transcript` polls in a row reuses the same
+    /// parsed state instead of reparsing the 500-message JSONL on
+    /// every request.
+    public func snapshotStore(forJSONLPath url: URL) -> SessionChatStore? {
+        startSweepIfNeeded()
+        let canonical = url.standardizedFileURL
+        if var entry = pathEntries[canonical] {
+            entry.lastTouchedAt = Date()
+            pathEntries[canonical] = entry
+            return entry.store
+        }
+        // Synthesize a deterministic UUID from the path so logs/signposts
+        // remain stable across daemon restarts for the same JSONL.
+        let synthSessionId = Self.uuidForPath(canonical.path)
+        let store = SessionChatStore(sessionId: synthSessionId, sessionFileURL: canonical)
+        store.start()
+        let entry = Entry(
+            store: store,
+            subscriberCount: 0,
+            lastTouchedAt: Date()
+        )
+        pathEntries[canonical] = entry
+        enforceMaxResidentStores()
+        registryLogger.info("path-cache new path=\(canonical.path, privacy: .public) resident=\(self.entries.count) pathResident=\(self.pathEntries.count)")
+        return store
+    }
+
+    public var pathResidentCount: Int { pathEntries.count }
+
+    public func isPathResident(_ url: URL) -> Bool {
+        pathEntries[url.standardizedFileURL] != nil
+    }
+
+    // MARK: - v0.5.3: warmup on daemon startup
+
+    /// Pre-warm the registry with the N most-recently-modified JSONLs
+    /// under `~/.claude/projects/` and `~/.codex/sessions/`. Each store
+    /// kicks off a background reverse-tail parse; by the time the iPhone
+    /// hits its first `/chat-snapshot` or `/transcript` after Mac
+    /// startup, the snapshot is already populated. Eliminates the cold-
+    /// cache slowness the user reported on 2026-05-19.
+    ///
+    /// Safe to call from `AgentControlServer.start()` post-listener-bind.
+    /// Runs async on a detached Task so it doesn't block startup.
+    public func warm(recentLimit: Int = 5) {
+        guard warmupTask == nil else { return }
+        let limit = recentLimit
+        warmupTask = Task.detached(priority: .utility) { [weak self] in
+            let recents = Self.scanForRecentJSONLs(limit: limit)
+            await MainActor.run {
+                guard let self else { return }
+                for url in recents {
+                    _ = self.snapshotStore(forJSONLPath: url)
+                }
+                registryLogger.info("warmup complete: \(recents.count) JSONLs preloaded")
+            }
+        }
+    }
+
+    /// Walk `~/.claude/projects/` and `~/.codex/sessions/` for the `limit`
+    /// most-recently-modified `.jsonl` files. `nonisolated` so the
+    /// background `Task.detached` in `warm()` can call it off-main.
+    nonisolated private static func scanForRecentJSONLs(limit: Int) -> [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let roots = [
+            home.appendingPathComponent(".claude/projects", isDirectory: true),
+            home.appendingPathComponent(".codex/sessions", isDirectory: true),
+        ]
+        var candidates: [(URL, Date)] = []
+        for root in roots {
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+                let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                candidates.append((url.standardizedFileURL, mtime))
+            }
+        }
+        candidates.sort { $0.1 > $1.1 }
+        return candidates.prefix(limit).map(\.0)
+    }
+
+    /// Deterministic UUID derived from a path. We use the same SHA-256-
+    /// based scheme as `Foundation.UUID(uuidString:)` accepts, but
+    /// constructed from the path bytes so the same file always produces
+    /// the same id. Cheap to compute, cheap to compare in logs.
+    nonisolated private static func uuidForPath(_ path: String) -> UUID {
+        // SHA-256(path) → first 16 bytes → UUID. SHA-256 from CryptoKit
+        // would import a framework just for this; rolling a tiny FNV-1a
+        // hash twice (mixed) is plenty here — the id only matters for
+        // observability, NOT security.
+        var h1: UInt64 = 0xcbf29ce484222325
+        var h2: UInt64 = 0x84222325cbf29ce4
+        for byte in path.utf8 {
+            h1 = (h1 ^ UInt64(byte)) &* 0x100000001b3
+            h2 = (h2 ^ UInt64(byte ^ 0xA5)) &* 0x100000001b3
+        }
+        var bytes = [UInt8](repeating: 0, count: 16)
+        for i in 0..<8 { bytes[i]     = UInt8((h1 >> (i * 8)) & 0xFF) }
+        for i in 0..<8 { bytes[i + 8] = UInt8((h2 >> (i * 8)) & 0xFF) }
+        // Set version (4) + variant bits so the UUID is well-formed.
+        bytes[6] = (bytes[6] & 0x0F) | 0x40
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0],  bytes[1],  bytes[2],  bytes[3],
+            bytes[4],  bytes[5],  bytes[6],  bytes[7],
+            bytes[8],  bytes[9],  bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
     }
 }

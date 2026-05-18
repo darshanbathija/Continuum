@@ -41,6 +41,14 @@ public final class SessionChatStore: ObservableObject {
     /// consistency by construction.
     public struct ChatSnapshot: Sendable, Equatable {
         public let items: [ChatItem]
+        /// v0.5.3: raw chronologically-sorted ChatMessage list, exposed
+        /// for the daemon's `/transcript` endpoint to serve through the
+        /// `DaemonChatStoreRegistry`'s path-based cache (same caching
+        /// pattern as `/chat-snapshot`, no per-request reparse). The
+        /// `items` array above is derived from this list via
+        /// `ChatItemBuilder`; both fields publish together so callers
+        /// see a consistent snapshot.
+        public let messages: [ChatMessage]
         public let planSteps: [PlanStep]
         public let sourceEntries: [SourceEntry]
         public let artifactEntries: [ArtifactEntry]
@@ -79,6 +87,7 @@ public final class SessionChatStore: ObservableObject {
 
         public init(
             items: [ChatItem],
+            messages: [ChatMessage] = [],
             planSteps: [PlanStep] = [],
             sourceEntries: [SourceEntry] = [],
             artifactEntries: [ArtifactEntry] = [],
@@ -95,6 +104,7 @@ public final class SessionChatStore: ObservableObject {
             updateCounter: UInt64
         ) {
             self.items = items
+            self.messages = messages
             self.planSteps = planSteps
             self.sourceEntries = sourceEntries
             self.artifactEntries = artifactEntries
@@ -1015,6 +1025,13 @@ actor StagingParser {
 
         cachedSnapshot = SessionChatStore.ChatSnapshot(
             items: items,
+            // v0.5.3: include the raw chronological message list so the
+            // daemon's /transcript endpoint can serve it from the same
+            // cache pile-up that /chat-snapshot reads. We copy
+            // `sortedMessages` rather than dedup-extract from items
+            // because items has run-grouping applied that drops the
+            // 1:1 mapping.
+            messages: sortedMessages,
             planSteps: steps,
             sourceEntries: sources,
             artifactEntries: artifacts,

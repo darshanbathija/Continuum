@@ -4,6 +4,20 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.5.3 build 36] - 2026-05-19
+
+### Fixed
+
+- **No more cold-cache slowness on first iPhone session-load after Mac restart.** The 2026-05-19 user-reported "session not loading on mobile" (which turned out to be a 10–30s wait while `/transcript` reparsed a 4–30MB JSONL on first request) is fully addressed:
+  - **`DaemonChatStoreRegistry` now also serves `/transcript`.** New path-keyed map (`pathEntries: [URL: Entry]`) alongside the existing session-id-keyed map. `snapshotStore(forJSONLPath:)` creates / reuses long-lived `SessionChatStore`s pinned to absolute JSONL paths; the iPhone outside-Clawdmeter session view hits the same warm cache as `/chat-snapshot` instead of reparsing 500 messages on every request. Cold-miss still falls back to legacy synchronous `TranscriptLoader.load`; subsequent requests within the 5-minute idle window are instant.
+  - **Daemon startup pre-warms the registry.** New `registry.warm(recentLimit: 5)` scans `~/.claude/projects/` and `~/.codex/sessions/` for the 5 most-recently-modified `.jsonl` files and pre-creates stores for them. Reverse-tail parse runs on a detached background Task post-listener-bind so it doesn't block startup. First iPhone request after Mac restart hits a warm store.
+- **`SessionChatStore.ChatSnapshot` exposes `messages: [ChatMessage]`** (the raw chronologically-sorted list) so the `/transcript` envelope can serve it through the same publish cycle that drives `items`. Both fields stay consistent by construction — the snapshot rebuild publishes them together.
+
+### Internal
+
+- Combined sweep + max-cap eviction across session-id and path-keyed entries. Both share the `maxResidentStores = 20` hard cap; idle entries from either map evict after 5 minutes regardless of which key surfaced them.
+- Synthesized stable UUIDs for path-keyed stores via a 16-byte mixed FNV-1a hash of the path so OSSignpost logs stay traceable for `/transcript` cache hits.
+
 ## [0.5.2 build 35] - 2026-05-19
 
 ### Added

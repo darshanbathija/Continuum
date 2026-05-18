@@ -173,6 +173,12 @@ public final class AgentControlServer {
             }
         }
         writeServerJSON(port: httpPort, wsPort: boundWsPort ?? 0)
+        // v0.5.3: warm the chat-store registry for the most recently-
+        // touched JSONLs across ~/.claude/projects/ and ~/.codex/sessions/.
+        // The first iPhone /chat-snapshot or /transcript request after
+        // Mac restart hits a warm store instead of a cold reparse.
+        // Async on a detached Task so it doesn't block listener bind.
+        chatStoreRegistry.warm(recentLimit: 5)
     }
 
     public func stop() {
@@ -1725,7 +1731,23 @@ public final class AgentControlServer {
             return
         }
         let url = URL(fileURLWithPath: jsonlPath)
-        let messages = TranscriptLoader.load(from: url, maxMessages: maxMessages)
+        // v0.5.3: route through the daemon-owned chat-store registry so
+        // burst polling reuses the parsed state instead of reparsing
+        // 500 messages on every request. Cold miss falls back to the
+        // legacy synchronous TranscriptLoader.load path; the store
+        // warms up in the background and subsequent requests within
+        // the 5-minute idle window hit the cache.
+        let registryStore = chatStoreRegistry.snapshotStore(forJSONLPath: url)
+        let messages: [ChatMessage]
+        if let store = registryStore, !store.snapshot.messages.isEmpty {
+            // Cap to the requested maxMessages, taking the tail so the
+            // most recent messages are surfaced — matches what
+            // TranscriptLoader.load(maxMessages:) does today.
+            let all = store.snapshot.messages
+            messages = all.suffix(maxMessages).map { $0 }
+        } else {
+            messages = TranscriptLoader.load(from: url, maxMessages: maxMessages)
+        }
         let envelope = TranscriptEnvelope(
             path: jsonlPath,
             messages: messages,
