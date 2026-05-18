@@ -42,7 +42,14 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
 
     public var currentAccessToken: String? {
         lock.lock(); defer { lock.unlock() }
-        if let cached { return cached.claudeAiOauth.accessToken }
+        // v0.4.11 root-cause fix: always re-read Keychain. Caching the
+        // first read meant that when Claude Code rotated its OAuth
+        // token (it does this every few hours), the Mac app kept its
+        // stale copy and started getting 403s. Anthropic returns 403
+        // (not 401) for rotated tokens, so UsagePoller's 401-only
+        // refresh path never fired — backoff grew, dashboard stuck
+        // on "Connecting…" forever. Keychain reads are sub-ms;
+        // re-reading on every 60s poll is free.
         do {
             let bundle = try loadFromKeychain()
             cached = bundle
