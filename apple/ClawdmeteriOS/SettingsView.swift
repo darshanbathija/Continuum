@@ -11,10 +11,38 @@ struct SettingsView: View {
     @State private var tokenDraft: String = ""
     @State private var showingClearConfirm: Bool = false
     @State private var saveError: String?
+    /// Mirrors ContentView's `clawdmeter.appearance` AppStorage. Writes
+    /// from this Picker propagate through the @AppStorage observer to
+    /// the root TabView's `.preferredColorScheme` modifier — the whole
+    /// app re-themes the moment the user lifts their finger off the
+    /// segmented control.
+    @AppStorage("clawdmeter.appearance") private var appearanceRaw: String = AppearanceMode.system.rawValue
+    private var appearanceBinding: Binding<AppearanceMode> {
+        Binding(
+            get: { AppearanceMode(rawValue: appearanceRaw) ?? .system },
+            set: { appearanceRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Picker(selection: appearanceBinding) {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Label(mode.displayName, systemImage: mode.systemIcon)
+                                .tag(mode)
+                        }
+                    } label: {
+                        Label("Theme", systemImage: "paintbrush")
+                    }
+                    .pickerStyle(.menu)
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("System follows iOS Settings → Display & Brightness. Light and Dark pin the app regardless of system state.")
+                }
+
                 Section {
                     if model.tokenProvider.hasToken {
                         HStack {
