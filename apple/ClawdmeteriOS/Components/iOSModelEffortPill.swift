@@ -66,9 +66,7 @@ struct iOSModelEffortPill: View {
                 Text(summaryText)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
-                if let effort = selectedEffort, !modelSupportsEffort {
-                    EmptyView()
-                } else if let effort = selectedEffort {
+                if let effort = selectedEffort, modelSupportsEffort {
                     Text(effortLabel(effort))
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)

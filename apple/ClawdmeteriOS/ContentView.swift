@@ -19,13 +19,6 @@ struct ContentView: View {
     /// Persists across launches so a Codex-first user keeps landing on
     /// Codex. Default is Claude (matches the prior stacked layout's order).
     @AppStorage("clawdmeter.live.selectedProvider") private var selectedProviderRaw: String = LiveProvider.claude.rawValue
-    /// User-selected appearance — System / Light / Dark. SettingsView
-    /// is the writer; ContentView's `.preferredColorScheme` is the
-    /// reader so the choice propagates to every sheet + nav stack.
-    @AppStorage("clawdmeter.appearance") private var appearanceRaw: String = AppearanceMode.system.rawValue
-    private var appearance: AppearanceMode {
-        AppearanceMode(rawValue: appearanceRaw) ?? .system
-    }
     /// Tracks horizontal swipe so we can derive a direction for the
     /// transition (swipe left → next provider slides in from the right).
     @State private var swipeDirection: Edge = .trailing
@@ -72,9 +65,10 @@ struct ContentView: View {
             await notifManager.requestAuthorizationIfNeeded()
             notifManager.scheduleBackgroundRefresh()
         }
-        // Apply the user's appearance choice to the entire app — passing
-        // nil for `.system` lets iOS Settings → Display & Brightness win.
-        .preferredColorScheme(appearance.colorScheme)
+        // Note: `preferredColorScheme` lives on the WindowGroup in
+        // ClawdmeteriOSApp, not here. Applying it on the TabView
+        // doesn't re-theme presented sheets, which is what the
+        // Appearance picker needs.
     }
 
     private var selectedProvider: LiveProvider {
