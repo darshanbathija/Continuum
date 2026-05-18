@@ -791,6 +791,25 @@ public struct ContinueReadOnlyResponse: Codable, Sendable {
     }
 }
 
+/// `POST /sessions/:id/attachments?ext=png` response.
+///
+/// Body of the request is raw image bytes. The daemon writes them to
+/// the session's staging directory (`~/Library/Application Support/
+/// Clawdmeter/attachments/<sessionId>/<uuid>.<ext>` for Claude / Codex-
+/// local, or `<worktree>/.clawdmeter-attachments/` when Codex is in
+/// worktree mode), and returns the absolute path the agent can read
+/// via `@<path>`. Lets iOS attach images from the camera roll without
+/// shipping the bytes back to itself.
+public struct UploadAttachmentResponse: Codable, Sendable {
+    public let id: UUID
+    public let path: String
+
+    public init(id: UUID, path: String) {
+        self.id = id
+        self.path = path
+    }
+}
+
 /// `POST /sessions/:id/autopilot` body. NO re-auth (D14). Each toggle
 /// writes an audit log entry. Per E7: enabling adds 15-min inactivity
 /// timeout + per-repo trust list + red banner across surfaces.
