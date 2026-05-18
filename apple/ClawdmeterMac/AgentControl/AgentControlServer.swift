@@ -44,6 +44,11 @@ public final class AgentControlServer {
     private let registry: AgentSessionRegistry
     private let tmux: TmuxControlClient
     private let notifications: NotificationDispatcher
+    /// Phase 0a: long-lived per-session chat-store registry. Replaces the
+    /// "reparse JSONL on every /chat-snapshot request" path. Used by the
+    /// HTTP handler (snapshotStore) and, in Phase 2, by the WS dispatcher
+    /// for `chat-subscribe` long-lived subscriptions (acquire / release).
+    private let chatStoreRegistry: DaemonChatStoreRegistry
     /// T18 Wire Inspector: per-connection request context so the
     /// outgoing-response recorder can tag entries with the original
     /// method+path. Each NWConnection serves one request before
@@ -88,7 +93,8 @@ public final class AgentControlServer {
         registry: AgentSessionRegistry,
         tmux: TmuxControlClient,
         notifications: NotificationDispatcher,
-        whois: TailscaleWhois = .shared
+        whois: TailscaleWhois = .shared,
+        chatStoreRegistry: DaemonChatStoreRegistry? = nil
     ) {
         self.pairingTokens = pairingTokens
         self.repoIndex = repoIndex
@@ -96,6 +102,11 @@ public final class AgentControlServer {
         self.tmux = tmux
         self.notifications = notifications
         self.whois = whois
+        // The default `DaemonChatStoreRegistry()` is @MainActor-isolated, so
+        // the parameter default has to be `nil` (the default expression
+        // wouldn't pick up the enclosing actor isolation). Resolve here
+        // inside the @MainActor init body where the construction is legal.
+        self.chatStoreRegistry = chatStoreRegistry ?? DaemonChatStoreRegistry()
     }
 
     /// Hand the daemon the live usage publishers + analytics store
@@ -1410,29 +1421,59 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
-        let cwd = session.worktreePath ?? session.repoKey
-        let url: URL?
-        if session.agent == .claude {
-            url = SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
+        // Phase 0a: prefer the long-lived registry store. On cold misses
+        // (first request after server boot or after idle eviction) the
+        // store's reverse-tail hasn't ingested yet, so we fall back to
+        // the legacy synchronous reparse to keep the first request fast.
+        // Subsequent requests within the idle window read the warm
+        // snapshot.
+        let registryStore = chatStoreRegistry.snapshotStore(for: session)
+        let snapshotItems: [ChatItem]
+        let snapshotCounter: UInt64
+        let snapshotLastEventAt: Date?
+        if let store = registryStore, !store.snapshot.items.isEmpty {
+            snapshotItems = store.snapshot.items
+            // Phase 0a / Codex P0: this is the real chat cursor now.
+            // Pre-v5, this field was populated from session.lastEventSeq
+            // (registry/status counter); the transcript cursor lives on
+            // SessionChatStore.updateCounter and only bumps on actual
+            // chat-state changes. iOS uses this for delta detection.
+            snapshotCounter = store.snapshot.updateCounter
+            snapshotLastEventAt = store.snapshot.lastEventAt ?? session.lastEventAt
         } else {
-            url = newestCodexJSONL()
+            // Cold-store fallback: legacy synchronous reparse path. The
+            // background store will catch up; the next request gets the
+            // warm snapshot.
+            let cwd = session.worktreePath ?? session.repoKey
+            let url: URL?
+            if session.agent == .claude {
+                url = SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
+            } else {
+                url = newestCodexJSONL()
+            }
+            let messages = url.map { TranscriptLoader.load(from: $0, maxMessages: 500) } ?? []
+            var builder = ChatItemBuilder()
+            for message in messages {
+                builder.ingest(message)
+            }
+            builder.flushPending()
+            snapshotItems = builder.items
+            // Even on cold fallback, prefer the registry's (still-warming)
+            // counter when available; only fall through to session.lastEventSeq
+            // when the resolver returned nil (no live store).
+            snapshotCounter = registryStore?.snapshot.updateCounter ?? session.lastEventSeq
+            snapshotLastEventAt = session.lastEventAt
         }
-        let messages = url.map { TranscriptLoader.load(from: $0, maxMessages: 500) } ?? []
-        var builder = ChatItemBuilder()
-        for message in messages {
-            builder.ingest(message)
-        }
-        builder.flushPending()
         let snapshot = WireChatSnapshot(
             sessionId: session.id,
-            items: builder.items,
+            items: snapshotItems,
             planSteps: [],
             sourceEntries: [],
             artifactEntries: [],
             totalInputTokens: 0,
             totalOutputTokens: 0,
-            lastEventAt: session.lastEventAt,
-            updateCounter: session.lastEventSeq
+            lastEventAt: snapshotLastEventAt,
+            updateCounter: snapshotCounter
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

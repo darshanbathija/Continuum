@@ -24,11 +24,22 @@ public enum AgentControlWireVersion {
     /// Wire version. Bump when adding a new WS op, REST endpoint, or DTO that
     /// older Macs won't recognize so iOS can fall back gracefully.
     /// v4 (2026-05-18) adds `compose-draft` WS op (X1 cross-Apple handoff).
-    public static let current: Int = 4
+    /// v5 (2026-05-19) Phase 0a: `WireChatSnapshot.updateCounter` is now
+    /// populated from the daemon-owned `SessionChatStore.updateCounter`
+    /// (transcript counter) instead of `session.lastEventSeq` (registry/
+    /// status counter). The field name and shape are unchanged; only the
+    /// semantics shift, so v4 iOS clients keep working. Phase 0a also
+    /// introduces the `chat-subscribe` WS op (lands in Phase 2).
+    public static let current: Int = 5
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
     public static let composeDraftMinimum: Int = 4
+    /// Minimum wire version that supports the `chat-subscribe` WS op
+    /// (Phase 2 push-based chat snapshot delivery, replacing iOS 3s HTTP
+    /// polling). iOS guards WS subscribe on this — older Macs stay on
+    /// the `/chat-snapshot` HTTP polling path.
+    public static let chatSubscribeMinimum: Int = 5
 }
 
 /// `GET /health` response. Old clients tolerate the extra fields; new

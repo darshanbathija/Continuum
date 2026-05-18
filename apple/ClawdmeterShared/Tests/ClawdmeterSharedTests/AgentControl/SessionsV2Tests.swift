@@ -229,12 +229,16 @@ final class SessionsV2Tests: XCTestCase {
     }
 
     func testWireVersionConstant() {
-        // Bumped 3 → 4 on 2026-05-18 to cover the X1 `compose-draft` WS op.
-        // iOS gates `postComposeDraft` on `composeDraftMinimum` so older
-        // Macs surface an "Update Clawdmeter" alert instead of silently
-        // dropping the draft on `.unsupportedData` close.
-        XCTAssertEqual(AgentControlWireVersion.current, 4)
+        // Bumped 3 → 4 on 2026-05-18 for the X1 `compose-draft` WS op.
+        // Bumped 4 → 5 on 2026-05-19 (Phase 0a): WireChatSnapshot.updateCounter
+        // is now populated from the daemon-owned SessionChatStore.updateCounter
+        // (transcript counter) instead of session.lastEventSeq, AND the
+        // chat-subscribe WS op (Phase 2) gates on chatSubscribeMinimum.
+        // Field name unchanged so v4 iOS clients keep working; only the
+        // semantics of updateCounter shifted.
+        XCTAssertEqual(AgentControlWireVersion.current, 5)
         XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
+        XCTAssertEqual(AgentControlWireVersion.chatSubscribeMinimum, 5)
     }
 
     // MARK: - Mid-session change requests
