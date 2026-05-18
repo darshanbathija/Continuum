@@ -1244,7 +1244,17 @@ private struct CenterThread: View {
         let target: AgentSession
         if isReadOnly {
             guard let live = await model.continueCurrentReadOnly() else {
-                composerStore.endSend(error: .daemonError(message: "Couldn't resume this session — no session id in the JSONL header."))
+                // v0.5.0 — surface the JSONL path in the error message so
+                // a failed extract can be diagnosed. The most common
+                // failure mode pre-v0.5.0 was the 64KB header read missing
+                // the sessionId-bearing line; `JSONLSessionId.extract` now
+                // streams up to 1MB. If this error still fires, the path
+                // points to the specific file where extract returned nil
+                // (file missing, unreadable, or genuinely malformed).
+                let jsonlPath = model.openOutsideJSONLPath ?? "(unknown)"
+                composerStore.endSend(error: .daemonError(
+                    message: "Couldn't resume this session — no session id in the JSONL header.\n\nPath: \(jsonlPath)"
+                ))
                 return
             }
             // Match EmptyStateCenteredComposer's pane-readiness wait — tmux

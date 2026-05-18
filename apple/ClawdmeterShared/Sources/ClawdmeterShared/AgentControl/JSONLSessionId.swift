@@ -14,23 +14,58 @@ public enum JSONLSessionId {
         case codex
     }
 
-    /// Read the first ~16KB of the JSONL and pull the CLI session id.
-    /// Returns nil if the file is missing, unreadable, or the id key is
-    /// absent. Caller (Wave A "Continue here") falls back to read-only
-    /// when nil is returned.
-    public static func extract(from fileURL: URL, provider: Provider) -> String? {
+    /// Read the JSONL header in chunks until a CLI session id is found or
+    /// the size cap is hit. Returns nil if the file is missing, unreadable,
+    /// or no usable id is encountered in the first `maxBytes`. Caller
+    /// (Mac "Continue here" composer / iOS continue-readonly promote)
+    /// falls back to read-only when nil is returned.
+    ///
+    /// v0.5.0 robustness pass — was originally a single 64KB read which
+    /// would lose to:
+    ///   * actively-written files where the kernel hadn't flushed the
+    ///     write that contains the first sessionId-bearing line yet
+    ///     (`handle.readData` returns short data, the partial last line
+    ///     in that chunk fails JSON parse, and no complete line ever has
+    ///     the field)
+    ///   * Codex variants where the session_meta line sits behind a
+    ///     larger header than the typical ~5KB
+    ///   * exotic JSONL shapes that don't carry the field in early lines
+    /// The new loop reads 64KB at a time up to `maxBytes` (default 1MB).
+    /// Empty `readData` (EOF or transient short read) breaks the loop;
+    /// any complete line containing the field returns immediately.
+    public static func extract(
+        from fileURL: URL,
+        provider: Provider,
+        maxBytes: Int = 1 * 1024 * 1024
+    ) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
             return nil
         }
         defer { try? handle.close() }
-        // 64KB covers Codex session_meta lines that embed a multi-KB
-        // `base_instructions` blob (observed ~5KB, with headroom for the
-        // longer system prompts shipped in later CLI builds). Cheap to
-        // over-read; the file is small and we only read once.
-        let data = handle.readData(ofLength: 64 * 1024)
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        // Scan line-by-line so we don't depend on the whole prefix being
-        // valid JSON (Codex sometimes prepends a stray newline).
+        var buffer = Data()
+        let chunkSize = 64 * 1024
+        while buffer.count < maxBytes {
+            let chunk = handle.readData(ofLength: chunkSize)
+            if chunk.isEmpty { break }
+            buffer.append(chunk)
+            // Scan only COMPLETE lines so we don't repeatedly fail-parse
+            // the partial trailing line as the buffer grows. Find the
+            // last newline; lines up to that point are complete.
+            guard let lastNewlineIdx = buffer.lastIndex(of: 0x0A) else { continue }
+            let complete = buffer.prefix(through: lastNewlineIdx)
+            if let id = scan(complete: complete, provider: provider) {
+                return id
+            }
+        }
+        // Final scan covers the case where the file is smaller than one
+        // chunk and has no trailing newline (a single line with the
+        // header). Without this the loop above never gets a newline to
+        // bound the scan window and the file's only line is never tried.
+        return scan(complete: buffer, provider: provider)
+    }
+
+    private static func scan(complete: Data, provider: Provider) -> String? {
+        guard let text = String(data: complete, encoding: .utf8) else { return nil }
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
             let line = String(rawLine)
             guard let lineData = line.data(using: .utf8) else { continue }

@@ -4,6 +4,13 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.5.1 build 34] - 2026-05-19
+
+### Fixed
+
+- **"Couldn't resume this session — no session id in the JSONL header" on read-only Continue here.** `JSONLSessionId.extract` was a single 64KB header read; if the kernel hadn't flushed the sessionId-bearing line yet (active write race), or if the JSONL variant carries the field past the 64KB mark, extract returned nil and the Mac composer surfaced the resume error. v0.5.1 streams the file in 64KB chunks up to a 1MB cap, scanning only complete lines per chunk so a partial trailing line in one chunk doesn't poison the parse. Plus a final scan that handles single-line files with no trailing newline. All 10 existing `JSONLSessionIdTests` still pass.
+- **The error message now includes the JSONL path** when extract still returns nil — so a genuinely-malformed file is identifiable without grepping logs. Same daemon-error pattern as the other read-only failures.
+
 ## [0.5.0 build 33] - 2026-05-19
 
 ### Fixed
