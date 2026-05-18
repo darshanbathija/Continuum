@@ -218,6 +218,48 @@ deferred items the CEO review identified.
   TODOS predates this and asks for the same thing.
 - **Effort**: ~2hr CC. Store as `~/.clawdmeter/repo-defaults.json`.
 
+### Push iPhone install to v0.4.9 (build 27) when reunited
+- **What**: v0.4.9 is live on origin/main + the v0.4.9-mac DMG is on
+  GitHub Releases, but the iPhone (`E97117A1-DD0C-5B07-94EB-F2F5E3C652D3`,
+  "Darshan Bathija") was on a different WiFi during the ship — Apple's
+  CoreDevice wireless install bailed with `Browsing on the local area
+  network ... has previously reported preparation errors`. The phone
+  was reachable over Tailscale at the IP layer, but Xcode's wireless
+  device discovery doesn't traverse Tailscale.
+- **Workaround when reunited**: same WiFi as the Mac (or USB),
+  unlock the phone, then run:
+  ```
+  cd apple
+  xcodebuild -scheme "Clawdmeter (iOS)" \
+    -destination 'id=E97117A1-DD0C-5B07-94EB-F2F5E3C652D3' \
+    -configuration Release -allowProvisioningUpdates \
+    -derivedDataPath /tmp/clawdmeter-ios-device build
+  xcrun devicectl device install app \
+    --device E97117A1-DD0C-5B07-94EB-F2F5E3C652D3 \
+    /tmp/clawdmeter-ios-device/Build/Products/Release-iphoneos/Clawdmeter.app
+  ```
+- **Why this can't go over Tailscale today**:
+  - **Bonjour gating.** Xcode's wireless device protocol relies on
+    `_apple-mobdev2._tcp` mDNS advertisements to find the device.
+    Tailscale is unicast-only; mDNS is link-local multicast. The Mac
+    literally can't see the phone unless they share a broadcast
+    domain. No `-destination 'id=…'` trick gets around discovery.
+  - **Personal Team cert + 7-day expiry.** Even if discovery worked,
+    free-tier ad-hoc distribution caps at 7 days before the embedded
+    `.mobileprovision` expires. Weekly re-push isn't a system worth
+    building.
+  - **No TestFlight on a Personal Team.** Apple's only sanctioned
+    over-the-internet install path is App Store Connect /
+    TestFlight, which requires the $99/year paid Developer Program.
+    The project currently signs with a Personal Team.
+  - **AltStore / SideStore** sideload-over-network routes exist but
+    require a third-party server in the loop; not worth the risk for
+    a personal tool when paying Apple solves it cleanly.
+- **The real fix when it matters**: enroll in Apple Developer Program
+  ($99/year), set up an App Store Connect API key, ship every release
+  via TestFlight. ~1 day of first-time setup + Apple's review for the
+  first build; ~30 min per subsequent ship.
+
 ### CLI session-id resume bug in SessionConfigChanger
 - **What**: `SessionConfigChanger.swap(sessionId:)` passes
   `sessionId.uuidString` (the Clawdmeter UUID) as `--resume <id>` /

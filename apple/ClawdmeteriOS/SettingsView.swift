@@ -143,6 +143,14 @@ struct SettingsView: View {
                 Text("Your token will be removed from this device.")
             }
         }
+        // SwiftUI sheets capture `preferredColorScheme` at presentation
+        // time and don't pick up later changes from the presenter's
+        // @AppStorage updates. Applying it here on the sheet's own root
+        // makes the active sheet re-theme the instant the user picks a
+        // new value from the Theme menu above.
+        .preferredColorScheme(
+            (AppearanceMode(rawValue: appearanceRaw) ?? .system).colorScheme
+        )
     }
 
     /// Pull the clipboard contents into the token draft. The iOS Simulator

@@ -5,6 +5,14 @@ import ClawdmeterShared
 @main
 struct ClawdmeteriOSApp: App {
     @StateObject private var model = UsageModel()
+    /// Reads the same @AppStorage key the Settings picker writes.
+    /// Applied on the WindowGroup so the resolved color scheme
+    /// propagates into sheets + alerts (which a TabView-level modifier
+    /// does NOT do — sheets present in a fresh trait environment).
+    @AppStorage("clawdmeter.appearance") private var appearanceRaw: String = AppearanceMode.system.rawValue
+    private var appearance: AppearanceMode {
+        AppearanceMode(rawValue: appearanceRaw) ?? .system
+    }
 
     init() {
         // Register the BGAppRefreshTask handler at launch (D15 fallback for
@@ -30,7 +38,13 @@ struct ClawdmeteriOSApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
-                .preferredColorScheme(nil) // honor system theme by default
+                // Applied here, INSIDE the WindowGroup, so the value
+                // lands on the root view's traitCollection — that's
+                // the path SwiftUI uses to re-theme sheets and alerts
+                // alongside the regular view tree. Returning nil for
+                // `.system` lets iOS Settings → Display & Brightness
+                // drive things.
+                .preferredColorScheme(appearance.colorScheme)
         }
     }
 }
