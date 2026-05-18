@@ -714,6 +714,9 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions/continue-readonly") { [weak self] req, conn, _ in
             await self?.handleContinueReadOnly(request: req, connection: conn)
         }
+        t.register(method: "POST", pattern: "/sessions/:id/attachments") { [weak self] req, conn, params in
+            await self?.handleUploadAttachment(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
         t.register(method: "POST", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
             await self?.handleRegisterPushToken(request: req, connection: conn)
         }
@@ -1000,6 +1003,55 @@ public final class AgentControlServer {
             }
         } catch {
             serverLogger.error("continue-readonly failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// `POST /sessions/:id/attachments?ext=png` — body is raw image
+    /// bytes. Writes them to the session's staging dir via
+    /// `AttachmentStaging.stage(data:ext:...)` and returns the absolute
+    /// path. Lets iOS attach screenshots / photos from the camera roll
+    /// without writing to its sandboxed app-support; the agent reads
+    /// the resulting `@<path>` from the prompt body.
+    ///
+    /// Cap: 50MB (matches the Mac drag-drop cap). Auth + per-peer
+    /// rate-limit + audit logging happen in the dispatcher before this
+    /// handler is invoked.
+    private func handleUploadAttachment(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let extArg: String = {
+            guard let comps = URLComponents(string: request.path),
+                  let raw = comps.queryItems?.first(where: { $0.name == "ext" })?.value,
+                  !raw.isEmpty else { return "bin" }
+            return raw
+        }()
+        // 50MB body cap. Bigger and we'd want a streaming multipart
+        // path; for screenshots / photos this is plenty.
+        guard request.body.count > 0, request.body.count <= 50 * 1024 * 1024 else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        guard let stagingDir = AttachmentStaging.stagingDir(for: session) else {
+            sendResponse(.internalError, on: connection); return
+        }
+        let attachmentId = UUID()
+        do {
+            let staged = try AttachmentStaging.stage(
+                data: request.body,
+                ext: extArg,
+                into: stagingDir,
+                attachmentId: attachmentId
+            )
+            let response = UploadAttachmentResponse(id: attachmentId, path: staged.path)
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(response) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            serverLogger.error("attachment upload failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
     }
@@ -2176,7 +2228,14 @@ private final class HTTPRequestBuffer: @unchecked Sendable {
     }
 
     private static let maxHeaderBytes = 32 * 1024
-    private static let maxBodyBytes = 1_000_000
+    /// Raised from 1MB → 50MB in v0.4.8 so iOS can POST raw image
+    /// bytes to `/sessions/:id/attachments`. Tailscale ACL + bearer
+    /// auth still gate who can reach the daemon, so the worst case is
+    /// a paired peer wasting Mac memory on one malformed upload — and
+    /// per-endpoint handlers still enforce their own caps (the send
+    /// path stays at 1MB, the artifact endpoint at 50MB, attachment
+    /// uploads at 50MB).
+    private static let maxBodyBytes = 50 * 1024 * 1024
 
     var data = Data()
 

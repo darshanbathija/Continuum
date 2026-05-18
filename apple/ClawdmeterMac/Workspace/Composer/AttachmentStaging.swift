@@ -68,6 +68,20 @@ enum AttachmentStaging {
         return dest
     }
 
+    /// Write raw bytes (e.g. from an iOS HTTP upload) to the staging dir
+    /// under `<uuid>.<ext>`. `ext` is sanitised — anything that isn't
+    /// alphanumeric falls back to no extension so a bad client can't
+    /// smuggle path traversal via `../foo`.
+    static func stage(data: Data, ext: String, into destDir: URL, attachmentId: UUID) throws -> URL {
+        let safeExt = ext.filter(\.isLetter).lowercased()
+        let filename = safeExt.isEmpty
+            ? attachmentId.uuidString
+            : "\(attachmentId.uuidString).\(safeExt)"
+        let dest = destDir.appendingPathComponent(filename)
+        try data.write(to: dest, options: [.atomic])
+        return dest
+    }
+
     /// Write an in-memory NSImage (e.g. from clipboard paste) to the staging
     /// dir as a PNG.
     static func stage(image: NSImage, into destDir: URL, attachmentId: UUID) throws -> URL {

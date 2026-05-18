@@ -185,6 +185,41 @@ public final class AgentControlClient: ObservableObject {
                         body: SendPromptRequest(text: text, asFollowUp: asFollowUp))
     }
 
+    /// Upload raw image bytes to the daemon's per-session staging dir.
+    /// The Mac writes them to `~/Library/Application Support/Clawdmeter/
+    /// attachments/<sessionId>/<uuid>.<ext>` (or the Codex worktree's
+    /// sandbox dir when applicable) and returns the absolute path. The
+    /// caller is responsible for prepending `@<path>` to the eventual
+    /// `sendPrompt` body so the agent's Read tool resolves the file.
+    ///
+    /// `ext` is the file extension WITHOUT the dot (`"png"`, `"jpg"`).
+    /// Cap is 50MB at the daemon's body-parser layer.
+    @MainActor
+    public func uploadAttachment(
+        sessionId: UUID,
+        ext: String,
+        data: Data
+    ) async -> String? {
+        let safeExt = ext.filter { $0.isLetter || $0.isNumber }
+        let path = "/sessions/\(sessionId.uuidString)/attachments?ext=\(safeExt)"
+        guard var request = makeRequest(path: path, method: "POST", body: data) else {
+            return nil
+        }
+        // The daemon doesn't care about Content-Type for this endpoint
+        // (filename ext is what drives the on-disk name), but set it
+        // anyway for honest semantics + future-proofing.
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        do {
+            let result = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            let resp = try decoder.decode(UploadAttachmentResponse.self, from: result)
+            return resp.path
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     /// Promote a Recent (outside-Clawdmeter) JSONL into a live live
     /// session and optionally post a first prompt. Mirrors the Mac's
     /// `SessionsModel.continueCurrentReadOnly` over the wire so iOS can
