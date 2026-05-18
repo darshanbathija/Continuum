@@ -214,6 +214,145 @@ Source PNG: `~/Downloads/Clawd Logo.png` (user's design). Crop pipeline in
 No flood-fill, no rim sweep, no pixel manipulation — the HSV crop alone
 removes the source's white outer area cleanly.
 
+## Sessions WhatsApp-smooth pipeline (v0.5.0 build 33, 2026-05-19)
+
+Four mergeable phases moved the iPhone and Mac chat surfaces from
+"feels heavy / sluggish to scroll" to native-chat smoothness. The plan
+went through `/office-hours` → `/plan-eng-review` → Codex outside-voice
+review (which gutted the original plan with 3 P0s + 9 P1s); the rescoped
+v1 ships in four commits on `main`, none of which require a wire
+version bump above 5.
+
+The originally-planned APNS push, ConversationFilter, cursor delta
+envelope, shared cross-platform container, and Mac sidebar List
+migration were all explicitly deferred during the review; see
+`TODOS.md` "v0.6 / v1.1 — WhatsApp-smooth Sessions follow-ups" for the
+follow-up briefs.
+
+### Phase 0a — daemon-owned per-session chat store
+
+- New file `apple/ClawdmeterMac/AgentControl/DaemonChatStoreRegistry.swift`.
+  `@MainActor` class that owns a `[UUID: SessionChatStore]` registry
+  on the *daemon* side. Mirrors the pattern Mac UI's `SessionsView`
+  uses for the dashboard, but lives in `AgentControlServer` so HTTP
+  + WS subscribers can share one long-lived store per session id
+  instead of forcing a fresh JSONL reparse on every `/chat-snapshot`
+  request.
+- Subscriber retention: `acquire(for:)` / `release(sessionId:)`
+  pair for long-lived subscribers (WS in Phase 2), `snapshotStore(for:)`
+  for one-shot HTTP handlers. Idle sweep evicts after 5 minutes of
+  no subscribers; hard cap at 20 resident stores.
+- Cold-miss fallback path preserved in `handleGetChatSnapshot` —
+  first request after server boot or after eviction still works at
+  legacy reparse latency, and the warmed store catches up for the
+  next request.
+- `WireChatSnapshot.updateCounter` is now populated from
+  `SessionChatStore.updateCounter` (the actual transcript cursor)
+  instead of `session.lastEventSeq` (a registry/status counter). Wire
+  version bumped 4 → 5 with `chatSubscribeMinimum = 5` gating Phase 2.
+  Field shape unchanged; v4 iOS clients keep working — only the
+  semantics shifted.
+
+### Phase 0b — SessionFileResolver + Codex respawn lineage
+
+- New file `apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/SessionFileResolver.swift`.
+  Maps `AgentSession.id → on-disk JSONL URL` with explicit lineage
+  tracking for Codex sessions across `approve-plan` boundaries.
+- Why: `approve-plan` intentionally kills the plan-mode pane and
+  spawns a fresh Codex rollout file (new JSONL with a new Codex
+  session id). The pre-Phase-0b daemon resolved Codex chat via
+  `newestCodexJSONL()` (global newest) — works for one session at a
+  time but silently strands on the wrong file as soon as any other
+  Codex session ticks over.
+- API: `resolve(session:)` returns the cached URL if still valid OR
+  scans `~/.codex/sessions/` for the newest rollout in the session's
+  activity window (`createdAt … lastEventAt + 5min`). `record(sessionId:rolloutURL:)`
+  for the spawn path; `invalidate(sessionId:)` for the `approve-plan`
+  handler. Belt-and-suspenders auto-promotion: even without explicit
+  invalidate, `resolve` will pick up a newer in-window rollout if one
+  appears.
+- `SessionChatStore.resolveSessionFileURL(repoCwd:)` and `encodeCwd`
+  / `newestJSONL` are now `nonisolated static` so the resolver's
+  `@Sendable` Claude closure can call them without an actor hop.
+  Pure FileManager calls, no isolation required.
+- The resolver is constructed in `AgentControlServer.init` and
+  injected into `DaemonChatStoreRegistry` via the `resolveURL` closure.
+  `handleApprovePlan` calls `chatFileResolver.invalidate(sessionId:)`
+  after the respawn succeeds.
+
+### Phase 1 — iPhone + Mac chat lists → native List
+
+- iOS `liveChatList` at [iOSSessionsView.swift:935](apple/ClawdmeteriOS/iOSSessionsView.swift:935)
+  and Mac `ChatThreadScroll.body` at
+  [SessionWorkspaceView.swift:1488](apple/ClawdmeterMac/Workspace/SessionWorkspaceView.swift:1488)
+  moved from `ScrollView { LazyVStack }` with per-row `.id(item.id)`
+  + per-row `.onAppear` / `.onDisappear` pin-tracking to native `List`.
+  - The per-row `.id(item.id)` defeats SwiftUI row recycling
+    (~10x scroll-perf cost at 1k+ messages per Stream benchmarks).
+  - The per-row appearance callbacks fired on EVERY chat item as the
+    user scrolled, doing N appearance dispatches per scroll-frame.
+- Both surfaces now use a single 1pt `Color.clear` bottom-sentinel
+  row whose `.onAppear` / `.onDisappear` drive `pinnedToBottom`. One
+  callback per scroll-edge event, not N per scroll-frame.
+- Scroll-on-new-item path coalesces rapid bumps via a 50ms
+  `Task.sleep` debounce so streaming reply tokens stop animating
+  scroll-to-latest per token.
+- Mac AppKit `List` fall-back documented: if perf regresses on very
+  long sessions, swap to `LazyVStack` without `.id(item.id)` keeping
+  identity stable via `ForEach(id: \.id)`.
+
+### Phase 2 — chat-subscribe WS push (replaces iOS 3s HTTP polling)
+
+- New file `apple/ClawdmeterMac/AgentControl/ChatStreamWebSocketChannel.swift`.
+  Server-side `WSChannel` that observes `SessionChatStore.$snapshot`
+  via Combine, debounces commits at 100ms via `.debounce`, encodes a
+  `WireChatSnapshot` as JSON, and sends as a WS text frame. Lifecycle
+  pairs `acquire` on `start()` with `release` on `stop()` so the
+  registry's idle sweep eventually evicts the store after the last
+  subscriber disconnects.
+- Dispatcher gains a `"chat-subscribe"` case alongside
+  `"compose-draft"`, `"terminal"`, `"events"` in
+  `AgentControlServer.routeWSSubscription`. Same envelope shape:
+  `{op, token, sessionId}`. Bearer auth + Tailscale whois gates
+  cover the new path via the existing routing — zero new auth surface.
+- **No delta encoding in v1.** Codex's outside-voice review (D6)
+  explicitly cut the `WireChatEvent.appendItems` /
+  `.patchLastToolRun` / `.resyncRequired` envelope until measurements
+  prove the bandwidth savings justify the bug surface.
+- iOS `iOSChatStore` is now a long-lived WS subscriber. `start()`
+  spawns a `runSubscriptionLoop` Task that:
+  - Gates on `serverWireVersion ≥ chatSubscribeMinimum = 5` (older
+    Macs stay on the HTTP fallback ladder).
+  - Opens a `URLSessionWebSocketTask`, sends `{op: "chat-subscribe",
+    token, sessionId}`, then receives frames in a loop and applies
+    each one wholesale.
+  - On transient WS error, retries with exp backoff 1→2→4→8→16→30s
+    plus 0-20% jitter.
+  - After 3 consecutive WS failures, falls back to HTTP polling for
+    3 cycles before retrying WS. Prevents stranding when the
+    daemon's WS port flaps but HTTP works.
+- `UIApplication.didBecomeActiveNotification` observer cancels the
+  current WS task if the last received frame is >30s stale, forcing
+  the subscription loop to reconnect.
+- `AgentControlClient.fetchChatSnapshot(sessionId:)` HTTP path
+  preserved both for the fallback ladder and any one-shot callers.
+
+### Tests
+
+- `apple/ClawdmeterShared/Tests/ClawdmeterSharedTests/AgentControl/SessionFileResolverTests.swift`
+  (new — 9 cases). Covers Claude path delegation, Codex
+  activity-window scanning, cache reuse, the regression-critical
+  `testCodexApprovePlanRespawnLineage_CRITICAL`,
+  `testCodexExplicitInvalidateForcesRescan`,
+  `testCodexCachedFileMissingFallsBackToScan`,
+  `testFallbackToNewestForSyntheticPreview`, `testRecordSetsCacheDirectly`.
+- `testWireVersionConstant` in `SessionsV2Tests` updated to assert
+  the `4 → 5` bump + `chatSubscribeMinimum = 5`.
+- 267 → 276 ClawdmeterShared tests. Mac / iOS / Watch schemes all
+  build clean (CODE_SIGNING_ALLOWED=NO).
+- See `TODOS.md` "Mac + iOS XCTest test targets" for the 9 spec'd
+  tests that need new test scaffolding before they can land.
+
 ## Sessions feature v2 (2026-05-17)
 
 Mobile-native control plane for Claude Code + Codex. iPhone (and Watch)

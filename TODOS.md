@@ -12,6 +12,116 @@ follow-up that didn't make the v2.0 ship but is worth picking up.
 > interaction states, T16 e2e smoke test, T27 fastlane, plus the
 > v2.1 P3 items (per-repo defaults, voice-first session).
 
+> **2026-05-19 update (v0.5.0 build 33)**: WhatsApp-smooth Sessions
+> v1 SHIPPED across four phases — Phase 0a (DaemonChatStoreRegistry +
+> real chat cursor), Phase 0b (SessionFileResolver + Codex respawn
+> lineage), Phase 1 (iPhone + Mac chat lists → native `List`), Phase 2
+> (chat-subscribe WS push + iOS HTTP-fallback ladder). The plan was
+> rescoped midway via Codex outside-voice review: APNS push,
+> ConversationFilter, and the cross-platform shared container all
+> deferred to v0.6 / v1.1 follow-ups below.
+
+## v0.6 / v1.1 — WhatsApp-smooth Sessions follow-ups (2026-05-19)
+
+### APNS plan-mode push + UNNotificationAction (deferred from v0.5.0 D6)
+- **What**: lock-screen "plan ready" push for Claude sessions with
+  Approve / Reject `UNNotificationAction`s that POST directly to
+  `/approve-plan` or `/reject-plan` without app foreground. Bearer
+  token moves from `UserDefaults` to a shared App Group keychain so
+  the notification-action extension can read it.
+- **Why deferred (Codex D6 P1)**: reverses documented prior decision
+  D15 (`apple/ClawdmeterMac/AgentControl/NotificationDispatcher.swift:9`
+  literally says "D15 dropped APNS; iOS polls `GET /sessions/needs-attention`").
+  `MacAPNSPusher` is built for Live Activity push *tokens*, not
+  regular APS notification delivery — those are different APNS topics
+  with different infrastructure. The "<1s lock-screen Approve" gate
+  also can't be hit reliably on Tailscale-only transport without
+  cellular wake handling. Phase 2 WS-while-foreground already covers
+  the "I check on it while walking with the app open" case which is
+  most of the real usage.
+- **Scope when revisited**: design pass first to spec the regular-APS
+  provider key wiring (separate from the Live Activity key) and the
+  App Group keychain migration. Then code.
+
+### ConversationFilter / Texting mode (deferred from v0.5.0 D6)
+- **What**: project `[ChatItem] → [ConversationTurn]` filter that
+  hides standalone `tool_use` / `tool_result` blocks behind a tiny
+  "ran 12 tools" footnote per turn. Tapping the footnote routes to
+  the Diff tab. Chat tab default flips to `.conversation`; other
+  tabs keep `.full`.
+- **Why deferred (Codex D6 P1)**: product change disguised as perf
+  work. The current Mac + iOS chat surfaces intentionally show
+  grouped tool runs inline because that's the surface where users
+  verify agent behavior. Cutting visibility of tool calls reduces
+  traceability. Decide whether the right product is "opt-in clean
+  mode toggle in Settings" (probably) vs "Texting mode default + opt
+  into terminal mode" (riskier).
+
+### Cursor delta envelope — `appendItems` / `patchLastToolRun` (deferred from v0.5.0)
+- **What**: replace Phase 2's full-snapshot-per-commit WS push with a
+  delta-event envelope. New `WireChatEvent` enum:
+  `.snapshot(WireChatSnapshot)` | `.appendItems(baseRevision, revision, items, totals, lastEventAt)` |
+  `.patchLastToolRun(baseRevision, revision, runId, pairs)` |
+  `.resyncRequired(latestRevision)`. Server emits resync on
+  `baseRevision` mismatch, 256-event ring buffer overflow, or
+  non-tail mutation. Client applies deltas locally.
+- **Why deferred**: per Codex D6, full-snapshot push with the bounded
+  500-item-per-store cap is acceptable in v1. Bandwidth savings of
+  deltas don't justify the resync-state-machine bug surface until
+  measurements prove fast-streaming sessions actually saturate the
+  current path.
+- **Trigger to revisit**: if `WireInspector` shows fast-streaming
+  sessions pushing >500KB/sec in coalesced frames, or if iPhone
+  scroll fps drops below 50fps on a long agent run, this becomes the
+  next architectural investment.
+
+### Materialized chat-lane projection store — Codex lateral (deferred to v2)
+- **What**: Mac daemon writes a compact append-only conversation
+  projection on disk beside the JSONL — pre-grouped bubbles, turn
+  boundaries, chat revision ids, notification previews. Chat /
+  notifications / Watch read the projection; Diff / PR / Terminal
+  keep reading raw JSONL.
+- **Why deferred**: 3–4 weeks of net-new on-disk artifact plus sync
+  semantics. Reconsider after Phase 0 + 2 measurements; if v1 hits
+  the WhatsApp gate, projection isn't needed.
+
+### Mac repo-grouped sidebar List migration (deferred from v0.5.0 Phase 1)
+- **What**: migrate the Mac dashboard sidebar at
+  `apple/ClawdmeterMac/Workspace/SessionWorkspaceView.swift:414` from
+  `ScrollView + LazyVStack` to native `List`. Same anti-pattern Phase 1
+  fixed on the chat thread.
+- **Why deferred**: scope reduction; chat thread is the surface the
+  user actually scrolls fast. Lift if Mac dashboard history scroll
+  feels off in real use.
+
+### Shared cross-platform chat-row rendering / pinning logic (deferred from v0.5.0 Phase 1)
+- **What**: extract the chat-bubble layout + pin-to-bottom
+  `ScrollViewReader` plumbing into a shared component. iOS uses
+  `liveChatList` in `iOSSessionsView.swift:935`; Mac uses
+  `ChatThreadScroll.body` in `SessionWorkspaceView.swift:1488`. They
+  share ~70% of the code today.
+- **Why deferred (Codex D6 P1)**: the right shared surface is row
+  rendering + scroll position logic, not the container itself.
+  SwiftUI `List`'s scroll-anchor behavior diverges between iOS and
+  AppKit so a single cross-platform container is the wrong boundary.
+  Lift when duplication starts costing real bugs.
+
+### Mac + iOS XCTest test targets — gating for 9 plan-spec'd tests
+- **What**: add `apple/ClawdmeterMac/AgentControl/Tests/` and
+  `apple/ClawdmeteriOS/Tests/` to `apple/project.yml` as XCTest test
+  targets so the v0.5.0 plan's `DaemonChatStoreRegistryTests`,
+  `LiveChatScrollPinTests`, `ChatSubscribeIntegrationTests`, and
+  `iOSChatStoreWSTests` can be written.
+- **Why pending**: the v0.5.0 ship landed without these because the
+  project only had a `ClawdmeterShared` Swift package test target.
+  `SessionFileResolverTests` (the only Phase 0/1/2 tests that fit the
+  existing infrastructure) shipped. The other 9 spec'd tests need new
+  scaffolding before they can land.
+- **Effort**: ~half a day to add the test targets + scaffolding +
+  port the 9 spec'd tests. Important enough to do before the next
+  refactor of the WS / registry / chat-store code paths so changes
+  there don't ship without coverage.
+
 ## v2.0.1 — visible-polish follow-ups
 
 ### iOS Live Activity APNS push (D9 narrow scope) — SHIPPED 2026-05-17 build 15

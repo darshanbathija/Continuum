@@ -58,8 +58,9 @@ The Sessions tab on Mac is a first-class chat workbench for the CLIs themselves.
 - **Plan mode works for both agents.** Claude maps to `--permission-mode plan`, Codex maps to `--sandbox read-only`. Approve & run flips the permission / sandbox afterwards.
 - **Pairing is QR + Tailscale.** Tap "Sync with iPhone" on the Mac, scan or paste the URL on the phone. No iCloud, no APNS, no `.p8` key custody.
 - **The Mac daemon** (`Network.framework` HTTP + WS on ports 21731 / 21732, bound to loopback + Tailscale CGNAT) exposes the full control surface to the iPhone and Watch.
+- **iPhone chat snapshot arrives via push, not poll (v0.5.0).** The Mac daemon owns a long-lived per-session chat store (`DaemonChatStoreRegistry`); a new `chat-subscribe` WebSocket op pushes a coalesced 100ms snapshot to the paired iPhone instead of having the phone poll `GET /chat-snapshot` every 3 seconds. Codex `approve-plan` mid-session keeps continuity across the rollout-file boundary via `SessionFileResolver`. Both iPhone + Mac chat threads use native `List` now (out: `LazyVStack` with per-row `.id(item.id)` defeating recycling). Wire version 4 → 5; older Macs auto-fall-back to the HTTP polling path.
 
-See `docs/designs/sessions-v2.md` for the v2.0 control-plane ship, `CHANGELOG.md` for the v0.3.0 chat-IDE rewrite, and `TODOS.md` for deferred work.
+See `docs/designs/sessions-v2.md` for the v2.0 control-plane ship, `CHANGELOG.md` for the v0.3.0 chat-IDE rewrite and the v0.5.0 WhatsApp-smooth pipeline, and `TODOS.md` for deferred work.
 
 ## Building from source
 
