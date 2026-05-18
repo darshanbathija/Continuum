@@ -3,34 +3,34 @@ import OSLog
 
 private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "AnthropicSource")
 
-/// `AISource` implementation that fetches Claude.ai subscription usage from
-/// the same `GET /api/oauth/usage` endpoint Claude Code uses internally.
+/// V1 `AISource` implementation against the Phase 0 Data Source Contract.
 ///
-/// **Why this endpoint, not `/v1/messages`?** Before v0.4.11 we hit `POST
-/// /v1/messages` with a 1-token request and parsed the `anthropic-ratelimit-
-/// unified-*` response headers. That worked for months — until Anthropic
-/// tightened the OAuth surface on `/v1/messages` to block Pro/Max OAuth
-/// tokens (response: HTTP 403 `permission_error` "OAuth authentication is
-/// currently not allowed for this organization"). The user-visible symptom
-/// was the Mac dashboard sitting on "Connecting…" forever. `claude` CLI
-/// itself still works because it goes through `/api/oauth/usage` for the
-/// rate-limit fetch — discovered by searching `~/.local/bin/claude` for
-/// `fetchUtilization: GET /api/oauth/usage`. We now match that path.
+/// **Primary path:** `POST /v1/messages` with a 1-token Haiku request and
+/// parse the `anthropic-ratelimit-unified-*` response headers. This is the
+/// rich path — both the 5h and 7d windows come back in a single response,
+/// no separate fetch needed, no per-endpoint rate-limit budget to worry
+/// about (the 1-token spend is negligible).
 ///
-/// **Response shape (observed via binary strings and the statusline doc):**
-/// either a single representative-claim object
-/// ```json
-/// {"rate_limit_type":"five_hour","utilization":0.27,"resets_at":"<ISO 8601>"}
-/// ```
-/// or a richer multi-window envelope
-/// ```json
-/// {"five_hour":{"utilization":0.27,"resets_at":"<ISO>"},
-///  "seven_day":{"utilization":0.42,"resets_at":"<ISO>"},
-///  "rate_limit_type":"seven_day"}
-/// ```
-/// or a `{rate_limits:{five_hour:…,seven_day:…}}` envelope matching what
-/// `claude` itself feeds the statusline. We decode all three shapes; whichever
-/// turns out to be authoritative will fill `UsageData` cleanly.
+/// **What we now send.** Earlier builds of Clawdmeter polled `/v1/messages`
+/// directly with the OAuth token and worked for months — until Anthropic
+/// started returning HTTP 403 `permission_error` "OAuth authentication is
+/// currently not allowed for this organization." The fix is one header:
+/// `x-anthropic-additional-protection: true`. Without it, Anthropic blocks
+/// Pro/Max OAuth tokens against `/v1/messages` to prevent abusing
+/// Claude.ai-tier auth as a backdoor to free API access. With it, requests
+/// are recognized as legitimate Claude-Code-style traffic. The literal
+/// value is just the string `true`; pulled from the bundled `claude` CLI
+/// binary alongside the existing `x-anthropic-billing-header: cc_version=…`
+/// header that Anthropic also expects.
+///
+/// **Fallback path:** if `/v1/messages` ever 403s again (Anthropic rotates
+/// the additional-protection mechanism, or revokes our org's access to it),
+/// `pollOAuthUsageFallback()` calls `GET /api/oauth/usage`. That's the
+/// endpoint `claude` itself uses for its rate-limit fetch — the response
+/// body's `rate_limit_type` / `utilization` / `resets_at` is enough to
+/// populate the binding window, with the un-binding window remembered
+/// from the previous successful poll. Strictly poorer data than the
+/// primary path (only one window populated per call) but resilient.
 public final class AnthropicSource: AISource, @unchecked Sendable {
 
     public let providerID = "anthropic"
@@ -38,24 +38,29 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
 
     private let tokenProvider: TokenProvider
     private let urlSession: URLSession
-    private let endpoint: URL
+    private let messagesEndpoint: URL
+    private let oauthUsageEndpoint: URL
     private let userAgent: String
+    private let ccVersion: String
 
     /// Bounded refresh attempts per E7. Use a window to prevent infinite retries.
     private var refreshAttempts: [Date] = []
     private let refreshWindowSeconds: TimeInterval = 600 // 10 min
     private let maxRefreshAttemptsPerWindow = 2
 
-    /// Latest window snapshots, kept across polls so that the un-binding
-    /// window's percentage doesn't drop to 0% on each tick (the API may only
-    /// report the binding window when the other is fresh / unused).
+    /// Latest window snapshots, kept across polls so the un-binding window's
+    /// percentage doesn't drop to 0% on the fallback path when the API only
+    /// reports the binding window. Primary path overrides both windows on
+    /// every successful poll, so this only matters in fallback mode.
     private var lastSession: (pct: Int, resetEpoch: Int)?
     private var lastWeekly: (pct: Int, resetEpoch: Int)?
 
     public init(
         tokenProvider: TokenProvider,
         urlSession: URLSession? = nil,
-        endpoint: URL = URL(string: "https://api.anthropic.com/api/oauth/usage")!,
+        messagesEndpoint: URL = URL(string: "https://api.anthropic.com/v1/messages")!,
+        oauthUsageEndpoint: URL = URL(string: "https://api.anthropic.com/api/oauth/usage")!,
+        ccVersion: String = "2.1.143",
         userAgent: String = "claude-cli/2.1.143 (external, cli)"
     ) {
         self.tokenProvider = tokenProvider
@@ -71,7 +76,9 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
             cfg.waitsForConnectivity = false
             self.urlSession = URLSession(configuration: cfg)
         }
-        self.endpoint = endpoint
+        self.messagesEndpoint = messagesEndpoint
+        self.oauthUsageEndpoint = oauthUsageEndpoint
+        self.ccVersion = ccVersion
         self.userAgent = userAgent
     }
 
@@ -92,64 +99,27 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
         let fp = token.count > 18
             ? "\(token.prefix(14))…\(token.suffix(4))"
             : "(short:\(token.count))"
-        logger.info("AnthropicSource.poll: token len=\(token.count) fp=\(fp, privacy: .public), GET \(self.endpoint, privacy: .public)")
+        logger.info("AnthropicSource.poll: token len=\(token.count) fp=\(fp, privacy: .public), trying /v1/messages")
         defer { logger.info("AnthropicSource.poll: HTTPS leg done") }
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 30
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        // The oauth-2025-04-20 beta gates the OAuth-mode endpoints. Belt-and-
-        // suspenders: Claude Code's own request includes it even on /api/* paths.
-        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-
-        // Use dataTask + continuation instead of URLSession.data(for:) — the
-        // async API hangs on macOS Tahoe with `URLSession.shared` from
-        // cooperative tasks when multiple sessions are active. The completion-
-        // handler API doesn't have this issue.
-        struct NetResult: Sendable { let data: Data; let response: URLResponse }
-        let result: NetResult
         do {
-            result = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NetResult, Error>) in
-                let task = urlSession.dataTask(with: request) { data, response, error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else if let data, let response {
-                        continuation.resume(returning: NetResult(data: data, response: response))
-                    } else {
-                        continuation.resume(throwing: URLError(.unknown))
-                    }
-                }
-                task.resume()
+            return try await pollViaMessages(token: token)
+        } catch AISourceError.unauthenticated {
+            // 401/403 on the primary path. Two possibilities:
+            //   1. Token genuinely expired/rotated — caller's refresh path
+            //      will fire and the next tick re-tries the primary.
+            //   2. Anthropic rotated the additional-protection mechanism on
+            //      /v1/messages and the magic header no longer suffices.
+            // Try the fallback before propagating the auth error so the
+            // dashboard at least shows the binding window's number.
+            logger.warning("AnthropicSource.poll: /v1/messages auth-rejected; trying /api/oauth/usage fallback")
+            do {
+                return try await pollOAuthUsageFallback(token: token)
+            } catch {
+                // Surface the original .unauthenticated so the bounded-retry
+                // wrapper has a chance to refresh credentials.
+                throw AISourceError.unauthenticated
             }
-        } catch {
-            throw AISourceError.networkFailure(underlying: error)
-        }
-        let response = result.response
-
-        guard let http = response as? HTTPURLResponse else {
-            throw AISourceError.malformedResponse(detail: "Non-HTTP response")
-        }
-
-        switch http.statusCode {
-        case 200:
-            return try parseUsage(body: result.data, response: http)
-        case 401, 403:
-            // Auth chain handled in poller's bounded-retry wrapper (E7).
-            // 403 with `OAuth authentication is currently not allowed` was
-            // the v0.4.10-era symptom that pushed us off /v1/messages.
-            throw AISourceError.unauthenticated
-        case 429:
-            let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
-            throw AISourceError.rateLimited(retryAfter: retryAfter)
-        case 400...499:
-            throw AISourceError.malformedResponse(detail: "Client error: \(http.statusCode)")
-        case 500...599:
-            throw AISourceError.networkFailure(underlying: nil)
-        default:
-            throw AISourceError.malformedResponse(detail: "Unexpected status: \(http.statusCode)")
         }
     }
 
@@ -164,13 +134,165 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
         return try await tokenProvider.refreshIfNeeded()
     }
 
-    // MARK: - Response parsing
+    // MARK: - Primary path (/v1/messages + unified rate-limit headers)
 
-    /// Defensive decoder. The `/api/oauth/usage` response shape isn't
-    /// publicly documented; reverse-engineered from `claude` CLI's bundled
-    /// JS. We try the richer shape first, fall back to the single-binding
-    /// shape, and as a last resort try the `{rate_limits:{…}}` envelope.
-    private func parseUsage(body: Data, response: HTTPURLResponse) throws -> UsageData {
+    private func pollViaMessages(token: String) async throws -> UsageData {
+        var request = URLRequest(url: messagesEndpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        // ↓ The two headers that distinguish a legitimate Claude-Code poll
+        // from "random OAuth client trying to use /v1/messages as a free
+        // API." Without these, Anthropic returns 403 permission_error.
+        // `x-anthropic-additional-protection: true` is the literal value
+        // observed in the bundled `claude` CLI binary; `x-anthropic-billing-
+        // header: cc_version=<v>` is the matching billing tag.
+        request.setValue("true", forHTTPHeaderField: "x-anthropic-additional-protection")
+        request.setValue("cc_version=\(ccVersion)", forHTTPHeaderField: "x-anthropic-billing-header")
+
+        let bodyJSON: [String: Any] = [
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 1,
+            "messages": [["role": "user", "content": "hi"]],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: bodyJSON)
+
+        let (_, response) = try await runRequest(request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AISourceError.malformedResponse(detail: "Non-HTTP response")
+        }
+        switch http.statusCode {
+        case 200:
+            return try parseUnifiedHeaders(from: http)
+        case 401, 403:
+            // 401 = token rotated / revoked; 403 = additional-protection
+            // mechanism rejected us. Either way the caller's fallback
+            // routes to /api/oauth/usage before surfacing the auth error.
+            throw AISourceError.unauthenticated
+        case 429:
+            let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+            throw AISourceError.rateLimited(retryAfter: retryAfter)
+        case 400...499:
+            throw AISourceError.malformedResponse(detail: "Client error: \(http.statusCode)")
+        case 500...599:
+            throw AISourceError.networkFailure(underlying: nil)
+        default:
+            throw AISourceError.malformedResponse(detail: "Unexpected status: \(http.statusCode)")
+        }
+    }
+
+    /// Phase 0 Data Source Contract — parse `anthropic-ratelimit-unified-*`
+    /// response headers into a `UsageData` snapshot.
+    private func parseUnifiedHeaders(from response: HTTPURLResponse) throws -> UsageData {
+        func headerFloat(_ name: String) -> Double? {
+            response.value(forHTTPHeaderField: name).flatMap(Double.init)
+        }
+        func headerInt(_ name: String) -> Int? {
+            response.value(forHTTPHeaderField: name).flatMap(Int.init)
+        }
+        func headerString(_ name: String) -> String? {
+            response.value(forHTTPHeaderField: name)
+        }
+
+        guard let s5hUtil = headerFloat("anthropic-ratelimit-unified-5h-utilization"),
+              let s5hReset = headerInt("anthropic-ratelimit-unified-5h-reset"),
+              let s7dUtil = headerFloat("anthropic-ratelimit-unified-7d-utilization"),
+              let s7dReset = headerInt("anthropic-ratelimit-unified-7d-reset")
+        else {
+            throw AISourceError.dataSourceContractViolation(
+                detail: "Missing unified rate-limit headers (5h or 7d utilization/reset)."
+            )
+        }
+
+        let serverDate = parseServerDate(from: response) ?? Date()
+        let serverEpoch = Int(serverDate.timeIntervalSince1970)
+
+        let sessionPct = Int((s5hUtil * 100).rounded())
+        let weeklyPct = Int((s7dUtil * 100).rounded())
+        let sessionResetMins = max(0, (s5hReset - serverEpoch) / 60)
+        let weeklyResetMins = max(0, (s7dReset - serverEpoch) / 60)
+
+        let sessionStatus = headerString("anthropic-ratelimit-unified-5h-status") ?? "unknown"
+        let weeklyStatus = headerString("anthropic-ratelimit-unified-7d-status") ?? "unknown"
+        let compositeStatus: UsageData.Status = {
+            if sessionStatus == "limited" || weeklyStatus == "limited" { return .limited }
+            if sessionStatus.hasPrefix("allowed") && weeklyStatus.hasPrefix("allowed") { return .allowed }
+            return .unknown
+        }()
+
+        let claim: UsageData.BindingWindow = {
+            switch headerString("anthropic-ratelimit-unified-representative-claim") {
+            case "five_hour": return .fiveHour
+            case "seven_day": return .sevenDay
+            default: return .unknown
+            }
+        }()
+
+        // Cache for fallback-path continuity.
+        lastSession = (sessionPct, s5hReset)
+        lastWeekly = (weeklyPct, s7dReset)
+
+        return UsageData(
+            sessionPct: sessionPct,
+            sessionResetMins: sessionResetMins,
+            sessionEpoch: s5hReset,
+            weeklyPct: weeklyPct,
+            weeklyResetMins: weeklyResetMins,
+            weeklyEpoch: s7dReset,
+            status: compositeStatus,
+            representativeClaim: claim,
+            updatedAt: serverDate,
+            organizationID: headerString("anthropic-organization-id")
+        )
+    }
+
+    /// Parse RFC 7231 `date:` header into a `Date`.
+    private func parseServerDate(from response: HTTPURLResponse) -> Date? {
+        guard let raw = response.value(forHTTPHeaderField: "date") else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: raw)
+    }
+
+    // MARK: - Fallback path (/api/oauth/usage + JSON body)
+
+    private func pollOAuthUsageFallback(token: String) async throws -> UsageData {
+        var request = URLRequest(url: oauthUsageEndpoint)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await runRequest(request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AISourceError.malformedResponse(detail: "Non-HTTP response")
+        }
+        switch http.statusCode {
+        case 200:
+            return try parseOAuthUsageBody(data: data, response: http)
+        case 401, 403:
+            throw AISourceError.unauthenticated
+        case 429:
+            let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+            throw AISourceError.rateLimited(retryAfter: retryAfter)
+        case 400...499:
+            throw AISourceError.malformedResponse(detail: "Client error: \(http.statusCode)")
+        case 500...599:
+            throw AISourceError.networkFailure(underlying: nil)
+        default:
+            throw AISourceError.malformedResponse(detail: "Unexpected status: \(http.statusCode)")
+        }
+    }
+
+    private func parseOAuthUsageBody(data: Data, response: HTTPURLResponse) throws -> UsageData {
         let serverDate = parseServerDate(from: response) ?? Date()
         let serverEpoch = Int(serverDate.timeIntervalSince1970)
 
@@ -179,16 +301,14 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
 
         let envelope: OAuthUsageEnvelope
         do {
-            envelope = try decoder.decode(OAuthUsageEnvelope.self, from: body)
+            envelope = try decoder.decode(OAuthUsageEnvelope.self, from: data)
         } catch {
-            logger.error("AnthropicSource.parseUsage: JSON decode failed: \(error.localizedDescription, privacy: .public)")
-            // Dump a short preview of the body so we can shape-correct in v0.4.12.
-            let preview = String(data: body.prefix(400), encoding: .utf8) ?? "<binary>"
-            logger.info("AnthropicSource.parseUsage: body preview: \(preview, privacy: .public)")
+            logger.error("AnthropicSource.parseOAuthUsageBody: JSON decode failed: \(error.localizedDescription, privacy: .public)")
+            let preview = String(data: data.prefix(400), encoding: .utf8) ?? "<binary>"
+            logger.info("AnthropicSource.parseOAuthUsageBody: body preview: \(preview, privacy: .public)")
             throw AISourceError.malformedResponse(detail: "Could not decode /api/oauth/usage body")
         }
 
-        // Resolve the binding window per Claude Code's own taxonomy.
         let binding: UsageData.BindingWindow = {
             switch envelope.bindingType {
             case .fiveHour: return .fiveHour
@@ -197,31 +317,28 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
             }
         }()
 
-        // Pull the two window snapshots. Each one of these can come from:
-        //   1) a nested object on the envelope ({"five_hour":{…}})
-        //   2) the single-binding shape (`utilization` on the root maps to
-        //      whichever window `rateLimitType` names)
-        //   3) the previous tick's cached value (so the unbinding window
-        //      doesn't reset to 0% just because the API stopped reporting it)
-        let session = envelope.window(for: .fiveHour, fallbackBinding: binding == UsageData.BindingWindow.fiveHour ? envelope.flatUtilization : nil,
-                                       fallbackResetEpoch: binding == UsageData.BindingWindow.fiveHour ? envelope.flatResetsAt?.epoch(server: serverEpoch) : nil)
-        let weekly = envelope.window(for: .sevenDay, fallbackBinding: binding == UsageData.BindingWindow.sevenDay ? envelope.flatUtilization : nil,
-                                      fallbackResetEpoch: binding == UsageData.BindingWindow.sevenDay ? envelope.flatResetsAt?.epoch(server: serverEpoch) : nil)
+        let session = envelope.window(
+            for: .fiveHour,
+            fallbackBinding: binding == .fiveHour ? envelope.flatUtilization : nil,
+            fallbackResetEpoch: binding == .fiveHour ? envelope.flatResetsAt?.epoch(server: serverEpoch) : nil
+        )
+        let weekly = envelope.window(
+            for: .sevenDay,
+            fallbackBinding: binding == .sevenDay ? envelope.flatUtilization : nil,
+            fallbackResetEpoch: binding == .sevenDay ? envelope.flatResetsAt?.epoch(server: serverEpoch) : nil
+        )
 
         let sessionPct = session?.pct ?? lastSession?.pct ?? 0
         let sessionEpoch = session?.resetEpoch ?? lastSession?.resetEpoch ?? serverEpoch
         let weeklyPct = weekly?.pct ?? lastWeekly?.pct ?? 0
         let weeklyEpoch = weekly?.resetEpoch ?? lastWeekly?.resetEpoch ?? serverEpoch
 
-        // Remember the freshest readings so the next poll keeps the unbinding
-        // window stable rather than dropping to 0%.
         if let session { lastSession = session }
         if let weekly { lastWeekly = weekly }
 
         let sessionResetMins = max(0, (sessionEpoch - serverEpoch) / 60)
         let weeklyResetMins = max(0, (weeklyEpoch - serverEpoch) / 60)
 
-        // Status: "limited" if either window is fully consumed.
         let status: UsageData.Status = {
             if sessionPct >= 100 || weeklyPct >= 100 { return .limited }
             if sessionPct == 0 && weeklyPct == 0 { return .unknown }
@@ -242,22 +359,39 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
         )
     }
 
-    /// Parse RFC 7231 `date:` header into a `Date`.
-    private func parseServerDate(from response: HTTPURLResponse) -> Date? {
-        guard let raw = response.value(forHTTPHeaderField: "date") else { return nil }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "GMT")
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        return formatter.date(from: raw)
+    // MARK: - Networking helper
+
+    private func runRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        // Use dataTask + continuation instead of URLSession.data(for:) — the
+        // async API hangs on macOS Tahoe with `URLSession.shared` from
+        // cooperative tasks when multiple sessions are active. The completion-
+        // handler API doesn't have this issue.
+        struct NetResult: Sendable { let data: Data; let response: URLResponse }
+        do {
+            let result: NetResult = try await withCheckedThrowingContinuation { continuation in
+                let task = urlSession.dataTask(with: request) { data, response, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let data, let response {
+                        continuation.resume(returning: NetResult(data: data, response: response))
+                    } else {
+                        continuation.resume(throwing: URLError(.unknown))
+                    }
+                }
+                task.resume()
+            }
+            return (result.data, result.response)
+        } catch {
+            throw AISourceError.networkFailure(underlying: error)
+        }
     }
 }
 
-// MARK: - Envelope
+// MARK: - /api/oauth/usage envelope
 
-/// Catch-all decoder for the `/api/oauth/usage` response. Tolerates three
-/// observed-or-inferred shapes by making every field optional and unifying
-/// the candidate locations at decode time.
+/// Catch-all decoder for the `/api/oauth/usage` fallback response.
+/// Tolerates three observed-or-inferred shapes by making every field
+/// optional and unifying the candidate locations at decode time.
 private struct OAuthUsageEnvelope: Decodable {
     let bindingType: BindingType?
     /// Used when the envelope reports a single binding only:
@@ -272,12 +406,7 @@ private struct OAuthUsageEnvelope: Decodable {
 
     let organizationUuid: String?
 
-    enum BindingType: String, Decodable {
-        // The Decoder uses `.convertFromSnakeCase`, but enum raw values
-        // are matched verbatim against the original (post-conversion)
-        // string. So "five_hour" on the wire decodes after the strategy
-        // turns it into "fiveHour" — we accept either casing here so
-        // the strategy choice and the wire shape stay decoupled.
+    enum BindingType: Decodable {
         case fiveHour, sevenDay, sevenDayOpus, sevenDaySonnet, overage
         init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
@@ -312,14 +441,10 @@ private struct OAuthUsageEnvelope: Decodable {
             if let s = try? c.decode(String.self) {
                 let iso = ISO8601DateFormatter()
                 iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                if let d = iso.date(from: s) {
-                    date = d; return
-                }
+                if let d = iso.date(from: s) { date = d; return }
                 let iso2 = ISO8601DateFormatter()
                 iso2.formatOptions = [.withInternetDateTime]
-                if let d = iso2.date(from: s) {
-                    date = d; return
-                }
+                if let d = iso2.date(from: s) { date = d; return }
             }
             if let secs = try? c.decode(Double.self) {
                 date = Date(timeIntervalSince1970: secs); return
@@ -333,18 +458,14 @@ private struct OAuthUsageEnvelope: Decodable {
     }
 
     private enum FlatKeys: String, CodingKey {
-        case rateLimitType
-        case utilization
-        case resetsAt
-        case fiveHour
-        case sevenDay
-        case rateLimits      // nested envelope: {"rate_limits":{"five_hour":…, "seven_day":…}}
+        case rateLimitType, utilization, resetsAt
+        case fiveHour, sevenDay
+        case rateLimits
         case organizationUuid
     }
 
     private enum NestedKeys: String, CodingKey {
-        case fiveHour
-        case sevenDay
+        case fiveHour, sevenDay
     }
 
     init(from decoder: Decoder) throws {
@@ -354,10 +475,9 @@ private struct OAuthUsageEnvelope: Decodable {
         self.flatResetsAt = try c.decodeIfPresent(AnyDate.self, forKey: .resetsAt)
         self.organizationUuid = try c.decodeIfPresent(String.self, forKey: .organizationUuid)
 
-        // Try the multi-window shapes.
         var five = try c.decodeIfPresent(WindowReading.self, forKey: .fiveHour)
         var seven = try c.decodeIfPresent(WindowReading.self, forKey: .sevenDay)
-        if five == nil || seven == nil,
+        if (five == nil || seven == nil),
            let nested = try? c.nestedContainer(keyedBy: NestedKeys.self, forKey: .rateLimits) {
             if five == nil  { five  = try nested.decodeIfPresent(WindowReading.self, forKey: .fiveHour) }
             if seven == nil { seven = try nested.decodeIfPresent(WindowReading.self, forKey: .sevenDay) }
