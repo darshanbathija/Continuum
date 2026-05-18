@@ -59,10 +59,11 @@ public final class DaemonChatStoreRegistry {
     /// passenger-seat use and well below memory concerns at ~5MB/store.
     public static let maxResidentStores: Int = 20
 
-    /// File-URL resolver, injected so Phase 0b can swap in a real
-    /// `SessionFileResolver` (with Codex respawn lineage tracking).
-    /// Default: the legacy Claude path resolution + newest-Codex-rollout
-    /// fallback used by `AgentControlServer.handleGetChatSnapshot` today.
+    /// File-URL resolver, injected. AppRuntime wires in the Phase 0b
+    /// `SessionFileResolver` (with Codex respawn-lineage tracking) via a
+    /// closure that delegates to it. The default fallback exists for
+    /// tests and pre-Phase-0b back-compat — it mirrors the legacy
+    /// `AgentControlServer.handleGetChatSnapshot` path-resolution rules.
     private let resolveURL: @MainActor (UUID, AgentSession) -> URL?
 
     public init(

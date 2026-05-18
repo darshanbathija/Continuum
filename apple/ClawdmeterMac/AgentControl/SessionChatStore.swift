@@ -549,7 +549,7 @@ public final class SessionChatStore: ObservableObject {
     /// the JSONLs are filed under the parent's encoded name. `RepoIdentity.normalize`
     /// has already descended us into the git child, but the project dir is
     /// for the parent. Walking up catches it.
-    public static func resolveSessionFileURL(repoCwd: String) -> URL? {
+    public nonisolated static func resolveSessionFileURL(repoCwd: String) -> URL? {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let projects = home.appendingPathComponent(".claude/projects")
         var current = (repoCwd as NSString).standardizingPath
@@ -566,14 +566,14 @@ public final class SessionChatStore: ObservableObject {
 
     /// Claude's project-dir name encoding. `/`, `_`, and ` ` all collapse
     /// to `-`. Letter case is preserved.
-    static func encodeCwd(_ cwd: String) -> String {
+    nonisolated static func encodeCwd(_ cwd: String) -> String {
         cwd
             .replacingOccurrences(of: "_", with: "-")
             .replacingOccurrences(of: " ", with: "-")
             .replacingOccurrences(of: "/", with: "-")
     }
 
-    private static func newestJSONL(in projects: URL, claudeEncoded: String) -> URL? {
+    private nonisolated static func newestJSONL(in projects: URL, claudeEncoded: String) -> URL? {
         let dir = projects.appendingPathComponent(claudeEncoded)
         guard FileManager.default.fileExists(atPath: dir.path) else { return nil }
         guard let contents = try? FileManager.default.contentsOfDirectory(

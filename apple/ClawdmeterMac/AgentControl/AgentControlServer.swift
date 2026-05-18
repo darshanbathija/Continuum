@@ -49,6 +49,11 @@ public final class AgentControlServer {
     /// HTTP handler (snapshotStore) and, in Phase 2, by the WS dispatcher
     /// for `chat-subscribe` long-lived subscriptions (acquire / release).
     private let chatStoreRegistry: DaemonChatStoreRegistry
+    /// Phase 0b: shared file resolver. Owns the Codex respawn-lineage
+    /// tracking — `approve-plan` invalidates the resolver so the next
+    /// chat-snapshot request rescans for the new rollout file. The
+    /// `chatStoreRegistry` delegates JSONL URL resolution to this.
+    private let chatFileResolver: SessionFileResolver
     /// T18 Wire Inspector: per-connection request context so the
     /// outgoing-response recorder can tag entries with the original
     /// method+path. Each NWConnection serves one request before
@@ -94,7 +99,8 @@ public final class AgentControlServer {
         tmux: TmuxControlClient,
         notifications: NotificationDispatcher,
         whois: TailscaleWhois = .shared,
-        chatStoreRegistry: DaemonChatStoreRegistry? = nil
+        chatStoreRegistry: DaemonChatStoreRegistry? = nil,
+        chatFileResolver: SessionFileResolver? = nil
     ) {
         self.pairingTokens = pairingTokens
         self.repoIndex = repoIndex
@@ -102,11 +108,24 @@ public final class AgentControlServer {
         self.tmux = tmux
         self.notifications = notifications
         self.whois = whois
-        // The default `DaemonChatStoreRegistry()` is @MainActor-isolated, so
-        // the parameter default has to be `nil` (the default expression
-        // wouldn't pick up the enclosing actor isolation). Resolve here
-        // inside the @MainActor init body where the construction is legal.
-        self.chatStoreRegistry = chatStoreRegistry ?? DaemonChatStoreRegistry()
+        // Phase 0b: the file resolver delegates Claude lookups to
+        // `SessionChatStore.resolveSessionFileURL(repoCwd:)` and handles
+        // Codex respawn lineage itself. The default `~/.codex/sessions`
+        // path is correct for production; tests pass a tmpdir.
+        let resolver = chatFileResolver ?? SessionFileResolver(
+            resolveClaudeURL: { session in
+                let cwd = session.worktreePath ?? session.repoKey
+                return SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
+            }
+        )
+        self.chatFileResolver = resolver
+        // Phase 0a + 0b: the registry's URL resolver delegates to the
+        // shared `SessionFileResolver`. Same default-isolation note as
+        // before applies: the parameter default has to be `nil` and the
+        // construction lives inside the @MainActor init body.
+        self.chatStoreRegistry = chatStoreRegistry ?? DaemonChatStoreRegistry(
+            resolveURL: { _, session in resolver.resolve(session: session) }
+        )
     }
 
     /// Hand the daemon the live usage publishers + analytics store
@@ -1443,14 +1462,10 @@ public final class AgentControlServer {
         } else {
             // Cold-store fallback: legacy synchronous reparse path. The
             // background store will catch up; the next request gets the
-            // warm snapshot.
-            let cwd = session.worktreePath ?? session.repoKey
-            let url: URL?
-            if session.agent == .claude {
-                url = SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
-            } else {
-                url = newestCodexJSONL()
-            }
+            // warm snapshot. Phase 0b: URL resolution goes through the
+            // shared `SessionFileResolver` so Codex respawn lineage is
+            // honored even in the cold path.
+            let url = chatFileResolver.resolve(session: session)
             let messages = url.map { TranscriptLoader.load(from: $0, maxMessages: 500) } ?? []
             var builder = ChatItemBuilder()
             for message in messages {
@@ -1978,6 +1993,14 @@ public final class AgentControlServer {
                 sessionId: uuid, sourcePeer: peer,
                 agent: session.agent.rawValue
             )
+            // Phase 0b: Codex respawn-lineage. approve-plan kills the
+            // plan-mode pane and spawns a fresh rollout (new JSONL file
+            // with a new Codex session id). Invalidate the resolver's
+            // cached link so the next chat-snapshot request rescans for
+            // the new file. Claude's resume path keeps the same JSONL so
+            // invalidation there is a cheap no-op. Belt to the suspenders
+            // anyway: invalidate both paths.
+            chatFileResolver.invalidate(sessionId: uuid)
             sendResponse(.ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)), on: connection)
         } catch {
             serverLogger.error("approve-plan failed: \(error.localizedDescription, privacy: .public)")
