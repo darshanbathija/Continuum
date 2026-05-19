@@ -21,6 +21,101 @@ follow-up that didn't make the v2.0 ship but is worth picking up.
 > ConversationFilter, and the cross-platform shared container all
 > deferred to v0.6 / v1.1 follow-ups below.
 
+## v0.7 — Gemini provider follow-ups (2026-05-19)
+
+Triaged from /plan-ceo-review D13 + /plan-eng-review X3-C. The Mac UI for
+Gemini shipped in v0.5.11 on top of v0.5.10's shared-package work. These
+are the explicit deferrals.
+
+### OpenRouter integration (next branch)
+- **What**: 4th provider — live model catalog from `/api/v1/models`, API key
+  + "use ours (coming soon)" toggle, model selector tray with featured
+  models highlighted (DeepSeek V4, Kimi K2.6, Nemotron 3 Free, Gemma Free),
+  composer send-path.
+- **Why**: Half of the original 2026-05-19 user ask (D1 in CEO review
+  deferred OpenRouter to its own design pass). OpenRouter's send-path is
+  its own non-trivial design (HTTP → OR, SSE streaming parse, tool-use
+  mapping, abort), so a separate feature branch is right.
+- **Hook**: Replay the Antigravity-discovery pattern — OR exposes
+  `/api/v1/auth/key` + `/api/v1/credits` for usage. Reuse the v6
+  byProvider dict + `/usage` dual-shape envelope from v0.5.10/v0.5.11.
+- **Effort**: M with CC (composer send-path is the chunk).
+
+### Antigravity unified-quota slice (Claude/GPT-OSS)
+- **What**: Surface Antigravity's own allocated Claude / GPT-OSS quotas
+  as a separate "Antigravity" provider (distinct bucket from
+  AnthropicSource's Max plan + CodexSource's ChatGPT plan).
+- **Why**: For users paying for Antigravity, those budgets matter and
+  aren't visible elsewhere — Antigravity's screenshot showed unified
+  quota across Gemini + Claude + GPT-OSS.
+- **Hook**: Same `cloudcode-pa.googleapis.com/v1internal:loadCodeAssist`
+  endpoint already used by GeminiSource. Just don't filter on `gemini-*`.
+- **Effort**: S with CC.
+
+### Per-request token estimation for Gemini cost
+- **What**: When Google publishes per-request token telemetry (or we
+  synthesize via `gemini -o stream-json` line-level token counts), compute
+  $cost for Gemini analytics rows. Removes the "Gemini = N reqs / no $"
+  schema-split.
+- **Why**: Gemini cells currently show "N reqs" — inconsistent with the
+  $cost surface on Claude/Codex cells.
+- **Hook**: `GeminiUsageParser` already emits `UsageRecord` per request;
+  plumb token counts through `TokenTotals` (the `requestCount` field is
+  already there; add `inputTokens`/`outputTokens` whenever discoverable).
+  Pricing.swift's LiteLLM snapshot now covers `gemini-*` and `gemma-*`
+  model keys (see v0.5.11 refresh-pricing.sh extension).
+- **Effort**: S with CC once Google publishes the telemetry.
+
+### iOS Gemini section in Live tab + Settings paste-token
+- **What**: iOS Live tab grows a 3rd Gemini section reading the
+  Mac-mirrored OAuth token (via iCloud Keychain) OR an iOS paste-token
+  fallback. iOS Settings gains a "Gemini token" section after the
+  Anthropic-token section.
+- **Why**: iOS users currently see Claude + Codex in the Live tab; the
+  Mac-side v0.5.11 update introduces a 3rd provider that iOS doesn't
+  surface yet. Analytics tab already picks Gemini up automatically via
+  the shared `AnalyticsTotalsGrid` refactor.
+- **Hook**: `UsageModel` extends to own a `geminiModel` parallel to the
+  existing `anthropicModel`. `PastedGeminiTokenProvider` (iCloud Keychain
+  paste, mirrors `PastedAnthropicTokenProvider`). Wire-version gate on
+  `serverWireVersion >= geminiMinimum`.
+- **Effort**: M with CC.
+
+### Watch Gemini meter + complications
+- **What**: Watch app gains a 3rd Gemini meter alongside Claude + Codex;
+  complications carry `geminiUsage` gated on wireVersion.
+- **Hook**: `WatchUsageModel` extends. `WatchTokenBridge` carries
+  per-provider tuples (token + UsageData) instead of single-provider.
+- **Effort**: S with CC.
+
+### Gemini iOS Live Activity (D5, accepted via SELECTIVE EXPANSION)
+- **What**: Lock screen + Dynamic Island compact/expanded + always-on
+  Live Activity for Gemini's daily quota. Push triggers on 80% / 95% /
+  100% threshold crosses.
+- **Hook**: Reuses `LiveActivityCoordinator` + `MacAPNSPusher` patterns.
+  New `GeminiLiveActivityAttributes` struct mirrors
+  `SessionLiveActivityAttributes`. Mac-side pusher gains a Gemini
+  fingerprint (similar to `AppRuntime.liveActivityFingerprint`).
+- **Effort**: M with CC.
+
+### AgentSpawner.geminiArgv + Sessions runtime (E3 #2, Codex P1(4))
+- **What**: `AgentSpawner` gains a Gemini case so the chat composer can
+  spawn a `gemini` CLI session in tmux. Includes `GeminiJSONLParser` for
+  `gemini -o stream-json` output and Composer model picker extension.
+- **Hook**: Mirrors `claudeArgv` / `codexArgv` patterns. The user already
+  has `gemini` CLI 0.42.0 at `/opt/homebrew/bin/gemini` with stream-json
+  output format support.
+- **Effort**: L with CC.
+
+### Adversarial Google quota endpoint test fixtures (D3 declined)
+- **What**: Mock cloudcode-pa with 401/403/429/500/malformed-body/
+  missing-quota-field fixtures. Catches Google rotating the endpoint
+  shape before users see broken gauges.
+- **Why**: D3 was declined in CEO review but the eng review's Codex
+  outside-voice flagged this as the most-likely failure mode. If we
+  ship and Google rotates, retro-actively add the fixtures.
+- **Effort**: S with CC.
+
 ## v0.6 / v1.1 — WhatsApp-smooth Sessions follow-ups (2026-05-19)
 
 ### APNS plan-mode push + UNNotificationAction (deferred from v0.5.0 D6)

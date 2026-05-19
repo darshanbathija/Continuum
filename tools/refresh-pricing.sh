@@ -6,8 +6,9 @@
 # Per plan A20 + A3: we ship an embedded snapshot rather than fetching at
 # runtime so analytics works offline and our totals are reproducible.
 #
-# Filter rule: keep keys matching `claude-*`, `gpt-*`, or `o[0-9]+*` so the
-# snapshot covers Anthropic + OpenAI/Codex models without dragging in every
+# Filter rule: keep keys matching `claude-*`, `gpt-*`, `o[0-9]+*`,
+# `gemini-*`, or `gemma-*` so the snapshot covers Anthropic + OpenAI/Codex
+# + Google (Gemini provider added 2026-05-19) without dragging in every
 # random provider LiteLLM tracks.
 #
 # Usage:
@@ -28,11 +29,11 @@ curl -fsSL "$SRC" -o "$RAW"
 
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-echo "Filtering to claude-* / gpt-* / o[0-9]* models..."
+echo "Filtering to claude-* / gpt-* / o[0-9]* / chatgpt-* / gemini-* / gemma-* models..."
 jq --arg src "$SRC" --arg ts "$NOW" '
   to_entries
   | map(select(
-      .key | test("^(claude-|gpt-|o[0-9]+($|-)|chatgpt-)"; "i")
+      .key | test("^(claude-|gpt-|o[0-9]+($|-)|chatgpt-|gemini-|gemma-)"; "i")
     ))
   | from_entries
   | { _meta: { source: $src, capturedAt: $ts }, models: . }

@@ -4,6 +4,26 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.5.11] - 2026-05-19
+
+### Added
+
+- **Gemini provider is now end-to-end on Mac.** v0.5.10 shipped the shared-package scaffolding (`AgentKind.gemini`, `ModelCatalog.gemini`, `GeminiSource`, `GeminiTokenProvider`, `GeminiUsageParser`, `byProvider` snapshot refactor, wire v6); v0.5.11 wires the Mac UI on top so users see the third provider end-to-end:
+  - **3rd menu bar item.** `AppDelegate.geminiController` (`NSStatusItem`) tracks the new `clawdmeter.gemini.menuBarShown` AppStorage key. Toggle from the dashboard's "Menu bar:" row.
+  - **3rd dashboard column with responsive collapse.** ≥1200pt = Claude / Codex / Gemini side-by-side; 800-1200pt = Claude+Codex top, Gemini below; <800pt = single-column vertical. Mirrors the Sessions tab's <1100pt collapse pattern (eng review D10).
+  - **New "Providers" Settings tab.** `ProvidersSettingsView` between General and Sessions surfaces per-provider connection state plus a stale-token banner for Gemini when `~/.gemini/oauth_creds.json`'s `expiry_date` is in the past (D4 UX — includes a Copy-command button for `gemini auth login`).
+  - **`ProviderConfig.supportsAutoRevive` flag.** Replaces the hardcoded `model.config.id == "claude"` check in `DashboardView.swift:365` and `PopoverView.swift:252`. Claude → true; Codex/Gemini → false. Eliminates a known code smell per the CEO review's E3 #3 / Codex P1(6) refactor-depth finding.
+  - **`MenuBarGaugeView.isTemplateAsset` recognises `GeminiLogo`.** New `GeminiLogo.svg` shipped in both Mac `Resources/` and iOS `Assets.xcassets/`.
+- **`UsageEnvelope` extended with per-provider fallback (X1 fix).** The `/usage` HTTP response now ships dual-shape: legacy `{claude, codex}` top-level fields PLUS a new `usage: [String: UsageData]` dict. Clients call `usageData(for: providerID)` which prefers the dict per-provider and falls back to legacy independently for each id. Prevents data-loss when the dict is partial (e.g. server emits `usage: {gemini: …}` while legacy fields carry Claude + Codex — naïve envelope-level fallback would drop Claude + Codex; per-provider fallback merges all three). `AgentControlServer.handleGetUsage` emits both shapes; legacy fields are removed at wireVersion 7 (future v0.8).
+- **`GeminiProviderLaneATests` (12 new tests).** Cover X2 TokenTotals back-compat (missing `requestCount` decodes to 0, not `keyNotFound`); `byProvider` Codable round-trip + legacy v8 migration on decode; compat getters returning `.empty` for missing keys (E3 #4); `AgentKind` tolerant decoder for unknown raws (D9); per-provider envelope fallback (E2/X1); v5 envelope decodes cleanly on v6 client; `GeminiTokenProvider` parses real-shape `oauth_creds.json` + detects expiry; `GeminiUsageParser` user-turn extraction with slash-command filtering. 276 → 288 shared tests, 0 failures.
+- **`tools/refresh-pricing.sh` extended.** Filter regex now matches `gemini-*` and `gemma-*` alongside the existing `claude-*` / `gpt-*` / `o[0-9]+*` / `chatgpt-*` patterns so the embedded `pricing.json` covers Google's model name families.
+- **`TODOS.md` v0.7 section.** Captures the explicit deferrals from the eng review: OpenRouter integration, Antigravity unified-quota slice, per-request token estimation for Gemini cost, iOS Gemini Live tab, Watch Gemini meter, iOS Live Activity for Gemini (D5), `AgentSpawner.geminiArgv` + Sessions runtime (E3 #2), and adversarial Google quota endpoint tests (D3 retro). Each entry has implementation hooks for the follow-up branch.
+
+### Build
+
+- Mac + iOS + Watch schemes all build clean (`CODE_SIGNING_ALLOWED=NO`).
+- Pre-existing Swift 6 warnings (NSLock-in-async, `AppModel.consume` actor isolation) inherited from `CodexTokenProvider` / existing `AppModel` patterns; not introduced by this branch.
+
 ## [0.5.10 build 43] - 2026-05-19
 
 ### Fixed
