@@ -4,6 +4,13 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.5.7 build 40] - 2026-05-19
+
+### Fixed
+
+- **iPhone long-press on session rows now triggers the rename context menu.** Previously the `.contextMenu` was attached to the outer `NavigationLink` which causes iOS 17's `List` to swallow the long-press gesture in favor of NavigationLink's own preview/peek behavior. Moved the modifier inside the `NavigationLink`'s label so it attaches to `SessionRow`'s hit-test surface directly. Both the repo-grouped and date-grouped paths fixed.
+- **Rename is now also a leading swipe action** alongside Approve / Interrupt. Discoverable from the same gesture users already know, and works regardless of context-menu quirks.
+
 ## [0.5.6 build 39] - 2026-05-19
 
 ### Fixed

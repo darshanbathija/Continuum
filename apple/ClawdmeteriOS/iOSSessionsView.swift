@@ -249,19 +249,31 @@ struct iOSSessionsView: View {
                 NavigationLink {
                     SessionDetailView(session: session, client: client)
                 } label: {
+                    // v0.5.6 fix: .contextMenu on the OUTER row gets
+                    // swallowed by NavigationLink's long-press in iOS 17
+                    // List rows — attach it to the label content so the
+                    // long-press hits the SessionRow's hit-test surface
+                    // first. Plus a leading swipe so the action is
+                    // actually discoverable.
                     SessionRow(session: session)
+                        .contextMenu {
+                            Button {
+                                renameTarget = session
+                                renameInput = session.customName ?? ""
+                            } label: {
+                                Label("Rename…", systemImage: "pencil")
+                            }
+                        }
                 }
-                // v0.5.4 long-press → rename.
-                .contextMenu {
+                // Phase 5 swipe-leading: positive-intent quick actions.
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
                     Button {
                         renameTarget = session
                         renameInput = session.customName ?? ""
                     } label: {
-                        Label("Rename…", systemImage: "pencil")
+                        Label("Rename", systemImage: "pencil")
                     }
-                }
-                // Phase 5 swipe-leading: positive-intent quick actions.
-                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                    .tint(.indigo)
                     if session.planText != nil && session.status == .planning {
                         Button {
                             Task { await client.approvePlan(sessionId: session.id) }
@@ -547,18 +559,28 @@ struct iOSSessionsView: View {
             NavigationLink {
                 SessionDetailView(session: session, client: client)
             } label: {
+                // v0.5.6: contextMenu must live on the label, not the
+                // outer NavigationLink, for iOS-17 List long-press to
+                // fire reliably. Swipe action backs the same intent for
+                // discoverability.
                 SessionRow(session: session)
+                    .contextMenu {
+                        Button {
+                            renameTarget = session
+                            renameInput = session.customName ?? ""
+                        } label: {
+                            Label("Rename…", systemImage: "pencil")
+                        }
+                    }
             }
-            // v0.5.4 long-press → rename (date-grouped path).
-            .contextMenu {
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
                 Button {
                     renameTarget = session
                     renameInput = session.customName ?? ""
                 } label: {
-                    Label("Rename…", systemImage: "pencil")
+                    Label("Rename", systemImage: "pencil")
                 }
-            }
-            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                .tint(.indigo)
                 if session.planText != nil && session.status == .planning {
                     Button {
                         Task { await client.approvePlan(sessionId: session.id) }
