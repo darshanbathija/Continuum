@@ -19,6 +19,17 @@ struct iOSChatTranscriptView: View {
     let banner: BannerStyle?
     @ObservedObject var client: AgentControlClient
 
+    /// v0.5.8: Recent JSONL row + its repo. When set, tapping a tray
+    /// option on an `AskUserQuestion` in this transcript triggers
+    /// `continueReadOnly(...)` to promote the synthetic session and
+    /// forward the answer as the seed prompt. Nil for non-outside
+    /// callers — the tray then renders read-only.
+    var recent: RecentSession? = nil
+    var repo: AgentRepo? = nil
+    /// v0.5.8: parent callback fired when a tray-driven answer promotes
+    /// the session to live. Mirrors `iOSComposerBar`'s `onPromoted`.
+    var onPromoted: ((UUID) -> Void)? = nil
+
     @State private var messages: [ChatMessage] = []
     @State private var truncated: Bool = false
     @State private var isLoading: Bool = true
@@ -28,6 +39,15 @@ struct iOSChatTranscriptView: View {
     /// When false the "Jump to latest" floating CTA appears and a reload
     /// won't auto-scroll the user out of history.
     @State private var userPinnedToBottom: Bool = true
+    /// v0.5.8: per-tool_use_id selection state for AskUserQuestion
+    /// trays embedded in the transcript. Persists across reloads
+    /// triggered by the `.task(id: jsonlPath)` modifier.
+    @State private var askUserQuestionSelections: [String: [String: Set<String>]] = [:]
+    /// v0.5.8: tool_use_ids whose tray has fired an answer already
+    /// (locally). Used to disable the send button until the parent
+    /// promotes — there's no live tool_result on a synthetic outside
+    /// session.
+    @State private var answeredAsk: Set<String> = []
 
     enum BannerStyle {
         case readOnlyOutside
@@ -203,7 +223,79 @@ struct iOSChatTranscriptView: View {
         case .message(let m):
             messageBubble(m)
         case .toolRun(_, let pairs):
-            toolRunCard(pairs: pairs)
+            // v0.5.8: parity with the live chat thread. Partition by
+            // tool kind: Edit/MultiEdit/Write → EditDiffRow chips,
+            // AskUserQuestion → interactive tray, everything else →
+            // existing tool-run card.
+            let editPairs = pairs.filter { $0.call.editStats != nil }
+            let askPairs  = pairs.filter { $0.call.askUserQuestion != nil }
+            let otherPairs = pairs.filter {
+                $0.call.editStats == nil && $0.call.askUserQuestion == nil
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(editPairs, id: \.call.id) { pair in
+                    if let stats = pair.call.editStats {
+                        EditDiffRow(stats: stats, resultBody: pair.result?.body)
+                    }
+                }
+                ForEach(askPairs, id: \.call.id) { pair in
+                    if let q = pair.call.askUserQuestion {
+                        let toolUseId = pair.call.id
+                        AskUserQuestionTray(
+                            question: q,
+                            answered: pair.result != nil || answeredAsk.contains(toolUseId),
+                            selections: Binding(
+                                get: { askUserQuestionSelections[toolUseId] ?? [:] },
+                                set: { askUserQuestionSelections[toolUseId] = $0 }
+                            )
+                        ) { _, options in
+                            handleAskUserQuestionAnswer(
+                                toolUseId: toolUseId,
+                                options: options
+                            )
+                        }
+                    }
+                }
+                if !otherPairs.isEmpty {
+                    toolRunCard(pairs: otherPairs)
+                }
+            }
+        }
+    }
+
+    /// v0.5.8 outside-session answer routing. When the transcript view
+    /// is rendering a Recent JSONL row (`recent` is set), tapping a
+    /// tray option promotes the synthetic session via
+    /// `continueReadOnly(prompt: <answer>)` — same single-shot path the
+    /// composer uses for typed prompts. The matching `onPromoted`
+    /// callback flips parent navigation to the new live session.
+    ///
+    /// When `recent` is nil (transcript view is being used outside the
+    /// outside-session flow), the tap is a no-op aside from marking
+    /// the tray as answered locally.
+    private func handleAskUserQuestionAnswer(
+        toolUseId: String,
+        options: [AskUserQuestion.Option]
+    ) {
+        let answer = options.map(\.label).joined(separator: ", ")
+        answeredAsk.insert(toolUseId)
+        guard let recent, let repo else { return }
+        Task {
+            let newId = await client.continueReadOnly(
+                jsonlPath: recent.path,
+                repoKey: repo.key,
+                agent: recent.provider,
+                prompt: answer
+            )
+            if let newId {
+                await client.refreshSessions()
+                onPromoted?(newId)
+            } else {
+                // continueReadOnly failed; re-enable the tray so the
+                // user can retry. We DON'T clear the selection — they
+                // shouldn't have to pick again.
+                await MainActor.run { answeredAsk.remove(toolUseId) }
+            }
         }
     }
 

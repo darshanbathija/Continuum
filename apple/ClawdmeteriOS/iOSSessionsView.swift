@@ -859,7 +859,16 @@ private struct OutsideSessionDetailView: View {
             iOSChatTranscriptView(
                 jsonlPath: recent.path,
                 banner: .readOnlyOutside,
-                client: client
+                client: client,
+                recent: recent,
+                repo: repo,
+                onPromoted: { newId in
+                    // Same as the composer's onPromoted — flip
+                    // navigation to the new live session.
+                    if let live = client.sessions.first(where: { $0.id == newId }) {
+                        promotedSession = live
+                    }
+                }
             )
             iOSComposerBar(
                 mode: .outside(recent: recent, repo: repo),
