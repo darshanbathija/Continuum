@@ -4,6 +4,12 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.5.9 build 42] - 2026-05-19
+
+### Fixed
+
+- **Session rename now actually works on both Mac and iPhone.** v0.5.4's rename alert used `.alert(isPresented: Binding(get: { renameTarget != nil }, set: ...))` to drive presentation off the data target. The closure-captured `renameTarget != nil` read isn't recognized as a SwiftUI dependency, so the binding's `get` never re-evaluates when `renameTarget` flips from nil to non-nil — the alert silently never presents. Both Mac and iPhone hit this; "rename not working" surfaced as nothing happening when the user picked Rename… from the context menu / swipe action. Fixed by moving to the canonical SwiftUI pattern: `@State Bool` for presentation + `presenting:` payload for the data. Trigger sites now also flip `showingRenameAlert = true` after setting the target. Alert presents reliably; Save / Clear name / Cancel buttons fire as expected.
+
 ## [0.5.8 build 41] - 2026-05-19
 
 ### Added

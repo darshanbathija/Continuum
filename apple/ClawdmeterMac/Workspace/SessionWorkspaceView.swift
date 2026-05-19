@@ -276,10 +276,13 @@ private struct SidebarPane: View {
     @AppStorage("clawdmeter.sidebar.sorting")  private var sortingRaw: String  = SessionSorting.recency.rawValue
     @AppStorage("clawdmeter.sidebar.status")   private var statusRaw: String   = SessionStatusFilter.all.rawValue
 
-    /// v0.5.4: rename sheet state. When non-nil, the rename alert is
-    /// up and bound to `renameInput`. Cleared on cancel/save.
+    /// v0.5.4: rename sheet state. v0.5.9: split into a dedicated bool
+    /// + data target — the `Binding(get:set:)` pattern for `isPresented:`
+    /// didn't reliably trigger alert presentation; the canonical pattern
+    /// is `@State Bool` + `presenting:` payload.
     @State private var renameTarget: AgentSession?
     @State private var renameInput: String = ""
+    @State private var showingRenameAlert: Bool = false
 
     private var grouping: SessionGrouping {
         SessionGrouping(rawValue: groupingRaw) ?? .repo
@@ -302,38 +305,36 @@ private struct SidebarPane: View {
             footer
         }
         .background(sidebarBg)
-        // v0.5.4 rename sheet. Bound to renameTarget; presents when set.
+        // v0.5.4 / v0.5.9 rename sheet. Explicit bool + presenting:
+        // payload is the SwiftUI pattern that reliably presents — the
+        // earlier Binding(get:set:) form silently no-op'd because the
+        // closure-captured state read isn't tracked as a dependency.
         .alert(
             "Rename session",
-            isPresented: Binding(
-                get: { renameTarget != nil },
-                set: { presented in
-                    if !presented { renameTarget = nil; renameInput = "" }
-                }
-            )
-        ) {
+            isPresented: $showingRenameAlert,
+            presenting: renameTarget
+        ) { target in
             TextField("Name", text: $renameInput)
                 .textFieldStyle(.roundedBorder)
             Button("Save") {
-                if let target = renameTarget {
-                    model.registry.rename(id: target.id, name: renameInput)
-                }
+                model.registry.rename(id: target.id, name: renameInput)
+                showingRenameAlert = false
                 renameTarget = nil
                 renameInput = ""
             }
             Button("Clear name", role: .destructive) {
-                if let target = renameTarget {
-                    model.registry.rename(id: target.id, name: nil)
-                }
+                model.registry.rename(id: target.id, name: nil)
+                showingRenameAlert = false
                 renameTarget = nil
                 renameInput = ""
             }
             Button("Cancel", role: .cancel) {
+                showingRenameAlert = false
                 renameTarget = nil
                 renameInput = ""
             }
-        } message: {
-            Text(renameTarget.map { "Currently: \($0.displayLabel)" } ?? "")
+        } message: { target in
+            Text("Currently: \(target.displayLabel)")
         }
     }
 
@@ -753,6 +754,7 @@ private struct SidebarPane: View {
                     Button("Rename…") {
                         renameTarget = s
                         renameInput = s.customName ?? ""
+                        showingRenameAlert = true
                     }
                     if s.archivedAt == nil {
                         Button("Archive") { model.registry.archive(id: s.id) }

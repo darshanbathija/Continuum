@@ -20,10 +20,14 @@ struct iOSSessionsView: View {
     /// the user makes a choice for a repo, it sticks for the session.
     @State private var manuallyExpanded: Set<String> = []
     @State private var manuallyCollapsed: Set<String> = []
-    /// v0.5.4 rename sheet state. When non-nil, the rename alert is
-    /// presented and bound to `renameInput`. Cleared on cancel/save.
+    /// v0.5.4 rename sheet state. v0.5.9 split into a dedicated bool +
+    /// data target — SwiftUI's `Binding(get:set:)` pattern for the
+    /// `isPresented:` arg didn't reliably trigger alert presentation
+    /// when `renameTarget` flipped from nil to non-nil. Boolean +
+    /// presenting-payload is the canonical pattern.
     @State private var renameTarget: AgentSession?
     @State private var renameInput: String = ""
+    @State private var showingRenameAlert: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -36,40 +40,37 @@ struct iOSSessionsView: View {
                     repoList
                 }
             }
-            // v0.5.4 rename alert. Triggered from session-row context menus
-            // (long-press). Bound to renameTarget; presents when set.
+            // v0.5.4 / v0.5.9 rename alert. Triggered from session-row
+            // context menus (long-press) + the leading swipe action.
+            // Uses an explicit @State Bool for presentation + the
+            // `presenting:` arg for the data payload — the safer
+            // SwiftUI pattern that always re-evaluates when the bool
+            // flips.
             .alert(
                 "Rename session",
-                isPresented: Binding(
-                    get: { renameTarget != nil },
-                    set: { presented in
-                        if !presented { renameTarget = nil; renameInput = "" }
-                    }
-                )
-            ) {
+                isPresented: $showingRenameAlert,
+                presenting: renameTarget
+            ) { target in
                 TextField("Name", text: $renameInput)
                 Button("Save") {
-                    if let target = renameTarget {
-                        Task { await client.renameSession(sessionId: target.id, name: renameInput) }
-                    }
+                    Task { await client.renameSession(sessionId: target.id, name: renameInput) }
+                    showingRenameAlert = false
                     renameTarget = nil
                     renameInput = ""
                 }
                 Button("Clear name", role: .destructive) {
-                    if let target = renameTarget {
-                        Task { await client.renameSession(sessionId: target.id, name: nil) }
-                    }
+                    Task { await client.renameSession(sessionId: target.id, name: nil) }
+                    showingRenameAlert = false
                     renameTarget = nil
                     renameInput = ""
                 }
                 Button("Cancel", role: .cancel) {
+                    showingRenameAlert = false
                     renameTarget = nil
                     renameInput = ""
                 }
-            } message: {
-                if let target = renameTarget {
-                    Text("Currently: \(target.customName?.isEmpty == false ? target.customName! : target.agent.rawValue.capitalized)")
-                }
+            } message: { target in
+                Text("Currently: \(target.customName?.isEmpty == false ? target.customName! : target.agent.rawValue.capitalized)")
             }
             .navigationTitle("Sessions")
             .navigationBarTitleDisplayMode(.inline)
@@ -260,6 +261,7 @@ struct iOSSessionsView: View {
                             Button {
                                 renameTarget = session
                                 renameInput = session.customName ?? ""
+                                showingRenameAlert = true
                             } label: {
                                 Label("Rename…", systemImage: "pencil")
                             }
@@ -270,6 +272,7 @@ struct iOSSessionsView: View {
                     Button {
                         renameTarget = session
                         renameInput = session.customName ?? ""
+                        showingRenameAlert = true
                     } label: {
                         Label("Rename", systemImage: "pencil")
                     }
@@ -568,6 +571,7 @@ struct iOSSessionsView: View {
                         Button {
                             renameTarget = session
                             renameInput = session.customName ?? ""
+                            showingRenameAlert = true
                         } label: {
                             Label("Rename…", systemImage: "pencil")
                         }
@@ -577,6 +581,7 @@ struct iOSSessionsView: View {
                 Button {
                     renameTarget = session
                     renameInput = session.customName ?? ""
+                    showingRenameAlert = true
                 } label: {
                     Label("Rename", systemImage: "pencil")
                 }
