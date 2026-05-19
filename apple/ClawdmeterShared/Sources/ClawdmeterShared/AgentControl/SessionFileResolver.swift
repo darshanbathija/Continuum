@@ -30,8 +30,10 @@ import Foundation
 public final class SessionFileResolver: @unchecked Sendable {
 
     private let codexSessionsRoot: URL
+    private let geminiTmpRoot: URL
     private let resolveClaudeURL: @Sendable (AgentSession) -> URL?
     private var codexLinks: [UUID: URL] = [:]
+    private var geminiLinks: [UUID: URL] = [:]
     /// Activity-window grace after `session.lastEventAt`. Rollouts modified
     /// more than this far past `lastEventAt` are not considered candidates
     /// for the session (likely belong to a different session entirely).
@@ -41,10 +43,13 @@ public final class SessionFileResolver: @unchecked Sendable {
     public init(
         codexSessionsRoot: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent(".codex/sessions", isDirectory: true),
+        geminiTmpRoot: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent(".gemini/tmp", isDirectory: true),
         activityGrace: TimeInterval = 5 * 60,
         resolveClaudeURL: @escaping @Sendable (AgentSession) -> URL?
     ) {
         self.codexSessionsRoot = codexSessionsRoot
+        self.geminiTmpRoot = geminiTmpRoot
         self.activityGrace = activityGrace
         self.resolveClaudeURL = resolveClaudeURL
     }
@@ -52,10 +57,14 @@ public final class SessionFileResolver: @unchecked Sendable {
     // MARK: - Public API
 
     public func resolve(session: AgentSession) -> URL? {
-        if session.agent == .claude {
+        switch session.agent {
+        case .claude:
             return resolveClaudeURL(session)
+        case .codex:
+            return resolveCodex(session: session)
+        case .gemini:
+            return resolveGemini(session: session)
         }
-        return resolveCodex(session: session)
     }
 
     /// Record a known-good rollout URL for a session id. Called by the
@@ -164,6 +173,93 @@ public final class SessionFileResolver: @unchecked Sendable {
             let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             guard date >= windowStart, date <= windowEnd else { continue }
             if let after = modifiedAfter, date <= after { continue }
+            if date > newestDate {
+                newestDate = date
+                newest = url
+            }
+        }
+        return newest
+    }
+
+    // MARK: - Gemini resolution
+
+    /// Mirror of `resolveCodex` for Gemini sessions. Gemini writes per-
+    /// session JSONL files at `~/.gemini/tmp/<repo-slug>/chats/session-
+    /// <timestamp>-<short-uuid>.jsonl`. The `<short-uuid>` is the first 8
+    /// chars of the session's UUID — so if we know our spawn passed
+    /// `--session-id <uuid>` we could match by prefix, but for the simpler
+    /// case we just pick the newest file whose mtime falls within the
+    /// session's activity window (mirrors Codex logic).
+    private func resolveGemini(session: AgentSession) -> URL? {
+        lock.lock()
+        let cached = geminiLinks[session.id]
+        lock.unlock()
+
+        if let cached, FileManager.default.fileExists(atPath: cached.path) {
+            let cachedMtime = (try? cached.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if let newer = findGeminiChat(for: session, modifiedAfter: cachedMtime),
+               newer != cached {
+                lock.lock()
+                geminiLinks[session.id] = newer
+                lock.unlock()
+                return newer
+            }
+            return cached
+        }
+
+        if let found = findGeminiChat(for: session, modifiedAfter: nil) {
+            lock.lock()
+            geminiLinks[session.id] = found
+            lock.unlock()
+            return found
+        }
+
+        return findNewestGeminiChat()
+    }
+
+    /// Newest `.jsonl` under `~/.gemini/tmp/*/chats/` whose mtime is in
+    /// `session.createdAt … lastEventAt + activityGrace`.
+    private func findGeminiChat(for session: AgentSession, modifiedAfter: Date?) -> URL? {
+        let windowStart = session.createdAt
+        let windowEnd = session.lastEventAt.addingTimeInterval(activityGrace)
+        guard let enumerator = FileManager.default.enumerator(
+            at: geminiTmpRoot,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        var newest: URL?
+        var newestDate = Date.distantPast
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "jsonl" else { continue }
+            // Belt-and-braces: only consider files under a `chats/` parent
+            // dir to skip the per-repo `logs.json` user-prompt stream.
+            guard url.path.contains("/chats/") else { continue }
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            guard date >= windowStart, date <= windowEnd else { continue }
+            if let after = modifiedAfter, date <= after { continue }
+            if date > newestDate {
+                newestDate = date
+                newest = url
+            }
+        }
+        return newest
+    }
+
+    /// Newest `.jsonl` under any `~/.gemini/tmp/*/chats/` — used for the
+    /// synthetic-preview fallback path on Read-only JSONL viewer.
+    public func findNewestGeminiChat() -> URL? {
+        guard let enumerator = FileManager.default.enumerator(
+            at: geminiTmpRoot,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        var newest: URL?
+        var newestDate = Date.distantPast
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "jsonl",
+                  url.path.contains("/chats/") else { continue }
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             if date > newestDate {
                 newestDate = date
                 newest = url

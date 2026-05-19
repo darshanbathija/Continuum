@@ -639,6 +639,22 @@ struct ParsedLine: Sendable {
     static func from(json: [String: Any]) -> ParsedLine? {
         let at = SessionChatStore.parseTimestamp(json) ?? Date()
         let type = json["type"] as? String ?? ""
+
+        // Gemini disambiguator. Both Claude and Gemini use `type: "user"`
+        // but the payload shapes differ:
+        //   - Claude wraps content under `message: {content: ...}`.
+        //   - Gemini puts `content: [{text: ...}]` at top level (no
+        //     `message` wrapper) and pairs with a `sessionId`-bearing
+        //     header line.
+        // If the line has no `message` field, it's Gemini's flat shape;
+        // route to the Gemini parser. Also catches `type: "model"` which
+        // Gemini emits for assistant turns (vs Claude's `"assistant"`).
+        if (type == "user" && json["message"] == nil)
+            || type == "model"
+            || type == "gemini" {
+            return decodeGeminiLine(json: json, at: at)
+        }
+
         switch type {
         case "user":
             return decodeUser(json: json, at: at)
@@ -649,6 +665,24 @@ struct ParsedLine: Sendable {
         default:
             return nil
         }
+    }
+
+    /// Gemini JSONL chat decoder. Thin wrapper over
+    /// `GeminiJSONLParser.decode` — the pure transform lives in Shared
+    /// (testable + iOS-readable). Threads the `stableId` cursor through
+    /// and wraps the resulting `[ChatMessage]` in a `ParsedLine` for the
+    /// Mac staging pipeline.
+    private static func decodeGeminiLine(json: [String: Any], at: Date) -> ParsedLine? {
+        let messages = GeminiJSONLParser.decode(json: json, at: at) { suffix in
+            SessionChatStore.stableId(json, suffix: suffix)
+        }
+        guard !messages.isEmpty else { return nil }
+        return ParsedLine(
+            timestamp: at, messages: messages,
+            deltaInputTokens: 0, deltaOutputTokens: 0,
+            deltaCacheCreationTokens: 0, deltaCacheReadTokens: 0,
+            model: nil
+        )
     }
 
     /// Codex JSONL chat decoder. Thin wrapper over
