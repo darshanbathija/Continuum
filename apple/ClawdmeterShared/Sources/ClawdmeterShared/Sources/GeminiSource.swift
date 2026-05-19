@@ -117,11 +117,11 @@ public final class GeminiSource: AISource, @unchecked Sendable {
             (data, response) = try await urlSession.data(for: req)
         } catch {
             logger.warning("Gemini poll network error: \(String(describing: error), privacy: .public)")
-            return cachedFallback(reason: "network")
+            return try cachedFallbackOrThrow(reason: "network")
         }
 
         guard let http = response as? HTTPURLResponse else {
-            return cachedFallback(reason: "non-http")
+            return try cachedFallbackOrThrow(reason: "non-http")
         }
 
         switch http.statusCode {
@@ -131,7 +131,7 @@ public final class GeminiSource: AISource, @unchecked Sendable {
             }
             let preview = String(data: data.prefix(500), encoding: .utf8) ?? "<binary>"
             logger.warning("Gemini parse miss; body preview: \(preview, privacy: .public)")
-            return cachedFallback(reason: "parse-miss")
+            return try cachedFallbackOrThrow(reason: "parse-miss")
         case 401, 403:
             // Stale or rejected token — surface as unauthenticated so the
             // UsagePoller's refresh path picks up a rotation by `gemini auth
@@ -142,9 +142,9 @@ public final class GeminiSource: AISource, @unchecked Sendable {
             let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
             throw AISourceError.rateLimited(retryAfter: retryAfter)
         case 500...599:
-            return cachedFallback(reason: "5xx")
+            return try cachedFallbackOrThrow(reason: "5xx")
         default:
-            return cachedFallback(reason: "unexpected-\(http.statusCode)")
+            return try cachedFallbackOrThrow(reason: "unexpected-\(http.statusCode)")
         }
     }
 
@@ -250,10 +250,20 @@ public final class GeminiSource: AISource, @unchecked Sendable {
     /// D7 fallback. When cloudcode-pa parsing fails, return the last good
     /// snapshot with `.unknown` status so the UI renders cached data + a
     /// "Updated Nh ago" stale badge instead of going blank.
-    private func cachedFallback(reason: String) -> UsageData {
+    /// Return a cached snapshot if available, otherwise throw so the
+    /// UsagePoller leaves `model.usage` at nil → UI renders "Connecting…"
+    /// instead of a misleading "0% now" / 26-secs-from-now countdown.
+    /// Critical: returning a placeholder UsageData with `sessionEpoch ==
+    /// nowEpoch` caused the popover to perpetually tick from "26 secs"
+    /// down to "now" on each 60s poll — visually "the countdown isn't
+    /// working" because the reset target kept moving with the current
+    /// time.
+    private func cachedFallbackOrThrow(reason: String) throws -> UsageData {
         let now = Date()
         let nowEpoch = Int(now.timeIntervalSince1970)
         if let last = lastSession, let updated = lastUpdatedAt {
+            // Have a previous good poll — render its data with a stale
+            // status badge per D7.
             let mins = max(0, (last.resetEpoch - nowEpoch + 59) / 60)
             return UsageData(
                 sessionPct: last.pct,
@@ -267,20 +277,12 @@ public final class GeminiSource: AISource, @unchecked Sendable {
                 updatedAt: updated
             )
         }
-        // No cache — return a fully-unknown placeholder. The UI shows
-        // "Connecting…" until the first successful poll. The fallback
-        // reason is logged for debugging.
-        logger.info("Gemini cachedFallback reason=\(reason, privacy: .public) (no cache yet)")
-        return UsageData(
-            sessionPct: 0,
-            sessionResetMins: 0,
-            sessionEpoch: nowEpoch,
-            weeklyPct: 0,
-            weeklyResetMins: 0,
-            weeklyEpoch: nowEpoch,
-            status: .unknown,
-            representativeClaim: .unknown,
-            updatedAt: now
+        // No cache — throw so the UI keeps showing "Connecting…" (a
+        // honest "no data yet" rather than a fabricated 0% gauge). The
+        // poller will retry on its next 60s tick.
+        logger.info("Gemini fallback no-cache: reason=\(reason, privacy: .public); surfacing as dataSourceContractViolation so UI shows Connecting…")
+        throw AISourceError.dataSourceContractViolation(
+            detail: "Gemini first-poll \(reason) — no cached usage yet, UI stays at Connecting…"
         )
     }
 }
