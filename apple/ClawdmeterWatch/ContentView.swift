@@ -34,6 +34,23 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                if let codex = model.codexUsage {
+                    Divider().padding(.top, 4)
+                    smallMeter(
+                        title: "Codex",
+                        usage: codex,
+                        tint: Color(red: 0x5C/255, green: 0x9D/255, blue: 0xFF/255)
+                    )
+                }
+                if let gemini = model.geminiUsage {
+                    Divider().padding(.top, 4)
+                    smallMeter(
+                        title: "Gemini",
+                        usage: gemini,
+                        tint: Color(red: 0x42/255, green: 0x85/255, blue: 0xF4/255)
+                    )
+                }
+
                 // Sessions v2 Phase 6: sessions list entry point.
                 if let bridge = planBridge, !bridge.sessionsSummary.isEmpty {
                     NavigationLink {
@@ -111,6 +128,31 @@ struct ContentView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.top, 2)
+        }
+    }
+
+    /// Compact secondary meter — single row, used by Codex + Gemini below
+    /// the primary Claude meter. Gemini's cloudcode-pa quota doesn't
+    /// surface a weekly window so the row stays single-line by design.
+    @ViewBuilder
+    private func smallMeter(title: String, usage: UsageData, tint: Color) -> some View {
+        let resetDate = Date(timeIntervalSince1970: TimeInterval(usage.sessionEpoch))
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(usage.sessionPct)%")
+                    .font(.system(size: 14, weight: .semibold))
+                    .monospacedDigit()
+                (Text("· ") + Text(resetDate, style: .relative))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            ProgressView(value: Double(min(max(usage.sessionPct, 0), 100)) / 100.0)
+                .tint(tint)
         }
     }
 

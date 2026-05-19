@@ -47,7 +47,7 @@ public struct ProviderConfig: Identifiable, Sendable {
         reviveEndpoint: URL(string: "https://api.anthropic.com/v1/messages")!,
         reviveAuthVersion: "2023-06-01",
         storageKeyPrefix: "clawdmeter.claude",
-        supportsAutoRevive: true
+        supportsAutoRevive: AutoReviveSupport.supports("claude")
     )
 
     public static let codex = ProviderConfig(
@@ -58,7 +58,7 @@ public struct ProviderConfig: Identifiable, Sendable {
         reviveEndpoint: URL(string: "https://chatgpt.com/backend-api/conversation")!,
         reviveAuthVersion: nil,
         storageKeyPrefix: "clawdmeter.codex",
-        supportsAutoRevive: false
+        supportsAutoRevive: AutoReviveSupport.supports("codex")
     )
 
     /// Gemini via Google's Cloud Code Assist API (same endpoint Antigravity
@@ -74,6 +74,6 @@ public struct ProviderConfig: Identifiable, Sendable {
         reviveEndpoint: URL(string: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")!,
         reviveAuthVersion: nil,
         storageKeyPrefix: "clawdmeter.gemini",
-        supportsAutoRevive: false
+        supportsAutoRevive: AutoReviveSupport.supports("gemini")
     )
 }

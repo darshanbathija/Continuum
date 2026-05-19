@@ -27,10 +27,18 @@ public final class UsageModel: ObservableObject {
     @Published public private(set) var isPolling: Bool = false
     @Published public private(set) var now: Date = Date()
 
-    /// Codex snapshot mirrored from the Mac via iCloud Key-Value store.
-    /// `nil` if the user hasn't run the Mac app or iCloud sync hasn't
-    /// propagated yet.
+    /// Codex snapshot mirrored from the Mac via iCloud Key-Value store
+    /// AND/OR via the paired daemon's `/usage` endpoint. `nil` if the
+    /// user hasn't run the Mac app or iCloud sync hasn't propagated yet.
     @Published public private(set) var codexSnapshot: UsageStore.Snapshot?
+
+    /// Gemini snapshot mirrored from the paired Mac daemon's `/usage`
+    /// dict (wire v6+). Gemini doesn't have a local poll path on iOS —
+    /// the Gemini CLI's OAuth token lives at `~/.gemini/oauth_creds.json`
+    /// on the Mac and the daemon is the only authority for the
+    /// cloudcode-pa quota. `nil` until the daemon serves its first
+    /// `/usage` response carrying a `gemini` entry.
+    @Published public private(set) var geminiSnapshot: UsageStore.Snapshot?
 
     /// Aggregated token-analytics snapshot mirrored from the Mac via iCloud
     /// KV. `nil` until the Mac has run with the iCloud entitlement live.
@@ -144,10 +152,10 @@ public final class UsageModel: ObservableObject {
         async let analyticsPayload = client.fetchAnalytics()
 
         if let usage = await usagePayload {
-            if let codex = usage.codex {
-                // Mirror to the same `codexSnapshot` shape the iCloud
-                // path populates so the Live tab's `CodexSection`
-                // doesn't need to know which source served the data.
+            // Codex: prefer the v6 dict + per-provider fallback shape;
+            // legacy `usage.codex` field is still populated by the server
+            // and the `usageData(for:)` helper handles fallback per X1.
+            if let codex = usage.usageData(for: "codex") {
                 codexSnapshot = UsageStore.Snapshot(
                     providerID: "codex",
                     displayName: "Codex",
@@ -156,6 +164,28 @@ public final class UsageModel: ObservableObject {
                 )
                 UsageStore.write(codex, providerID: "codex", displayName: "Codex")
                 UsageStore.reloadWidgets(providerID: "codex")
+                // Forward to the paired Apple Watch's per-provider channel.
+                WatchTokenBridge.shared.pushUsage(providerID: "codex", codex)
+            }
+            // Gemini: only available on wire v6+. v5 Macs return no
+            // `gemini` entry in the dict and `usageData(for:)` returns nil.
+            if let gemini = usage.usageData(for: "gemini") {
+                geminiSnapshot = UsageStore.Snapshot(
+                    providerID: "gemini",
+                    displayName: "Gemini",
+                    usage: gemini,
+                    writtenAt: usage.lastChecked
+                )
+                UsageStore.write(gemini, providerID: "gemini", displayName: "Gemini")
+                UsageStore.reloadWidgets(providerID: "gemini")
+                WatchTokenBridge.shared.pushUsage(providerID: "gemini", gemini)
+                // D5: drive the Gemini quota Live Activity. Status .unknown
+                // means cached-fallback (D7) — stale flag tells the widget
+                // to render a small caution dot in the Dynamic Island.
+                GeminiQuotaLiveActivityCoordinator.shared.refresh(
+                    usage: gemini,
+                    stale: gemini.status == .unknown
+                )
             }
         }
         if let snap = await analyticsPayload {

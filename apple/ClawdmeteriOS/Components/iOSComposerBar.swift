@@ -196,7 +196,7 @@ struct iOSComposerBar: View {
             } else if case .outside(let recent, _) = mode {
                 // Outside rows haven't promoted yet — show the agent
                 // they'll spawn with as a static chip so the user knows.
-                Text(recent.provider == .claude ? "Claude" : "Codex")
+                Text(AgentKindUI.displayName(for: recent.provider))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(recent.provider == .claude ? accent : .primary)
                     .padding(.horizontal, 12)

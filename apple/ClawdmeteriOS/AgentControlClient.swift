@@ -150,12 +150,33 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
-    /// True when the paired Mac is running a different wire version than
-    /// this app expects. iOS shows a banner with a copy-link to the DMG.
+    /// True when the paired Mac is running a wire version too old for the
+    /// minimum iOS feature surface. Forward-compat: any server at or above
+    /// `composeDraftMinimum` is compatible — per-feature flags below handle
+    /// the rest (e.g. `supportsGemini`, `supportsChatSubscribe`). Newer
+    /// servers (e.g. v7 ↔ v6 client) work fine; the client just won't see
+    /// features it doesn't know about. Implementation routed through the
+    /// shared `AgentControlWireVersion.hasMismatch(...)` helper so the
+    /// `WireMixedVersionPairingTests` suite asserts the exact logic the
+    /// iOS client uses.
     @MainActor
     public var hasWireVersionMismatch: Bool {
-        guard let serverWireVersion else { return false }
-        return serverWireVersion != AgentControlWireVersion.current
+        AgentControlWireVersion.hasMismatch(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
+    public var supportsGemini: Bool {
+        AgentControlWireVersion.supportsGemini(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
+    public var supportsChatSubscribe: Bool {
+        AgentControlWireVersion.supportsChatSubscribe(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
+    public var supportsComposeDraft: Bool {
+        AgentControlWireVersion.supportsComposeDraft(serverWireVersion: serverWireVersion)
     }
 
     // MARK: - Sessions v2 mid-session controls

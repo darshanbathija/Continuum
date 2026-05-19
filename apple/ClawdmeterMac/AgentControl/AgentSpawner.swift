@@ -128,24 +128,15 @@ public enum AgentSpawner {
         // in a separate flag. Kept in signature so callers don't need to branch.
         _ = effort
         guard let gemini = ShellRunner.locateBinary("gemini") else { return nil }
-        var argv = [gemini]
-        if let resumeSessionId, !resumeSessionId.isEmpty {
-            argv += ["--resume", resumeSessionId]
-        }
-        if let model, !model.isEmpty {
-            argv += ["-m", model]
-        }
-        // Approval-mode precedence: plan > yolo (autopilot) > auto_edit
-        // > default. Only one --approval-mode flag may be set.
-        if planMode {
-            argv += ["--approval-mode", "plan"]
-        } else if autopilot {
-            argv += ["--approval-mode", "yolo"]
-        } else if acceptEdits {
-            argv += ["--approval-mode", "auto_edit"]
-        }
-        argv.append(contentsOf: extraArgs)
-        return argv
+        return GeminiArgvBuilder.argv(
+            geminiBinary: gemini,
+            model: model,
+            planMode: planMode,
+            autopilot: autopilot,
+            acceptEdits: acceptEdits,
+            resumeSessionId: resumeSessionId,
+            extraArgs: extraArgs
+        )
     }
 
     /// Build argv for a `NewSessionRequest`. Returns an empty array if the

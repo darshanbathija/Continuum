@@ -21,22 +21,23 @@ public struct AnalyticsRepoList: View {
         self.providerFilter = providerFilter
     }
 
-    /// Merge the two providers' byRepo for the active window, recompute %
+    /// Merge each provider's byRepo for the active window, recompute %
     /// share, re-rank, and keep top-8 + rollup. Each row carries BOTH the
     /// combined cost AND the per-provider breakdown so the progress bar
     /// renderer can stack Claude (orange) and Codex (blue) segments,
     /// rather than showing a single solid tint that hides which provider
     /// contributed how much.
+    ///
+    /// X3-C trunk refactor: Gemini contributes `requestCount`, not
+    /// `costUSD` (cloudcode-pa doesn't expose tokens). Each row tracks
+    /// `geminiRequests` separately; ranking still keys on $ so cost-bearing
+    /// providers dominate sort order, but the row badge surfaces Gemini's
+    /// per-repo request count when present. Repos with ONLY Gemini activity
+    /// still appear (with $0 cost) when `.gemini` is in the filter.
     private var rows: [Row] {
         var claudeByRepo: [RepoKey: TokenTotals] = [:]
         var codexByRepo: [RepoKey: TokenTotals] = [:]
-        // Per-provider include checks via the new .includes(_:) helper.
-        // Gemini's costUSD is always 0 (cloudcode-pa doesn't expose tokens)
-        // so even when .includes(.gemini) is true, Gemini contributes
-        // nothing to this cost-ranked list. Gemini per-repo request counts
-        // are surfaced separately in the Requests chart panel; promoting
-        // them into this list is a v0.7 follow-up (TODOS.md X3-C trunk
-        // refactor item).
+        var geminiByRepo: [RepoKey: TokenTotals] = [:]
         if providerFilter.includes(.claude) {
             for row in snapshot.claude.window(window).byRepo where row.repo != "__rest__" {
                 claudeByRepo[row.repo, default: .zero] += row.totals
@@ -47,30 +48,58 @@ public struct AnalyticsRepoList: View {
                 codexByRepo[row.repo, default: .zero] += row.totals
             }
         }
+        if providerFilter.includes(.gemini) {
+            for row in snapshot.gemini.window(window).byRepo where row.repo != "__rest__" {
+                geminiByRepo[row.repo, default: .zero] += row.totals
+            }
+        }
 
-        // Build a combined keyset so a repo that's Codex-only still shows.
-        let allRepoKeys = Set(claudeByRepo.keys).union(codexByRepo.keys)
-        var combinedByRepo: [RepoKey: (claude: Decimal, codex: Decimal, total: Decimal, tokens: Int)] = [:]
+        // Build a combined keyset so a repo that's Codex-only OR Gemini-
+        // only still shows.
+        let allRepoKeys = Set(claudeByRepo.keys)
+            .union(codexByRepo.keys)
+            .union(geminiByRepo.keys)
+        var combinedByRepo: [RepoKey: (claude: Decimal, codex: Decimal, total: Decimal, tokens: Int, geminiReqs: Int)] = [:]
         for key in allRepoKeys {
             let cl = claudeByRepo[key, default: .zero]
             let cx = codexByRepo[key, default: .zero]
+            let gm = geminiByRepo[key, default: .zero]
             combinedByRepo[key] = (
                 claude: cl.costUSD,
                 codex: cx.costUSD,
                 total: cl.costUSD + cx.costUSD,
-                tokens: cl.totalTokens + cx.totalTokens
+                tokens: cl.totalTokens + cx.totalTokens,
+                geminiReqs: gm.requestCount
             )
         }
 
         let totalCost = combinedByRepo.values.reduce(Decimal.zero, { $0 + $1.total })
-        guard totalCost > 0 else { return [] }
+        let totalGeminiReqs = combinedByRepo.values.reduce(0, { $0 + $1.geminiReqs })
+        // Skip the list when there's neither cost nor request data.
+        guard totalCost > 0 || totalGeminiReqs > 0 else { return [] }
 
-        let sorted = combinedByRepo.sorted { $0.value.total > $1.value.total }
+        // Composite rank: cost-bearing repos sort by $, ties / cost-zero
+        // rows fall through to gemini request count. Per X3-C trunk-level
+        // refactor — without this Gemini-only repos would never appear.
+        let sorted = combinedByRepo.sorted { a, b in
+            if a.value.total != b.value.total {
+                return a.value.total > b.value.total
+            }
+            return a.value.geminiReqs > b.value.geminiReqs
+        }
         let top = Array(sorted.prefix(8))
         let rest = Array(sorted.dropFirst(8))
 
         var out: [Row] = top.map { (key, value) in
-            Row(
+            // Cost-share against window total; falls back to Gemini-only
+            // intensity (0…1 of total gemini reqs) when no cost.
+            let costShare: Double = totalCost > 0
+                ? NSDecimalNumber(decimal: value.total / totalCost).doubleValue
+                : 0
+            let geminiShare: Double = (totalGeminiReqs > 0 && totalCost == 0)
+                ? Double(value.geminiReqs) / Double(totalGeminiReqs)
+                : 0
+            return Row(
                 id: key,
                 repo: key,
                 displayName: RepoIdentity.displayName(for: key),
@@ -78,7 +107,8 @@ public struct AnalyticsRepoList: View {
                 claudeCost: value.claude,
                 codexCost: value.codex,
                 tokens: value.tokens,
-                share: NSDecimalNumber(decimal: value.total / totalCost).doubleValue,
+                geminiRequests: value.geminiReqs,
+                share: max(costShare, geminiShare),
                 isRest: false,
                 restCount: 0
             )
@@ -86,8 +116,12 @@ public struct AnalyticsRepoList: View {
         if !rest.isEmpty {
             let restClaude = rest.map(\.value.claude).reduce(Decimal.zero, +)
             let restCodex = rest.map(\.value.codex).reduce(Decimal.zero, +)
+            let restGemini = rest.map(\.value.geminiReqs).reduce(0, +)
             let restCost = restClaude + restCodex
             let restTokens = rest.map(\.value.tokens).reduce(0, +)
+            let restShare: Double = totalCost > 0
+                ? NSDecimalNumber(decimal: restCost / totalCost).doubleValue
+                : (totalGeminiReqs > 0 ? Double(restGemini) / Double(totalGeminiReqs) : 0)
             out.append(Row(
                 id: "__rest__",
                 repo: "__rest__",
@@ -96,7 +130,8 @@ public struct AnalyticsRepoList: View {
                 claudeCost: restClaude,
                 codexCost: restCodex,
                 tokens: restTokens,
-                share: NSDecimalNumber(decimal: restCost / totalCost).doubleValue,
+                geminiRequests: restGemini,
+                share: restShare,
                 isRest: true,
                 restCount: rest.count
             ))
@@ -150,6 +185,12 @@ public struct AnalyticsRepoList: View {
         /// the user couldn't see Codex's share.
         let codexCost: Decimal
         let tokens: Int
+        /// Gemini's contribution to this repo, expressed as request count.
+        /// cloudcode-pa doesn't surface tokens or cost, so this is a
+        /// distinct unit from `claudeCost` / `codexCost`. Rendered as a
+        /// small "+N gem" badge in the row instead of a stacked bar segment
+        /// to keep the cost-comparable bar honest.
+        let geminiRequests: Int
         let share: Double
         let isRest: Bool
         let restCount: Int
@@ -178,11 +219,31 @@ private struct RepoRow: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+                if row.geminiRequests > 0 {
+                    // Gemini contributes request count, not $. Render as a
+                    // small inline pill so the user sees per-repo Gemini
+                    // activity without distorting the cost-comparable
+                    // stacked bar below. Distinct shape (capsule with
+                    // gemini blue) keeps it visually separable from cost.
+                    Text("+\(row.geminiRequests) gem")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(geminiColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(geminiColor.opacity(0.15), in: Capsule())
+                }
                 Spacer()
-                Text(AnalyticsCurrencyFormatter.format(row.cost))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .monospacedDigit()
+                if row.cost > 0 {
+                    Text(AnalyticsCurrencyFormatter.format(row.cost))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .monospacedDigit()
+                } else if row.geminiRequests > 0 {
+                    Text("\(row.geminiRequests) reqs")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .monospacedDigit()
+                }
                 Text(percentString(row.share))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
@@ -246,6 +307,9 @@ private struct RepoRow: View {
     private var codexColor: Color {
         Color.accentColor
     }
+    private var geminiColor: Color {
+        Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0)
+    }
 
     private var providerBreakdownTooltip: String {
         guard !row.isRest else { return "" }
@@ -255,6 +319,9 @@ private struct RepoRow: View {
         }
         if row.codexCost > 0 {
             parts.append("Codex " + AnalyticsCurrencyFormatter.format(row.codexCost))
+        }
+        if row.geminiRequests > 0 {
+            parts.append("Gemini \(row.geminiRequests) reqs")
         }
         return parts.joined(separator: " · ")
     }

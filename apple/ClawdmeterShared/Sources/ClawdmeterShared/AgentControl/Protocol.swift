@@ -51,6 +51,38 @@ public enum AgentControlWireVersion {
     /// `serverWireVersion < this` and surfaces an "Update Clawdmeter on
     /// Mac" banner instead of dropping into a confused state.
     public static let geminiMinimum: Int = 6
+
+    /// Forward-compat client-side check (X3-A). Returns `true` when the
+    /// client should flag a mismatch banner. The contract is *forward-
+    /// compatible*: newer servers (e.g. wire v7) work fine with this
+    /// client; per-feature gates (`supportsGemini`, `supportsChatSubscribe`,
+    /// `supportsComposeDraft`) handle the feature surface. Only true when
+    /// the server is genuinely too old for the minimum feature floor
+    /// (`composeDraftMinimum`).
+    ///
+    /// - Parameter serverWireVersion: the version the paired Mac reports
+    ///   on `/health`. `nil` means we haven't heard from the Mac yet —
+    ///   that's not a mismatch.
+    /// - Returns: `true` only when `serverWireVersion < composeDraftMinimum`.
+    public static func hasMismatch(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v < composeDraftMinimum
+    }
+
+    public static func supportsGemini(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= geminiMinimum
+    }
+
+    public static func supportsChatSubscribe(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= chatSubscribeMinimum
+    }
+
+    public static func supportsComposeDraft(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= composeDraftMinimum
+    }
 }
 
 /// `GET /health` response. Old clients tolerate the extra fields; new

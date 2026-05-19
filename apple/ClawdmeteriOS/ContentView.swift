@@ -6,6 +6,7 @@ import ClawdmeterShared
 private enum LiveProvider: String, CaseIterable, Hashable {
     case claude
     case codex
+    case gemini
 }
 
 /// Two stacked provider sections: Claude (live-polled on iOS via the synced
@@ -72,7 +73,14 @@ struct ContentView: View {
     }
 
     private var selectedProvider: LiveProvider {
-        LiveProvider(rawValue: selectedProviderRaw) ?? .claude
+        let raw = LiveProvider(rawValue: selectedProviderRaw) ?? .claude
+        if raw == .gemini && !agentClient.supportsGemini {
+            // Mac running wire < 6 (or unpaired). Fall back to Claude so we
+            // don't show a dead "Connecting…" pane for a provider the Mac
+            // can't surface.
+            return .claude
+        }
+        return raw
     }
 
     private var liveTab: some View {
@@ -80,6 +88,7 @@ struct ContentView: View {
             VStack(spacing: 14) {
                 ProviderToggleHeader(
                     selected: selectedProvider,
+                    supportsGemini: agentClient.supportsGemini,
                     onPick: { picked in pickProvider(picked) }
                 )
                 .padding(.horizontal, 16)
@@ -90,6 +99,7 @@ struct ContentView: View {
                         switch selectedProvider {
                         case .claude: claudePane
                         case .codex:  codexPane
+                        case .gemini: geminiPane
                         }
                     }
                     .padding(.horizontal, 16)
@@ -169,6 +179,38 @@ struct ContentView: View {
     @ViewBuilder
     private var codexPane: some View {
         CodexSection(snapshot: model.codexSnapshot, agentClient: agentClient)
+    }
+
+    @ViewBuilder
+    private var geminiPane: some View {
+        if agentClient.supportsGemini {
+            GeminiSection(snapshot: model.geminiSnapshot, agentClient: agentClient)
+        } else {
+            UpdateMacForGeminiCard()
+        }
+    }
+}
+
+/// Shown when the paired Mac is pre-Gemini (wire < 6). Tells the user to
+/// upgrade Clawdmeter on the Mac. Mirrors the "Update Clawdmeter on Mac"
+/// pattern X1 cross-Apple compose-draft uses on older Macs.
+private struct UpdateMacForGeminiCard: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "arrow.up.circle")
+                .font(.system(size: 42, weight: .light))
+                .foregroundStyle(.secondary)
+            Text("Update Clawdmeter on Mac")
+                .font(.system(size: 17, weight: .semibold))
+            Text("The paired Mac is running an older Clawdmeter. Update to v0.6.0+ on the Mac to unlock Gemini live quota.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity)
+        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 }
 
@@ -522,6 +564,11 @@ private struct ReauthCard: View {
 /// the control.
 private struct ProviderToggleHeader: View {
     let selected: LiveProvider
+    /// Gates whether the Gemini logo is offered. Drives X3-A forward-compat:
+    /// older Macs (wire < 6) hide Gemini entirely instead of dropping the
+    /// user into a confusing "Connecting…" state. Mirrors what
+    /// `AgentControlClient.supportsGemini` returns.
+    let supportsGemini: Bool
     /// Called when the user taps a specific provider's logo. The caller
     /// derives a slide direction from the picked side (left = leading
     /// edge, right = trailing edge).
@@ -531,6 +578,9 @@ private struct ProviderToggleHeader: View {
         HStack(spacing: 0) {
             providerButton(.claude)
             providerButton(.codex)
+            if supportsGemini {
+                providerButton(.gemini)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.top, 6)
@@ -570,6 +620,7 @@ private struct ProviderToggleHeader: View {
         switch provider {
         case .claude: return "ClaudeLogo"
         case .codex:  return "CodexLogo"
+        case .gemini: return "GeminiLogo"
         }
     }
 
@@ -577,6 +628,7 @@ private struct ProviderToggleHeader: View {
         switch provider {
         case .claude: return "Claude"
         case .codex:  return "Codex"
+        case .gemini: return "Gemini"
         }
     }
 
@@ -591,11 +643,11 @@ private struct ProviderLogo: View {
 
     var body: some View {
         if let img = UIImage(named: asset) {
-            // Codex's asset is a black silhouette on transparent — switch
-            // it to template rendering so SwiftUI tints it with the
-            // current foreground style (adapts to light/dark mode).
-            // Claude's burst keeps its terra-cotta color.
-            let rendered = (asset == "CodexLogo")
+            // Codex + Gemini assets are alpha-shaped silhouettes designed
+            // for template-tinting so they pick up the foreground style
+            // (adapts to light/dark + section accent). Claude's burst
+            // keeps its terra-cotta color.
+            let rendered = (asset == "CodexLogo" || asset == "GeminiLogo")
                 ? img.withRenderingMode(.alwaysTemplate)
                 : img
             Image(uiImage: rendered)
@@ -617,4 +669,53 @@ private enum ClaudeBrand {
 
 private enum CodexBrand {
     static let color = Color.primary.opacity(0.85)
+}
+
+private enum GeminiBrand {
+    /// Google blue — matches the Mac dashboard's Gemini column tint
+    /// (#4285F4). Used by `GeminiSection`'s session-card tint.
+    static let color = Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0)
+}
+
+// MARK: - Gemini (mirror-only from paired Mac daemon)
+
+/// Mirrors the Mac dashboard's Gemini column. Like Codex, there's no local
+/// poll path on iOS — the Gemini CLI's OAuth credentials live at
+/// `~/.gemini/oauth_creds.json` on the Mac and only the daemon authoritatively
+/// reads the cloudcode-pa quota endpoint. iOS pulls Gemini snapshots from
+/// the Mac daemon's `/usage` dict (wire v6+, gated on `geminiMinimum`).
+///
+/// Weekly limits aren't surfaced by cloudcode-pa (Gemini Code Assist's quota
+/// is a single 24h-style refresh per model), so the section drops the
+/// `WeeklyCard` Codex/Claude carry. The session card's reset countdown
+/// already conveys "next refresh".
+private struct GeminiSection: View {
+    let snapshot: UsageStore.Snapshot?
+    @ObservedObject var agentClient: AgentControlClient
+
+    var body: some View {
+        VStack(spacing: 14) {
+            if let snap = snapshot {
+                let notStarted = snap.usage.status == .notStarted
+                let usage = snap.usage
+                SessionCard(
+                    title: "Current quota",
+                    percent: notStarted ? 0 : usage.sessionPct,
+                    resetDate: Date(timeIntervalSince1970: TimeInterval(usage.sessionEpoch)),
+                    notStarted: notStarted,
+                    tint: GeminiBrand.color
+                )
+                HStack {
+                    (Text("Synced from Mac ") + Text(snap.writtenAt, style: .relative) + Text(" ago"))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+            } else {
+                WaitingForMacCard(agentClient: agentClient)
+            }
+        }
+    }
 }

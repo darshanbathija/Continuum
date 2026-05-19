@@ -16,6 +16,95 @@ struct ClawdmeteriOSWidgetsBundle: WidgetBundle {
     var body: some Widget {
         ClaudeUsageWidget()
         SessionLiveActivityWidget()
+        GeminiQuotaLiveActivityWidget()
+    }
+}
+
+@available(iOSApplicationExtension 16.1, *)
+struct GeminiQuotaLiveActivityWidget: Widget {
+    /// Google blue — matches the iOS Live tab + Mac dashboard tint.
+    private let tint = Color(red: 0x42/255, green: 0x85/255, blue: 0xF4/255)
+
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: GeminiQuotaLiveActivityAttributes.self) { context in
+            // Lock Screen pill.
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .stroke(.secondary.opacity(0.18), lineWidth: 4)
+                        .frame(width: 36, height: 36)
+                    Circle()
+                        .trim(from: 0, to: max(0.001, Double(context.state.sessionPct) / 100.0))
+                        .stroke(tint, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 36, height: 36)
+                    Text("\(context.state.sessionPct)")
+                        .font(.system(size: 12, weight: .bold))
+                        .monospacedDigit()
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text("Gemini")
+                            .font(.headline)
+                        if context.state.stale {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    (Text("Resets ") + Text(context.state.resetDate, style: .relative))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Spacer()
+            }
+            .containerBackground(.fill.tertiary, for: .widget)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Text("Gemini")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Text("\(context.state.sessionPct)%")
+                        .font(.title3.weight(.bold))
+                        .monospacedDigit()
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    HStack {
+                        (Text("Resets ") + Text(context.state.resetDate, style: .relative))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        Spacer()
+                        if context.state.stale {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                Text("Stale")
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        }
+                    }
+                }
+            } compactLeading: {
+                // Compact pill: the "G" glyph.
+                Text("G")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(tint)
+            } compactTrailing: {
+                Text("\(context.state.sessionPct)%")
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+            } minimal: {
+                // Always-on dimmed glyph — single character only.
+                Text("G")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(tint)
+            }
+        }
     }
 }
 

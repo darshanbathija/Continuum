@@ -40,6 +40,12 @@ public final class WatchUsageModel: ObservableObject {
     /// so the user knows where the number is coming from.
     @Published public private(set) var receivingFromPhone: Bool = false
 
+    /// Per-provider usage snapshots delivered through the new
+    /// `usageByProvider` WCSession channel. v5 iPhones never populate this
+    /// — Watch falls back to the legacy `usage` field (Claude only). v6+
+    /// iPhones drive the Codex + Gemini meters via this dict.
+    @Published public private(set) var usageByProvider: [String: UsageData] = [:]
+
     private var poller: UsagePoller?
     private var cancellables = Set<AnyCancellable>()
 
@@ -165,7 +171,37 @@ public final class WatchUsageModel: ObservableObject {
 	                }
 	            }
             .store(in: &cancellables)
+
+        // v6+ multi-provider channel. Mirrors each per-provider snapshot
+        // into the App Group store so widgets/complications can pick it
+        // up. Idempotent with the legacy `didReceiveUsage` Claude path —
+        // both fire and the App Group write is the same.
+        WatchTokenBridge.shared.didReceiveUsageByProvider
+            .sink { [weak self] dict in
+                guard let self else { return }
+                Task { @MainActor in
+                    self.usageByProvider = dict
+                    for (id, snap) in dict {
+                        let display = self.displayName(for: id)
+                        UsageStore.write(snap, providerID: id, displayName: display)
+                        UsageStore.reloadWidgets(providerID: id)
+                    }
+                }
+            }
+            .store(in: &cancellables)
     }
+
+    private func displayName(for providerID: String) -> String {
+        switch providerID {
+        case "claude": return "Claude"
+        case "codex":  return "Codex"
+        case "gemini": return "Gemini"
+        default:       return providerID.capitalized
+        }
+    }
+
+    public var codexUsage: UsageData? { usageByProvider["codex"] }
+    public var geminiUsage: UsageData? { usageByProvider["gemini"] }
 
     /// One-shot copy of the shared-keychain token (if any) into the local
     /// keychain. Saves us a round-trip when iCloud Keychain DOES happen to

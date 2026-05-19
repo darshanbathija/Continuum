@@ -69,9 +69,13 @@ struct NewSessionMacSheet: View {
                 // `codex --help` 2026-05). Approve & run swaps the
                 // sandbox/permission afterwards.
                 Toggle("Plan mode", isOn: $planMode)
-                    .help(agent == .claude
-                          ? "Claude runs in --permission-mode plan: reads + proposes, doesn't write until approved."
-                          : "Codex runs in --sandbox read-only: reads + proposes, doesn't write until approved.")
+                    .help({
+                        switch agent {
+                        case .claude: return "Claude runs in --permission-mode plan: reads + proposes, doesn't write until approved."
+                        case .codex:  return "Codex runs in --sandbox read-only: reads + proposes, doesn't write until approved."
+                        case .gemini: return "Gemini runs in --approval-mode plan: reads + proposes, doesn't write until approved."
+                        }
+                    }())
 
                 Picker("Mode", selection: $mode) {
                     Text("Local").tag(SessionMode.local)

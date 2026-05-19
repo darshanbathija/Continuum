@@ -37,6 +37,14 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
     /// direction.
     public let didReceiveUsage = PassthroughSubject<UsageData, Never>()
 
+    /// Fires on the receiving side when a multi-provider usage payload
+    /// lands. The dict is keyed by `providerID` (e.g. "claude", "codex",
+    /// "gemini"). Watch subscribes to populate per-provider meters. The
+    /// legacy `didReceiveUsage` publisher continues to fire for the
+    /// "claude" entry so existing single-provider watch code keeps
+    /// working without changes.
+    public let didReceiveUsageByProvider = PassthroughSubject<[String: UsageData], Never>()
+
     private var session: WCSession? {
         WCSession.isSupported() ? WCSession.default : nil
     }
@@ -48,6 +56,10 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
     private var pendingToken: String?
     private var pendingTokenSeen = false
     private var pendingUsage: UsageData?
+    /// Pending multi-provider usage snapshots, keyed by providerID. Sent
+    /// alongside the legacy single `usage` field so v5 watches keep
+    /// reading the Claude snapshot through the old path.
+    private var pendingUsageByProvider: [String: UsageData] = [:]
 
     private override init() {
         super.init()
@@ -79,6 +91,26 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
 #if os(iOS)
         queueLock.lock()
         pendingUsage = usage
+        // Also surface in the by-provider dict so the watch's per-provider
+        // path receives Claude updates without a separate iOS-side call.
+        pendingUsageByProvider["claude"] = usage
+        queueLock.unlock()
+        sendPending()
+#endif
+    }
+
+    /// Push a per-provider `UsageData` snapshot to the paired watch.
+    /// Multiple providers can be staged and shipped together by calling
+    /// this once per provider before the next flush. Pass `providerID =
+    /// "claude"` to also drive the legacy single-provider path.
+    public func pushUsage(providerID: String, _ usage: UsageData) {
+#if os(iOS)
+        queueLock.lock()
+        pendingUsageByProvider[providerID] = usage
+        if providerID == "claude" {
+            // Keep the legacy single-field path warm for older watches.
+            pendingUsage = usage
+        }
         queueLock.unlock()
         sendPending()
 #endif
@@ -96,6 +128,7 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
         let token = pendingToken
         let tokenSeen = pendingTokenSeen
         let usage = pendingUsage
+        let byProvider = pendingUsageByProvider
         queueLock.unlock()
 
         guard let session, session.activationState == .activated else {
@@ -115,6 +148,23 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
         if let usage, let encoded = try? JSONEncoder().encode(usage) {
             payload["usage"] = encoded
             payload["usagePushedAt"] = Date().timeIntervalSince1970
+        }
+        // Encode each provider snapshot as its own Data field. Picking a
+        // [String: Data] dict over a single encoded blob keeps the
+        // WCSession context flat (no nested NSCoding) and lets v5
+        // watches happily ignore unknown keys.
+        if !byProvider.isEmpty {
+            let encoder = JSONEncoder()
+            var encodedByProvider: [String: Data] = [:]
+            for (id, snap) in byProvider {
+                if let data = try? encoder.encode(snap) {
+                    encodedByProvider[id] = data
+                }
+            }
+            if !encodedByProvider.isEmpty {
+                payload["usageByProvider"] = encodedByProvider
+                payload["usageByProviderPushedAt"] = Date().timeIntervalSince1970
+            }
         }
         guard !payload.isEmpty else { return }
 
@@ -200,6 +250,19 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
            let usage = try? JSONDecoder().decode(UsageData.self, from: usageData) {
             logger.info("rx usage session=\(usage.sessionPct, privacy: .public)% weekly=\(usage.weeklyPct, privacy: .public)%")
             DispatchQueue.main.async { self.didReceiveUsage.send(usage) }
+        }
+        if let dict = ctx["usageByProvider"] as? [String: Data] {
+            let decoder = JSONDecoder()
+            var byProvider: [String: UsageData] = [:]
+            for (id, data) in dict {
+                if let snap = try? decoder.decode(UsageData.self, from: data) {
+                    byProvider[id] = snap
+                }
+            }
+            if !byProvider.isEmpty {
+                logger.info("rx usageByProvider providers=\(byProvider.keys.joined(separator: ","), privacy: .public)")
+                DispatchQueue.main.async { self.didReceiveUsageByProvider.send(byProvider) }
+            }
         }
     }
 #endif

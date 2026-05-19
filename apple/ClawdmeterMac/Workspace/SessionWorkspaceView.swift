@@ -688,18 +688,20 @@ private struct SidebarPane: View {
     @ViewBuilder
     private func providerBadge(for recent: RecentSession) -> some View {
         let isLive = isRecentLive(recent)
+        let rgb = AgentKindUI.accentRGB(for: recent.provider)
+        let accent = Color(red: Double(rgb.r)/255, green: Double(rgb.g)/255, blue: Double(rgb.b)/255)
         ZStack {
             Circle()
                 .fill(recent.provider == .claude
-                      ? terraCotta.opacity(0.18)
+                      ? accent.opacity(0.18)
                       : Color.secondary.opacity(0.20))
                 .frame(width: 20, height: 20)
             ProviderBadgeImage(
-                assetName: recent.provider == .claude ? "ClaudeLogo" : "CodexLogo",
-                isTemplate: recent.provider == .codex,
+                assetName: AgentKindUI.assetName(for: recent.provider),
+                isTemplate: AgentKindUI.isTemplate(for: recent.provider),
                 size: 12
             )
-            .foregroundStyle(recent.provider == .claude ? terraCotta : .primary)
+            .foregroundStyle(recent.provider == .claude ? accent : .primary)
             if isLive {
                 Circle()
                     .stroke(Color.green, lineWidth: 1.5)
@@ -713,8 +715,11 @@ private struct SidebarPane: View {
     /// `read-only` suffix that used to live here.
     @ViewBuilder
     private func recentSubtitleRow(recent: RecentSession, repo: AgentRepo, showRepoChip: Bool) -> some View {
-        let providerName = recent.provider == .claude ? "Claude" : "Codex"
-        let providerColor: Color = recent.provider == .claude ? terraCotta : .primary
+        let providerName = AgentKindUI.displayName(for: recent.provider)
+        let rgb = AgentKindUI.accentRGB(for: recent.provider)
+        let providerColor: Color = recent.provider == .claude
+            ? terraCotta
+            : Color(red: Double(rgb.r)/255, green: Double(rgb.g)/255, blue: Double(rgb.b)/255)
         let rel = Self.relativeTimestampFormatter.localizedString(
             for: recent.lastModified, relativeTo: Date()
         )
@@ -766,8 +771,7 @@ private struct SidebarPane: View {
         if let prompt = recent.firstPrompt, !prompt.isEmpty {
             return prompt
         }
-        let provider = recent.provider == .claude ? "Claude" : "Codex"
-        return "\(provider) session"
+        return "\(AgentKindUI.displayName(for: recent.provider)) session"
     }
 
     private static let relativeTimestampFormatter: RelativeDateTimeFormatter = {

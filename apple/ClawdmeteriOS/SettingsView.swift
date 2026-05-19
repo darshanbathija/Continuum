@@ -109,13 +109,30 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Codex requires the Mac app")
                                 .font(.subheadline.weight(.semibold))
-                            Text("The Codex CLI runs locally on your Mac and writes session usage to `~/.codex/sessions/`. We can't read those files from iOS. The macOS app surfaces Codex; an iCloud sync to bring it here is on the roadmap.")
+                            Text("The Codex CLI runs locally on your Mac and writes session usage to `~/.codex/sessions/`. We can't read those files from iOS. The macOS app surfaces Codex and forwards the snapshot to iOS via the paired Mac daemon.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
                     }
                 } header: {
                     Text("Codex")
+                }
+
+                Section {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "sparkles")
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 2)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Gemini requires the Mac app")
+                                .font(.subheadline.weight(.semibold))
+                            Text("The Gemini CLI's OAuth credentials live at `~/.gemini/oauth_creds.json` on the Mac. Clawdmeter on Mac reads them, polls Google's Code Assist quota endpoint, and forwards the snapshot to iOS over the paired Mac daemon. The Live tab Gemini section + Live Activity light up automatically when the Mac is on Clawdmeter v0.6.0 or later.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Gemini")
                 }
 
                 Section {

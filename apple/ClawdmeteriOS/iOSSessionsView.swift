@@ -110,7 +110,7 @@ struct iOSSessionsView: View {
                 let label: String = {
                     if let c = current, !c.isEmpty { return c }
                     if let p = target.firstPrompt, !p.isEmpty { return p }
-                    return target.provider == .claude ? "Claude session" : "Codex session"
+                    return "\(AgentKindUI.displayName(for: target.provider)) session"
                 }()
                 Text("Currently: \(label)")
             }
@@ -827,8 +827,8 @@ private struct RecentSessionRow: View {
                 .fill(badgeBackground)
                 .frame(width: 30, height: 30)
             ProviderBadgeImage(
-                assetName: recent.provider == .claude ? "ClaudeLogo" : "CodexLogo",
-                isTemplate: recent.provider == .codex,
+                assetName: AgentKindUI.assetName(for: recent.provider),
+                isTemplate: AgentKindUI.isTemplate(for: recent.provider),
                 size: 17
             )
             .foregroundStyle(badgeForeground)
@@ -1000,7 +1000,7 @@ private struct OutsideSessionDetailView: View {
                     Section("Session") {
                         LabeledContent("Repo") { Text(repo.displayName) }
                         LabeledContent("Provider") {
-                            Text(recent.provider == .claude ? "Claude" : "Codex")
+                            Text(AgentKindUI.displayName(for: recent.provider))
                         }
                         LabeledContent("Last write") {
                             Text(recent.lastModified, style: .relative)

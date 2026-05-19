@@ -366,7 +366,14 @@ struct MeterLabels: View {
 
 @ViewBuilder
 private func providerBadge(providerID: String, size: CGFloat) -> some View {
-    let assetName = (providerID == "claude") ? "ClaudeLogo" : "CodexLogo"
+    let assetName: String = {
+        switch providerID {
+        case "claude": return "ClaudeLogo"
+        case "codex":  return "CodexLogo"
+        case "gemini": return "GeminiLogo"
+        default:       return "ClaudeLogo"
+        }
+    }()
     if let nsImage = NSImage(named: assetName) {
         Image(nsImage: nsImage)
             .resizable()

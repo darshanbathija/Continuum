@@ -275,10 +275,33 @@ private struct ProviderColumn: View {
             // Provider title + logo
             HStack(spacing: 10) {
                 providerBadge(assetName: model.config.logoAssetName, size: 32)
-                Text(model.config.displayName)
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(primaryText)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(model.config.displayName)
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(primaryText)
+                    // D8: when the provider's auth file isn't detected
+                    // (e.g. ~/.gemini/oauth_creds.json missing) surface
+                    // a "Not detected" subtitle so the column reads as
+                    // honest "no data" instead of a perpetually-spinning
+                    // "Connecting…" state. Today only Gemini has the
+                    // file-presence proxy; Claude/Codex's tokens live in
+                    // Keychain / auth.json and detection there happens
+                    // by `model.usage == nil && !needsReauth` for >60s.
+                    if let subtitle = providerSubtitle {
+                        Text(subtitle)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(secondaryText)
+                    }
+                }
                 Spacer()
+            }
+
+            // D4: stale-token banner shown inline (not just in Settings)
+            // when the model surfaced `.unauthenticatedNeedsReauth` from
+            // its poller. Includes a one-click copy-command button for
+            // the provider-specific re-login flow.
+            if model.needsReauth {
+                staleTokenBanner
             }
 
             // Current session
@@ -356,13 +379,27 @@ private struct ProviderColumn: View {
 
             Divider().background(dividerColor)
 
-            // Last updated + refresh
-            HStack {
+            // Last updated + refresh. D7: when the source returned a cached
+            // snapshot with `.unknown` status (parse-miss / 5xx fallback),
+            // surface "Stale · updated Xh ago" so the user knows the
+            // numbers above are last-known-good, not live.
+            HStack(spacing: 8) {
                 if let updatedAt = model.usage?.updatedAt {
-                    (Text("Last updated ") + Text(updatedAt, style: .relative) + Text(" ago"))
-                        .font(.system(size: 12))
-                        .foregroundStyle(secondaryText)
-                        .monospacedDigit()
+                    let stale = model.usage?.status == .unknown
+                    HStack(spacing: 5) {
+                        if stale {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.orange)
+                                .accessibilityLabel("Data is stale")
+                        }
+                        (Text(stale ? "Stale · updated " : "Last updated ")
+                         + Text(updatedAt, style: .relative)
+                         + Text(" ago"))
+                            .font(.system(size: 12))
+                            .foregroundStyle(stale ? Color.orange.opacity(0.85) : secondaryText)
+                            .monospacedDigit()
+                    }
                 } else {
                     Text("Connecting…")
                         .font(.system(size: 12))
@@ -503,6 +540,77 @@ private struct ProviderColumn: View {
     }
 
     // MARK: - Helpers
+
+    /// D8: subtitle shown under the provider name when the local auth
+    /// material isn't detected. Returns nil when the provider is in a
+    /// normal state. Currently only Gemini exposes a file-presence
+    /// proxy (`~/.gemini/oauth_creds.json`); Claude/Codex's tokens live
+    /// in Keychain / `~/.codex/auth.json` and we can't cheaply detect
+    /// "not configured" vs "configured but offline" for them.
+    private var providerSubtitle: String? {
+        guard model.config.id == "gemini" else { return nil }
+        let path = (NSHomeDirectory() as NSString).appendingPathComponent(".gemini/oauth_creds.json")
+        let exists = FileManager.default.fileExists(atPath: path)
+        return exists ? nil : "Not detected · install gemini CLI"
+    }
+
+    /// D4: provider-specific re-login command, used by the stale-token
+    /// banner's "Copy command" button. Returns nil when the provider
+    /// doesn't have a known re-auth incantation.
+    private var reAuthCommand: String? {
+        switch model.config.id {
+        case "claude": return "claude auth login"
+        case "codex":  return "codex auth login"
+        case "gemini": return "gemini auth login"
+        default:       return nil
+        }
+    }
+
+    /// D4: inline banner shown above the session/weekly cards when the
+    /// model's poller surfaced `.unauthenticatedNeedsReauth`. Mirrors the
+    /// banner already in ProvidersSettingsView but lands where the user
+    /// actually looks first (the provider column on the dashboard).
+    @ViewBuilder
+    private var staleTokenBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.system(size: 14))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Token expired")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(primaryText)
+                if let cmd = reAuthCommand {
+                    Text("Run `\(cmd)` in a terminal, then click Refresh below.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Copy command") {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(cmd, forType: .string)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                } else {
+                    Text("Reconnect this provider — see Settings → Providers.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(secondaryText)
+                }
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.orange.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.orange.opacity(0.30), lineWidth: 0.5)
+        )
+    }
 
     private func progressValue(_ pct: Int?) -> Double {
         guard let pct else { return 0 }
