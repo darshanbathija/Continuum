@@ -4,6 +4,20 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.5.6 build 39] - 2026-05-19
+
+### Fixed
+
+- **Token-usage "Daily spend" bar chart now renders on the All-time filter.** Previously gated by an `if store.activeWindow != .allTime` in `AnalyticsView`, which hid the chart for any "All time" selection. The `AnalyticsDailyChart.allTime` code path was already correct — walked the union of activity days ascending, zero-filled gaps — the gate just denied it the chance to render. Removed.
+
+### Added
+
+- **Interactive AskUserQuestion tray in chat.** When the assistant emits an `AskUserQuestion` tool_use, the chat thread now renders an answer card (per-question header + question text + tappable option rows with descriptions) instead of folding into "Ran 1 command". Tap an option → tap "Send answer" → the chosen label routes through the daemon's `/sessions/:id/send` endpoint (same path the composer uses) → Claude Code's interactive picker on the Mac receives the answer text + trailing newline, which acts as Enter for the picker. The tray grays out once the matching `tool_result` lands so the user knows it's been consumed.
+  - **New `AskUserQuestion` Codable struct in `ClawdmeterShared`** with a `fromToolInput(_:)` factory that parses the `{questions: [{question, header, multiSelect, options: [{label, description}]}]}` shape. Decoder-tolerant via the optional `askUserQuestion: AskUserQuestion?` field on `ChatMessage` — v0 messages decode cleanly.
+  - **New `AskUserQuestionTray` view in `ClawdmeterShared/AgentControl/Views/`** with single-select / multi-select support. State persists per tool_use_id across list re-renders.
+  - **Wired into both iOS `liveChatList` and Mac `ChatThreadScroll`.** The chat thread now partitions each `toolRun`'s pairs by tool kind (Edit → diff chip, AskUserQuestion → tray, everything else → generic disclosure).
+  - **Mac answer-send** uses the existing `MacComposerSender` loopback to the daemon, picking up the same rate-limit + audit-log path as a typed prompt.
+
 ## [0.5.5 build 38] - 2026-05-19
 
 ### Added

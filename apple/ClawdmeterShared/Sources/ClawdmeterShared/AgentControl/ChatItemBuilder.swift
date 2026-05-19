@@ -34,6 +34,11 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
     /// calls. Nil for any other tool (Bash, Read, Grep, etc.) and for
     /// non-tool messages.
     public let editStats: EditStats?
+    /// v0.5.6: structured AskUserQuestion payload populated at parse time
+    /// when the assistant emits an `AskUserQuestion` tool_use. Drives the
+    /// interactive tappable tray that replaces the generic "Ran 1
+    /// command" card for AskUserQuestion calls. Nil for any other tool.
+    public let askUserQuestion: AskUserQuestion?
 
     public init(
         id: String,
@@ -43,7 +48,8 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
         detail: String? = nil,
         at: Date,
         isError: Bool = false,
-        editStats: EditStats? = nil
+        editStats: EditStats? = nil,
+        askUserQuestion: AskUserQuestion? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -53,11 +59,12 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
         self.at = at
         self.isError = isError
         self.editStats = editStats
+        self.askUserQuestion = askUserQuestion
     }
 
     // Custom Decodable init so v0 messages persisted before the editStats
-    // field landed still decode cleanly. `decodeIfPresent` defaults the
-    // new field to nil; everything else is unchanged.
+    // field landed still decode cleanly. `decodeIfPresent` defaults each
+    // new field to nil; older messages decode without error.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(String.self, forKey: .id)
@@ -68,10 +75,77 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
         self.at = try c.decode(Date.self, forKey: .at)
         self.isError = (try? c.decode(Bool.self, forKey: .isError)) ?? false
         self.editStats = try c.decodeIfPresent(EditStats.self, forKey: .editStats)
+        self.askUserQuestion = try c.decodeIfPresent(AskUserQuestion.self, forKey: .askUserQuestion)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, title, body, detail, at, isError, editStats
+        case id, kind, title, body, detail, at, isError, editStats, askUserQuestion
+    }
+}
+
+/// v0.5.6: parsed `AskUserQuestion` tool_use payload. Mirrors the input
+/// shape Claude Code's `AskUserQuestion` tool emits — `questions: [...]`
+/// each with a short header, a long question, and a list of options.
+public struct AskUserQuestion: Hashable, Sendable, Codable {
+    public struct Question: Hashable, Sendable, Codable {
+        public let question: String
+        public let header: String
+        public let multiSelect: Bool
+        public let options: [Option]
+
+        public init(question: String, header: String, multiSelect: Bool, options: [Option]) {
+            self.question = question
+            self.header = header
+            self.multiSelect = multiSelect
+            self.options = options
+        }
+    }
+
+    public struct Option: Hashable, Sendable, Codable, Identifiable {
+        public let label: String
+        public let description: String
+
+        public var id: String { label }
+
+        public init(label: String, description: String) {
+            self.label = label
+            self.description = description
+        }
+    }
+
+    public let questions: [Question]
+
+    public init(questions: [Question]) {
+        self.questions = questions
+    }
+
+    /// Try to derive an `AskUserQuestion` from a tool_use's raw `input`
+    /// dict. Returns nil if the input doesn't match the expected shape.
+    public static func fromToolInput(_ input: Any?) -> AskUserQuestion? {
+        guard let dict = input as? [String: Any],
+              let rawQuestions = dict["questions"] as? [[String: Any]] else { return nil }
+        var parsed: [Question] = []
+        for raw in rawQuestions {
+            guard let question = raw["question"] as? String,
+                  let header = raw["header"] as? String,
+                  let rawOptions = raw["options"] as? [[String: Any]] else { continue }
+            let multiSelect = (raw["multiSelect"] as? Bool) ?? false
+            var options: [Option] = []
+            for ro in rawOptions {
+                guard let label = ro["label"] as? String else { continue }
+                let description = (ro["description"] as? String) ?? ""
+                options.append(Option(label: label, description: description))
+            }
+            guard !options.isEmpty else { continue }
+            parsed.append(Question(
+                question: question,
+                header: header,
+                multiSelect: multiSelect,
+                options: options
+            ))
+        }
+        guard !parsed.isEmpty else { return nil }
+        return AskUserQuestion(questions: parsed)
     }
 }
 

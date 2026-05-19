@@ -907,6 +907,12 @@ private struct SessionDetailView: View {
     /// Tracks whether the chat scroll is at the tail so we know when to
     /// auto-scroll on new items vs. surface a "Jump to latest" CTA.
     @State private var liveChatPinnedToBottom: Bool = true
+    /// v0.5.6: per-tool_use_id selection state for AskUserQuestion trays.
+    /// `[toolUseId: [questionHeader: Set<optionLabel>]]`. Lives at the
+    /// detail-view level so picks survive list re-renders during
+    /// streaming bumps. Cleared on send (the tool_result lands and
+    /// disables the tray) or when the user navigates away.
+    @State private var askUserQuestionSelections: [String: [String: Set<String>]] = [:]
 
     init(session: AgentSession, client: AgentControlClient) {
         self.session = session
@@ -1150,15 +1156,39 @@ private struct SessionDetailView: View {
         case .message(let msg):
             liveMessageBubble(msg)
         case .toolRun(_, let pairs):
-            // v0.5.5: partition file-edit pairs into their own row chips
-            // mirroring Claude Code's "Edited <file> +N -M" CLI rendering.
-            // Non-edit pairs fold into the existing tool-run disclosure.
+            // v0.5.5 / v0.5.6: partition by tool kind.
+            //   • Edit/MultiEdit/Write → EditDiffRow chips
+            //   • AskUserQuestion       → interactive AskUserQuestionTray
+            //   • everything else       → generic "Ran N commands" card
             let editPairs = pairs.filter { $0.call.editStats != nil }
-            let otherPairs = pairs.filter { $0.call.editStats == nil }
+            let askPairs  = pairs.filter { $0.call.askUserQuestion != nil }
+            let otherPairs = pairs.filter {
+                $0.call.editStats == nil && $0.call.askUserQuestion == nil
+            }
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(editPairs) { pair in
                     if let stats = pair.call.editStats {
                         EditDiffRow(stats: stats, resultBody: pair.result?.body)
+                    }
+                }
+                ForEach(askPairs) { pair in
+                    if let q = pair.call.askUserQuestion {
+                        AskUserQuestionTray(
+                            question: q,
+                            answered: pair.result != nil,
+                            selections: Binding(
+                                get: { askUserQuestionSelections[pair.id] ?? [:] },
+                                set: { askUserQuestionSelections[pair.id] = $0 }
+                            )
+                        ) { _, options in
+                            // Paste the chosen labels into the agent's
+                            // tmux pane. sendPrompt appends a trailing
+                            // newline so Claude Code's interactive
+                            // picker treats it as Enter; single-select
+                            // pickers accept the typed label as filter.
+                            let answer = options.map(\.label).joined(separator: ", ")
+                            Task { await client.sendPrompt(sessionId: session.id, text: answer) }
+                        }
                     }
                 }
                 if !otherPairs.isEmpty {

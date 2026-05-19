@@ -1556,6 +1556,11 @@ private struct ChatThreadScroll: View {
     /// Tests confirm tapping one row only invalidates that row when reads
     /// flow through `snapshot.items` (T5).
     @State private var expanded: Set<String> = []
+    /// v0.5.6: per-tool_use_id selection state for AskUserQuestion trays.
+    /// `[toolUseId: [questionHeader: Set<optionLabel>]]`. Lives at the
+    /// scroll-view level so picks survive list recycling during
+    /// streaming bumps.
+    @State private var askUserQuestionSelections: [String: [String: Set<String>]] = [:]
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -1715,22 +1720,60 @@ private struct ChatThreadScroll: View {
         case .message(let m):
             messageRow(m)
         case .toolRun(let id, let pairs):
-            // v0.5.5: file-edit pairs (Edit / MultiEdit / Write) render
-            // as inline EditDiffRow chips ("Edited <file> +N -M"); the
-            // rest still fold into the existing "Ran N commands"
-            // disclosure.
+            // v0.5.5/v0.5.6: partition by tool kind:
+            //   • Edit/MultiEdit/Write → inline EditDiffRow chips
+            //   • AskUserQuestion       → interactive AskUserQuestionTray
+            //   • everything else       → "Ran N commands" disclosure
             let editPairs = pairs.filter { $0.call.editStats != nil }
-            let otherPairs = pairs.filter { $0.call.editStats == nil }
+            let askPairs  = pairs.filter { $0.call.askUserQuestion != nil }
+            let otherPairs = pairs.filter {
+                $0.call.editStats == nil && $0.call.askUserQuestion == nil
+            }
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(editPairs) { pair in
                     if let stats = pair.call.editStats {
                         EditDiffRow(stats: stats, resultBody: pair.result?.body)
                     }
                 }
+                ForEach(askPairs) { pair in
+                    if let q = pair.call.askUserQuestion {
+                        AskUserQuestionTray(
+                            question: q,
+                            answered: pair.result != nil,
+                            selections: Binding(
+                                get: { askUserQuestionSelections[pair.id] ?? [:] },
+                                set: { askUserQuestionSelections[pair.id] = $0 }
+                            )
+                        ) { _, options in
+                            // Paste the chosen labels into the session's
+                            // tmux pane via the daemon's existing send
+                            // endpoint. Trailing newline is added by the
+                            // server-side paste-buffer handler so Claude
+                            // Code's picker treats it as Enter.
+                            let answer = options.map(\.label).joined(separator: ", ")
+                            sendAnswerToSession(answer)
+                        }
+                    }
+                }
                 if !otherPairs.isEmpty {
                     toolRunGroup(id: id, pairs: otherPairs)
                 }
             }
+        }
+    }
+
+    /// v0.5.6 — fire-and-forget answer send. Mirrors the existing
+    /// MacComposerSender path used by the main composer; loopback HTTP
+    /// to the local daemon's `/sessions/:id/send`, which routes through
+    /// the same rate-limit + audit-log path as a typed prompt.
+    private func sendAnswerToSession(_ answer: String) {
+        guard !answer.isEmpty,
+              let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort else { return }
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        let sessionId = session.id
+        Task {
+            try? await sender.send(sessionId: sessionId, body: answer, asFollowUp: true)
         }
     }
 

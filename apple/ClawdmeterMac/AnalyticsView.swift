@@ -21,13 +21,17 @@ struct AnalyticsView: View {
                 AnalyticsTotalsGrid(snapshot: snapshot)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                if store.activeWindow != .allTime {
-                    AnalyticsDailyChart(
-                        snapshot: snapshot,
-                        window: store.activeWindow,
-                        providerFilter: .both
-                    )
-                }
+                // v0.5.6: removed the `!= .allTime` gate. The chart's
+                // `.allTime` branch (in `AnalyticsDailyChart`) walks the
+                // union of activity days ascending and zero-fills gaps —
+                // it always had the right behavior, but the gate hid it
+                // for the "All time" window. User feedback flagged the
+                // missing chart on the All-time filter.
+                AnalyticsDailyChart(
+                    snapshot: snapshot,
+                    window: store.activeWindow,
+                    providerFilter: .both
+                )
 
                 repoSection(snapshot: snapshot)
 

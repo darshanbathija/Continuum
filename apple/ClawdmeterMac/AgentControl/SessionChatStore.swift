@@ -749,10 +749,18 @@ struct ParsedLine: Sendable {
                     // "Edited <file> +N -M" chip instead of folding
                     // into the generic "Ran N commands" card.
                     let editStats = EditStats.fromClaudeInput(block["input"], toolName: name)
+                    // v0.5.6: AskUserQuestion lands as an interactive
+                    // tappable tray instead of "Ran 1 command". Parsed
+                    // here from the raw input dict so the view doesn't
+                    // need to re-walk JSON downstream.
+                    let askUserQuestion: AskUserQuestion? = (name == "AskUserQuestion")
+                        ? AskUserQuestion.fromToolInput(block["input"])
+                        : nil
                     out.append(ChatMessage(
                         id: "call:\(toolUseId)", kind: .toolCall, title: name,
                         body: inputSummary, detail: inputDetail, at: at,
-                        editStats: editStats
+                        editStats: editStats,
+                        askUserQuestion: askUserQuestion
                     ))
                 default:
                     break
