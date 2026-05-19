@@ -20,11 +20,18 @@ let package = Package(
     dependencies: [
         // Snapshot testing for primitives (Pass 3 of eng review).
         .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", from: "1.17.0"),
+        // Apple's CommonMark parser. Used by BrainPlanParser to walk the
+        // checklist structure of `implementation_plan.md` so we render
+        // nested steps, ignore prose between lists, and handle fenced
+        // code blocks correctly (eng review 2C fix).
+        .package(url: "https://github.com/apple/swift-markdown", from: "0.4.0"),
     ],
     targets: [
         .target(
             name: "ClawdmeterShared",
-            dependencies: [],
+            dependencies: [
+                .product(name: "Markdown", package: "swift-markdown"),
+            ],
             resources: [
                 // Embedded LiteLLM pricing snapshot (A3 + A20). Refreshed via
                 // `tools/refresh-pricing.sh`; loaded at runtime by `Pricing`.
