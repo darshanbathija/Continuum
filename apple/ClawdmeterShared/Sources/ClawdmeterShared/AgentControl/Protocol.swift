@@ -36,7 +36,16 @@ public enum AgentControlWireVersion {
     /// dict) with PER-PROVIDER fallback in v6 readers (X1 fix: prefer
     /// `usage[id]`, fall back to legacy `<id>` for each provider
     /// independently — prevents data-loss when dict is partial).
-    public static let current: Int = 6
+    /// v7 (2026-05-20) Antigravity 2 native: new `/sessions/:id/antigravity-plan`
+    /// REST endpoint + `antigravity-plan-subscribe` WS op; new
+    /// `AntigravityPlanSnapshot` DTO. `UsageData` gains optional
+    /// `antigravityModel: String?` + `sdkModeActive: Bool?` fields
+    /// (decodeIfPresent; back-compat preserved). The `usage[id]` dict key
+    /// STAYS "gemini" through v7 per locked decision D5 — never rename
+    /// to "antigravity" because v6 iOS clients use the per-provider
+    /// fallback that keys on "gemini" literally; renaming would silently
+    /// strand iOS data.
+    public static let current: Int = 7
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
@@ -51,6 +60,12 @@ public enum AgentControlWireVersion {
     /// `serverWireVersion < this` and surfaces an "Update Clawdmeter on
     /// Mac" banner instead of dropping into a confused state.
     public static let geminiMinimum: Int = 6
+
+    /// Minimum wire version that supports the Antigravity Plan endpoint
+    /// + WS subscribe op (v7 — Antigravity 2 native release). iOS hides
+    /// the Plan tab when `serverWireVersion < this` and shows
+    /// "Update Clawdmeter on Mac for the Plan tab" copy instead.
+    public static let antigravityMinimum: Int = 7
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -82,6 +97,14 @@ public enum AgentControlWireVersion {
     public static func supportsComposeDraft(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= composeDraftMinimum
+    }
+
+    /// Whether the paired Mac is wire v7+ and therefore exposes
+    /// `/sessions/:id/antigravity-plan` + the `antigravity-plan-subscribe`
+    /// WS op. Used by iOS to gate the Plan tab visibility.
+    public static func supportsAntigravityPlan(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= antigravityMinimum
     }
 }
 
@@ -1568,5 +1591,152 @@ public struct ComposeDraft: Codable, Sendable, Equatable, Hashable {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return [:] }
         return obj
+    }
+}
+
+// MARK: - Antigravity Plan wire DTOs (v7)
+
+/// Snapshot of a brain dir's task + steps + annotations + usage, served
+/// by `GET /sessions/:id/antigravity-plan` and pushed via the
+/// `antigravity-plan-subscribe` WS op (wire v7+).
+///
+/// Decoding is forward-compatible: older Macs (v6) don't serve this
+/// shape, so iOS gates the Plan tab on `supportsAntigravityPlan(...)`.
+/// Newer Macs may add fields — iOS uses decodeIfPresent so partial
+/// envelopes still parse cleanly.
+public struct AntigravityPlanSnapshot: Codable, Equatable, Sendable {
+    /// Session id this snapshot is for.
+    public let sessionId: UUID
+    /// Brain UUID (Antigravity's identifier — same as `brain/<uuid>/`
+    /// and `conversations/<uuid>.pb`).
+    public let brainUUID: String
+    /// `task.md` headline (first non-blank line, hash-stripped). Empty
+    /// when the brain dir is in the `.awaitingFirstTurn` state.
+    public let taskHeadline: String
+    /// `task.md` body — everything after the headline, plaintext
+    /// markdown. Empty when no body or awaitingFirstTurn.
+    public let taskBody: String
+    /// Parsed checklist from `implementation_plan.md`. Empty when no
+    /// plan or awaitingFirstTurn.
+    public let planSteps: [WirePlanStep]
+    /// Per-brain annotations (`annotations/*.pbtxt` body).
+    public let annotations: [WireBrainArtifact]
+    /// Coarse token usage. Nil when the data source can't determine
+    /// (Disk mode + encrypted conversation file → nil; SDK mode → real
+    /// per-message totals).
+    public let totalUsage: WireTokenUsage?
+    /// Last-modified timestamp across the brain dir.
+    public let lastUpdated: Date
+    /// Currently selected model display name. Nil when unknown.
+    public let model: String?
+    /// True when SDK mode is active on the daemon (per Settings toggle).
+    /// Nil-coalesces to false on older wire versions.
+    public let sdkModeActive: Bool?
+    /// Awaiting-first-turn flag. When true, the brain dir exists but
+    /// task.md/implementation_plan.md haven't been written yet; the UI
+    /// renders the spinner state. Eng review 2A fix surfaced via the
+    /// wire so iOS doesn't have to re-derive it from empty content.
+    public let awaitingFirstTurn: Bool
+
+    public init(
+        sessionId: UUID,
+        brainUUID: String,
+        taskHeadline: String,
+        taskBody: String,
+        planSteps: [WirePlanStep],
+        annotations: [WireBrainArtifact],
+        totalUsage: WireTokenUsage?,
+        lastUpdated: Date,
+        model: String?,
+        sdkModeActive: Bool?,
+        awaitingFirstTurn: Bool
+    ) {
+        self.sessionId = sessionId
+        self.brainUUID = brainUUID
+        self.taskHeadline = taskHeadline
+        self.taskBody = taskBody
+        self.planSteps = planSteps
+        self.annotations = annotations
+        self.totalUsage = totalUsage
+        self.lastUpdated = lastUpdated
+        self.model = model
+        self.sdkModeActive = sdkModeActive
+        self.awaitingFirstTurn = awaitingFirstTurn
+    }
+}
+
+/// Wire DTO for one step in `implementation_plan.md`. Named `WirePlanStep`
+/// to avoid collision with the existing `PlanStep` (consumed by the v1
+/// PlanTrackerPane). Carries the same data as `BrainPlanStep` (Commit 3)
+/// but flat — sub-steps come through as separate entries with `depth > 0`
+/// instead of nested arrays. Flat shape simplifies JSON encoding +
+/// iOS SwiftUI rendering.
+public struct WirePlanStep: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let label: String
+    public let isComplete: Bool
+    public let depth: Int
+
+    public init(id: String, label: String, isComplete: Bool, depth: Int) {
+        self.id = id
+        self.label = label
+        self.isComplete = isComplete
+        self.depth = depth
+    }
+}
+
+/// Wire DTO for an annotation (`annotations/*.pbtxt`). Surfaces the
+/// filename + plaintext body — Antigravity's annotation schema isn't
+/// fully reverse-engineered, but the body is text-proto so the Plan
+/// pane can render it as a monospace block.
+public struct WireBrainArtifact: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let filename: String
+    public let body: String
+
+    public init(id: String, filename: String, body: String) {
+        self.id = id
+        self.filename = filename
+        self.body = body
+    }
+}
+
+/// Wire DTO for token usage. Optional fields because Disk mode can't
+/// extract them from encrypted conversation files — see the deviation
+/// note in the plan file's "Deviations during implementation" section.
+/// SDK mode populates all four counters; Disk mode populates only the
+/// estimate.
+public struct WireTokenUsage: Codable, Equatable, Sendable {
+    /// Total token count (sum of prompt + candidate + thoughts + cached).
+    /// Disk mode: the `~estimated` value from `ConversationProtoParser`.
+    /// SDK mode: real value from `agent.conversation.total_usage`.
+    public let total: Int
+    /// Prompt (input) tokens. Nil in Disk mode (encryption).
+    public let prompt: Int?
+    /// Candidate (output) tokens. Nil in Disk mode.
+    public let candidate: Int?
+    /// Thoughts (reasoning) tokens. Nil in Disk mode.
+    public let thoughts: Int?
+    /// Cached tokens (from cache hits). Nil in Disk mode.
+    public let cached: Int?
+    /// True when the value is the Disk mode coarse estimate; UI renders
+    /// a `~` provisional marker when true. Nil when unknown — treat as
+    /// false (exact value).
+    public let isEstimate: Bool?
+
+    public init(
+        total: Int,
+        prompt: Int? = nil,
+        candidate: Int? = nil,
+        thoughts: Int? = nil,
+        cached: Int? = nil,
+        isEstimate: Bool? = nil
+    ) {
+        self.total = total
+        self.prompt = prompt
+        self.candidate = candidate
+        self.thoughts = thoughts
+        self.cached = cached
+        self.isEstimate = isEstimate
     }
 }

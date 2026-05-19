@@ -239,10 +239,15 @@ final class SessionsV2Tests: XCTestCase {
         // Bumped 5 → 6 on 2026-05-19 (Gemini provider): extends AgentKind
         // with .gemini, ModelCatalog gains gemini array, /usage envelope
         // ships dual-shape (legacy claude/codex + new usage dict).
-        XCTAssertEqual(AgentControlWireVersion.current, 6)
+        // Bumped 6 → 7 on 2026-05-20 (Antigravity 2 native): adds
+        // /sessions/:id/antigravity-plan endpoint + antigravity-plan-subscribe
+        // WS op + AntigravityPlanSnapshot DTO + UsageData.antigravityModel
+        // + UsageData.sdkModeActive (decodeIfPresent — back-compat preserved).
+        XCTAssertEqual(AgentControlWireVersion.current, 7)
         XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
         XCTAssertEqual(AgentControlWireVersion.chatSubscribeMinimum, 5)
         XCTAssertEqual(AgentControlWireVersion.geminiMinimum, 6)
+        XCTAssertEqual(AgentControlWireVersion.antigravityMinimum, 7)
     }
 
     // MARK: - Mid-session change requests

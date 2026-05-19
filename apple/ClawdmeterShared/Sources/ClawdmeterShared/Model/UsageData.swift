@@ -33,6 +33,19 @@ public struct UsageData: Codable, Equatable, Sendable {
     public let representativeClaim: BindingWindow
     public let updatedAt: Date           // server-time, parsed from API response `date:` header
     public let organizationID: String?   // surfaced for V2 multi-account (see plan roadmap)
+    /// Wire v7: display name of the currently-selected Antigravity 2 model
+    /// (e.g. "gemini-3.5-flash"). Resolved by the Mac from the live
+    /// LanguageServerClient or — when LS isn't available — from
+    /// `antigravity_state.pbtxt`'s `last_selected_agent_model` token.
+    /// Nil for non-Gemini providers and for older wire versions.
+    /// decodeIfPresent — back-compat with v6 readers.
+    public let antigravityModel: String?
+    /// Wire v7: true when the daemon is running with SDK mode toggle ON
+    /// (Python sidecar provisioned + observer.py active). Drives the
+    /// "· SDK mode" vs "· disk mode" subtitle on the analytics row.
+    /// Nil for older wire versions; treat nil as `false` (Disk mode).
+    /// decodeIfPresent — back-compat with v6 readers.
+    public let sdkModeActive: Bool?
 
     public init(
         sessionPct: Int,
@@ -44,7 +57,9 @@ public struct UsageData: Codable, Equatable, Sendable {
         status: Status,
         representativeClaim: BindingWindow,
         updatedAt: Date,
-        organizationID: String? = nil
+        organizationID: String? = nil,
+        antigravityModel: String? = nil,
+        sdkModeActive: Bool? = nil
     ) {
         self.sessionPct = sessionPct
         self.sessionResetMins = sessionResetMins
@@ -56,6 +71,53 @@ public struct UsageData: Codable, Equatable, Sendable {
         self.representativeClaim = representativeClaim
         self.updatedAt = updatedAt
         self.organizationID = organizationID
+        self.antigravityModel = antigravityModel
+        self.sdkModeActive = sdkModeActive
+    }
+
+    // MARK: - Custom Codable (back-compat with v6)
+
+    enum CodingKeys: String, CodingKey {
+        case sessionPct, sessionResetMins, sessionEpoch
+        case weeklyPct, weeklyResetMins, weeklyEpoch
+        case status, representativeClaim, updatedAt
+        case organizationID
+        case antigravityModel, sdkModeActive
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionPct = try c.decode(Int.self, forKey: .sessionPct)
+        self.sessionResetMins = try c.decode(Int.self, forKey: .sessionResetMins)
+        self.sessionEpoch = try c.decode(Int.self, forKey: .sessionEpoch)
+        self.weeklyPct = try c.decode(Int.self, forKey: .weeklyPct)
+        self.weeklyResetMins = try c.decode(Int.self, forKey: .weeklyResetMins)
+        self.weeklyEpoch = try c.decode(Int.self, forKey: .weeklyEpoch)
+        self.status = try c.decode(Status.self, forKey: .status)
+        self.representativeClaim = try c.decode(BindingWindow.self, forKey: .representativeClaim)
+        self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        self.organizationID = try c.decodeIfPresent(String.self, forKey: .organizationID)
+        // v7 fields — decodeIfPresent so older wire payloads still decode
+        // cleanly. Newer clients reading older payloads get nil here,
+        // which renders the same as Disk mode (subtitle = "· disk mode").
+        self.antigravityModel = try c.decodeIfPresent(String.self, forKey: .antigravityModel)
+        self.sdkModeActive = try c.decodeIfPresent(Bool.self, forKey: .sdkModeActive)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(sessionPct, forKey: .sessionPct)
+        try c.encode(sessionResetMins, forKey: .sessionResetMins)
+        try c.encode(sessionEpoch, forKey: .sessionEpoch)
+        try c.encode(weeklyPct, forKey: .weeklyPct)
+        try c.encode(weeklyResetMins, forKey: .weeklyResetMins)
+        try c.encode(weeklyEpoch, forKey: .weeklyEpoch)
+        try c.encode(status, forKey: .status)
+        try c.encode(representativeClaim, forKey: .representativeClaim)
+        try c.encode(updatedAt, forKey: .updatedAt)
+        try c.encodeIfPresent(organizationID, forKey: .organizationID)
+        try c.encodeIfPresent(antigravityModel, forKey: .antigravityModel)
+        try c.encodeIfPresent(sdkModeActive, forKey: .sdkModeActive)
     }
 
     /// Mood derived from session usage. Drives gauge color and animation cadence.
