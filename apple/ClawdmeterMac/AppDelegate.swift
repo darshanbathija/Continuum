@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var claudeController: ProviderStatusController?
     private var codexController: ProviderStatusController?
+    private var geminiController: ProviderStatusController?
 
     private var prefsObserver: NSObjectProtocol?
     private var windowCloseObserver: NSObjectProtocol?
@@ -59,6 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if codexController == nil {
             codexController = ProviderStatusController(model: runtime.codexModel)
+        }
+        if geminiController == nil {
+            geminiController = ProviderStatusController(model: runtime.geminiModel)
         }
         installObserversIfNeeded()
         applyVisibilityFromPrefs()
@@ -172,8 +176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Both default-on so first-launch users see what the docs promise.
         let claudeShown = defaults.object(forKey: ProviderStatusController.prefKey("claude")) as? Bool ?? true
         let codexShown = defaults.object(forKey: ProviderStatusController.prefKey("codex")) as? Bool ?? true
+        let geminiShown = defaults.object(forKey: ProviderStatusController.prefKey("gemini")) as? Bool ?? true
         claudeController?.setVisible(claudeShown)
         codexController?.setVisible(codexShown)
+        geminiController?.setVisible(geminiShown)
     }
 }
 

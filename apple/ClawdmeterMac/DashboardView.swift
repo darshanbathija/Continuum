@@ -10,6 +10,7 @@ import ClawdmeterShared
 struct DashboardView: View {
     @ObservedObject var claudeModel: AppModel
     @ObservedObject var codexModel: AppModel
+    @ObservedObject var geminiModel: AppModel
     @ObservedObject var usageHistoryStore: UsageHistoryStore
     @ObservedObject var sessionsModel: SessionsModel
 
@@ -20,6 +21,7 @@ struct DashboardView: View {
     /// behaviour matches what the docs promise.
     @AppStorage("clawdmeter.claude.menuBarShown") private var claudeMenuBarShown: Bool = true
     @AppStorage("clawdmeter.codex.menuBarShown") private var codexMenuBarShown: Bool = true
+    @AppStorage("clawdmeter.gemini.menuBarShown") private var geminiMenuBarShown: Bool = true
 
     /// Sessions feature toggle (T18 feature flag). Default true — the
     /// SwiftUI-side check; AppRuntime also gates daemon startup on it.
@@ -60,6 +62,39 @@ struct DashboardView: View {
         case sessions = "Sessions"
     }
 
+    /// 3-col / 2-col / 1-col responsive layout per D10. Breakpoints mirror
+    /// the Sessions tab's <1100pt collapse pattern.
+    @ViewBuilder
+    private func providerColumns(width: CGFloat) -> some View {
+        if width >= 1200 {
+            HStack(spacing: 0) {
+                ProviderColumn(model: claudeModel)
+                Divider()
+                ProviderColumn(model: codexModel)
+                Divider()
+                ProviderColumn(model: geminiModel)
+            }
+        } else if width >= 800 {
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    ProviderColumn(model: claudeModel)
+                    Divider()
+                    ProviderColumn(model: codexModel)
+                }
+                Divider()
+                ProviderColumn(model: geminiModel)
+            }
+        } else {
+            VStack(spacing: 0) {
+                ProviderColumn(model: claudeModel)
+                Divider()
+                ProviderColumn(model: codexModel)
+                Divider()
+                ProviderColumn(model: geminiModel)
+            }
+        }
+    }
+
     private var tabStrip: some View {
         HStack(spacing: 0) {
             ForEach(visibleTabs, id: \.self) { tab in
@@ -94,11 +129,14 @@ struct DashboardView: View {
         case .usage:
             ScrollView {
                 VStack(spacing: 0) {
-                    HStack(spacing: 0) {
-                        ProviderColumn(model: claudeModel)
-                        Divider()
-                        ProviderColumn(model: codexModel)
+                    // 3-col responsive layout per D10: ≥1200pt = 3 cols
+                    // side-by-side, 800-1200pt = 2 cols (Claude+Codex top,
+                    // Gemini below), <800pt = single-column vertical.
+                    // Mirrors the Sessions tab's existing collapse pattern.
+                    GeometryReader { proxy in
+                        providerColumns(width: proxy.size.width)
                     }
+                    .frame(minHeight: 460)
                     Divider()
                     if #available(macOS 13, *) {
                         AnalyticsView(store: usageHistoryStore)
@@ -136,6 +174,10 @@ struct DashboardView: View {
                     .foregroundStyle(primaryText)
 
                 Toggle("Codex", isOn: $codexMenuBarShown)
+                    .toggleStyle(.checkbox)
+                    .foregroundStyle(primaryText)
+
+                Toggle("Gemini", isOn: $geminiMenuBarShown)
                     .toggleStyle(.checkbox)
                     .foregroundStyle(primaryText)
             }
@@ -362,7 +404,10 @@ private struct ProviderColumn: View {
         // Codex's auto-revive isn't implemented (ChatGPT backend uses SSE
         // streaming, not a one-shot completion call). Disable the toggle
         // and explain inline.
-        let autoReviveSupported = (model.config.id == "claude")
+        // Auto-revive toggle gated on the provider's own capability flag
+        // (see ProviderConfig.supportsAutoRevive). Eliminates the previous
+        // `id == "claude"` hardcode (per E3 #3 / Codex P1(6)).
+        let autoReviveSupported = model.config.supportsAutoRevive
 
         VStack(alignment: .leading, spacing: 12) {
             Button(action: { withAnimation(.snappy) { advancedExpanded.toggle() } }) {

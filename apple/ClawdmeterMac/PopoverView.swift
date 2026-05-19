@@ -249,7 +249,10 @@ struct PopoverView: View {
                     // surface area than a "Hi" ping deserves. Disable for
                     // Codex; only Claude's Anthropic Messages endpoint is
                     // simple enough to be a one-shot 1-token call.
-                    let autoReviveSupported = (model.config.id == "claude")
+                    // Gated on ProviderConfig.supportsAutoRevive (E3 #3 /
+                    // Codex P1(6) refactor — eliminates `id == "claude"`
+                    // hardcode).
+                    let autoReviveSupported = model.config.supportsAutoRevive
 
                     Toggle(isOn: $autoReviveEnabled) {
                         VStack(alignment: .leading, spacing: 3) {

@@ -237,12 +237,13 @@ struct MenuBarGaugeView: View {
     }
 
     /// Whether to render this provider's badge in monochrome template mode.
-    /// Both current assets are alpha-only marks designed for menu bar tinting:
+    /// All current assets are alpha-only marks designed for menu bar tinting:
     ///   - ClaudeLogo: the Anthropic burst (SVG, fill auto-tinted)
     ///   - CodexLogo: sourced from /Applications/Codex.app — codexTemplate.png
     ///     is Apple's standard "template" PNG (alpha mask, tints with menu bar)
+    ///   - GeminiLogo: 4-pointed Gemini star (SVG, fill auto-tinted)
     static func isTemplateAsset(_ name: String) -> Bool {
-        name == "ClaudeLogo" || name == "CodexLogo"
+        name == "ClaudeLogo" || name == "CodexLogo" || name == "GeminiLogo"
     }
 
     /// Backwards-compat shim until callers migrate to `providerBadgeImage`.

@@ -19,6 +19,7 @@ final class AppRuntime: ObservableObject {
 
     let claudeModel: AppModel
     let codexModel: AppModel
+    let geminiModel: AppModel
     let usageHistoryStore: UsageHistoryStore
 
     // Sessions feature (Phase 1 + 2 + supervisor):
@@ -57,14 +58,26 @@ final class AppRuntime: ObservableObject {
             tokenProvider: codexTokenProvider
         )
 
+        // Gemini: OAuth token from `~/.gemini/oauth_creds.json` (Gemini CLI
+        // manages this) → poll Antigravity's cloudcode-pa quota endpoint.
+        // Same TOS posture as CodexSource against chatgpt.com/backend-api;
+        // documented in CLAUDE.md.
+        let geminiTokenProvider = GeminiTokenProvider()
+        self.geminiModel = AppModel(
+            config: .gemini,
+            source: GeminiSource(tokenProvider: geminiTokenProvider),
+            tokenProvider: geminiTokenProvider
+        )
+
         // Don't forward objectWillChange — it was saturating main thread with
         // SwiftUI invalidations and starving the per-poller main-queue hops
         // for the slower provider. Let each MenuBarGaugeView observe its own
         // model directly.
 
-        // Start both pollers immediately. AppModel.start() is idempotent.
+        // Start all pollers immediately. AppModel.start() is idempotent.
         claudeModel.start()
         codexModel.start()
+        geminiModel.start()
 
         // Analytics history: walks the on-disk JSONL caches, computes
         // calendar-day-aligned totals, mirrors the snapshot into iCloud KV
@@ -107,6 +120,7 @@ final class AppRuntime: ObservableObject {
         self.agentControlServer.attachUsageSources(
             claude: self.claudeModel,
             codex: self.codexModel,
+            gemini: self.geminiModel,
             history: self.usageHistoryStore
         )
         self.sessionsModel = SessionsModel(

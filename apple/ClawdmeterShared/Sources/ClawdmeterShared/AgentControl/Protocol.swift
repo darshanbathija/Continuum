@@ -1429,17 +1429,69 @@ public struct TranscriptEnvelope: Codable, Sendable {
 /// Apple Developer entitlement — the iPhone just polls this every 30s
 /// from the same paired Tailscale connection it uses for Sessions.
 public struct UsageEnvelope: Codable, Sendable {
+    /// Legacy top-level fields — kept for v5 clients reading a v6 server.
+    /// v6+ clients prefer the `usage` dict below; legacy is the fallback
+    /// path. See plan E2/X1 wire dual-shape contract.
     public let claude: UsageData?
     public let codex: UsageData?
+    /// Per-provider dict added in wire v6 (2026-05-19 Gemini provider).
+    /// Keyed by `providerID` (matches `UsageRecord.Provider.rawValue`).
+    /// v6 clients prefer this dict per-provider, falling back to the
+    /// legacy fields independently per provider (X1 fix: per-provider
+    /// fallback prevents data-loss when the dict is partial — e.g.
+    /// `{usage: {gemini: …}}` without `claude`/`codex` keys still lets
+    /// legacy fields carry those providers through).
+    public let usage: [String: UsageData]?
     /// Server-side wall-clock when the snapshot was assembled. The
     /// iPhone uses this to age the gauges ("Last checked X ago") so
     /// the user knows when the Mac last actually polled the providers.
     public let lastChecked: Date
 
-    public init(claude: UsageData?, codex: UsageData?, lastChecked: Date) {
+    public init(
+        claude: UsageData?,
+        codex: UsageData?,
+        usage: [String: UsageData]? = nil,
+        lastChecked: Date
+    ) {
         self.claude = claude
         self.codex = codex
+        self.usage = usage
         self.lastChecked = lastChecked
+    }
+
+    /// Per-provider read with E2/X1 fallback semantics. v6 clients call
+    /// this once per provider; the implementation prefers the dict and
+    /// falls back to legacy fields independently for each id, preventing
+    /// data-loss when the dict is partial.
+    public func usageData(for providerID: String) -> UsageData? {
+        if let dict = usage, let snapshot = dict[providerID] {
+            return snapshot
+        }
+        switch providerID {
+        case "claude": return claude
+        case "codex":  return codex
+        default:       return nil
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case claude, codex, usage, lastChecked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.claude = try c.decodeIfPresent(UsageData.self, forKey: .claude)
+        self.codex = try c.decodeIfPresent(UsageData.self, forKey: .codex)
+        self.usage = try c.decodeIfPresent([String: UsageData].self, forKey: .usage)
+        self.lastChecked = try c.decode(Date.self, forKey: .lastChecked)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(claude, forKey: .claude)
+        try c.encodeIfPresent(codex, forKey: .codex)
+        try c.encodeIfPresent(usage, forKey: .usage)
+        try c.encode(lastChecked, forKey: .lastChecked)
     }
 }
 

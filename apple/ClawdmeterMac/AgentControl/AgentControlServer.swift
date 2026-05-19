@@ -68,6 +68,7 @@ public final class AgentControlServer {
     /// attached yet (cold start, tests).
     private weak var claudeModel: AppModel?
     private weak var codexModel: AppModel?
+    private weak var geminiModel: AppModel?
     private weak var usageHistory: UsageHistoryStore?
 
     private var listener: NWListener?
@@ -135,10 +136,12 @@ public final class AgentControlServer {
     public func attachUsageSources(
         claude: AppModel?,
         codex: AppModel?,
+        gemini: AppModel? = nil,
         history: UsageHistoryStore?
     ) {
         self.claudeModel = claude
         self.codexModel = codex
+        self.geminiModel = gemini
         self.usageHistory = history
     }
 
@@ -1672,9 +1675,19 @@ public final class AgentControlServer {
     /// requires a paid Apple Developer entitlement). Wire shape:
     /// `{claude: UsageData?, codex: UsageData?, lastChecked: Date}`.
     private func handleGetUsage(connection: NWConnection) {
+        // Dual-shape envelope per E2/X1 contract: emit BOTH legacy
+        // `{claude, codex}` top-level fields AND new `usage` dict. v5
+        // clients read legacy; v6+ prefer dict with per-provider fallback
+        // to legacy. Servers always emit both while wireVersion == 6
+        // (legacy fields removed at v7, future v0.8).
+        var dict: [String: UsageData] = [:]
+        if let c = claudeModel?.usage { dict["claude"] = c }
+        if let x = codexModel?.usage  { dict["codex"]  = x }
+        if let g = geminiModel?.usage { dict["gemini"] = g }
         let payload = UsageEnvelope(
             claude: claudeModel?.usage,
             codex: codexModel?.usage,
+            usage: dict,
             lastChecked: Date()
         )
         let encoder = JSONEncoder()

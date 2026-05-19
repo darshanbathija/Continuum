@@ -34,6 +34,7 @@ struct ClawdmeterMacApp: App {
             DashboardView(
                 claudeModel: runtime.claudeModel,
                 codexModel: runtime.codexModel,
+                geminiModel: runtime.geminiModel,
                 usageHistoryStore: runtime.usageHistoryStore,
                 sessionsModel: runtime.sessionsModel
             )
@@ -85,6 +86,13 @@ struct ClawdmeterMacApp: App {
                     codexModel: runtime.codexModel
                 )
                 .tabItem { Label("General", systemImage: "gearshape") }
+
+                ProvidersSettingsView(
+                    claudeModel: runtime.claudeModel,
+                    codexModel: runtime.codexModel,
+                    geminiModel: runtime.geminiModel
+                )
+                .tabItem { Label("Providers", systemImage: "person.crop.rectangle.stack") }
 
                 PairingSettingsView(runtime: runtime)
                     .tabItem { Label("Sessions", systemImage: "rectangle.connected.to.line.below") }

@@ -37,6 +37,7 @@
 		358CD1C23BCFA5602E805A41 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E414059E5EEBAE58913412B /* AppTheme.swift */; };
 		35FF2B2D02857186CD94E7E1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6576347309635291F6B4C01B /* Assets.xcassets */; };
 		370187D5FB528DC613BE368B /* SessionConfigChanger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCD917577DAE8F4BE5BCA99 /* SessionConfigChanger.swift */; };
+		389C34543E4E3E857E98DC40 /* GeminiLogo.svg in Resources */ = {isa = PBXBuildFile; fileRef = 61DCEB1020CBB0E324C60959 /* GeminiLogo.svg */; };
 		3C1B58E34AA8D8FC4831DBAF /* ClawdmeterMacWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748E1F1BC9C3BDE9E666458C /* ClawdmeterMacWidgets.swift */; };
 		3D153FBD1EF5FB96D68B6AA4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE1C3B5FDF4AB46F3A7B4FC6 /* SettingsView.swift */; };
 		3D7C8FFD8D4435D633FE91F1 /* AgentEventStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9881A0E3387C6A605D8D83 /* AgentEventStream.swift */; };
@@ -137,6 +138,7 @@
 		F2246425775CDC80F361A49E /* APNSCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21239F87404DC4B4E7F21AB7 /* APNSCredentialStore.swift */; };
 		F2A463341EA0924E426712F0 /* MentionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 797168CA4C5227800441FD18 /* MentionPicker.swift */; };
 		F4C4D33C87EA884DB52B4654 /* UsageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10D345820EF090F6426A9E0 /* UsageModel.swift */; };
+		F945360BFE5147E7FAF7250C /* ProvidersSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945D7D6CDA1A0EAB8C5ABD29 /* ProvidersSettingsView.swift */; };
 		FAAF4E8871EF0B2D53A935A7 /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 1B6F19371B0A6808926B1EA9 /* ClawdmeterShared */; };
 		FC09E87265C8C2DFEF77D40F /* MacTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68EF91556CDC1149B2B2C480 /* MacTerminalView.swift */; };
 		FD9C682E80F548EAF56E6B16 /* AgentControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A48C1F28E237626714EF1272 /* AgentControlClient.swift */; };
@@ -257,6 +259,7 @@
 		5FE801BE3944A9DD21D9452C /* LiveActivityCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityCoordinator.swift; sourceTree = "<group>"; };
 		60C622DD99169A6ABCBC6F8C /* UsageStatusChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageStatusChip.swift; sourceTree = "<group>"; };
 		60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSpawner.swift; sourceTree = "<group>"; };
+		61DCEB1020CBB0E324C60959 /* GeminiLogo.svg */ = {isa = PBXFileReference; path = GeminiLogo.svg; sourceTree = "<group>"; };
 		64C634F7C5D8CBEF39FAA084 /* SessionActivityStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionActivityStrip.swift; sourceTree = "<group>"; };
 		6576347309635291F6B4C01B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		68EF91556CDC1149B2B2C480 /* MacTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTerminalView.swift; sourceTree = "<group>"; };
@@ -282,6 +285,7 @@
 		925041B8C85D144E1647A0E6 /* RateLimiter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RateLimiter.swift; sourceTree = "<group>"; };
 		93A894C6B7326CFA1F502397 /* PRReviewPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRReviewPane.swift; sourceTree = "<group>"; };
 		93D530AD60605887515476C0 /* iOSDiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSDiffView.swift; sourceTree = "<group>"; };
+		945D7D6CDA1A0EAB8C5ABD29 /* ProvidersSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvidersSettingsView.swift; sourceTree = "<group>"; };
 		94EDF3CEF7F199E2380D7927 /* WireInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireInspector.swift; sourceTree = "<group>"; };
 		96732148372DBB9D002F93B9 /* ClawdmeteriOSWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeteriOSWidgets.swift; sourceTree = "<group>"; };
 		96C2DF0BC33E8B4A3197CFDD /* DaemonChatStoreRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonChatStoreRegistry.swift; sourceTree = "<group>"; };
@@ -499,6 +503,7 @@
 				F4AB727DC3A2913C9B91A989 /* PairingSettingsView.swift */,
 				1362703230C869345B8AF6F7 /* PopoverView.swift */,
 				F7744A52822D779D5A3A61FD /* ProviderConfig.swift */,
+				945D7D6CDA1A0EAB8C5ABD29 /* ProvidersSettingsView.swift */,
 				7F3AB01400D1F534506FEF4B /* SessionsView.swift */,
 				24E844E6256A865A0DFEEF18 /* UsageQueryService.swift */,
 				02FCCC418BA0C1695E829FB9 /* AgentControl */,
@@ -642,6 +647,7 @@
 			children = (
 				989678078117646A9327BB0B /* ClaudeLogo.svg */,
 				41B60D6E8F440791CA97B015 /* CodexLogo.png */,
+				61DCEB1020CBB0E324C60959 /* GeminiLogo.svg */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -888,6 +894,7 @@
 				0127E090A7799D2F4A7BC9BB /* Assets.xcassets in Resources */,
 				4A027F14FB57C10128699164 /* ClaudeLogo.svg in Resources */,
 				C97F41751616AF2672BAA590 /* CodexLogo.png in Resources */,
+				389C34543E4E3E857E98DC40 /* GeminiLogo.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -953,6 +960,7 @@
 				C25E52ACBC77D484C6E4A117 /* PluginRegistry.swift in Sources */,
 				7886C417E861C566EE86D686 /* PopoverView.swift in Sources */,
 				5432E5C01B962FF077E05110 /* ProviderConfig.swift in Sources */,
+				F945360BFE5147E7FAF7250C /* ProvidersSettingsView.swift in Sources */,
 				DCA8543E3CD0D2378D6C6BC3 /* PseudoTerminal.swift in Sources */,
 				23D6E3DB6CFE748F738370BA /* RateLimiter.swift in Sources */,
 				EC15D5F8B7BC3F151C890C8C /* RepoIndex.swift in Sources */,
