@@ -232,28 +232,51 @@ final class GeminiProviderLaneATests: XCTestCase {
         XCTAssertTrue(provider.isTokenExpired, "Fixture's expiry_date is in the past — D4 stale-token UX trigger")
     }
 
-    // MARK: - GeminiUsageParser smoke
+    // MARK: - AntigravityUsageParser smoke (v0.6.0 — replaces GeminiUsageParser per D1)
 
-    func test_geminiUsageParser_parsesUserTurns_skipsSlashCommands() throws {
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-gemini-logs")
-        try FileManager.default.createDirectory(at: temp.appendingPathComponent("test-repo"), withIntermediateDirectories: true)
-        let logsURL = temp.appendingPathComponent("test-repo/logs.json")
-        let payload = """
-        [
-          { "sessionId": "s1", "messageId": 0, "type": "user", "message": "hello world", "timestamp": "2026-05-19T08:00:00.000Z" },
-          { "sessionId": "s1", "messageId": 1, "type": "user", "message": "/quit", "timestamp": "2026-05-19T08:00:01.000Z" },
-          { "sessionId": "s1", "messageId": 2, "type": "user", "message": "another prompt", "timestamp": "2026-05-19T08:00:02.000Z" }
-        ]
-        """.data(using: .utf8)!
-        try payload.write(to: logsURL)
+    /// v0.6.0 replaces the Gemini CLI v0.42 `logs.json` path with the
+    /// Antigravity 2 `conversations/<uuid>.pb` + brain dir layout. The
+    /// new parser is encryption-aware (see Commit 4 — Antigravity 2
+    /// encrypts conversation .pb files at rest) and falls back to
+    /// metadata-based usage estimates from the brain dir.
+    func test_antigravityUsageParser_emitsRecordPerConversation() throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-antigravity")
+        let brainUUID = "11111111-1111-4111-8111-111111111111"
+        let brain = temp.appendingPathComponent("brain/\(brainUUID)", isDirectory: true)
+        let conversations = temp.appendingPathComponent("conversations", isDirectory: true)
+        try FileManager.default.createDirectory(at: brain, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: conversations, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        let records = try GeminiUsageParser.parse(file: logsURL)
-        XCTAssertEqual(records.count, 2, "Slash-command `/quit` must be filtered out")
+        // Two metadata files = 2 turns.
+        try "{}".write(to: brain.appendingPathComponent("task.md.metadata.json"), atomically: true, encoding: .utf8)
+        try "{}".write(to: brain.appendingPathComponent("implementation_plan.md.metadata.json"), atomically: true, encoding: .utf8)
+        try String(repeating: "x", count: 400).write(to: brain.appendingPathComponent("task.md"), atomically: true, encoding: .utf8)
+
+        // Encrypted-looking conversation file (random bytes).
+        var randomBytes = [UInt8](repeating: 0, count: 1024)
+        for i in 0..<randomBytes.count { randomBytes[i] = UInt8.random(in: 0...255) }
+        let convURL = conversations.appendingPathComponent("\(brainUUID).pb")
+        try Data(randomBytes).write(to: convURL)
+
+        // Build a minimal brain index pointing at this brain.
+        let index = BrainSummaryIndex(
+            byUUID: [brainUUID: BrainSummary(brainUUID: brainUUID, cwd: URL(fileURLWithPath: "/Users/test/Repo"))],
+            byCwdPath: ["/users/test/repo": [brainUUID]]
+        )
+
+        let records = try AntigravityUsageParser.parse(
+            conversationURL: convURL,
+            antigravityDataDir: temp,
+            brainIndex: index,
+            modelName: "gemini-3.5-flash"
+        )
+        XCTAssertEqual(records.count, 1)
         XCTAssertEqual(records.first?.provider, .gemini)
-        XCTAssertEqual(records.first?.repo, "test-repo")
-        XCTAssertEqual(records.first?.tokens.requestCount, 1)
-        XCTAssertEqual(records.first?.tokens.costUSD, 0, "Gemini records carry no cost — analytics surfaces request count instead")
+        XCTAssertEqual(records.first?.tokens.requestCount, 2, "2 metadata.json files = 2 turns")
+        XCTAssertEqual(records.first?.model, "gemini-3.5-flash")
+        XCTAssertEqual(records.first?.repo, "/Users/test/Repo")
+        XCTAssertEqual(records.first?.dedupKey, "antigravity:\(brainUUID)")
     }
 
     // MARK: - QA ISSUE-001 regression: D7 stale-fallback emission must replace

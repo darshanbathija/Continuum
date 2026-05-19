@@ -667,22 +667,32 @@ struct ParsedLine: Sendable {
         }
     }
 
-    /// Gemini JSONL chat decoder. Thin wrapper over
-    /// `GeminiJSONLParser.decode` — the pure transform lives in Shared
-    /// (testable + iOS-readable). Threads the `stableId` cursor through
-    /// and wraps the resulting `[ChatMessage]` in a `ParsedLine` for the
-    /// Mac staging pipeline.
+    /// Gemini JSONL chat decoder — DEPRECATED in v0.6.0.
+    ///
+    /// Per locked plan decision D1 ("v2-only — drop the Gemini CLI v0.42
+    /// path entirely"), Antigravity 2 stopped writing the per-session
+    /// JSONL files (`~/.gemini/tmp/<repo>/chats/session-*.jsonl`) that
+    /// GeminiJSONLParser consumed. Antigravity 2 writes encrypted
+    /// `conversations/<uuid>.pb` files instead — see Commit 4's
+    /// `ConversationProtoParser` for the encryption finding.
+    ///
+    /// In Disk mode (default), the Sessions IDE chat pane for Gemini
+    /// sessions stays empty — the Plan pane (Commit 8) is the primary
+    /// surface for Antigravity 2 sessions. In SDK mode (Commit 10), the
+    /// Python sidecar's observer.py decodes conversation messages via
+    /// the SDK's introspection API.
+    ///
+    /// We keep the discriminator (`type: "gemini"`, `type: "model"`,
+    /// `type: "user"` without `message`) so any STILL-EXISTING legacy
+    /// v0.42 JSONL on the user's disk parses to "empty chat" rather
+    /// than throwing.
     private static func decodeGeminiLine(json: [String: Any], at: Date) -> ParsedLine? {
-        let messages = GeminiJSONLParser.decode(json: json, at: at) { suffix in
-            SessionChatStore.stableId(json, suffix: suffix)
-        }
-        guard !messages.isEmpty else { return nil }
-        return ParsedLine(
-            timestamp: at, messages: messages,
-            deltaInputTokens: 0, deltaOutputTokens: 0,
-            deltaCacheCreationTokens: 0, deltaCacheReadTokens: 0,
-            model: nil
-        )
+        // v0.42 JSONL files (~/.gemini/tmp/...) may still exist on disk
+        // for users mid-migration. We don't parse them — Antigravity 2
+        // is v2-only per D1. Return nil so the line is silently dropped.
+        _ = json
+        _ = at
+        return nil
     }
 
     /// Codex JSONL chat decoder. Thin wrapper over

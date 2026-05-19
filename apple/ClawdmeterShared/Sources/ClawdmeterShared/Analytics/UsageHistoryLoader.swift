@@ -37,9 +37,11 @@ public actor UsageHistoryLoader {
         let home = URL(fileURLWithPath: NSHomeDirectory())
         self.claudeDir = claudeDir ?? home.appendingPathComponent(".claude/projects", isDirectory: true)
         self.codexDir = codexDir ?? home.appendingPathComponent(".codex/sessions", isDirectory: true)
-        // Gemini CLI writes per-repo logs under `~/.gemini/tmp/<repo>/logs.json`.
-        // `GeminiUsageParser` walks this tree; missing dir is a no-op.
-        self.geminiDir = geminiDir ?? home.appendingPathComponent(".gemini/tmp", isDirectory: true)
+        // v0.6.0: Antigravity 2 native. Replaces Gemini CLI v0.42's
+        // ~/.gemini/tmp/<repo>/logs.json (which Antigravity stopped writing).
+        // AntigravityUsageParser walks ~/.gemini/antigravity/conversations/*.pb
+        // and resolves UUIDs to repos via BrainSummaryIndexer.
+        self.geminiDir = geminiDir ?? home.appendingPathComponent(".gemini/antigravity/conversations", isDirectory: true)
         self.cacheURL = cacheURL ?? Self.defaultCacheURL()
         self.pricing = pricing
     }
@@ -86,7 +88,20 @@ public actor UsageHistoryLoader {
 
         let claudeFiles = enumerate(dir: claudeDir, suffix: ".jsonl")
         let codexFiles = enumerate(dir: codexDir, suffix: ".jsonl")
-        let geminiFiles = enumerate(dir: geminiDir, suffix: "logs.json")
+        // v0.6.0 Antigravity 2: per-conversation .pb files in
+        // ~/.gemini/antigravity/conversations/. Pre-build the brain index
+        // once per load so the per-file parser doesn't re-read the
+        // global index for every conversation.
+        let geminiFiles = enumerate(dir: geminiDir, suffix: ".pb")
+        let antigravityDataDir = geminiDir.deletingLastPathComponent()
+        let brainIndex = BrainSummaryIndexer.read(
+            at: antigravityDataDir.appendingPathComponent("agyhub_summaries_proto.pb")
+        )
+        // Read the current model from antigravity_state.pbtxt — used by
+        // every UsageRecord we emit for pricing lookup.
+        let antigravityModel = (try? AntigravityStateReader.read(
+            at: antigravityDataDir.appendingPathComponent("antigravity_state.pbtxt")
+        ))?.displayModelName ?? "gemini-3.5-flash"
 
         // Identify active (newest mtime) per dir — those bypass cache.
         let claudeActive = claudeFiles.max(by: { $0.mtime < $1.mtime })?.url
@@ -116,7 +131,12 @@ public actor UsageHistoryLoader {
             cache: cache,
             activeURL: geminiActive,
             parser: { url in
-                try Self.parseGeminiFile(at: url)
+                try Self.parseAntigravityFile(
+                    at: url,
+                    antigravityDataDir: antigravityDataDir,
+                    brainIndex: brainIndex,
+                    modelName: antigravityModel
+                )
             }
         )
 
@@ -358,10 +378,21 @@ public actor UsageHistoryLoader {
         )
     }
 
-    private nonisolated static func parseGeminiFile(at url: URL) throws -> PerFileResult {
-        // Gemini's logs.json is a JSON array, not a JSONL stream — different
-        // shape from Claude/Codex but same target output (PerFileResult).
-        let records = try GeminiUsageParser.parse(file: url)
+    private nonisolated static func parseAntigravityFile(
+        at url: URL,
+        antigravityDataDir: URL,
+        brainIndex: BrainSummaryIndex,
+        modelName: String
+    ) throws -> PerFileResult {
+        // v0.6.0 Antigravity 2: per-conversation .pb file. The file
+        // itself is encrypted at rest (see ConversationProtoParser);
+        // tokens are estimated from the matching brain dir's metadata.
+        let records = try AntigravityUsageParser.parse(
+            conversationURL: url,
+            antigravityDataDir: antigravityDataDir,
+            brainIndex: brainIndex,
+            modelName: modelName
+        )
         var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
         var dedupKeys = Set<String>()
         var unpriced: [String: TokenTotals] = [:]
