@@ -71,21 +71,16 @@ struct AntigravityTaskView: View {
             .scaledToFit()
             .frame(width: 14, height: 14)
             .widgetCurvesContent()
-            .widgetLabel(label)
+            .widgetLabel(displayText)
     }
 
-    @ViewBuilder
-    private var label: some View {
+    /// Pre-truncated label string. `widgetLabel` accepts a String
+    /// directly — no need for a view-builder path that would require
+    /// the .accessoryCorner-specific Label/Gauge API.
+    private var displayText: String {
         if let headline = entry.headline, !headline.isEmpty {
-            let truncated = headline.count > 18 ? String(headline.prefix(18)) : headline
-            Text(truncated)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .lineLimit(1)
-                .truncationMode(.tail)
-        } else {
-            Text("Idle")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
+            return headline.count > 18 ? String(headline.prefix(18)) : headline
         }
+        return "Idle"
     }
 }

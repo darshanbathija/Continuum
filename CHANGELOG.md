@@ -4,6 +4,228 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.6.0 build 45] - 2026-05-20
+
+Antigravity 2 native. v0.5.11 broke silently for users on Google's
+Antigravity 2 (announced at I/O 2026; replaces Gemini CLI free/Pro on
+2026-06-18): analytics row empty (Antigravity stopped writing
+`~/.gemini/tmp/<repo>/logs.json`), Sessions IDE Gemini chat pane empty
+(no more `chats/session-*.jsonl`), model catalog stale
+(`gemini-3.5-flash` shipped as the new default, not in `ModelCatalog`).
+v0.6.0 is the correctness release + the v2-native upgrade path:
+**Plan pane** in Mac Sessions IDE, **Plan tab** on iOS, **task
+complication** on watchOS, token-aware analytics with `~` provisional
+marker.
+
+Locked decisions: D1 v2-only (no Gemini CLI v0.42 path); D2 Plan pane
+first-class; D3 two modes — Disk (default, zero Python deps) + SDK
+(opt-in toggle, recommended for paid Antigravity users); D5
+`usage[id]` dict key stays "gemini" through v7 (NEVER rename to
+"antigravity" — strands v6 iOS clients); D6 watchOS task complication
+in v0.6.0 (read-only); D7 real `$` Gemini analytics (Disk-mode estimate
+with `~` marker; SDK mode gets exact `agent.conversation.total_usage`).
+
+Shipped as 10 bisectable commits on `feat/antigravity-v2`. Suite 335 →
+438 (+103 net). Mac / iOS / Watch all `BUILD SUCCEEDED`.
+
+### Architectural deviation discovered mid-implementation
+
+**Antigravity 2 encrypts per-conversation `.pb` files at rest.** Found
+empirically against 36 live conversations: every file shows ~58%
+non-printable byte ratio — the signature of uniformly-random
+ciphertext. swift-protobuf can't decode ciphertext; the app.asar also
+doesn't ship `.proto` schema files (language_server is a Go binary
+with schemas compiled in). The plan's vendored-proto-decode approach
+isn't reachable in Disk mode.
+
+Adaptation in commit 4: `ConversationProtoParser.probe()` detects
+encryption via byte-ratio threshold (0.45, well-separated from real
+plaintext ~15% and real encrypted ~58%) and falls back to
+metadata-derived signals from the plaintext-readable brain dir:
+turn count from `*.metadata.json` files, token estimate from
+plaintext markdown artifact sizes ÷ 4 chars/token. UI surfaces the
+estimate with a `~` provisional marker. SDK mode (v0.6.1) remains
+the path to exact totals via the SDK's live decryption.
+
+### Shared package (Mac + iOS + Watch)
+
+- **`AntigravityInstall.detect()`** — probes `/Applications/Antigravity.app/`,
+  `~/.gemini/antigravity/`, `~/Library/Application Support/Antigravity/
+  bin/agy-node`. Returns `.installed(version:appDataDir:agyNodePath:
+  hasRunningServer:)` or `.absent`. Coarse `hasRunningServer` proxy via
+  the transient `logs/<TS>/ls-main.log` dir; authoritative check is
+  `LanguageServerClient.discoverLive()` (commit 8).
+- **`AntigravityStateReader.parse()`** — pure-Swift text-proto line
+  parser for `antigravity_state.pbtxt`. Extracts
+  `last_selected_agent_model` (opaque `MODEL_PLACEHOLDER_M133` token,
+  resolved via lookup map to display name "gemini-3.5-flash"),
+  `installation_uuid`, `migrate_convos_into_projects`. Handles
+  unknown M-tokens gracefully (passes through to caller).
+- **`BrainSummaryIndexer.read()`** — string-scan parser for the
+  global `agyhub_summaries_proto.pb` UUID↔cwd index. Bulletproof to
+  proto field-number drift (Antigravity has reshuffled at least once
+  between 2.0.0 and 2.0.1): scans for `0a 24 <UUID>` anchor, sweeps
+  forward for length-delimited `file://`, `https://...git`, and
+  branch/owner-repo strings, attributes to the current UUID.
+- **`BrainPlanParser.parse(brainURL:)`** — returns `PlanState` enum:
+  `.absent` / `.awaitingFirstTurn` / `.ready(BrainPlan)`. The
+  explicit `.awaitingFirstTurn` case (eng review 2A fix) avoids
+  nil-coalescing — UI renders a spinner + "Antigravity is preparing
+  this task…" copy. Plan checklist parsed via Apple's swift-markdown
+  0.4.0 with `ListItem.checkbox` (eng review 2C fix), handles nested
+  sub-steps + code blocks + prose between lists. Bounded 1KB read on
+  `.system_generated/logs/transcript.jsonl` for line-0 cwd (eng
+  review 4A fix).
+- **`BrainDirWatcher`** — `DispatchSourceFileSystemObject` wrapper.
+  Mirrors `.git/index` watcher in `GitDiffPane`. Debounced 100ms
+  coalesces partial writes into one re-parse. Owns the fd; closes
+  on `stop()` or deinit.
+- **`ConversationProtoParser.probe(conversationURL:brainURL:)`** —
+  encryption-aware. Byte-ratio threshold detects encrypted vs
+  plaintext .pb files. For encrypted (the v2.0.0 production reality),
+  emits `ConversationProbe.kind = .encrypted` + metadata-derived
+  turn count + token estimate. Caller surfaces with `~` provisional
+  marker.
+- **`AntigravityObservation` protocol** — abstracts the data source
+  for the toggle. `DiskObservationProvider` (Mac) wires together
+  AntigravityInstall + AntigravityStateReader + BrainSummaryIndexer
+  + BrainPlanParser + ConversationProtoParser with mtime-cached
+  brain index. `SDKObservationProviderStub` returns false/.empty/nil
+  until v0.6.1's full sidecar IPC.
+- **Wire v6→v7.** `AgentControlWireVersion.current = 7`,
+  `antigravityMinimum = 7`, `supportsAntigravityPlan(serverWireVersion:)`.
+  New DTOs: `AntigravityPlanSnapshot`, `WirePlanStep`,
+  `WireBrainArtifact`, `WireTokenUsage`. `UsageData` gains optional
+  `antigravityModel: String?` + `sdkModeActive: Bool?` with custom
+  Codable (decodeIfPresent — v6 payloads parse into v7 structs with
+  nils; v7 encoders omit nil keys via encodeIfPresent). **D5
+  contract enforced**: `usage[id]` dict key STAYS "gemini" through
+  v7 (regression marker test in WireV7Tests).
+- **`AntigravityUsageParser`** — replaces `GeminiUsageParser`. Walks
+  `~/.gemini/antigravity/conversations/*.pb`, uses
+  `ConversationProtoParser.probe` per file with the matching brain
+  dir, emits one `UsageRecord` per conversation:
+  `provider: .gemini`, `requestCount = turnCount`, `inputTokens`
+  + `outputTokens` apportioned 70/30 from the estimate,
+  `model: "gemini-3.5-flash"` (from state file). Dedup key
+  `"antigravity:<uuid>"` stable across cache rebuilds.
+- **`SessionFileResolver.findAntigravityBrain(for:)`** — bounded LRU
+  cache (eng review 1C fix). Cap 200 entries (active session count
+  ~20 + history without unbounded growth). Path-exists invalidation
+  on every read — Antigravity GC can sweep older brains under us.
+  Tier 1 lookup via BrainSummaryIndex cwd→uuid + mtime tiebreaker.
+- **`pricing.json`** gains provisional `gemini-3.5-flash`,
+  `gemini-3-pro`, `gemini-3-flash` entries. `_provisional: true`
+  flag marks estimates pending Google's official pricing API
+  (rendered with `~` marker in the UI).
+- **`WatchPlanBridge.Payload` typed Codable struct** (eng review 2D
+  fix). Replaces v0.5.11's loose-keyed `[String: Any]` dict shape.
+  New `currentTaskHeadline: String?` field for the watch task
+  complication. `encodedAsDict()` preserves the exact key names
+  legacy v5/v6 receivers read — back-compat fully preserved.
+- **`WatchPlanBridge.SendGate`** (eng review 4B fix). Diff-before-send
+  guard: SHA256 over stable field concatenation (excluding `sentAt`)
+  to skip identical WCSession sends. Resettable on WCSession reconnect.
+
+### Mac
+
+- **`LanguageServerClient.discoverLive()`** (eng review 1A fix) —
+  walks `~/.gemini/antigravity/logs/<TS>/ls-main.log` newest first,
+  parses port + PID + CSRF token from each, validates via `kill(pid,
+  0)` AND `lsof -nP -iTCP:<port> -sTCP:LISTEN`. Returns `.live(...)`
+  on first pass; `.notRunning` if all stale. Re-discover on
+  `NSWorkspace.didActivateApplicationNotification`.
+- **Loopback-scoped TLS trust** (eng review 2B fix). URLSessionDelegate
+  `didReceive challenge:` accepts serverTrust only for 127.0.0.1 / ::1
+  / localhost; non-loopback hits default validation (rejects
+  self-signed properly).
+- **`GET /sessions/:id/antigravity-plan`** endpoint — returns
+  `AntigravityPlanSnapshot`. Resolves brain dir via BrainSummaryIndex
+  cwd lookup + mtime tiebreaker. Returns awaitingFirstTurn for empty
+  brains; 404 for non-Gemini sessions.
+- **`AntigravityPlanPane`** SwiftUI view. Sessions IDE split-view
+  sibling of GitDiffPane. Renders task headline + body + step
+  checklist (depth-indented) + annotations + footer (token estimate
+  with `~` marker + "Open in Antigravity" deep-link via
+  `antigravity://brain/<uuid>` URL scheme). 3s HTTP poll cadence
+  (WS subscribe ships in a follow-up). Spinner + retry on errors.
+- **`AntigravitySidecarManager`** (skeleton). v0.6.0 ships the
+  toggle + Settings → Diagnostics integration. The toggle ON path
+  probes `tools/clawdmeter-agents/main.py` via `python3`,
+  captures the skeleton's `sdk_not_provisioned` response,
+  surfaces the error message in Diagnostics, reverts the toggle
+  to OFF. Full uv provisioning + observer.py + 3 helper agents
+  land in v0.6.1.
+- **`GeminiSource` dual-host**. Tries
+  `daily-cloudcode-pa.googleapis.com` first (Antigravity 2 channel),
+  falls back to legacy `cloudcode-pa.googleapis.com` on network /
+  404 / 5xx. Cached `preferredQuotaHost` sticks to the working host
+  across polls. Auth / rate-limit / contract errors aren't retried
+  on the secondary (not host-related).
+
+### iOS
+
+- **`iOSAntigravityPlanView`** + `iOSAntigravityPlanStore` — Plan tab
+  for Sessions detail. Pull-to-refresh, 3s poll, spinner for
+  awaitingFirstTurn, error pill with retry. Same content rendering
+  as Mac Plan pane. Gated on `serverWireVersion >= antigravityMinimum`
+  (v7); older Macs hide the tab.
+
+### watchOS
+
+- **`AntigravityTaskComplication`** `.accessoryCorner` widget.
+  Reads the 18-char-truncated headline from App Group UserDefaults
+  (`clawdmeter.watch.currentTaskHeadline`); WatchPlanBridge writes
+  on every fresh payload arrival. Sparkle glyph + curved label.
+  Read-only in v0.6.0 (D6 — Approve/Interrupt deferred to v0.7).
+
+### Python sidecar (v0.6.0 skeleton; v0.6.1 full impl)
+
+- `tools/clawdmeter-agents/{main.py, observer.py, session_summarizer.py,
+  cost_pulse_watcher.py, repo_context_extractor.py, pyproject.toml,
+  README.md, tests/}`. Each script ships a skeleton that emits the
+  `sdk_not_provisioned` JSON-lines error so the SDK toggle's
+  fail-soft path exercises end-to-end. 3 pytest tests verify the
+  dispatcher's header parsing + happy path.
+
+### Tests
+
+- Suite: 335 → 438 (+103 net). 11 new Swift unit tests deleted with
+  GeminiJSONLParser → 442 - 11 + 107 = 438.
+- Coverage by commit:
+  - C1: 27 (AntigravityInstall × 11 + AntigravityStateReader × 16)
+  - C2: 16 (BrainSummaryIndexer)
+  - C3: 24 (BrainPlanParser × 19 + BrainDirWatcher × 5)
+  - C4: 15 (ConversationProtoParser)
+  - C5: 12 (AntigravityObservation)
+  - C6: 12 (WireV7 + bumped wire constant audits)
+  - C7: -11 (GeminiJSONLParser deletion) + 1 (Antigravity smoke)
+  - C8: 0 (Plan pane runtime-tested via build; UI E2E ships in v0.6.1)
+  - C9: 8 (WatchPlanBridge.Payload + SendGate)
+  - C10: 3 (Python pytest)
+- Mac / iOS / Watch xcodebuild: clean across every commit.
+
+### Deferred to v0.6.1
+
+- Full uv provisioning of `~/Library/Application Support/Clawdmeter/python`
+- Real `observer.py` via `from google.antigravity import Connection`
+- The 3 helper agents (session_summarizer, cost_pulse_watcher,
+  repo_context_extractor) wired through launchd
+- `SidecarAskCoordinator` actor for first-wins UUID + 409 idempotency
+  (eng review 1B fix — depends on sidecar to exist first)
+- `antigravity-plan-subscribe` WS op (replaces 3s HTTP polling)
+- Antigravity Claude-Code-skill plugin install (cosmetic)
+- watch task complication Approve/Interrupt buttons (D6 deferred)
+- Bundled `uv` Mach-O binary in Resources
+
+### Worktree parallelization metrics
+
+Foundation (commits 1-6, shared/) ran serialized. Lanes B (Mac) + C
+(iOS+Watch) executed sequentially in this session because the
+implementation moved commit-by-commit; parallelization would be a
+later optimization. Lane D (sidecar) depends on B's
+`AntigravitySidecarManager` and ran after.
+
 ## [0.5.11 build 44] - 2026-05-19
 
 End-to-end Gemini provider across Mac, iOS, and Watch. v0.5.10 shipped the shared-package scaffolding (`AgentKind.gemini`, `ModelCatalog.gemini`, `GeminiSource`, `GeminiTokenProvider`, `GeminiUsageParser`, `byProvider` snapshot refactor, wire v6). The 0.5.11 work spans three batches — an initial Mac UI wiring pass, an autonomous multiplatform completion pass (iOS Live tab + Watch meter + Live Activity + X3 cross-model fixes), and two medium-severity /qa fixes — all shipped together. Tests 250 → 335 across the cycle. Mac / iOS / Watch schemes all BUILD SUCCEEDED.

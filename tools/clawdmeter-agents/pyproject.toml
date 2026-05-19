@@ -1,0 +1,19 @@
+[project]
+name = "clawdmeter-agents"
+version = "0.6.0"
+description = "Python sidecar for Clawdmeter SDK mode (Antigravity 2 native)"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # v0.6.0 ships skeletons only — full impl in v0.6.1.
+    # "google-antigravity~=0.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
