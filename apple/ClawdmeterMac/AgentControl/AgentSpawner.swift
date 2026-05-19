@@ -102,6 +102,52 @@ public enum AgentSpawner {
         return argv
     }
 
+    /// Build argv for spawning Gemini with the given options. Returns nil if
+    /// the `gemini` binary cannot be located.
+    ///
+    /// CLI flags verified against `gemini --help` (CLI 0.42.0, 2026-05):
+    ///   -m / --model            model selection (accepts `pro-high`/`pro`/`flash` aliases)
+    ///   --approval-mode plan    read-only mode; agent reads + plans, no mutations
+    ///   --approval-mode auto_edit  auto-accept file edits (acceptEdits)
+    ///   --approval-mode yolo    skip all approval prompts (autopilot)
+    ///   -r / --resume <id>      resume a previous session
+    ///
+    /// `effort` is a no-op for Gemini — the CLI doesn't expose a per-call
+    /// effort flag. The user picks a higher-effort model in the catalog
+    /// instead (e.g. `gemini-3.1-pro-high` vs `gemini-3.1-pro-low`).
+    public static func geminiArgv(
+        model: String? = nil,
+        planMode: Bool = false,
+        effort: ReasoningEffort? = nil,
+        autopilot: Bool = false,
+        acceptEdits: Bool = false,
+        resumeSessionId: String? = nil,
+        extraArgs: [String] = []
+    ) -> [String]? {
+        // Effort is encoded in the model name (per-high / pro-low), not
+        // in a separate flag. Kept in signature so callers don't need to branch.
+        _ = effort
+        guard let gemini = ShellRunner.locateBinary("gemini") else { return nil }
+        var argv = [gemini]
+        if let resumeSessionId, !resumeSessionId.isEmpty {
+            argv += ["--resume", resumeSessionId]
+        }
+        if let model, !model.isEmpty {
+            argv += ["-m", model]
+        }
+        // Approval-mode precedence: plan > yolo (autopilot) > auto_edit
+        // > default. Only one --approval-mode flag may be set.
+        if planMode {
+            argv += ["--approval-mode", "plan"]
+        } else if autopilot {
+            argv += ["--approval-mode", "yolo"]
+        } else if acceptEdits {
+            argv += ["--approval-mode", "auto_edit"]
+        }
+        argv.append(contentsOf: extraArgs)
+        return argv
+    }
+
     /// Build argv for a `NewSessionRequest`. Returns an empty array if the
     /// required binary is missing — caller checks and surfaces the error.
     public static func argv(for request: NewSessionRequest, autopilot: Bool = false) -> [String] {
@@ -121,10 +167,12 @@ public enum AgentSpawner {
                 autopilot: autopilot
             ) ?? []
         case .gemini:
-            // Gemini spawner not implemented yet — wire schema knows about
-            // it (wire v6) but there's no `gemini` CLI to launch. Empty
-            // argv triggers the missing-binary surface in the caller.
-            return []
+            return geminiArgv(
+                model: request.model,
+                planMode: request.planMode,
+                effort: request.effort,
+                autopilot: autopilot
+            ) ?? []
         }
     }
 
@@ -161,9 +209,14 @@ public enum AgentSpawner {
                 resumeSessionId: resumeSessionId
             ) ?? []
         case .gemini:
-            // See note in `argv(for:autopilot:)` — Gemini spawner not
-            // implemented; respawn falls back to empty argv.
-            return []
+            return geminiArgv(
+                model: model,
+                planMode: planMode,
+                effort: effort,
+                autopilot: autopilot,
+                acceptEdits: acceptEdits,
+                resumeSessionId: resumeSessionId
+            ) ?? []
         }
     }
 

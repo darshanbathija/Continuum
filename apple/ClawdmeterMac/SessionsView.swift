@@ -56,6 +56,7 @@ struct NewSessionMacSheet: View {
                 Picker("Agent", selection: $agent) {
                     Text("Claude").tag(AgentKind.claude)
                     Text("Codex").tag(AgentKind.codex)
+                    Text("Gemini").tag(AgentKind.gemini)
                 }
                 .pickerStyle(.segmented)
 

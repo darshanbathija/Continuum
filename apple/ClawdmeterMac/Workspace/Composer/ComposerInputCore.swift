@@ -235,9 +235,10 @@ struct ComposerInputCore: View {
                 Picker("Agent", selection: $store.agent) {
                     Text("Claude").tag(AgentKind.claude)
                     Text("Codex").tag(AgentKind.codex)
+                    Text("Gemini").tag(AgentKind.gemini)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 140)
+                .frame(width: 200)
                 .labelsHidden()
                 ModePicker(mode: store.mode, agent: store.agent) { newMode in
                     store.mode = newMode

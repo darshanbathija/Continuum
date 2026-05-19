@@ -61,8 +61,26 @@ struct iOSModelPicker: View {
 
     private var selectedEntry: ModelCatalogEntry? {
         guard let id = selectedModelId else { return nil }
-        let entries = agent == .claude ? catalog.claude : catalog.codex
-        return entries.first(where: { $0.id == id })
+        return Self.entries(for: agent, in: catalog).first(where: { $0.id == id })
+    }
+
+    /// Per-agent catalog lookup. Centralized here + reused by `iOSModelPickerList`
+    /// to keep the picker exhaustive over `AgentKind` — adding a 4th provider
+    /// only requires extending this one switch.
+    fileprivate static func entries(for agent: AgentKind, in catalog: ModelCatalog) -> [ModelCatalogEntry] {
+        switch agent {
+        case .claude: return catalog.claude
+        case .codex:  return catalog.codex
+        case .gemini: return catalog.gemini
+        }
+    }
+
+    fileprivate static func sectionTitle(for agent: AgentKind) -> String {
+        switch agent {
+        case .claude: return "Claude Code"
+        case .codex:  return "Codex"
+        case .gemini: return "Gemini Code Assist"
+        }
     }
 }
 
@@ -74,7 +92,7 @@ struct iOSModelPickerList: View {
 
     var body: some View {
         List {
-            Section(agent == .claude ? "Claude Code" : "Codex") {
+            Section(iOSModelPicker.sectionTitle(for: agent)) {
                 ForEach(entries) { entry in
                     Button {
                         selectedModelId = entry.id
@@ -115,7 +133,7 @@ struct iOSModelPickerList: View {
     }
 
     private var entries: [ModelCatalogEntry] {
-        agent == .claude ? catalog.claude : catalog.codex
+        iOSModelPicker.entries(for: agent, in: catalog)
     }
 
     private func rowAccessibilityLabel(entry: ModelCatalogEntry) -> String {
