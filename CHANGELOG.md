@@ -4,6 +4,45 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.18 build 64] - 2026-05-21
+
+### Added
+
+- **"Bypass permissions" now appears in the empty-state composer's
+  Mode menu.** v0.7.16 made bypass actually reach the spawned CLI
+  (via `autopilot:` on `spawnSession` + auto-trust via
+  `AutopilotState.trustRepo` on first-send), but the empty-state mode
+  menu was still hiding `.bypass` from the option list. The
+  `availablePermissionModes` switch in `ComposerInputCore.swift` now
+  returns the full `[.ask, .acceptEdits, .plan, .bypass]` array for
+  both bound + empty-state composers — same `⇧⌘4` shortcut as the
+  bound chip. The auto-trust flow lands the spawn with
+  `--dangerously-skip-permissions` (Claude) /
+  `--dangerously-bypass-approvals-and-sandbox` (Codex) /
+  `--approval-mode yolo` (Gemini) on the very first turn.
+
+## [0.7.17 build 63] - 2026-05-21
+
+### Added
+
+- **Gemini 3.5 Flash (Thinking) + Gemini 3 Flash (Thinking) in the
+  model picker.** Google ships a Standard / Extended thinking-level
+  toggle in the Antigravity UI; Clawdmeter's catalog only carried the
+  Standard variant, so users had no way to pick the Extended thinking
+  budget. Two new `ModelCatalog.bundled.gemini` entries:
+    - `gemini-3.5-flash-thinking` — "Gemini 3.5 Flash (Thinking)",
+      CLI alias `flash-3.5-thinking`, badge "Thinking",
+      `supportsThinking: true`. Recommended for: Complex problem solving.
+    - `gemini-3-flash-thinking` — "Gemini 3 Flash (Thinking)", same
+      shape. Mirrors the 3.5 Flash split.
+  Both variants ride the same `-m <model>` flag the gemini CLI
+  already accepts; the upstream API enables the higher thinking_budget
+  configuration when it sees the `-thinking` suffix. Pricing entries
+  added in `pricing.json` matching the base model's per-token rates
+  (with a note that thinking tokens bill at the output rate per
+  Google's thinking_config spec). Provisional `~` marker stays on
+  Gemini analytics cells until Google publishes an official rate.
+
 ## [0.7.16 build 62] - 2026-05-21
 
 ### Fixed

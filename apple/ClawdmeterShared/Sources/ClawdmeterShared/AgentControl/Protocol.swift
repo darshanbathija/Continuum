@@ -333,11 +333,21 @@ public struct ModelCatalog: Codable, Sendable {
             // list so `ModelCatalog.bundled.gemini.first?.id` picks it up
             // as the default for new sessions. Pricing row already in
             // pricing.json under the same id.
-            ModelCatalogEntry(id: "gemini-3.5-flash",      provider: .gemini, displayName: "Gemini 3.5 Flash",      cliAlias: "flash-3.5", supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Antigravity 2 default", badge: "New"),
-            ModelCatalogEntry(id: "gemini-3-pro",          provider: .gemini, displayName: "Gemini 3 Pro",          cliAlias: "pro",       supportsThinking: true,  supportsEffort: false, contextWindow: 2_000_000, recommendedFor: "Deep reasoning",       badge: "Pro"),
-            ModelCatalogEntry(id: "gemini-3.1-pro-high",   provider: .gemini, displayName: "Gemini 3.1 Pro (High)", cliAlias: "pro-high",  supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Deep reasoning",       badge: "High"),
-            ModelCatalogEntry(id: "gemini-3.1-pro-low",    provider: .gemini, displayName: "Gemini 3.1 Pro (Low)",  cliAlias: "pro",       supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Most work",            badge: nil),
-            ModelCatalogEntry(id: "gemini-3-flash",        provider: .gemini, displayName: "Gemini 3 Flash",        cliAlias: "flash",     supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Fast iteration",       badge: "Fast"),
+            ModelCatalogEntry(id: "gemini-3.5-flash",          provider: .gemini, displayName: "Gemini 3.5 Flash",            cliAlias: "flash-3.5",          supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Antigravity 2 default",  badge: "New"),
+            // v0.7.17: Gemini 3.5 Flash's "Extended" thinking mode —
+            // matches the Standard/Extended picker Google ships in the
+            // Antigravity UI. Same base model, but the CLI passes the
+            // `-thinking` suffix so the API enables the higher
+            // thinking_budget configuration. Standard = 0 budget,
+            // Extended ≈ 24576 tokens of thinking before the answer
+            // turn (per Google's published thinking_config spec).
+            ModelCatalogEntry(id: "gemini-3.5-flash-thinking", provider: .gemini, displayName: "Gemini 3.5 Flash (Thinking)", cliAlias: "flash-3.5-thinking", supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Complex problem solving", badge: "Thinking"),
+            ModelCatalogEntry(id: "gemini-3-pro",              provider: .gemini, displayName: "Gemini 3 Pro",                cliAlias: "pro",                supportsThinking: true,  supportsEffort: false, contextWindow: 2_000_000, recommendedFor: "Deep reasoning",         badge: "Pro"),
+            ModelCatalogEntry(id: "gemini-3.1-pro-high",       provider: .gemini, displayName: "Gemini 3.1 Pro (High)",       cliAlias: "pro-high",           supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Deep reasoning",         badge: "High"),
+            ModelCatalogEntry(id: "gemini-3.1-pro-low",        provider: .gemini, displayName: "Gemini 3.1 Pro (Low)",        cliAlias: "pro",                supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Most work",              badge: nil),
+            ModelCatalogEntry(id: "gemini-3-flash",            provider: .gemini, displayName: "Gemini 3 Flash",              cliAlias: "flash",              supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Fast iteration",         badge: "Fast"),
+            // v0.7.17: same Standard/Extended split as 3.5 Flash above.
+            ModelCatalogEntry(id: "gemini-3-flash-thinking",   provider: .gemini, displayName: "Gemini 3 Flash (Thinking)",   cliAlias: "flash-thinking",     supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Complex problem solving", badge: "Thinking"),
         ],
         updatedAt: Date(timeIntervalSince1970: 1747353600) // 2026-05-15
     )

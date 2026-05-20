@@ -322,14 +322,18 @@ struct ComposerInputCore: View {
         }
     }
 
-    /// Permission modes available in this composer context. Bound
-    /// sessions get the full set; empty-state composers hide `.bypass`
-    /// (no session yet → nothing to trust-gate).
+    /// Permission modes available in this composer context. Both
+    /// bound + empty-state composers get the full set including
+    /// `.bypass`. v0.7.16 wired the empty-state path through
+    /// `EmptyStateCenteredComposer.firstSend()`, which records
+    /// per-repo trust via `AutopilotState.trustRepo` + seeds
+    /// `PermissionModeStore.setBypass` before the spawn — so picking
+    /// Bypass at empty-state has the same effect as picking it on a
+    /// bound session: the spawned CLI gets `--dangerously-skip-permissions`
+    /// (Claude) / `--dangerously-bypass-approvals-and-sandbox` (Codex)
+    /// / `--approval-mode yolo` (Gemini).
     private var availablePermissionModes: [PermissionMode] {
-        switch store.modeKind {
-        case .bound:      return [.ask, .acceptEdits, .plan, .bypass]
-        case .emptyState: return [.ask, .acceptEdits, .plan]
-        }
+        [.ask, .acceptEdits, .plan, .bypass]
     }
 
     private var attachButton: some View {
