@@ -175,9 +175,14 @@ struct SettingsView: View {
     /// `accessToken` from Keychain Access on the Mac and one-tap it into the
     /// Simulator's draft field here.
     private func pasteFromClipboard() {
-        guard let s = UIPasteboard.general.string,
-              !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return }
-        tokenDraft = s
+        // P2-iOS-9: trim the value we store, not just the value we check
+        // for emptiness. The previous form skipped the empty-paste case
+        // correctly but still saved the untrimmed string with surrounding
+        // whitespace, which then ended up in Keychain and made the
+        // sk-ant-oat01- prefix validation flag the token as malformed.
+        guard let raw = UIPasteboard.general.string else { return }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        tokenDraft = trimmed
     }
 }
