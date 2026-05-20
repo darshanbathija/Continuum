@@ -1,8 +1,21 @@
 import Foundation
-import OSLog
 import ClawdmeterShared
-
+// Codex fix: OSLog is Apple-only. The Ubuntu/Zorin Swift toolchain
+// fails with `no such module 'OSLog'` if we import it unconditionally
+// from this Linux target. Gate the Apple-platform logger and provide
+// a stderr-print fallback on Linux.
+#if canImport(OSLog)
+import OSLog
 private let trayLogger = Logger(subsystem: "com.clawdmeter.linux", category: "TrayPollLoop")
+#endif
+
+private func trayLogWarning(_ message: String) {
+#if canImport(OSLog)
+    trayLogger.warning("\(message, privacy: .public)")
+#else
+    FileHandle.standardError.write(Data(("TrayPollLoop WARN: " + message + "\n").utf8))
+#endif
+}
 
 /// Drives the AppIndicator gauge refresh at the 60s poll cadence.
 ///
@@ -52,9 +65,8 @@ public actor TrayPollLoop {
         } catch {
             // P2-Linux-2: render failed (tmpfs full / permissions / Cairo
             // surface error). The previous icon stays, but emit a warning
-            // so a tray rendering regression isn't invisible — the prior
-            // TODO ("log via swift-log once wired") gets resolved here.
-            trayLogger.warning("Gauge render failed for \(self.provider.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            // so a tray rendering regression isn't invisible.
+            trayLogWarning("Gauge render failed for \(provider.rawValue): \(error.localizedDescription)")
         }
     }
 
