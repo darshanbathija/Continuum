@@ -37,4 +37,24 @@ echo "Phase 7 will implement:"
 echo "  1. swift build -c release in linux/"
 echo "  2. linuxdeploy --appdir AppDir/ + bundle libswift*.so + libwebkitgtk-6.0 + libvte-2.91-gtk4 + bubblewrap + xdg-dbus-proxy + GStreamer plugins"
 echo "  3. appimagetool AppDir → dist/Clawdmeter-${VERSION}-x86_64.AppImage"
-exit 0
+
+# P1-Linux-3: fail loud instead of silently exiting 0. Downstream
+# packaging steps (CI upload, release publish, install-test) expect a
+# real artifact at dist/Clawdmeter-<version>-x86_64.AppImage. Without
+# this guard the upload step ran with `if-no-files-found: warn` and
+# the CI run looked green even though no .AppImage was produced.
+#
+# Set CLAWDMETER_PACKAGING_ALLOW_STUB=1 to keep the legacy exit-0
+# behaviour during local development where the toolchain isn't wired.
+EXPECTED_ARTIFACT="$DIST_DIR/Clawdmeter-${VERSION}-x86_64.AppImage"
+if [ ! -f "$EXPECTED_ARTIFACT" ]; then
+    if [ "${CLAWDMETER_PACKAGING_ALLOW_STUB:-0}" = "1" ]; then
+        echo "Stub mode (CLAWDMETER_PACKAGING_ALLOW_STUB=1) — exiting 0 without artifact." >&2
+        exit 0
+    fi
+    echo "ERROR: AppImage not produced at $EXPECTED_ARTIFACT." >&2
+    echo "       Implement the Phase 7 build pipeline above, or run with" >&2
+    echo "       CLAWDMETER_PACKAGING_ALLOW_STUB=1 to keep the stub exit-0 behaviour." >&2
+    exit 2
+fi
+echo "AppImage built: $EXPECTED_ARTIFACT"
