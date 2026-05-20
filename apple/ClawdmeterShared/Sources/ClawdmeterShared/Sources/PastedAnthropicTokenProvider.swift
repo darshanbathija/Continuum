@@ -42,13 +42,23 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
     /// iCloud-Keychain-synced shared instance. Use this when you want the
     /// same token visible across the user's Apple devices (e.g., Mac mirrors
     /// the Claude Code token into here, iPhone/Watch read from here).
+    ///
+    /// P1-Shared-2: a `static func` body was returning a fresh instance on
+    /// every call. Each instance kept its own `cached` field, so a
+    /// `clear()` / `setToken(...)` on one call site never invalidated the
+    /// cached token held by an instance some other call site grabbed
+    /// earlier — logouts and token rotations leaked stale values
+    /// indefinitely. Back it with a `static let` so all callers share a
+    /// single live cache.
     public static func shared() -> PastedAnthropicTokenProvider {
-        PastedAnthropicTokenProvider(
-            serviceName: defaultService,
-            accessGroup: sharedAccessGroup,
-            synchronizable: true
-        )
+        _shared
     }
+
+    private static let _shared = PastedAnthropicTokenProvider(
+        serviceName: defaultService,
+        accessGroup: sharedAccessGroup,
+        synchronizable: true
+    )
 
     public var currentAccessToken: String? {
         lock.lock(); defer { lock.unlock() }
