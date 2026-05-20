@@ -349,11 +349,26 @@ private struct CodexSection: View {
                     percent: usage.weeklyPct,
                     resetDate: Date(timeIntervalSince1970: TimeInterval(usage.weeklyEpoch))
                 )
-                HStack {
+                HStack(spacing: 4) {
                     (Text("Synced from Mac ") + Text(snap.writtenAt, style: .relative) + Text(" ago"))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                    // v0.7.1 wire v8: render "· SDK mode" when the
+                    // daemon reports `codexSDKModeActive = true`. Gated
+                    // on `supportsCodexSDK` so v7 Macs (which don't
+                    // report this field at all) don't render a confusing
+                    // "· disk mode" label.
+                    if AgentControlWireVersion.supportsCodexSDK(serverWireVersion: agentClient.serverWireVersion) {
+                        let isSDK = usage.codexSDKModeActive ?? false
+                        Text("·")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Text(isSDK ? "SDK mode" : "disk mode")
+                            .font(.footnote.monospaced())
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel(isSDK ? "Codex SDK mode active" : "Codex disk mode")
+                    }
                     Spacer()
                 }
                 .padding(.horizontal, 4)
