@@ -12,6 +12,11 @@ firmware/.vscode/
 tools/node_modules/
 tools/package-lock.json
 
+# v0.7.1 bundled Node binary (~120MB arm64). Downloaded on demand by
+# tools/download-bundled-node.sh; gitignored to keep the repo lean.
+# tools/build-mac-dmg.sh auto-runs the download before xcodebuild.
+apple/ClawdmeterMac/Resources/Vendor/node/
+
 # Apple — Xcode and xcodegen
 apple/Clawdmeter.xcodeproj/xcuserdata/
 apple/Clawdmeter.xcodeproj/project.xcworkspace/xcuserdata/

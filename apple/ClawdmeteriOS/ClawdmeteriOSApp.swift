@@ -27,13 +27,13 @@ struct ClawdmeteriOSApp: App {
             // instance in ContentView shares UserDefaults state.
             let client = AgentControlClient()
             let manager = iOSNotificationManager(client: client)
-            // Codex fix to P2-iOS-6: iOS treats double setTaskCompleted
-            // as a lifecycle violation (warning at best, crash at worst).
-            // The earlier patch had a race: expirationHandler called
-            // setTaskCompleted(false), but the still-running refreshTask
-            // could then complete normally and call setTaskCompleted(ok)
-            // a second time. Wrap the call in a single-shot guard so
-            // only the first caller wins.
+            // P2-iOS-6 + codex-5: BGTask lifecycle hazards.
+            // - iOS hard-kills the app if BGTask runs past its budget
+            //   without responding to the expiration signal.
+            // - iOS treats double setTaskCompleted as a violation. Earlier
+            //   patch had a race: expirationHandler completed (false) but
+            //   the still-running refreshTask could complete (ok) a second
+            //   time. Single-shot guard ensures the first caller wins.
             let completionGuard = BGTaskCompletionGuard()
             let refreshTask = Task { @MainActor in
                 let ok = await manager.performRefresh()

@@ -716,6 +716,10 @@ public final class AgentControlClient: ObservableObject {
     /// right UX (toast vs upgrade-Mac prompt vs silent success).
     public enum ComposeDraftResult: Equatable {
         case delivered
+        /// v0.7.2 wire v8: delivered + the Mac executed a Codex SDK
+        /// resume on the attached threadId. `finalResponse` contains
+        /// the agent's response text the iOS UI can render inline.
+        case deliveredWithCodexResume(threadId: String, finalResponse: String)
         /// Mac is too old to understand `compose-draft`. The user should
         /// see an "Update your Mac for Open-on-Mac" affordance.
         case macUnsupported(serverWireVersion: Int)
@@ -755,29 +759,76 @@ public final class AgentControlClient: ObservableObject {
         }
         do {
             try await task.send(.data(data))
-            // Wait for the daemon's single-byte ACK. 5s ceiling so a stuck
-            // daemon doesn't pin the UI; otherwise we trust the receive.
-            let ack: URLSessionWebSocketTask.Message
-            do {
-                ack = try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
-                    group.addTask { try await task.receive() }
-                    group.addTask {
-                        try await Task.sleep(nanoseconds: 5_000_000_000)
-                        throw URLError(.timedOut)
+            // v0.7.2: if the draft included `codexThreadId`, the Mac
+            // dispatches to CodexSDKManager.runResume() and sends a
+            // structured `codex_resume_result` (or `codex_resume_error`)
+            // frame BEFORE the standard `ok` ACK. We may need to read up
+            // to two frames: the optional resume result, then "ok".
+            // Timeout extended to 130s to cover the SDK's 120s resume
+            // ceiling + a few seconds of network slack.
+            let timeoutSec: UInt64 = draft.codexThreadId == nil ? 5 : 130
+            var codexResume: (threadId: String, finalResponse: String)?
+            for _ in 0..<2 {
+                let frame: URLSessionWebSocketTask.Message
+                do {
+                    frame = try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
+                        group.addTask { try await task.receive() }
+                        group.addTask {
+                            try await Task.sleep(nanoseconds: timeoutSec * 1_000_000_000)
+                            throw URLError(.timedOut)
+                        }
+                        let first = try await group.next()!
+                        group.cancelAll()
+                        return first
                     }
-                    let first = try await group.next()!
-                    group.cancelAll()
-                    return first
+                } catch {
+                    clientLogger.warning("compose-draft ACK wait failed: \(error.localizedDescription)")
+                    return .failed(message: "Mac didn't acknowledge the draft within \(timeoutSec)s.")
                 }
-            } catch {
-                clientLogger.warning("compose-draft ACK wait failed: \(error.localizedDescription)")
-                return .failed(message: "Mac didn't acknowledge the draft within 5s.")
+
+                // Try the structured result first.
+                if case let .string(s) = frame {
+                    if s == "ok" {
+                        if let resume = codexResume {
+                            return .deliveredWithCodexResume(
+                                threadId: resume.threadId,
+                                finalResponse: resume.finalResponse
+                            )
+                        }
+                        return .delivered
+                    }
+                    // Inspect for codex_resume_result / codex_resume_error.
+                    if let data = s.data(using: .utf8),
+                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        if let type = obj["type"] as? String, type == "codex_resume_result",
+                           let tid = obj["threadId"] as? String,
+                           let body = obj["finalResponse"] as? String {
+                            codexResume = (threadId: tid, finalResponse: body)
+                            continue
+                        }
+                        if let type = obj["type"] as? String, type == "codex_resume_error",
+                           let msg = obj["msg"] as? String {
+                            clientLogger.warning("compose-draft codex resume failed on Mac: \(msg)")
+                            // Still treat the underlying draft as delivered;
+                            // surface the resume failure via the result.
+                            // For now we fold into `.failed` since the iOS
+                            // caller probably wanted the resume to work.
+                            return .failed(message: "Mac couldn't resume the Codex thread: \(msg)")
+                        }
+                    }
+                }
+                if case let .data(d) = frame, d == Data("ok".utf8) {
+                    if let resume = codexResume {
+                        return .deliveredWithCodexResume(
+                            threadId: resume.threadId,
+                            finalResponse: resume.finalResponse
+                        )
+                    }
+                    return .delivered
+                }
+                // Unknown frame — keep loop alive for one more receive.
             }
-            switch ack {
-            case .string(let s) where s == "ok": return .delivered
-            case .data(let d) where d == Data("ok".utf8): return .delivered
-            default: return .failed(message: "Mac sent an unexpected ack.")
-            }
+            return .failed(message: "Mac sent an unexpected sequence of frames.")
         } catch {
             clientLogger.warning("compose-draft post failed: \(error.localizedDescription)")
             return .failed(message: error.localizedDescription)

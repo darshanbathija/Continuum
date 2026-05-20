@@ -1,6 +1,6 @@
 {
   "name": "clawdmeter-codex-sdk",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Node sidecar for Clawdmeter Codex SDK observation mode",
   "private": true,
   "type": "module",
@@ -11,10 +11,7 @@
   "scripts": {
     "test": "node --test tests/main.test.mjs"
   },
-  "dependencies": {
-    "_comment": "v0.7.0 ships skeletons only — full impl in v0.7.1. When provisioning lands, uncomment the SDK dependency below and CodexSDKManager will run `npm install` on first toggle ON."
-  },
-  "_pending_dependencies": {
-    "@openai/codex-sdk": "^0.1.0"
+  "comments": {
+    "dependency_strategy": "The @openai/codex-sdk dep is intentionally NOT listed here so the repo's tree stays light. CodexSDKManager.provisionIfNeeded() runs `npm install @openai/codex-sdk` into ~/Library/Application Support/Clawdmeter/codex-sdk/ on first toggle ON — the install lives in the AppSupport dir, not in the repo. The sidecar's main.mjs detects whether the SDK is reachable via `await import('@openai/codex-sdk')` and falls back to skeleton mode when not."
   }
 }

@@ -383,6 +383,66 @@ public final class AgentControlServer {
                     text: "[compose-draft] repo=\(payload.repoKey ?? "-") len=\(payload.text.count)"
                 )
                 serverLogger.info("compose-draft received: text length=\(payload.text.count, privacy: .public), repo=\(payload.repoKey ?? "-", privacy: .public), peer=\(peer, privacy: .public)")
+
+                // v0.7.2 wire v8 additive: when the iOS client attaches a
+                // `codexThreadId` AND the draft suggests Codex agent, dispatch
+                // the prompt to the Codex SDK's one-shot resume. Posts the
+                // resume_result back to the iOS client over the same WS as a
+                // second JSON frame before closing. SDK runs against the
+                // user's ChatGPT subscription quota (no per-token billing).
+                if let threadId = payload.codexThreadId,
+                   !threadId.isEmpty,
+                   payload.suggestedAgent == .codex,
+                   await CodexSDKManager.shared.isProvisioned {
+                    // Resolve workingDirectory: prefer the draft's repoKey,
+                    // fall back to the user's home dir so the SDK can run
+                    // outside a git repo too.
+                    let workingDirectory = payload.repoKey
+                        ?? FileManager.default.homeDirectoryForCurrentUser.path
+                    do {
+                        let result = try await CodexSDKManager.shared.runResume(
+                            threadId: threadId,
+                            prompt: payload.text,
+                            workingDirectory: workingDirectory,
+                            timeout: 120
+                        )
+                        // Post a structured result frame so iOS can render the
+                        // resumed-thread response inline. The wire format is a
+                        // single JSON line: {type, threadId, finalResponse,
+                        // usage}. iOS parses this from the WS receive.
+                        let response: [String: Any] = [
+                            "type": "codex_resume_result",
+                            "threadId": result.threadId,
+                            "finalResponse": result.finalResponse,
+                            "usage": [
+                                "inputTokens": result.usage?.inputTokens ?? 0,
+                                "cachedInputTokens": result.usage?.cachedInputTokens ?? 0,
+                                "outputTokens": result.usage?.outputTokens ?? 0,
+                                "reasoningOutputTokens": result.usage?.reasoningOutputTokens ?? 0,
+                            ]
+                        ]
+                        if let body = try? JSONSerialization.data(withJSONObject: response),
+                           let text = String(data: body, encoding: .utf8) {
+                            sendWSText(text, on: connection)
+                            serverLogger.info("compose-draft codex-resume succeeded: threadId=\(threadId, privacy: .public), tokens=\(result.usage?.outputTokens ?? 0, privacy: .public)")
+                        }
+                    } catch {
+                        // Send a structured error frame; iOS can show "Resume
+                        // failed" without conflating it with the original
+                        // draft delivery.
+                        let response: [String: Any] = [
+                            "type": "codex_resume_error",
+                            "threadId": threadId,
+                            "msg": error.localizedDescription,
+                        ]
+                        if let body = try? JSONSerialization.data(withJSONObject: response),
+                           let text = String(data: body, encoding: .utf8) {
+                            sendWSText(text, on: connection)
+                        }
+                        serverLogger.warning("compose-draft codex-resume failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+
                 // Send a 1-byte application-layer ACK before closing so the
                 // iOS caller can `task.receive()` instead of guessing a
                 // sleep duration. Replaces the prior 200ms hope-it-flushed

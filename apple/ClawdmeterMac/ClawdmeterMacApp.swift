@@ -97,6 +97,10 @@ struct ClawdmeterMacApp: App {
                 PairingSettingsView(runtime: runtime)
                     .tabItem { Label("Sessions", systemImage: "rectangle.connected.to.line.below") }
 
+                // v0.7.2: Codex SDK observation mode toggle + diagnostics.
+                CodexSDKSettingsView()
+                    .tabItem { Label("Codex SDK", systemImage: "swift") }
+
                 DiagnosticsSettingsView()
                     .tabItem { Label("Diagnostics", systemImage: "stethoscope") }
 

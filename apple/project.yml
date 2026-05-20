@@ -19,8 +19,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.7.0"
-    CURRENT_PROJECT_VERSION: "46"
+    MARKETING_VERSION: "0.7.2"
+    CURRENT_PROJECT_VERSION: "48"
 
 packages:
   ClawdmeterShared:
@@ -45,6 +45,30 @@ targets:
         excludes:
           - "Info.plist"
           - "ClawdmeterMac.entitlements"
+          # v0.7.1: bundled Node binary is added via the Copy Files
+          # build phase below; exclude from default source scanning so
+          # xcodegen doesn't try to compile it as a "source file".
+          - "Resources/Vendor/node/**"
+      # v0.7.1: bundled Node binary is treated as a "Copy Bundle
+      # Resources" entry — Xcode copies the whole Vendor/node/ tree
+      # into the .app's Contents/Resources/Vendor/node/. The folder
+      # reference (buildPhase: resources) preserves the bin/ subdir
+      # so CodexSDKManager.locateNode() can resolve it via
+      # `Bundle.main.url(forResource:"node", subdirectory:"Vendor/node/bin")`.
+      # File doesn't exist on disk for fresh clones; tools/download-bundled-node.sh
+      # creates it (gitignored).
+      - path: ClawdmeterMac/Resources/Vendor
+        type: folder
+        buildPhase: resources
+        optional: true
+      # v0.7.1: bundled Codex SDK main.mjs — same Resources copy path
+      # as the Node binary. CodexSDKManager.locateMainMJSSource() reads
+      # it from `Bundle.main.url(forResource:"main", withExtension:"mjs")`
+      # in production (xcodegen keeps the original filename in
+      # Resources/).
+      - path: ../tools/clawdmeter-codex-sdk/main.mjs
+        buildPhase: resources
+        optional: true
     dependencies:
       - package: ClawdmeterShared
         product: ClawdmeterShared
@@ -52,6 +76,24 @@ targets:
         product: SwiftTerm
       - target: ClawdmeterMacWidgets
         embed: true
+    preBuildScripts:
+      - name: Download bundled Node (if missing)
+        # v0.7.1: ensure the bundled Node binary exists before the
+        # resources phase runs. The script is idempotent + fast on
+        # warm cache (~50ms when already present, ~30s on first run).
+        # Skip when CLAWDMETER_SKIP_BUNDLED_NODE=1 (dev iteration where
+        # the dev relies on system Node via CodexSDKManager fallback).
+        script: |
+          if [ "${CLAWDMETER_SKIP_BUNDLED_NODE:-0}" = "1" ]; then
+            echo "Skipping bundled Node download (CLAWDMETER_SKIP_BUNDLED_NODE=1)"
+            exit 0
+          fi
+          REPO_ROOT="$(cd "$SRCROOT/.." && pwd)"
+          if [ ! -x "$REPO_ROOT/apple/ClawdmeterMac/Resources/Vendor/node/bin/node" ]; then
+            "$REPO_ROOT/tools/download-bundled-node.sh"
+          fi
+        outputFiles:
+          - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/node/bin/node
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.mac

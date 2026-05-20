@@ -1586,6 +1586,15 @@ public struct ComposeDraft: Codable, Sendable, Equatable, Hashable {
     public let suggestedModel: String?
     public let suggestedEffort: ReasoningEffort?
     public let createdAt: Date
+    /// v0.7.2 (wire v8 additive): when set + `suggestedAgent == .codex`,
+    /// the Mac daemon dispatches this draft to
+    /// `CodexSDKManager.runResume(threadId:prompt:)` instead of the
+    /// default empty-state-composer pre-fill flow. Enables iOS→Mac
+    /// thread continuation: iPhone holds a `Thread.id` from a prior
+    /// `codex.startThread()` / `resumeThread()`, taps "Open on Mac",
+    /// Mac resumes that thread + runs the prompt to completion.
+    /// `decodeIfPresent` — v7 Macs ignore this field cleanly.
+    public let codexThreadId: String?
 
     public init(
         text: String,
@@ -1593,6 +1602,7 @@ public struct ComposeDraft: Codable, Sendable, Equatable, Hashable {
         suggestedAgent: AgentKind? = nil,
         suggestedModel: String? = nil,
         suggestedEffort: ReasoningEffort? = nil,
+        codexThreadId: String? = nil,
         createdAt: Date = Date()
     ) {
         self.text = text
@@ -1600,7 +1610,38 @@ public struct ComposeDraft: Codable, Sendable, Equatable, Hashable {
         self.suggestedAgent = suggestedAgent
         self.suggestedModel = suggestedModel
         self.suggestedEffort = suggestedEffort
+        self.codexThreadId = codexThreadId
         self.createdAt = createdAt
+    }
+
+    // MARK: - Codable (codexThreadId is decodeIfPresent for wire v7 back-compat)
+
+    enum CodingKeys: String, CodingKey {
+        case text, repoKey, suggestedAgent, suggestedModel, suggestedEffort, codexThreadId, createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.text = try c.decode(String.self, forKey: .text)
+        self.repoKey = try c.decodeIfPresent(String.self, forKey: .repoKey)
+        self.suggestedAgent = try c.decodeIfPresent(AgentKind.self, forKey: .suggestedAgent)
+        self.suggestedModel = try c.decodeIfPresent(String.self, forKey: .suggestedModel)
+        self.suggestedEffort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .suggestedEffort)
+        // v0.7.2: codexThreadId is wire v8 additive. v7 iOS clients
+        // never populate it; v8 daemons ignore absent field.
+        self.codexThreadId = try c.decodeIfPresent(String.self, forKey: .codexThreadId)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(text, forKey: .text)
+        try c.encodeIfPresent(repoKey, forKey: .repoKey)
+        try c.encodeIfPresent(suggestedAgent, forKey: .suggestedAgent)
+        try c.encodeIfPresent(suggestedModel, forKey: .suggestedModel)
+        try c.encodeIfPresent(suggestedEffort, forKey: .suggestedEffort)
+        try c.encodeIfPresent(codexThreadId, forKey: .codexThreadId)
+        try c.encode(createdAt, forKey: .createdAt)
     }
 
     /// Serialize for inclusion as a nested JSON object inside the WS

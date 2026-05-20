@@ -1783,6 +1783,11 @@ private struct NewSessionSheet: View {
                 switch result {
                 case .delivered:
                     isPresented = false
+                case .deliveredWithCodexResume:
+                    // v0.7.2: the Mac executed a Codex SDK resume on the
+                    // draft's codexThreadId. Close the sheet — the Mac's
+                    // composer will render the agent's response inline.
+                    isPresented = false
                 case .macUnsupported(let v):
                     openOnMacUnsupportedAlert = "Your Mac is on wire version \(v); Open on Mac needs ≥\(AgentControlWireVersion.composeDraftMinimum). Update Clawdmeter on the Mac."
                 case .failed(let msg):
