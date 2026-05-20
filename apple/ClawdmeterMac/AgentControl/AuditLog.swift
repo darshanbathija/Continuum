@@ -134,6 +134,20 @@ public actor AuditLog {
         append(entry: entry, kind: "autopilot")
     }
 
+    /// v0.7.7: record a sidecar ask_user(...) decision. Source is
+    /// `mac` / `ios` / `timeout` so the diagnostics view shows which
+    /// surface won the cross-surface race (or that neither did).
+    public func recordSidecarAsk(promptUUID: UUID, decision: String, source: String) {
+        let entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "sidecar-ask",
+            "promptUUID": promptUUID.uuidString,
+            "decision": decision,
+            "source": source,
+        ]
+        append(entry: entry, kind: "sidecar-ask")
+    }
+
     /// Read recent entries from the given log kind. Used by Settings →
     /// Diagnostics → Session Event Timeline (T17).
     public func recentEntries(kind: String, limit: Int = 200) -> [String] {

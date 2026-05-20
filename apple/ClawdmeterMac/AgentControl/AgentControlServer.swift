@@ -853,6 +853,17 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions/:id/send") { [weak self] req, conn, params in
             await self?.handleSendPrompt(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
+        // v0.7.7: SidecarAskCoordinator route. iPhone surface POSTs
+        // decisions here for cross-surface ask_user(...) prompts the
+        // Antigravity SDK sidecar fires. Mac inline path calls the
+        // coordinator directly (in-proc).
+        t.register(method: "POST", pattern: "/internal/sidecar-ask/:promptUUID/decide") { [weak self] req, conn, params in
+            await self?.handleSidecarAskDecide(
+                promptUUID: params["promptUUID"] ?? "",
+                request: req,
+                connection: conn
+            )
+        }
         t.register(method: "POST", pattern: "/sessions/:id/interrupt") { [weak self] _, conn, params in
             await self?.handleInterrupt(sessionId: params["id"] ?? "", connection: conn)
         }
@@ -1262,6 +1273,62 @@ public final class AgentControlServer {
             sendJSON(["ok": true], on: connection)
         } catch {
             sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// v0.7.7: iPhone surface POSTs ask_user(...) decisions here. Body
+    /// shape: `{"decision":"approve|deny", "source":"ios"}`. Returns:
+    ///   - 200 `{outcome:"won", decision:"..."}` if first to decide.
+    ///   - 409 `{outcome:"lost", prior:"approve|deny", priorSource:"mac|ios|timeout"}`
+    ///     if another surface beat us. iOS UI renders "Already answered
+    ///     on <surface>" + dismisses.
+    ///   - 404 `{outcome:"unknown_prompt"}` if the UUID is GC'd or never
+    ///     existed.
+    private func handleSidecarAskDecide(promptUUID: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: promptUUID) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        struct DecidePayload: Codable {
+            let decision: String
+            let source: String?
+        }
+        let body = request.body ?? Data()
+        guard let payload = try? JSONDecoder().decode(DecidePayload.self, from: body),
+              let decision = SidecarAskCoordinator.Decision(rawValue: payload.decision)
+        else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let source: SidecarAskCoordinator.Source = {
+            if let s = payload.source, let parsed = SidecarAskCoordinator.Source(rawValue: s) {
+                return parsed
+            }
+            return .ios  // default: only iPhone hits the HTTP route
+        }()
+        let result = await SidecarAskCoordinator.shared.decide(
+            promptUUID: uuid,
+            decision: decision,
+            source: source
+        )
+        switch result {
+        case .won(let d):
+            sendJSON(["outcome": "won", "decision": d.rawValue], on: connection)
+        case .lost(let prior, let priorSource):
+            let payload: [String: Any] = [
+                "outcome": "lost",
+                "prior": prior.rawValue,
+                "priorSource": priorSource.rawValue,
+            ]
+            let body = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json", body: body
+            ), on: connection)
+        case .unknownPrompt:
+            let body = Data(#"{"outcome":"unknown_prompt"}"#.utf8)
+            sendResponse(HTTPResponse(
+                status: 404, reason: "Not Found",
+                contentType: "application/json", body: body
+            ), on: connection)
         }
     }
 
