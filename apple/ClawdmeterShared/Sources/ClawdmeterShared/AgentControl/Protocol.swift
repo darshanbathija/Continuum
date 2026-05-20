@@ -45,7 +45,14 @@ public enum AgentControlWireVersion {
     /// to "antigravity" because v6 iOS clients use the per-provider
     /// fallback that keys on "gemini" literally; renaming would silently
     /// strand iOS data.
-    public static let current: Int = 7
+    /// v8 (2026-05-20) Codex SDK observation mode: `UsageData` gains
+    /// optional `codexSDKModeActive: Bool?` field (decodeIfPresent —
+    /// back-compat preserved). New `codexSDKMinimum = 8` gate +
+    /// `supportsCodexSDK(serverWireVersion:)` helper. No new endpoints
+    /// or WS ops in v8 — the SDK observation mode rides on the existing
+    /// `/usage` envelope; the field tells iOS to render "· SDK mode" on
+    /// the Codex analytics subtitle.
+    public static let current: Int = 8
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
@@ -66,6 +73,12 @@ public enum AgentControlWireVersion {
     /// the Plan tab when `serverWireVersion < this` and shows
     /// "Update Clawdmeter on Mac for the Plan tab" copy instead.
     public static let antigravityMinimum: Int = 7
+
+    /// Minimum wire version that surfaces the Codex SDK mode toggle
+    /// state via `UsageData.codexSDKModeActive` (v8). Older Macs paired
+    /// with a v8 iOS hide the "· SDK mode" subtitle and assume Disk
+    /// mode by default.
+    public static let codexSDKMinimum: Int = 8
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -105,6 +118,15 @@ public enum AgentControlWireVersion {
     public static func supportsAntigravityPlan(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= antigravityMinimum
+    }
+
+    /// Whether the paired Mac is wire v8+ and therefore reports the
+    /// Codex SDK mode toggle state via `UsageData.codexSDKModeActive`.
+    /// Used by iOS to render "· SDK mode" vs "· disk mode" on the Codex
+    /// analytics subtitle. When false, iOS assumes disk mode.
+    public static func supportsCodexSDK(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= codexSDKMinimum
     }
 }
 

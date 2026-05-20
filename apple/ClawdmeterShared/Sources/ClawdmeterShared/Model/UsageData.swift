@@ -46,6 +46,12 @@ public struct UsageData: Codable, Equatable, Sendable {
     /// Nil for older wire versions; treat nil as `false` (Disk mode).
     /// decodeIfPresent — back-compat with v6 readers.
     public let sdkModeActive: Bool?
+    /// Wire v8: true when the Codex SDK observation mode toggle is ON
+    /// (Node sidecar provisioned + observer active). Drives the
+    /// "· SDK mode" subtitle on the Codex analytics column. Nil for
+    /// older wire versions; treat nil as `false` (Codex Disk mode).
+    /// decodeIfPresent — back-compat with v7 readers.
+    public let codexSDKModeActive: Bool?
 
     public init(
         sessionPct: Int,
@@ -59,7 +65,8 @@ public struct UsageData: Codable, Equatable, Sendable {
         updatedAt: Date,
         organizationID: String? = nil,
         antigravityModel: String? = nil,
-        sdkModeActive: Bool? = nil
+        sdkModeActive: Bool? = nil,
+        codexSDKModeActive: Bool? = nil
     ) {
         self.sessionPct = sessionPct
         self.sessionResetMins = sessionResetMins
@@ -73,9 +80,10 @@ public struct UsageData: Codable, Equatable, Sendable {
         self.organizationID = organizationID
         self.antigravityModel = antigravityModel
         self.sdkModeActive = sdkModeActive
+        self.codexSDKModeActive = codexSDKModeActive
     }
 
-    // MARK: - Custom Codable (back-compat with v6)
+    // MARK: - Custom Codable (back-compat with v6/v7)
 
     enum CodingKeys: String, CodingKey {
         case sessionPct, sessionResetMins, sessionEpoch
@@ -83,6 +91,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         case status, representativeClaim, updatedAt
         case organizationID
         case antigravityModel, sdkModeActive
+        case codexSDKModeActive
     }
 
     public init(from decoder: Decoder) throws {
@@ -102,6 +111,8 @@ public struct UsageData: Codable, Equatable, Sendable {
         // which renders the same as Disk mode (subtitle = "· disk mode").
         self.antigravityModel = try c.decodeIfPresent(String.self, forKey: .antigravityModel)
         self.sdkModeActive = try c.decodeIfPresent(Bool.self, forKey: .sdkModeActive)
+        // v8 field — decodeIfPresent so v6/v7 payloads still parse.
+        self.codexSDKModeActive = try c.decodeIfPresent(Bool.self, forKey: .codexSDKModeActive)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -118,6 +129,7 @@ public struct UsageData: Codable, Equatable, Sendable {
         try c.encodeIfPresent(organizationID, forKey: .organizationID)
         try c.encodeIfPresent(antigravityModel, forKey: .antigravityModel)
         try c.encodeIfPresent(sdkModeActive, forKey: .sdkModeActive)
+        try c.encodeIfPresent(codexSDKModeActive, forKey: .codexSDKModeActive)
     }
 
     /// Mood derived from session usage. Drives gauge color and animation cadence.

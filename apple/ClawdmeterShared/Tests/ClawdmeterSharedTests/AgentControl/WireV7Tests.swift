@@ -11,8 +11,12 @@ final class WireV7Tests: XCTestCase {
 
     // MARK: - Wire version constant
 
-    func test_currentWireVersionIsSeven() {
-        XCTAssertEqual(AgentControlWireVersion.current, 7)
+    func test_currentWireVersionIsAtLeastSeven() {
+        // v7 was the floor when this test landed. Forward-compat: any
+        // wire bump (v8, v9, ...) keeps the v7 surface alive — only
+        // `antigravityMinimum` asserts the actual floor for the Plan
+        // pane feature.
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 7)
     }
 
     func test_antigravityMinimumIsSeven() {

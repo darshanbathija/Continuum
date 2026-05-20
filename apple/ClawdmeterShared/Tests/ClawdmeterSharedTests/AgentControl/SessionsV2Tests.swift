@@ -243,11 +243,16 @@ final class SessionsV2Tests: XCTestCase {
         // /sessions/:id/antigravity-plan endpoint + antigravity-plan-subscribe
         // WS op + AntigravityPlanSnapshot DTO + UsageData.antigravityModel
         // + UsageData.sdkModeActive (decodeIfPresent — back-compat preserved).
-        XCTAssertEqual(AgentControlWireVersion.current, 7)
+        // Bumped 7 → 8 on 2026-05-20 (Codex SDK): adds
+        // UsageData.codexSDKModeActive (decodeIfPresent — back-compat).
+        // No new endpoints or WS ops in v8; the field rides on the
+        // existing /usage envelope.
+        XCTAssertEqual(AgentControlWireVersion.current, 8)
         XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
         XCTAssertEqual(AgentControlWireVersion.chatSubscribeMinimum, 5)
         XCTAssertEqual(AgentControlWireVersion.geminiMinimum, 6)
         XCTAssertEqual(AgentControlWireVersion.antigravityMinimum, 7)
+        XCTAssertEqual(AgentControlWireVersion.codexSDKMinimum, 8)
     }
 
     // MARK: - Mid-session change requests
