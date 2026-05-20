@@ -1,10 +1,13 @@
 import Foundation
 import WatchConnectivity
 import Combine
+import OSLog
 import ClawdmeterShared
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
+
+private let planBridgeLogger = Logger(subsystem: "com.clawdmeter.watch", category: "PlanBridge")
 
 /// Receives plan-ready state + session-list snapshot from the paired
 /// iPhone via `WCSession` `applicationContext` (latest-wins) + `userInfo`
@@ -77,12 +80,18 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
         // Sessions v2 Phase 6: session list snapshot. iPhone sends a
         // JSON-encoded `[WatchSessionSummary]` so the Codable round-trip
         // crosses the WCSession plist boundary cleanly.
+        //
+        // P2-Watch-2: log decode failures via os_log instead of `try?`
+        // swallowing them — when iPhone ships a payload the watch can't
+        // parse, the user just sees a stale list with no breadcrumb.
         if let json = context["sessionsSummaryJSON"] as? String,
            let data = json.data(using: .utf8) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            if let summaries = try? decoder.decode([WatchSessionSummary].self, from: data) {
-                self.sessionsSummary = summaries
+            do {
+                self.sessionsSummary = try decoder.decode([WatchSessionSummary].self, from: data)
+            } catch {
+                planBridgeLogger.warning("sessionsSummaryJSON decode failed: \(error.localizedDescription, privacy: .public)")
             }
         }
         // P1-Watch-1: push a fresh timeline to the plan-waiting complication
