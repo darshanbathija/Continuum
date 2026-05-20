@@ -94,6 +94,53 @@ public final class AgentSessionRegistry: ObservableObject {
         return session
     }
 
+    /// v0.8 Chat tab: create a chat-kind session. Stores the chat-cwd in
+    /// `worktreePath` (so the existing `effectiveCwd` dispatch resolves to
+    /// it) and leaves `repoKey` nil (chat sessions have no repo).
+    public func createChat(
+        provider: AgentKind,
+        model: String?,
+        chatCwd: String,
+        codexChatBackend: CodexChatBackend? = nil,
+        effort: ReasoningEffort? = nil
+    ) -> AgentSession {
+        let id = UUID()
+        let now = Date()
+        nextEventSeqBySession[id] = 1
+        let session = AgentSession(
+            id: id,
+            repoKey: nil,
+            repoDisplayName: "Chat — \(AgentKindUI.displayName(for: provider))",
+            agent: provider,
+            model: model,
+            goal: nil,
+            worktreePath: chatCwd,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: .running,
+            planText: nil,
+            createdAt: now,
+            lastEventAt: now,
+            lastEventSeq: 1,
+            mode: .local,
+            effort: effort,
+            kind: .chat,
+            codexChatBackend: codexChatBackend
+        )
+        sessions.append(session)
+        save()
+        return session
+    }
+
+    /// Update the persisted codex thread id for an SDK chat session after
+    /// the first turn returns its `thread.started` event. Lets resume-
+    /// after-evict in Phase 4.5 find the same server-side thread.
+    public func setCodexChatThreadId(id: UUID, threadId: String) {
+        update(id: id) { s in
+            with(s, codexChatThreadId: threadId)
+        }
+    }
+
     public func session(id: UUID) -> AgentSession? {
         sessions.first { $0.id == id }
     }
@@ -301,6 +348,7 @@ public final class AgentSessionRegistry: ObservableObject {
         abPairSessionId: UUID?? = nil,
         abPairDecidedAt: Date?? = nil,
         customName: String?? = nil,
+        codexChatThreadId: String?? = nil,
         lastEventSeq: UInt64? = nil
     ) -> AgentSession {
         AgentSession(
@@ -326,7 +374,15 @@ public final class AgentSessionRegistry: ObservableObject {
             effort: Self.resolve(effort, fallback: s.effort),
             abPairSessionId: Self.resolve(abPairSessionId, fallback: s.abPairSessionId),
             abPairDecidedAt: Self.resolve(abPairDecidedAt, fallback: s.abPairDecidedAt),
-            customName: Self.resolve(customName, fallback: s.customName)
+            customName: Self.resolve(customName, fallback: s.customName),
+            // v0.8 schema v5: preserve all the chat-tab fields across
+            // mutations so an update to a chat session doesn't silently
+            // convert it back to a code session.
+            kind: s.kind,
+            frontierGroupId: s.frontierGroupId,
+            frontierChildIndex: s.frontierChildIndex,
+            codexChatBackend: s.codexChatBackend,
+            codexChatThreadId: Self.resolve(codexChatThreadId, fallback: s.codexChatThreadId)
         )
     }
 

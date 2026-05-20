@@ -910,6 +910,31 @@ public final class AgentControlServer {
         t.register(method: "DELETE", pattern: "/sessions/:id") { [weak self] _, conn, params in
             await self?.handleDeleteSession(sessionId: params["id"] ?? "", connection: conn)
         }
+
+        // --- v0.8 Chat tab (wire v9) ---
+        t.register(method: "POST", pattern: "/chat-sessions") { [weak self] req, conn, _ in
+            await self?.handlePostChatSession(request: req, connection: conn)
+        }
+        t.register(method: "GET", pattern: "/chat-providers") { [weak self] _, conn, _ in
+            await self?.handleGetChatProviders(connection: conn)
+        }
+        // Frontier endpoints: forward-compat stubs in v0.8. The DTOs +
+        // routes ship so v0.9 (Antigravity-via-agy + 3-pane UI) can swap
+        // in real implementations without another wire bump. v0.8 daemon
+        // returns 501 Not Implemented; iOS doesn't surface the UI yet.
+        t.register(method: "POST", pattern: "/chat-sessions/frontier") { [weak self] _, conn, _ in
+            self?.handleFrontierStub(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/send") { [weak self] _, conn, _ in
+            self?.handleFrontierStub(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/retry-slot") { [weak self] _, conn, _ in
+            self?.handleFrontierStub(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/pick-winner") { [weak self] _, conn, _ in
+            self?.handleFrontierStub(connection: conn)
+        }
+
         return t
     }()
 
@@ -2170,6 +2195,190 @@ public final class AgentControlServer {
             serverLogger.error("Failed to spawn session: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    // MARK: - v0.8 Chat tab (wire v9)
+
+    /// `POST /chat-sessions`: spawn a new chat-kind AgentSession in an
+    /// empty per-session chat-cwd. Forces plan-mode. Branches on
+    /// (agent, codexChatBackend) per RE1. Gemini chat returns 501 in
+    /// v0.8 (deferred to v0.9 alongside Antigravity-via-agy).
+    private func handlePostChatSession(request: HTTPRequest, connection: NWConnection) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(CreateChatSessionRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        // Gemini chat is deferred to v0.9 (gemini CLI being replaced by
+        // Antigravity / agy in a parallel thread). Surface 501 with a
+        // clear reason string so iOS knows to show "Coming with
+        // Antigravity" copy instead of a generic error.
+        if req.provider == .gemini {
+            let body = #"{"error":"not_implemented","reason":"v0.9","provider":"gemini"}"#
+            sendResponse(HTTPResponse(
+                status: 501, reason: "Not Implemented",
+                contentType: "application/json", body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+        // Determine the Codex backend choice for this session. For non-
+        // Codex providers, leave it nil. For Codex, honor the per-request
+        // override if present; otherwise fall back to the global default
+        // (RE1: ship .sdk as the v0.8 default).
+        let codexBackend: CodexChatBackend? = {
+            guard req.provider == .codex else { return nil }
+            return req.codexChatBackend ?? .sdk
+        }()
+        // Create the session record first (assigns a UUID we can use to
+        // name the chat-cwd).
+        let session = registry.createChat(
+            provider: req.provider,
+            model: req.model,
+            chatCwd: "",  // placeholder; we'll patch it post-cwd-creation
+            codexChatBackend: codexBackend,
+            effort: req.effort
+        )
+        let chatCwd: String
+        do {
+            let url = try ChatCwdManager.ensure(for: session.id)
+            chatCwd = url.path
+        } catch {
+            serverLogger.error("chat-cwd create failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            registry.delete(id: session.id)
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        // Patch the worktreePath on the created session so effectiveCwd
+        // resolves to the chat-cwd. The createChat helper stored it as
+        // empty-string; rewrite via the existing update pattern.
+        registry.updateRuntime(
+            id: session.id,
+            worktreePath: chatCwd,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            mode: .local
+        )
+        // Spawn dispatch — Phase 3 dispatch handles the kind branches.
+        // For SDK chat (codex + .sdk) argv is empty and the daemon needs
+        // to route to CodexSubscriptionRelay; Phase 4.5 wires that. For
+        // CLI chat (claude / codex+.cli) we spawn a tmux window now.
+        let updatedSession = registry.session(id: session.id) ?? session
+        let argv = AgentSpawner.argv(for: updatedSession)
+        if argv.isEmpty && updatedSession.agent == .codex && updatedSession.codexChatBackend == .sdk {
+            // Phase 4.5 placeholder: SDK chat spawn lands when the relay
+            // integration completes. For v0.8 Phase 4b ship, return the
+            // session shell so iOS sees an empty chat row; the relay
+            // hookup follows.
+            // TODO(Phase 4.5): kick off CodexSubscriptionRelay.shared.start(...)
+        } else if argv.isEmpty {
+            // No binary on PATH for this provider — clean up + surface 503.
+            registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
+            ), on: connection)
+            return
+        } else {
+            // CLI chat path: spawn tmux window in the chat-cwd.
+            do {
+                try await tmux.start()
+                let window = try await tmux.newWindow(cwd: chatCwd, child: argv)
+                registry.updateRuntime(
+                    id: session.id,
+                    worktreePath: chatCwd,
+                    tmuxWindowId: window.windowId,
+                    tmuxPaneId: window.paneId,
+                    mode: .local
+                )
+            } catch {
+                serverLogger.error("chat spawn failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                sendResponse(.internalError, on: connection)
+                return
+            }
+        }
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["chat": "true", "provider": req.provider.rawValue]
+        )
+        let finalSession = registry.session(id: session.id) ?? session
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(finalSession) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// `GET /chat-providers`: returns the per-provider availability +
+    /// auth + capability-probe state per DG4. v0.8 ships a minimal
+    /// implementation that checks binary-on-PATH; the full P1-actor
+    /// ChatProviderProbe + CM3 ChatProviderAuthObserver land in v0.8.x
+    /// polish phase. Gemini row is hardcoded `available: false, reason:
+    /// "v0.9"` until Antigravity (agy) replacement ships.
+    private func handleGetChatProviders(connection: NWConnection) async {
+        let now = Date()
+        let claudeAvailable = ShellRunner.locateBinary("claude") != nil
+        let codexAvailable = ShellRunner.locateBinary("codex") != nil
+        let codexSDKAvailable = CodexSDKManager.shared.isProvisioned
+        let resp = ChatProvidersResponse(providers: [
+            ChatProviderEntry(
+                provider: .claude,
+                available: claudeAvailable,
+                authenticated: claudeAvailable,  // full auth probe in polish
+                capabilityProbePassed: claudeAvailable,
+                lastProbedAt: now,
+                reason: claudeAvailable ? nil : "claude CLI not on PATH"
+            ),
+            ChatProviderEntry(
+                provider: .codex, codexBackend: .sdk,
+                available: codexSDKAvailable,
+                authenticated: codexSDKAvailable,
+                capabilityProbePassed: codexSDKAvailable,
+                lastProbedAt: now,
+                reason: codexSDKAvailable ? nil : "Toggle SDK mode in Settings → Codex SDK"
+            ),
+            ChatProviderEntry(
+                provider: .codex, codexBackend: .cli,
+                available: codexAvailable,
+                authenticated: codexAvailable,
+                capabilityProbePassed: codexAvailable,
+                lastProbedAt: now,
+                reason: codexAvailable ? nil : "codex CLI not on PATH"
+            ),
+            ChatProviderEntry(
+                provider: .gemini,
+                available: false,
+                authenticated: false,
+                capabilityProbePassed: false,
+                reason: "v0.9"  // Antigravity-via-agy replacement
+            ),
+        ])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(resp) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Frontier endpoints stub. Returns 501 in v0.8 — the routes exist
+    /// for forward-compat (clients can probe), but the full implementation
+    /// (real spawn, FrontierWebSocketChannel, per-slot retry, pick-winner
+    /// fork) lands in v0.9 alongside the Antigravity replacement so the
+    /// 3-pane UI can use the full Claude+Codex+Gemini matrix.
+    private func handleFrontierStub(connection: NWConnection) {
+        let body = #"{"error":"not_implemented","reason":"frontier_ui_lands_in_v0.9"}"#
+        sendResponse(HTTPResponse(
+            status: 501, reason: "Not Implemented",
+            contentType: "application/json", body: Data(body.utf8)
+        ), on: connection)
     }
 
     private func attachClaudeWiring(for session: AgentSession, cwd: String) {
