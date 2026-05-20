@@ -4,6 +4,111 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.2 build 48] - 2026-05-20
+
+Codex SDK observation — the user-visible glue. v0.7.0 shipped
+scaffolding, v0.7.1 shipped real provisioning + observer/resume
+subcommands; v0.7.2 plugs the SDK into actual product surfaces:
+Mac Settings tab with toggle + diagnostics, daemon relay that ingests
+observer events, and X1 cross-Apple compose-draft → resume wire.
+Auth contract unchanged: `~/.codex/auth.json` chatgpt OAuth, no
+per-token billing.
+
+Shipped as 4 commits on `feat/codex-sdk-v072`, fast-forward merged
+to `main`. Swift suite 457/457. Mac/iOS/Watch builds all clean.
+
+### Settings → Codex SDK tab
+
+`CodexSDKSettingsView`. The previously-invisible
+`clawdmeter.codex.sdkMode` AppStorage toggle now has a real Settings
+tab between Sessions and Diagnostics. Renders:
+- Header explaining what SDK mode does + the auth contract
+- Toggle bound to AppStorage; ON triggers
+  `CodexSDKManager.enableSDKMode(progress:)` with a closure that
+  surfaces step messages ("Locating node binary…", "Installing
+  @openai/codex-sdk (~25s)…", "Probing sidecar…") via a progress
+  indicator. OFF calls `disableSDKMode()` synchronously.
+- Status grid: mode, provisioned, SDK version, install path (
+  Application Support dir, copy-able).
+- Actions: "Open install folder" (NSWorkspace.open), "Wipe SDK
+  install" with confirmation dialog → `wipeProvisionedState()`.
+- Soft-red error banner when `lastProvisioningError` is set.
+- Auth note explaining the OAuth piggyback.
+
+Wired into the existing TabView with a `swift` SF Symbol.
+
+### CodexSubscriptionRelay (daemon)
+
+`CodexSubscriptionRelay` is the Mac-side bridge between the Node
+sidecar's stdout JSON-lines and the rest of the daemon. Per-session
+sidecar lifecycle:
+- `start(session:workingDirectory:initialPrompt:threadId?:)` spawns
+  Node in observer mode, sends `{agent:"observer"}` then `{op:"start"
+  or "resume", prompt, ...}`, returns a `CodexRelaySubscription`
+  with an `AsyncStream<CodexRelayEvent>`.
+- `forwardPrompt(sessionId:workingDirectory:prompt:threadId?:)` push
+  a new turn into an already-running sidecar.
+- `stop(sessionId:)` async — sends `{op:"shutdown"}`, waits up to
+  3s for graceful exit, SIGTERMs otherwise.
+- `stopAll()` test/teardown helper.
+
+`CodexRelayEvent.classify(json:handle:)` parses the sidecar's
+`{type:"stream_event",subscriptionId,threadId,event}` envelope into
+typed `.threadStarted`, `.turnStarted`, `.item`, `.turnCompleted`,
+`.turnFailed`, `.error`, `.streamStarted`, `.streamDone`,
+`.streamError`, `.observerReady`, `.unknown` cases. Tracks last-known
+`subscription_id` + `thread_id` on the ProcessHandle so subsequent
+events without explicit ids still get tagged.
+
+Stdout reader: `FileHandle.readabilityHandler` + line buffer →
+AsyncStream with `bufferingOldest(512)` policy so a slow consumer
+can't OOM the daemon.
+
+Skeleton-aware: `start()` throws `RelayError.sdkNotProvisioned`
+when `CodexSDKManager.isProvisioned == false` with the
+"Toggle SDK mode in Settings → Codex SDK" CTA.
+
+### X1 compose-draft → codexThreadId wire
+
+`ComposeDraft` gains optional `codexThreadId: String?` field (wire v8
+additive, decodeIfPresent). When iOS posts a compose-draft with this
+field set + `suggestedAgent == .codex` + the Mac is provisioned,
+the daemon dispatches the prompt to
+`CodexSDKManager.runResume(threadId:prompt:workingDirectory:)` —
+a Swift wrapper around the sidecar's one-shot resume agent that
+calls `codex.resumeThread(id).run(prompt)` and returns the
+finalResponse + usage.
+
+The Mac sends back a structured `codex_resume_result` JSON frame
+BEFORE the existing "ok" ACK. iOS parses the new frame into a
+`ComposeDraftResult.deliveredWithCodexResume(threadId,finalResponse)`
+case. WS receive timeout extended from 5s to 130s when codexThreadId
+is set, covering the 90s SDK turn ceiling + buffer.
+
+`AuditLog` records the codex_resume dispatch alongside the standard
+compose-draft entry.
+
+### Tests
+
+- Swift suite: 457/457 — wire v8 round-trip tests already covered
+  the new ComposeDraft Codable shape (via decodeIfPresent default
+  behavior).
+- Mac/iOS/Watch xcodebuild: all BUILD SUCCEEDED.
+
+### Deferred to v0.7.3
+
+- iOS WS subscriber that consumes CodexSubscriptionRelay events
+  live (currently the relay's AsyncStream is one-subscriber-per-
+  session; v0.7.3 will multiplex via PassthroughSubject and expose
+  a `codex-stream-subscribe` WS op).
+- Mapping `agent_message` / `command_execution` / `reasoning` events
+  → `ChatItem` records appended to `SessionChatStore` so the existing
+  chat-subscribe WS pipeline carries SDK events into the iOS chat UI
+  without a separate channel.
+- iOS handoff UX for `.deliveredWithCodexResume`: currently the
+  sheet dismisses silently; v0.7.3 could surface the response inline
+  on the iOS chat pane the user opened the draft from.
+
 ## [0.7.1 build 47] - 2026-05-20
 
 Codex SDK observation mode — real provisioning + observer/resume
