@@ -4,6 +4,23 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.13 build 59] - 2026-05-21
+
+### Changed
+
+- **Permission-mode chip now matches the model+effort chip visually.**
+  The "Ask / Edits / Plan / Bypass" pill on the composer bottom bar
+  was wearing its own design language — a leading SF Symbol icon plus
+  a mode-specific tinted background (secondary / accent / yellow). It
+  now renders identically to the right-side `Opus 4.7 (1M) · Max`
+  chip: same `Color.secondary.opacity(0.10)` Capsule, same 11pt-medium
+  primary text, same 8pt-semibold chevron, same padding. No icon, no
+  tint. The popover already shows the active mode via the checkmark
+  on the row, so the chip itself doesn't need to encode it twice; the
+  payoff is a balanced bottom bar instead of chip-soup. Same ⌘⇧1-4
+  keyboard shortcuts, same Menu popover, same `Section("Mode")`
+  structure with the numbered shortcut hints on each row.
+
 ## [0.7.12 build 58] - 2026-05-21
 
 ### Changed
