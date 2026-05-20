@@ -4,6 +4,19 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.11 build 57] - 2026-05-21
+
+### Changed
+
+- **Permission-mode picker is now a segmented control.** The "(?) Ask"
+  chip on the composer bottom bar used to be a compact menu — one
+  active label with a chevron hiding the other modes. It now renders
+  as a segmented picker matching the Claude / Codex / Gemini agent
+  strip's visual weight: Ask · Edits · Plan side by side, with the
+  active mode highlighted at a glance. Bound sessions include the
+  Bypass segment; the empty-state composer hides it (no session yet
+  to trust-gate). Same ⌘⇧1-4 keyboard shortcuts.
+
 ## [0.7.10 build 56] - 2026-05-21
 
 ### Fixed

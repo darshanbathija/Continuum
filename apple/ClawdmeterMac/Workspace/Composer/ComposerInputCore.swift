@@ -213,7 +213,11 @@ struct ComposerInputCore: View {
     private var chipRow: some View {
         HStack(spacing: 8) {
             if !isReadOnly, onChangePermissionMode != nil {
-                PermissionModeChip(
+                // v0.7.11: segmented picker matches the Claude/Codex/
+                // Gemini agent strip's visual weight. Replaces the
+                // compact chip+chevron so the active mode reads at
+                // a glance.
+                PermissionModeSegmented(
                     mode: permissionMode,
                     availableModes: availablePermissionModes,
                     onChange: { newMode in
