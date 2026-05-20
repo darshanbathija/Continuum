@@ -204,9 +204,16 @@ public final class AgentControlServer {
         do {
             let nwPort = NWEndpoint.Port(rawValue: port)!
             let params = NWParameters.tcp
-            // Bind 0.0.0.0 — Network.framework defaults to localhost.
-            // We filter on accept in `handleNewConnection`.
-            params.requiredInterfaceType = .other  // any interface
+            // P1-Mac-8: don't set `requiredInterfaceType = .other` — that
+            // pins the listener to non-loopback/non-wired/non-wifi/non-cell
+            // interfaces, which excludes `lo0`. The Mac composer posts to
+            // 127.0.0.1 (Workspace/Composer/MacComposerSender.swift) and
+            // local Bonjour-less clients can be pinned to loopback, so the
+            // HTTP path was silently failing on those code paths even
+            // though the accept filter explicitly allows loopback. The
+            // WebSocket listener (a few lines below) already didn't set
+            // this; align the HTTP listener with it and rely on
+            // `isAllowedPeer` to gate connections.
             params.allowLocalEndpointReuse = true
 
             let listener = try NWListener(using: params, on: nwPort)
