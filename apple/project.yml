@@ -19,8 +19,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.7.13"
-    CURRENT_PROJECT_VERSION: "59"
+    MARKETING_VERSION: "0.7.14"
+    CURRENT_PROJECT_VERSION: "60"
 
 packages:
   ClawdmeterShared:
@@ -67,6 +67,17 @@ targets:
       # in production (xcodegen keeps the original filename in
       # Resources/).
       - path: ../tools/clawdmeter-codex-sdk/main.mjs
+        buildPhase: resources
+        optional: true
+      # v0.7.14: bundle the Antigravity Python sidecar so
+      # AntigravitySidecarManager.locateSidecarMain() can resolve it
+      # from /Applications/Clawdmeter.app/Contents/Resources/clawdmeter-agents/.
+      # The whole folder is copied as a folder reference (mirrors
+      # Vendor/node pattern above) so future siblings (observer.py,
+      # cost_pulse_watcher.py, etc.) come along for free when v0.6.1's
+      # full uv provisioning lands.
+      - path: ../tools/clawdmeter-agents
+        type: folder
         buildPhase: resources
         optional: true
     dependencies:

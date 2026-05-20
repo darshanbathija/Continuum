@@ -4,6 +4,44 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.14 build 60] - 2026-05-21
+
+### Fixed
+
+- **Antigravity SDK toggle now reaches its (skeleton) sidecar.**
+  Settings → Antigravity → "SDK mode" was reporting "Sidecar probe
+  failed: SDK mode not provisioned: sidecar main.py not found" on
+  the released .app, because `AntigravitySidecarManager.locateSidecarMain()`
+  walked up from CWD looking for `tools/clawdmeter-agents/main.py` —
+  which only works from a dev checkout. The .app's CWD is `/` so the
+  walk never finds anything. The Codex SDK sibling solved this same
+  problem in v0.7.1 by reading `Bundle.main.resourceURL`; the
+  Antigravity sibling was left as a TODO comment.
+  - `project.yml` now bundles `tools/clawdmeter-agents/` as a folder
+    reference under `Contents/Resources/clawdmeter-agents/` (mirrors
+    the `Vendor/node` pattern). All five `.py` files + `pyproject.toml`
+    + `README.md` come along, so v0.6.1's eventual full uv-provisioning
+    work doesn't need a second bundling pass.
+  - `locateSidecarMain()` now checks `Bundle.main.resourceURL/clawdmeter-agents/main.py`
+    first, falls back to the repo walk for dev builds. Matches
+    `CodexSDKManager.locateMainMJSSource()` shape.
+  - Result: toggling SDK mode ON now reaches the Python sidecar,
+    which returns the **honest** v0.6.0 skeleton message — "SDK mode
+    skeleton — full impl ships in v0.6.1. Toggle SDK mode off in
+    Settings to dismiss this warning." — and the toggle reverts to
+    OFF as designed. Disk mode (the default) is unaffected.
+
+### Known limitation (deferred follow-up)
+
+- The Antigravity SDK toggle is still a skeleton in v0.7.14. Real
+  uv-Python provisioning + `pip install google-antigravity` + the
+  full observer.py impl is the v0.6.1 work that was scoped in the
+  original plan but never landed (the v0.7.x line shipped Codex SDK
+  parity instead). Users who want live Gemini token streaming via
+  the official Antigravity SDK will need that follow-up; Disk mode
+  remains the default and reads `~/.gemini/antigravity/brain/`
+  directly without any Python dependency.
+
 ## [0.7.13 build 59] - 2026-05-21
 
 ### Changed

@@ -159,14 +159,27 @@ public final class AntigravitySidecarManager {
         return .skeleton(message: "Unexpected sidecar response — assume skeleton")
     }
 
-    /// Walks up from the current working directory looking for
-    /// `tools/clawdmeter-agents/main.py`. In production the Mac app
-    /// bundles the sidecar under `Contents/Resources/`; v0.6.1 wires
-    /// that path. For now we use the repo-relative path.
+    /// Locates the sidecar's `main.py`. Production .app bundles ship it
+    /// as `Contents/Resources/clawdmeter-agents/main.py` (via the
+    /// `project.yml` folder-reference resources entry, v0.7.14); dev
+    /// builds running from the repo walk up to find
+    /// `tools/clawdmeter-agents/main.py`. Mirrors the Codex SDK
+    /// `locateMainMJSSource()` pattern so both SDKs resolve the same way.
     private func locateSidecarMain() -> URL? {
+        // Bundled path takes priority — guarantees the .py the manager
+        // probes matches the version that shipped with the .app.
+        if let bundleResources = Bundle.main.resourceURL {
+            let bundled = bundleResources
+                .appendingPathComponent("clawdmeter-agents", isDirectory: true)
+                .appendingPathComponent("main.py", isDirectory: false)
+            if FileManager.default.fileExists(atPath: bundled.path) {
+                return bundled
+            }
+        }
+        // Dev: walk up from the cwd to find the repo-relative source.
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         var dir = cwd
-        for _ in 0..<6 {
+        for _ in 0..<8 {
             let candidate = dir
                 .appendingPathComponent("tools", isDirectory: true)
                 .appendingPathComponent("clawdmeter-agents", isDirectory: true)
