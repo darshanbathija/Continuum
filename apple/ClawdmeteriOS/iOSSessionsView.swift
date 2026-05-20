@@ -1031,11 +1031,25 @@ private struct OutsideSessionDetailView: View {
 }
 
 private struct SessionDetailView: View {
+    /// Seed session — used only when client.sessions doesn't have a live
+    /// entry for this id (e.g., immediately after archive or while a
+    /// refresh is in flight). Live reads should go through
+    /// `currentSession` so plan / goal / status updates propagate
+    /// without rebuilding this view.
     let session: AgentSession
     @ObservedObject var client: AgentControlClient
     @State private var viewMode: ViewMode = .chat
     /// Sessions v2 T40: chat store mirrors the daemon's chat snapshot.
     @StateObject private var chatStore: iOSChatStore
+
+    /// P1-Mac-20: derive live session state from `client.sessions` on each
+    /// render. The previous implementation captured `session` as `let`
+    /// and read mutable fields (planText, goal, archivedAt) off the
+    /// captured snapshot, so plan-mode / done / archive updates were
+    /// invisible until the user closed and re-opened the detail view.
+    private var currentSession: AgentSession {
+        client.sessions.first(where: { $0.id == session.id }) ?? session
+    }
     /// Tracks whether the chat scroll is at the tail so we know when to
     /// auto-scroll on new items vs. surface a "Jump to latest" CTA.
     @State private var liveChatPinnedToBottom: Bool = true
@@ -1107,7 +1121,7 @@ private struct SessionDetailView: View {
                 terminalView
             }
         }
-        .navigationTitle(session.displayLabel)
+        .navigationTitle(currentSession.displayLabel)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { iOSChatStoreCache.shared.protectSession(session.id) }
         .onDisappear { iOSChatStoreCache.shared.unprotectSession(session.id) }
@@ -1115,14 +1129,14 @@ private struct SessionDetailView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     NavigationLink {
-                        iOSArtifactsPane(client: client, session: session, chatStore: chatStore)
+                        iOSArtifactsPane(client: client, session: currentSession, chatStore: chatStore)
                             .navigationTitle("Artifacts")
                             .navigationBarTitleDisplayMode(.inline)
                     } label: {
                         Label("Artifacts (\(chatStore.snapshot.artifactEntries.count))", systemImage: "paperclip")
                     }
                     Divider()
-                    if session.archivedAt == nil {
+                    if currentSession.archivedAt == nil {
                         Button("Archive session") {
                             Task { await client.archiveSession(id: session.id) }
                         }
@@ -1162,9 +1176,9 @@ private struct SessionDetailView: View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 List {
-                    if let planText = session.planText, !planText.isEmpty {
+                    if let planText = currentSession.planText, !planText.isEmpty {
                         PlanCardView(
-                            goal: session.goal,
+                            goal: currentSession.goal,
                             planSummary: planText,
                             files: [],
                             onApprove: {
