@@ -2,6 +2,9 @@ import Foundation
 import WatchConnectivity
 import Combine
 import ClawdmeterShared
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 /// Receives plan-ready state + session-list snapshot from the paired
 /// iPhone via `WCSession` `applicationContext` (latest-wins) + `userInfo`
@@ -53,7 +56,9 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
 
     private func apply(context: [String: Any]) {
         WatchTokenBridge.shared.receive(context: context)
+        var planWaitingChanged = false
         if let count = context["planWaitingCount"] as? Int {
+            if planWaitingCount != count { planWaitingChanged = true }
             planWaitingCount = count
             defaults?.set(count, forKey: "clawdmeter.watch.planWaitingCount")
         }
@@ -80,6 +85,19 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
                 self.sessionsSummary = summaries
             }
         }
+        // P1-Watch-1: push a fresh timeline to the plan-waiting complication
+        // whenever the count moves. The complication provider schedules its
+        // next refresh 30 minutes out; without this reload the watch face
+        // shows a stale "approve" badge until the next timeline tick.
+        if planWaitingChanged {
+            reloadPlanWaitingComplication()
+        }
+    }
+
+    private func reloadPlanWaitingComplication() {
+#if canImport(WidgetKit)
+        WidgetCenter.shared.reloadTimelines(ofKind: "ClawdmeterMeter.planWaiting")
+#endif
     }
 
     // MARK: - Approve
@@ -103,6 +121,9 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
         sendOrQueue(message)
         planWaitingCount = max(0, planWaitingCount - 1)
         defaults?.set(planWaitingCount, forKey: "clawdmeter.watch.planWaitingCount")
+        // P1-Watch-1: keep the complication in lockstep with the optimistic
+        // decrement so the user sees the count drop immediately.
+        reloadPlanWaitingComplication()
     }
 
     /// Sessions v2 Phase 6: send ESC to the session's tmux pane.
@@ -124,8 +145,17 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
     }
 
     private func sendOrQueue(_ message: [String: Any]) {
+        // P1-Watch-2: sendMessage's silent error handler dropped approvals
+        // when reachability flipped mid-send. transferUserInfo guarantees
+        // queued delivery, so fall through to it from inside the error
+        // path as well, not just when isReachable is false at call time.
         if WCSession.default.isReachable {
-            WCSession.default.sendMessage(message, replyHandler: nil) { _ in }
+            WCSession.default.sendMessage(message, replyHandler: nil) { _ in
+                // The transferUserInfo path is durable across reachability
+                // flips, so on send failure resend through it instead of
+                // losing the approval.
+                WCSession.default.transferUserInfo(message)
+            }
         } else {
             WCSession.default.transferUserInfo(message)
         }
