@@ -108,41 +108,48 @@ public actor ShellRunner {
             errDone.signal()
         }
 
-        // P2-Shared-2: wait via terminationHandler + a racing timeout Task
-        // instead of a 50ms poll. The previous form burned a wakeup every
-        // 50ms for the lifetime of every shell-out (a 30s tmux command
-        // cost 600 cooperative-pool wakes) and added up to 50ms of
-        // post-exit latency. terminationHandler fires the instant the
-        // child reaps, so exit latency drops to one continuation hop.
-        let exitedNormally: Bool = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            // `terminationHandler` runs on a background queue exactly once
-            // when the process is reaped. Resume the continuation with
-            // `true` to signal a clean wait (the timeout path resumes with
-            // `false` below before terminate() is called).
-            let resumed = ResumeOnce()
-            process.terminationHandler = { _ in
-                if resumed.fire() { cont.resume(returning: true) }
+        // P2-Shared-2 + Codex structured P2: wait via terminationHandler
+        // + a racing timeout Task instead of a 50ms poll. The earlier
+        // patch added a bare `Task { ... }` for the timeout race, which
+        // is unstructured and does NOT inherit the caller's cancellation.
+        // If the caller's Task was cancelled mid-shell-out, the child
+        // process kept running until the deadline expired (regressing
+        // the previous explicit cancellation behavior).
+        //
+        // Bridge caller cancellation through `withTaskCancellationHandler`:
+        // the onCancel closure terminates the process synchronously when
+        // the calling Task is cancelled. terminate() triggers the
+        // terminationHandler, which resumes the continuation with `true`.
+        // We then detect cancellation by checking Task.isCancelled
+        // after the await and throw CancellationError below.
+        let resumed = ResumeOnce()
+        let exitedNormally: Bool = await withTaskCancellationHandler {
+            await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                // `terminationHandler` runs on a background queue exactly
+                // once when the process is reaped.
+                process.terminationHandler = { _ in
+                    if resumed.fire() { cont.resume(returning: true) }
+                }
+                // Timeout race only — caller cancellation is delivered
+                // through the outer onCancel below.
+                Task {
+                    let deadline = ContinuousClock.now + .seconds(timeout)
+                    while ContinuousClock.now < deadline {
+                        if !process.isRunning { return }
+                        try? await Task.sleep(for: .milliseconds(200))
+                    }
+                    if process.isRunning, resumed.fire() {
+                        cont.resume(returning: false)
+                    }
+                }
             }
-            // Timeout / cancellation race. We can't structurally cancel a
-            // `withCheckedContinuation`, so spin a child Task that resumes
-            // the continuation with `false` if it fires first.
-            Task {
-                let deadline = ContinuousClock.now + .seconds(timeout)
-                while ContinuousClock.now < deadline {
-                    if !process.isRunning {
-                        // terminationHandler will have resumed already, or
-                        // will momentarily — bail without racing it.
-                        return
-                    }
-                    if Task.isCancelled {
-                        if resumed.fire() { cont.resume(returning: false) }
-                        return
-                    }
-                    try? await Task.sleep(for: .milliseconds(200))
-                }
-                if process.isRunning, resumed.fire() {
-                    cont.resume(returning: false)
-                }
+        } onCancel: {
+            // Synchronous on the cancelling thread. Terminate the child
+            // so terminationHandler fires and the awaiting continuation
+            // wakes immediately. The `if Task.isCancelled` block below
+            // converts this into a thrown CancellationError.
+            if process.isRunning {
+                process.terminate()
             }
         }
         if !exitedNormally {

@@ -94,23 +94,36 @@ public final class Pricing: @unchecked Sendable {
         // instead of $4.5k.
         let inputTokens = tokens.inputTokens
         let boundary = rates.boundaryTokens
-        // P1-Shared-1: cache-read tokens occupy context-window budget the
-        // same as fresh input tokens, so they count toward the tier
-        // boundary check. Using inputTokens alone made a 150k-input +
-        // 60k-cache-read request stay in the below-tier rate even though
-        // its real context window was 210k. We still apply the above-tier
-        // rate only to the fresh input portion past the boundary; cache
-        // rates flip independently below.
+        // P1-Shared-1 + Codex structured P2: cache-read tokens occupy the
+        // same context-window budget as fresh input tokens, so they count
+        // toward the tier boundary AND they consume part of the
+        // below-tier allowance before fresh input does.
+        //
+        // For 150k input + 60k cache-read with a 200k boundary:
+        //   total context = 210k → crosses boundary → hasAboveTier = true.
+        //   cache-read fills the first 60k of the below-tier band.
+        //   That leaves an effective below-tier ceiling for input of
+        //     max(0, 200k - 60k) = 140k.
+        //   inputBelow = min(150k, 140k) = 140k.
+        //   inputAbove = 150k - 140k = 10k → billed at above-tier rate.
+        //
+        // The prior P1-Shared-1 patch correctly flipped hasAboveTier on
+        // total context but split the input portion only on the raw
+        // boundary, leaving inputAbove at 0 for this exact case and
+        // silently undercharging the 10k that actually fell past the
+        // effective boundary. Codex's structured pass caught the gap.
         let contextWindowTokens = inputTokens + tokens.cacheReadTokens
         let hasAboveTier = rates.aboveBoundary != nil && contextWindowTokens > boundary
         let aboveRates = rates.aboveBoundary
 
         var total: Decimal = 0
         if hasAboveTier, let above = aboveRates {
-            // Split fresh input only — the boundary measures total context
-            // window crossed, but cache-read is priced separately below.
-            let inputBelow = min(inputTokens, boundary)
-            let inputAbove = inputTokens > boundary ? inputTokens - boundary : 0
+            let cacheReadBelow = min(tokens.cacheReadTokens, boundary)
+            let effectiveBoundaryForInput = boundary > cacheReadBelow
+                ? boundary - cacheReadBelow
+                : 0
+            let inputBelow = min(inputTokens, effectiveBoundaryForInput)
+            let inputAbove = inputTokens - inputBelow
             total += rates.inputPerToken * Decimal(inputBelow)
             total += above.inputPerToken * Decimal(inputAbove)
         } else {
