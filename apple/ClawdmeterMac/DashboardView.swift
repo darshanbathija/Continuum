@@ -59,7 +59,7 @@ struct DashboardView: View {
 
     enum DashboardTab: String, CaseIterable {
         case usage = "Usage"
-        case sessions = "Sessions"
+        case sessions = "Code"
     }
 
     /// 3-col / 2-col / 1-col responsive layout per D10. Breakpoints mirror

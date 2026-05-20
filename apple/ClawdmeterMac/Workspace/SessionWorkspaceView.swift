@@ -376,7 +376,7 @@ private struct SidebarPane: View {
 
     private var sidebarHeader: some View {
         HStack(spacing: 6) {
-            Text("Sessions")
+            Text("Code")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)

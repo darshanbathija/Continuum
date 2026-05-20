@@ -158,6 +158,7 @@
 		F0E45574BB27372F491E9AB0 /* CodexTaskComplication.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DB68892A592E6EE6C06E5B /* CodexTaskComplication.swift */; };
 		F2246425775CDC80F361A49E /* APNSCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21239F87404DC4B4E7F21AB7 /* APNSCredentialStore.swift */; };
 		F2A463341EA0924E426712F0 /* MentionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 797168CA4C5227800441FD18 /* MentionPicker.swift */; };
+		F2AAA9F7E98632FA51E063BA /* LiveGaugesHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 731A7AB283726BD3FFA5CA18 /* LiveGaugesHeader.swift */; };
 		F4C4D33C87EA884DB52B4654 /* UsageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10D345820EF090F6426A9E0 /* UsageModel.swift */; };
 		F54AA92455AB651F391E0FB3 /* AntigravityPlanPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88501FECEB4876BDEAAF06B7 /* AntigravityPlanPane.swift */; };
 		F8FA8741CD3BB21488BF313B /* Vendor in Resources */ = {isa = PBXBuildFile; fileRef = 3F390A788ACC767845A4786C /* Vendor */; };
@@ -308,6 +309,7 @@
 		6C40566A9CD019426F02502C /* CodexLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = CodexLogo.png; sourceTree = "<group>"; };
 		6FF9E7F2868CDF9804D82F59 /* PluginRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginRegistry.swift; sourceTree = "<group>"; };
 		717807F26A96613EF8C57F1C /* iOSModelEffortPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSModelEffortPill.swift; sourceTree = "<group>"; };
+		731A7AB283726BD3FFA5CA18 /* LiveGaugesHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGaugesHeader.swift; sourceTree = "<group>"; };
 		748E1F1BC9C3BDE9E666458C /* ClawdmeterMacWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeterMacWidgets.swift; sourceTree = "<group>"; };
 		7522B33A2BBD974C63BEDC00 /* CodexSDKSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexSDKSettingsView.swift; sourceTree = "<group>"; };
 		771A489D405A0930831693F7 /* PermissionModeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionModeStore.swift; sourceTree = "<group>"; };
@@ -543,6 +545,7 @@
 				47379626A67ED52F4DF364AE /* iOSModelPicker.swift */,
 				A8EC55494D4D0B26A8B3C366 /* iOSSessionActivityStrip.swift */,
 				C36A898E076F41B5BA9001E2 /* iOSSessionControlsStrip.swift */,
+				731A7AB283726BD3FFA5CA18 /* LiveGaugesHeader.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -1222,6 +1225,7 @@
 				78CACDE47AB17C62008BFE5E /* CostBannerView.swift in Sources */,
 				96389D247535DF202C123C35 /* GeminiQuotaLiveActivityCoordinator.swift in Sources */,
 				604846A327EC4EDB6CFD3529 /* LiveActivityCoordinator.swift in Sources */,
+				F2AAA9F7E98632FA51E063BA /* LiveGaugesHeader.swift in Sources */,
 				1F57B15A40CE4503F7909A98 /* PairingCTAButtons.swift in Sources */,
 				21394E54DBC8130457573563 /* PairingScannerView.swift in Sources */,
 				3D153FBD1EF5FB96D68B6AA4 /* SettingsView.swift in Sources */,

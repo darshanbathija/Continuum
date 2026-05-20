@@ -114,7 +114,7 @@ struct iOSSessionsView: View {
                 }()
                 Text("Currently: \(label)")
             }
-            .navigationTitle("Sessions")
+            .navigationTitle("Code")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
