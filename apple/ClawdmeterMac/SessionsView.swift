@@ -322,6 +322,19 @@ public final class SessionsModel: ObservableObject {
             touchLRU(session.id)
             return existing
         }
+        // v0.8 QA ISSUE-003 (second site): chat-kind sessions must NOT
+        // route through SessionChatStore.resolveSessionFileURL — its
+        // parent-walk falls through to ~/.claude/projects/-Users-...
+        // and renders unrelated content. Mirror the DaemonChatStoreRegistry
+        // fix: all .chat sessions get the sdkOnly store, no JSONLTail.
+        if session.kind == .chat {
+            let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+            store.start()
+            chatStores[session.id] = store
+            chatStoreLRU.append(session.id)
+            evictExcessChatStores()
+            return store
+        }
         let url: URL? = forcedChatStoreURLs[session.id]
             ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.effectiveCwd)
         guard let url else { return nil }
