@@ -991,6 +991,21 @@ public final class AgentControlServer {
             serverLogger.warning("continue-readonly: rejected repoKey \(req.repoKey, privacy: .public)")
             return
         }
+        // Codex follow-up: also validate jsonlPath. The earlier patch
+        // only checked repoKey; a paired compromised client could send
+        // a valid repoKey together with an arbitrary local JSONL path
+        // and have its session id extracted under that repo. Restrict
+        // jsonlPath to ~/.claude/projects/, ~/.codex/sessions/,
+        // ~/.codex/projects/, or ~/.gemini/.
+        guard Self.isValidJsonlPath(req.jsonlPath) else {
+            sendResponse(HTTPResponse(
+                status: 400, reason: "Bad Request",
+                contentType: "application/json",
+                body: Data(#"{"error":"invalid_jsonl_path"}"#.utf8)
+            ), on: connection)
+            serverLogger.warning("continue-readonly: rejected jsonlPath \(req.jsonlPath, privacy: .public)")
+            return
+        }
         let jsonlURL = URL(fileURLWithPath: req.jsonlPath)
         guard FileManager.default.fileExists(atPath: req.jsonlPath) else {
             let body = #"{"error":"jsonl_not_found","path":"\#(req.jsonlPath)"}"#
@@ -2370,10 +2385,13 @@ public final class AgentControlServer {
 
     /// P1-Mac-7: validate untrusted repoKey before forwarding to tmux. The
     /// path must be absolute, contain no `..` segments, hold no CR/LF or
-    /// control bytes, and resolve under the user's home directory. A
-    /// stricter check (against the live RepoIndex snapshot) would be ideal
-    /// but the snapshot is rebuilt async and we don't want to introduce a
-    /// stale window where new repos are rejected.
+    /// control bytes, and resolve under the user's home directory.
+    ///
+    /// Codex follow-up: also resolve symlinks before the home-prefix
+    /// check. The earlier patch only standardized (collapses `..` /
+    /// `./`); a symlink at `/Users/me/link → /etc` would pass the
+    /// hasPrefix test and let tmux escape the home sandbox. Resolve the
+    /// real path and re-check.
     static func isValidRepoKey(_ key: String) -> Bool {
         guard !key.isEmpty else { return false }
         guard key.hasPrefix("/") else { return false }
@@ -2386,8 +2404,51 @@ public final class AgentControlServer {
         }
         let home = NSHomeDirectory()
         if home.isEmpty { return true }  // unit-test environments
-        let normalized = (key as NSString).standardizingPath
-        return normalized.hasPrefix(home + "/") || normalized == home
+        let standardized = (key as NSString).standardizingPath
+        // Resolve symlinks so a symlink under $HOME pointing outside is
+        // rejected. resolvingSymlinksInPath() returns the input unchanged
+        // if the path doesn't exist, which is fine — we still hold the
+        // hasPrefix check below.
+        let resolved = URL(fileURLWithPath: standardized)
+            .resolvingSymlinksInPath()
+            .path
+        return resolved.hasPrefix(home + "/") || resolved == home
+    }
+
+    /// Codex follow-up to P1-Mac-7: also validate jsonlPath in the
+    /// continue-readonly handler. The repoKey check alone left a
+    /// trust-boundary gap — a compromised client could send a valid
+    /// repoKey and a jsonlPath pointing at an unrelated session, and
+    /// the handler would happily resume that one. Restrict jsonlPath
+    /// to live under the user's Claude/Codex project directories and
+    /// reject the same traversal / control-byte / symlink-escape shapes
+    /// covered by isValidRepoKey.
+    static func isValidJsonlPath(_ path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        guard path.hasPrefix("/") else { return false }
+        for scalar in path.unicodeScalars {
+            if scalar.value < 0x20 || scalar.value == 0x7F { return false }
+        }
+        for part in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if part == ".." || part == "." { return false }
+        }
+        let home = NSHomeDirectory()
+        if home.isEmpty { return true }
+        let standardized = (path as NSString).standardizingPath
+        let resolved = URL(fileURLWithPath: standardized)
+            .resolvingSymlinksInPath()
+            .path
+        // Allowlist: Claude Code (`~/.claude/projects/<dir>/...`),
+        // Codex (`~/.codex/sessions/...` and `~/.codex/projects/...`),
+        // Gemini/Antigravity (`~/.gemini/...`). Keep these explicit so
+        // a future provider can't be added without a deliberate change.
+        let allowedRoots = [
+            home + "/.claude/projects/",
+            home + "/.codex/sessions/",
+            home + "/.codex/projects/",
+            home + "/.gemini/",
+        ]
+        return allowedRoots.contains(where: { resolved.hasPrefix($0) })
     }
 
     private func sendResponse(_ response: HTTPResponse, on connection: NWConnection) {
