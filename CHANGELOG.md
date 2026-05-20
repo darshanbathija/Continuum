@@ -4,6 +4,18 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.12 build 58] - 2026-05-21
+
+### Changed
+
+- **Reverted the v0.7.11 segmented permission picker.** Back to the
+  Menu chip that opens a "Mode" popover with numbered ⇧⌘<N>
+  shortcuts and a checkmark on the active row — matches Claude
+  Code's compact "Auto ▾" pattern the user pointed at. The chip's
+  color still encodes the active mode (ask → secondary, edits →
+  accent, plan → accent, bypass → yellow). v0.7.11's
+  `PermissionModeSegmented.swift` removed.
+
 ## [0.7.11 build 57] - 2026-05-21
 
 ### Changed
