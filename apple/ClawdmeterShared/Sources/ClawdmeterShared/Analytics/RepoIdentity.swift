@@ -212,8 +212,27 @@ public enum RepoIdentity {
         let trimmed = contents.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefix = "gitdir: "
         guard trimmed.hasPrefix(prefix) else { return nil }
-        let gitdir = String(trimmed.dropFirst(prefix.count))
+        let rawGitdir = String(trimmed.dropFirst(prefix.count))
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // P2-Shared-1: git can write a relative `gitdir:` value (e.g.,
+        // `gitdir: ../.git/worktrees/feature` when the worktree lives
+        // adjacent to the main repo). The previous implementation passed
+        // the raw string to URL(fileURLWithPath:) which resolves relative
+        // paths against the process's working directory — wrong; they're
+        // relative to the .git POINTER FILE's parent directory.
+        //
+        // Resolve a leading non-`/` value against the .git file's parent,
+        // then standardize to collapse `..` segments. Absolute paths are
+        // passed through unchanged.
+        let gitFileParent = (gitFile as NSString).deletingLastPathComponent
+        let gitdir: String
+        if rawGitdir.hasPrefix("/") {
+            gitdir = rawGitdir
+        } else {
+            let joined = (gitFileParent as NSString).appendingPathComponent(rawGitdir)
+            gitdir = (joined as NSString).standardizingPath
+        }
 
         // gitdir looks like /.../main/.git/worktrees/<name>
         // Walking up: `.../main/.git/worktrees/<name>` → `/.../main/.git/worktrees`
