@@ -172,13 +172,32 @@ public actor TmuxControlClient {
     private func markExited(reason: String?) {
         guard isAlive else { return }
         isAlive = false
-        lifecycleContinuation?.yield(.serverExited(reason: reason))
-        lifecycleContinuation?.finish()
+        // P1-Mac-3: clear PTY + read-task state on exit so the supervisor's
+        // restart path (which calls `start()`) can actually spawn a fresh
+        // server. Previously `start()`'s `guard pty == nil else { return }`
+        // silently returned because `pty` was left non-nil; subsequent
+        // commands then wrote to a closed file descriptor.
+        if let pty {
+            close(pty.masterFD)
+        }
+        pty = nil
+        readTask?.cancel()
+        readTask = nil
+        childPid = 0
+        // Drop output sinks — paneIds will be reassigned by the new server.
+        for (_, sink) in outputSinks { sink.finish() }
+        outputSinks.removeAll()
         // Fail any in-flight commands.
         for (_, continuation) in pendingCommands {
             continuation.resume(throwing: TmuxError.serverExited)
         }
         pendingCommands.removeAll()
+        currentCommandNumber = nil
+        currentCommandBody = []
+        lifecycleContinuation?.yield(.serverExited(reason: reason))
+        lifecycleContinuation?.finish()
+        lifecycleStream = nil
+        lifecycleContinuation = nil
         tmuxLogger.warning("tmux server exited: \(reason ?? "unknown")")
     }
 
@@ -189,6 +208,19 @@ public actor TmuxControlClient {
     @discardableResult
     public func command(_ args: [String]) async throws -> CommandResult {
         guard pty != nil else { throw TmuxError.notStarted }
+        // P1-Mac-6: reject CR/LF and ASCII control bytes in every arg. The
+        // wire format here is plaintext joined with spaces and terminated by
+        // `\n`, so any control byte in an arg can split the line and inject
+        // an unrelated tmux command (or worse, paste into a child pane).
+        // `tmuxQuote` below only escapes single quotes; it cannot prevent
+        // this class of injection.
+        for arg in args {
+            for scalar in arg.unicodeScalars {
+                if scalar.value < 0x20 || scalar.value == 0x7F {
+                    throw TmuxError.invalidArgument(arg)
+                }
+            }
+        }
         let cmd = args.joined(separator: " ") + "\n"
         return try await withCheckedThrowingContinuation { continuation in
             // We don't know the command number until tmux echoes back
@@ -437,5 +469,6 @@ public actor TmuxControlClient {
         case commandFailed(String)
         case serverExited
         case ptyClosed
+        case invalidArgument(String)
     }
 }
