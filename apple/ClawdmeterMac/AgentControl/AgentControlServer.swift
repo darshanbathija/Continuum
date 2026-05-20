@@ -2514,26 +2514,10 @@ public final class AgentControlServer {
     /// hasPrefix test and let tmux escape the home sandbox. Resolve the
     /// real path and re-check.
     static func isValidRepoKey(_ key: String) -> Bool {
-        guard !key.isEmpty else { return false }
-        guard key.hasPrefix("/") else { return false }
-        for scalar in key.unicodeScalars {
-            if scalar.value < 0x20 || scalar.value == 0x7F { return false }
-        }
-        let parts = key.split(separator: "/", omittingEmptySubsequences: true)
-        for part in parts {
-            if part == ".." || part == "." { return false }
-        }
-        let home = NSHomeDirectory()
-        if home.isEmpty { return true }  // unit-test environments
-        let standardized = (key as NSString).standardizingPath
-        // Resolve symlinks so a symlink under $HOME pointing outside is
-        // rejected. resolvingSymlinksInPath() returns the input unchanged
-        // if the path doesn't exist, which is fine — we still hold the
-        // hasPrefix check below.
-        let resolved = URL(fileURLWithPath: standardized)
-            .resolvingSymlinksInPath()
-            .path
-        return resolved.hasPrefix(home + "/") || resolved == home
+        // v0.7.7: delegated to the shared PathValidator helper that
+        // consolidates the three near-clone validators that used to
+        // live across this file + iOSArtifactsPane.
+        PathValidator.isValidRepoKey(key)
     }
 
     /// Codex follow-up to P1-Mac-7: also validate jsonlPath in the
@@ -2545,31 +2529,9 @@ public final class AgentControlServer {
     /// reject the same traversal / control-byte / symlink-escape shapes
     /// covered by isValidRepoKey.
     static func isValidJsonlPath(_ path: String) -> Bool {
-        guard !path.isEmpty else { return false }
-        guard path.hasPrefix("/") else { return false }
-        for scalar in path.unicodeScalars {
-            if scalar.value < 0x20 || scalar.value == 0x7F { return false }
-        }
-        for part in path.split(separator: "/", omittingEmptySubsequences: true) {
-            if part == ".." || part == "." { return false }
-        }
-        let home = NSHomeDirectory()
-        if home.isEmpty { return true }
-        let standardized = (path as NSString).standardizingPath
-        let resolved = URL(fileURLWithPath: standardized)
-            .resolvingSymlinksInPath()
-            .path
-        // Allowlist: Claude Code (`~/.claude/projects/<dir>/...`),
-        // Codex (`~/.codex/sessions/...` and `~/.codex/projects/...`),
-        // Gemini/Antigravity (`~/.gemini/...`). Keep these explicit so
-        // a future provider can't be added without a deliberate change.
-        let allowedRoots = [
-            home + "/.claude/projects/",
-            home + "/.codex/sessions/",
-            home + "/.codex/projects/",
-            home + "/.gemini/",
-        ]
-        return allowedRoots.contains(where: { resolved.hasPrefix($0) })
+        // v0.7.7: delegated to PathValidator. Allowlist of agent project
+        // directories lives in the shared helper now.
+        PathValidator.isValidJsonlPath(path)
     }
 
     private func sendResponse(_ response: HTTPResponse, on connection: NWConnection) {

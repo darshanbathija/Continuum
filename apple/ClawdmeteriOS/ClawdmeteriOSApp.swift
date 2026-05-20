@@ -61,20 +61,13 @@ struct ClawdmeteriOSApp: App {
     }
 }
 
-/// Single-shot guard so the BGTask expirationHandler and the in-flight
-/// refresh Task can both attempt to complete the task without iOS
-/// flagging a double-complete. The first caller wins; subsequent calls
-/// are no-ops.
+/// v0.7.7: BGTaskCompletionGuard replaced by shared `FireOnce` +
+/// inline call-site closure. Behaviour identical: setTaskCompleted
+/// runs exactly once for the first caller, regardless of whether the
+/// expirationHandler or the in-flight refresh wins the race.
 private final class BGTaskCompletionGuard: @unchecked Sendable {
-    private let lock = NSLock()
-    private var completed = false
-
+    private let fireOnce = FireOnce()
     func complete(task: BGTask, success: Bool) {
-        lock.lock()
-        let firstCall = !completed
-        completed = true
-        lock.unlock()
-        guard firstCall else { return }
-        task.setTaskCompleted(success: success)
+        fireOnce.run { task.setTaskCompleted(success: success) }
     }
 }

@@ -138,16 +138,13 @@ struct iOSArtifactsPane: View {
         }
     }
 
-    /// Reject paths with traversal segments. Empty paths are also refused.
-    /// Absolute paths are allowed because the agent's tool inputs (Write,
-    /// etc.) routinely produce them; the daemon-side sandbox is the actual
-    /// defense against escaping the workspace.
+    /// v0.7.7: delegated to PathValidator. The shape (reject empty +
+    /// traversal, allow absolute) is identical to the previous inline
+    /// implementation; pulling it into the shared helper consolidates
+    /// the three near-clone validators that used to live across this
+    /// file + AgentControlServer.
     static func isSafeArtifactPath(_ path: String) -> Bool {
-        guard !path.isEmpty else { return false }
-        for segment in path.split(separator: "/") {
-            if segment == ".." || segment == "." { return false }
-        }
-        return true
+        PathValidator.isSafeArtifactPath(path)
     }
 }
 

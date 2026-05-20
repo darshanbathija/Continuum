@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import ClawdmeterShared
 
 private let shellLogger = Logger(subsystem: "com.clawdmeter.mac", category: "ShellRunner")
 
@@ -312,20 +313,11 @@ private final class DataBox: @unchecked Sendable {
     var data = Data()
 }
 
-/// Single-shot guard so the terminationHandler and the timeout/cancellation
-/// race can both attempt to resume the continuation without double-resume
-/// traps. `fire()` returns true exactly once for the first caller.
-private final class ResumeOnce: @unchecked Sendable {
-    private let lock = NSLock()
-    private var fired = false
-    func fire() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if fired { return false }
-        fired = true
-        return true
-    }
-}
+/// v0.7.7: ResumeOnce replaced by the shared `FireOnce` primitive in
+/// ClawdmeterShared. Typealias kept here so the existing call sites
+/// in `run(...)` stay readable — "resumed.fire()" reads better than
+/// "fireOnce.fire()" at the continuation race site.
+private typealias ResumeOnce = FireOnce
 
 /// Holds the continuation reference so the terminationHandler (set
 /// before `process.run()` to avoid the fast-exit hang) can resume
