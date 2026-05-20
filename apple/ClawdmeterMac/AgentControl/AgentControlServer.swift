@@ -93,6 +93,12 @@ public final class AgentControlServer {
     /// JSONL tail + done-detector + plan-watcher wired per active session.
     private var sessionWiring: [UUID: SessionEventWiring] = [:]
 
+    /// v0.8 Phase 4.5: per-session Codex SDK chat ingestors. Created on
+    /// the first /send for an SDK chat session; torn down on DELETE or
+    /// SDK chat-session idle evict. Holding a strong reference keeps the
+    /// Combine sink alive across the session lifetime.
+    private var sdkChatIngestors: [UUID: CodexSDKEventIngestor] = [:]
+
     public init(
         pairingTokens: PairingTokenStore = .shared,
         repoIndex: RepoIndex,
@@ -1054,11 +1060,20 @@ public final class AgentControlServer {
         guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
             sendResponse(.badRequest, on: connection); return
         }
-        guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
-            sendResponse(.internalError, on: connection); return
-        }
         guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSend, on: connection); return
+        }
+        // v0.8 Phase 4.5: SDK chat sessions route to CodexSubscriptionRelay
+        // instead of tmux. Detect via (kind=.chat, agent=.codex,
+        // backend=.sdk) — those sessions have no tmux pane.
+        if session.kind == .chat
+            && session.agent == .codex
+            && session.codexChatBackend == .sdk {
+            await sendChatSDKPrompt(session: session, prompt: req.text, connection: connection)
+            return
+        }
+        guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+            sendResponse(.internalError, on: connection); return
         }
         do {
             let data = Data(bytes)
@@ -2266,11 +2281,13 @@ public final class AgentControlServer {
         let updatedSession = registry.session(id: session.id) ?? session
         let argv = AgentSpawner.argv(for: updatedSession)
         if argv.isEmpty && updatedSession.agent == .codex && updatedSession.codexChatBackend == .sdk {
-            // Phase 4.5 placeholder: SDK chat spawn lands when the relay
-            // integration completes. For v0.8 Phase 4b ship, return the
-            // session shell so iOS sees an empty chat row; the relay
-            // hookup follows.
-            // TODO(Phase 4.5): kick off CodexSubscriptionRelay.shared.start(...)
+            // SDK chat: pre-create the SDK-only SessionChatStore via the
+            // registry so `chat-subscribe` WS subscribers and
+            // `/chat-snapshot` HTTP polls can find it immediately. The
+            // actual CodexSubscriptionRelay.start() is deferred until the
+            // first /send (we don't have an initial prompt at create
+            // time, and the SDK requires one to begin streaming).
+            _ = chatStoreRegistry.snapshotStore(for: updatedSession)
         } else if argv.isEmpty {
             // No binary on PATH for this provider — clean up + surface 503.
             registry.delete(id: session.id)
@@ -2379,6 +2396,108 @@ public final class AgentControlServer {
             status: 501, reason: "Not Implemented",
             contentType: "application/json", body: Data(body.utf8)
         ), on: connection)
+    }
+
+    /// v0.8 Phase 4.5: route a prompt for a Codex-SDK chat session to
+    /// CodexSubscriptionRelay instead of tmux. Lazy-starts the relay on
+    /// the first send (we don't have a prompt to seed it with at chat-
+    /// session create time). On subsequent sends, uses `forwardPrompt`
+    /// with the persisted threadId so the SDK reuses the same server-
+    /// side thread (and resume-after-evict works per NEW-T13).
+    ///
+    /// D1 (first-message-becomes-title): if the session has no
+    /// customName yet, derive a 40-char title from the prompt body and
+    /// persist via `registry.rename(...)`. Future renames via /rename
+    /// override this.
+    private func sendChatSDKPrompt(
+        session: AgentSession,
+        prompt: String,
+        connection: NWConnection
+    ) async {
+        // D1 chat naming: tag the customName from the first user prompt
+        // when none is set yet. Trim + truncate to 40 chars (with ellipsis
+        // if longer). Existing rename handler normalizes empties to nil
+        // so the placeholder "New <Provider> chat" still renders pre-send.
+        if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+            let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let truncated: String = {
+                    let cap = 40
+                    if trimmed.count <= cap { return trimmed }
+                    let idx = trimmed.index(trimmed.startIndex, offsetBy: cap - 1)
+                    return String(trimmed[..<idx]) + "…"
+                }()
+                registry.rename(id: session.id, name: truncated)
+            }
+        }
+        let chatCwd = session.effectiveCwd
+        do {
+            if CodexSubscriptionRelay.shared.isActive(sessionId: session.id) {
+                // Subsequent prompt — forward to the running sidecar with
+                // the resume threadId so the SDK reuses the same server-
+                // side thread.
+                try CodexSubscriptionRelay.shared.forwardPrompt(
+                    sessionId: session.id,
+                    workingDirectory: chatCwd,
+                    prompt: prompt,
+                    threadId: session.codexChatThreadId
+                )
+            } else {
+                // First prompt — spawn the relay + ingestor. The ingestor
+                // captures `thread.started` and persists the threadId on
+                // the session record for resume-after-evict (NEW-T13).
+                let registryRef = self.registry
+                if let store = chatStoreRegistry.snapshotStore(for: session) {
+                    let ingestor = CodexSDKEventIngestor(
+                        sessionId: session.id,
+                        store: store,
+                        onThreadStarted: { [weak registryRef] threadId in
+                            Task { @MainActor in
+                                registryRef?.setCodexChatThreadId(id: session.id, threadId: threadId)
+                            }
+                        }
+                    )
+                    ingestor.start()
+                    sdkChatIngestors[session.id] = ingestor
+                }
+                _ = try CodexSubscriptionRelay.shared.start(
+                    session: session,
+                    workingDirectory: chatCwd,
+                    initialPrompt: prompt,
+                    threadId: session.codexChatThreadId,
+                    model: session.model,
+                    sandboxMode: "read-only",
+                    modelReasoningEffort: session.effort?.codexConfigValue
+                )
+            }
+        } catch {
+            serverLogger.error("SDK chat send failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        let peer = Self.endpointString(connection.endpoint)
+        await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: peer, text: prompt)
+        let updated = registry.session(id: session.id) ?? session
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(updated) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+        }
+    }
+
+    /// v0.8 Phase 4.5 cleanup: tear down SDK chat ingestor + relay for a
+    /// session. Called from handleDeleteSession when removing a chat
+    /// session, and idempotent on non-SDK sessions / sessions that never
+    /// started a relay.
+    private func teardownSDKChat(sessionId: UUID) async {
+        if let ingestor = sdkChatIngestors.removeValue(forKey: sessionId) {
+            ingestor.stop()
+        }
+        if CodexSubscriptionRelay.shared.isActive(sessionId: sessionId) {
+            await CodexSubscriptionRelay.shared.stop(sessionId: sessionId)
+        }
     }
 
     private func attachClaudeWiring(for session: AgentSession, cwd: String) {
@@ -2649,6 +2768,9 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection)
             return
         }
+        // v0.8 Phase 4.5: tear down any SDK chat infrastructure first
+        // (ingestor sink + relay sidecar). Idempotent on non-SDK sessions.
+        await teardownSDKChat(sessionId: uuid)
         // Kill the tmux window.
         if let windowId = session.tmuxWindowId {
             do {
@@ -2657,13 +2779,17 @@ public final class AgentControlServer {
                 serverLogger.warning("kill-window \(windowId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
         }
-        // REV-DELETE (v0.8): chat sessions have no git worktree; their cwd
-        // is a plain dir under chat-sessions/. ChatCwdCleaner lands in
-        // Phase 4 to PathValidator-guard the FileManager.removeItem path.
-        // For Phase 2 we just skip the WorktreeManager call for chat
-        // sessions (it would throw on `git status` against a non-repo
-        // dir anyway). Phase 4 wires the proper cleanup branch.
-        if session.kind == .code, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
+        // v0.8 REV-DELETE: chat sessions clean up via FileManager
+        // (chat-cwd is a plain dir under chat-sessions/, not a git
+        // worktree). Code sessions go through WorktreeManager.delete as
+        // before.
+        if session.kind == .chat {
+            do {
+                try ChatCwdManager.remove(for: uuid)
+            } catch {
+                serverLogger.warning("chat-cwd cleanup failed for \(uuid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        } else if session.kind == .code, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
             do {
                 let result = try await WorktreeManager.shared.delete(
                     repoRoot: repoRoot,

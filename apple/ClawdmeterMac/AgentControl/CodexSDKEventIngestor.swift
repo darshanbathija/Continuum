@@ -26,13 +26,24 @@ public final class CodexSDKEventIngestor {
     private weak var store: SessionChatStore?
     private let relay: CodexSubscriptionRelay
     private var cancellable: AnyCancellable?
+    /// v0.8 Phase 4.5: SDK chat persists the threadId on the AgentSession
+    /// for resume-after-evict (NEW-T13). The daemon's chat handler passes
+    /// a closure that calls `registry.setCodexChatThreadId(...)` once the
+    /// first `thread.started` event arrives. Nil for non-chat consumers.
+    private let onThreadStarted: ((String) -> Void)?
+    /// True once we've already fired `onThreadStarted` for this session —
+    /// subsequent `thread.started` (shouldn't happen mid-session, but
+    /// defense) won't re-persist.
+    private var threadStartedFired = false
 
     public init(sessionId: UUID,
                 store: SessionChatStore,
-                relay: CodexSubscriptionRelay = .shared) {
+                relay: CodexSubscriptionRelay = .shared,
+                onThreadStarted: ((String) -> Void)? = nil) {
         self.sessionId = sessionId
         self.store = store
         self.relay = relay
+        self.onThreadStarted = onThreadStarted
     }
 
     public func start() {
@@ -77,7 +88,14 @@ public final class CodexSDKEventIngestor {
                        body: body,
                        at: event.receivedAt,
                        isError: true)
-        case .threadStarted, .turnStarted,
+        case .threadStarted:
+            // v0.8 Phase 4.5: surface the threadId to the SDK chat session
+            // record so resume-after-evict knows which thread to reconnect.
+            if !threadStartedFired, let threadId = event.threadId {
+                threadStartedFired = true
+                onThreadStarted?(threadId)
+            }
+        case .turnStarted,
              .streamStarted, .streamDone, .streamError,
              .observerReady, .unknown:
             // Lifecycle markers — don't surface as chat.

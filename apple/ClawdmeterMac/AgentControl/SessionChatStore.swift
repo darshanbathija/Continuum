@@ -229,13 +229,36 @@ public final class SessionChatStore: ObservableObject {
     /// "stop() doesn't stop all writers" race surfaced in /review.
     private var perLineIngestTasks: [Task<Void, Never>] = []
 
+    /// v0.8 NEW-E3: when true, `start()` skips JSONLTail + reverse-tail
+    /// entirely. Only the commit task runs, which picks up
+    /// `appendSDKMessages()` writes from CodexSDKEventIngestor. Used by
+    /// Codex SDK chat sessions which have no JSONL file on disk —
+    /// transcript lives server-side, the SDK streams events.
+    private let sdkOnly: Bool
+
     public init(sessionId: UUID, sessionFileURL: URL) {
         self.sessionId = sessionId
         self.sessionFileURL = sessionFileURL
+        self.sdkOnly = false
+    }
+
+    /// v0.8 Phase 4.5: SDK-only init for Codex SDK chat sessions. No
+    /// JSONL file is tailed; events arrive via `appendSDKMessages` from
+    /// the CodexSDKEventIngestor. The sessionFileURL stays as a sentinel
+    /// (`/dev/null`) so the field is non-nil but unused.
+    public init(sessionId: UUID, sdkOnly: Bool) {
+        precondition(sdkOnly, "Use init(sessionId:sessionFileURL:) for JSONL-backed stores")
+        self.sessionId = sessionId
+        self.sessionFileURL = URL(fileURLWithPath: "/dev/null")
+        self.sdkOnly = true
     }
 
     public func start() {
-        guard tail == nil else { return }
+        // sdkOnly stores have no `tail`, so the original `tail == nil`
+        // guard would let start() be called repeatedly. Use the commit
+        // task as the canonical "already started" signal — it's set in
+        // both modes.
+        guard commitTask == nil else { return }
         parseGeneration &+= 1
         let generation = parseGeneration
         let signpostID = OSSignpostID(log: chatPerfLog, object: self)
@@ -256,48 +279,50 @@ public final class SessionChatStore: ObservableObject {
             await staging.reset()
         }
 
-        // T4 reverse-tail progressive parse: kick off a background task
-        // that reads the last ~256 KB of the JSONL and ingests the newest
-        // ~50 messages into the staging actor FIRST. The commit loop's
-        // first frame then shows the latest messages; the head parse
-        // (JSONLTail from line 0) fills in older history behind them.
-        // StagingParser dedups by id + sorts by timestamp, so the final
-        // items array is in correct chronological order regardless of
-        // arrival.
-        let sessionURL = self.sessionFileURL
-        ingestTailTask = Task.detached(priority: .userInitiated) { [weak self] in
-            await Self.ingestTail(
-                url: sessionURL,
-                into: staging,
-                generation: generation,
-                store: self
-            )
-        }
+        // v0.8 Phase 4.5: SDK-only stores skip JSONLTail + reverse-tail
+        // because no JSONL file exists. The commit task below still runs
+        // and picks up `appendSDKMessages` writes from
+        // CodexSDKEventIngestor through the staging actor.
+        if !sdkOnly {
+            // T4 reverse-tail progressive parse: kick off a background task
+            // that reads the last ~256 KB of the JSONL and ingests the newest
+            // ~50 messages into the staging actor FIRST. The commit loop's
+            // first frame then shows the latest messages; the head parse
+            // (JSONLTail from line 0) fills in older history behind them.
+            // StagingParser dedups by id + sorts by timestamp, so the final
+            // items array is in correct chronological order regardless of
+            // arrival.
+            let sessionURL = self.sessionFileURL
+            ingestTailTask = Task.detached(priority: .userInitiated) { [weak self] in
+                await Self.ingestTail(
+                    url: sessionURL,
+                    into: staging,
+                    generation: generation,
+                    store: self
+                )
+            }
 
-        // JSONLTail runs on its background queue. The handler converts
-        // [String: Any] → typed `ParsedLine` (Sendable) BEFORE crossing
-        // into the actor — codex tension #7b: typed boundary, not raw
-        // dictionaries. The per-line task is tracked on `self` so
-        // `stop()` can cancel it; the closure-level generation check
-        // also drops late ingests from a prior parse generation.
-        let tail = JSONLTail(fileURL: sessionFileURL) { [weak self] json in
-            guard let parsed = ParsedLine.from(json: json) else { return }
-            let task = Task { [weak self] in
-                guard let self else { return }
-                // The MainActor read is necessary because parseGeneration
-                // lives on self (@MainActor). Snapshot it once then drop
-                // the hop.
-                let currentGen = await MainActor.run { self.parseGeneration }
-                guard currentGen == generation else { return }
-                await staging.ingest(parsed)
+            // JSONLTail runs on its background queue. The handler converts
+            // [String: Any] → typed `ParsedLine` (Sendable) BEFORE crossing
+            // into the actor — codex tension #7b: typed boundary, not raw
+            // dictionaries. The per-line task is tracked on `self` so
+            // `stop()` can cancel it; the closure-level generation check
+            // also drops late ingests from a prior parse generation.
+            let tail = JSONLTail(fileURL: sessionFileURL) { [weak self] json in
+                guard let parsed = ParsedLine.from(json: json) else { return }
+                let task = Task { [weak self] in
+                    guard let self else { return }
+                    let currentGen = await MainActor.run { self.parseGeneration }
+                    guard currentGen == generation else { return }
+                    await staging.ingest(parsed)
+                }
+                Task { @MainActor [weak self] in
+                    self?.perLineIngestTasks.append(task)
+                }
             }
-            // Track the task so stop() can cancel any in-flight ingests.
-            Task { @MainActor [weak self] in
-                self?.perLineIngestTasks.append(task)
-            }
+            self.tail = tail
+            tail.start()
         }
-        self.tail = tail
-        tail.start()
 
         // Background commit task: every 16ms, snapshot the staging actor
         // and publish to main. Generation-token guard suppresses any

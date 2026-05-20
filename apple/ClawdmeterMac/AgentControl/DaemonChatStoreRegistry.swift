@@ -208,6 +208,14 @@ public final class DaemonChatStoreRegistry {
     // MARK: - Internals
 
     private func createStore(for session: AgentSession) -> SessionChatStore? {
+        // v0.8 Phase 4.5 / NEW-E3: SDK chat sessions have no JSONL file
+        // — events arrive via CodexSDKEventIngestor.appendSDKMessages.
+        // Use the SDK-only init that skips JSONLTail entirely.
+        if session.kind == .chat && session.agent == .codex && session.codexChatBackend == .sdk {
+            let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+            store.start()
+            return store
+        }
         guard let url = resolveURL(session.id, session) else {
             registryLogger.warning("could not resolve JSONL for session \(session.id.uuidString, privacy: .public)")
             return nil
