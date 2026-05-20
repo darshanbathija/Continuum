@@ -4,6 +4,24 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.6 build 52] - 2026-05-20
+
+### Added
+
+- **`gemini-3.5-flash` in the model catalog.** Antigravity 2's default
+  model (resolves from the `MODEL_PLACEHOLDER_M133` opaque token in
+  `~/.gemini/antigravity/antigravity_state.pbtxt`). Now first in
+  `ModelCatalog.bundled.gemini` so new Gemini sessions default to it.
+  `pricing.json` already carried the rate row — only the catalog entry
+  was missing. Also added `gemini-3-pro` (2M context window) for the
+  pricing.json model id that didn't have a catalog row.
+
+### Fixed
+
+- `AgentSpawner.geminiArgv` comment no longer claims `gemini-3.1-pro-high`
+  vs `gemini-3.1-pro-low` is the effort-tier example — `gemini-3-pro` vs
+  `gemini-3.5-flash` is the modern shape.
+
 ## [0.7.5 build 51] - 2026-05-20
 
 ### Fixed

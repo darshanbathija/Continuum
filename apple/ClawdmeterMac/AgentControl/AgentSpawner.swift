@@ -114,7 +114,8 @@ public enum AgentSpawner {
     ///
     /// `effort` is a no-op for Gemini — the CLI doesn't expose a per-call
     /// effort flag. The user picks a higher-effort model in the catalog
-    /// instead (e.g. `gemini-3.1-pro-high` vs `gemini-3.1-pro-low`).
+    /// instead (e.g. `gemini-3-pro` for deep reasoning vs
+    /// `gemini-3.5-flash` for fast iteration).
     public static func geminiArgv(
         model: String? = nil,
         planMode: Bool = false,

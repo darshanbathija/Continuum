@@ -327,9 +327,17 @@ public struct ModelCatalog: Codable, Sendable {
             ModelCatalogEntry(id: "gpt-5.2-codex",       provider: .codex, displayName: "GPT-5.2 Codex",        cliAlias: nil, supportsThinking: false, supportsEffort: true, contextWindow: nil, recommendedFor: nil,              badge: nil),
         ],
         gemini: [
-            ModelCatalogEntry(id: "gemini-3.1-pro-high",  provider: .gemini, displayName: "Gemini 3.1 Pro (High)", cliAlias: "pro-high",  supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Deep reasoning", badge: "High"),
-            ModelCatalogEntry(id: "gemini-3.1-pro-low",   provider: .gemini, displayName: "Gemini 3.1 Pro (Low)",  cliAlias: "pro",       supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Most work",      badge: nil),
-            ModelCatalogEntry(id: "gemini-3-flash",       provider: .gemini, displayName: "Gemini 3 Flash",        cliAlias: "flash",     supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Fast iteration", badge: "Fast"),
+            // Antigravity 2's default model (resolves from the
+            // `MODEL_PLACEHOLDER_M133` opaque token in
+            // ~/.gemini/antigravity/antigravity_state.pbtxt). First in the
+            // list so `ModelCatalog.bundled.gemini.first?.id` picks it up
+            // as the default for new sessions. Pricing row already in
+            // pricing.json under the same id.
+            ModelCatalogEntry(id: "gemini-3.5-flash",      provider: .gemini, displayName: "Gemini 3.5 Flash",      cliAlias: "flash-3.5", supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Antigravity 2 default", badge: "New"),
+            ModelCatalogEntry(id: "gemini-3-pro",          provider: .gemini, displayName: "Gemini 3 Pro",          cliAlias: "pro",       supportsThinking: true,  supportsEffort: false, contextWindow: 2_000_000, recommendedFor: "Deep reasoning",       badge: "Pro"),
+            ModelCatalogEntry(id: "gemini-3.1-pro-high",   provider: .gemini, displayName: "Gemini 3.1 Pro (High)", cliAlias: "pro-high",  supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Deep reasoning",       badge: "High"),
+            ModelCatalogEntry(id: "gemini-3.1-pro-low",    provider: .gemini, displayName: "Gemini 3.1 Pro (Low)",  cliAlias: "pro",       supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Most work",            badge: nil),
+            ModelCatalogEntry(id: "gemini-3-flash",        provider: .gemini, displayName: "Gemini 3 Flash",        cliAlias: "flash",     supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Fast iteration",       badge: "Fast"),
         ],
         updatedAt: Date(timeIntervalSince1970: 1747353600) // 2026-05-15
     )
