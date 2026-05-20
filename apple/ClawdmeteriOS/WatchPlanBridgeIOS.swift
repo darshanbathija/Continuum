@@ -52,15 +52,27 @@ public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
     /// this annotation Swift 6 concurrency rejects the call.
     @MainActor
     public func updateContext(count: Int, latestGoal: String?, latestPlanSummary: String?, latestSessionId: UUID?) {
-        var context: [String: Any] = ["planWaitingCount": count]
-        if let latestGoal { context["latestGoal"] = latestGoal }
-        if let latestPlanSummary { context["latestPlanSummary"] = latestPlanSummary }
-        if let id = latestSessionId { context["latestSessionId"] = id.uuidString }
+        // P1-Watch-4: merge into the existing applicationContext instead of
+        // overwriting it. WatchTokenBridge writes `token` / `usage` /
+        // `usageByProvider` into the same context dictionary, and the
+        // previous "fresh dict + updateApplicationContext" pattern
+        // silently erased whichever bridge pushed last. Explicitly clear
+        // plan-specific keys when their inputs go nil so stale values
+        // don't linger on the watch when the iPhone reports "no plans
+        // waiting".
+        var context: [String: Any] = WCSession.default.applicationContext
+        context["planWaitingCount"] = count
+        if let latestGoal { context["latestGoal"] = latestGoal } else { context["latestGoal"] = nil }
+        if let latestPlanSummary { context["latestPlanSummary"] = latestPlanSummary } else { context["latestPlanSummary"] = nil }
+        if let id = latestSessionId { context["latestSessionId"] = id.uuidString } else { context["latestSessionId"] = nil }
         // Sessions v2 Phase 6: include the session list snapshot in the
         // same applicationContext push so the watch's list view stays fresh.
-        if let json = encodedSessionsSummary() {
-            context["sessionsSummaryJSON"] = json
-        }
+        // P2-iOS-2: send an explicit "[]" when there are no live sessions,
+        // otherwise the watch's `if let json = context[...]` keeps the
+        // previous list visible.
+        context["sessionsSummaryJSON"] = encodedSessionsSummary() ?? "[]"
+        // Drop nil-typed values WCSession refuses to encode.
+        context = context.compactMapValues { $0 is NSNull ? nil : $0 }
         do {
             try WCSession.default.updateApplicationContext(context)
         } catch {

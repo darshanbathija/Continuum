@@ -15,7 +15,33 @@ import TmuxControlMode
 //
 // Run: `cd tools/tmux-cc-probe && swift run tmux-cc-probe`
 
-let tmuxBinary = "/opt/homebrew/bin/tmux"
+// P1-Tools-1: don't hardcode the Apple Silicon Homebrew path — that
+// breaks on Intel Macs (/usr/local/bin/tmux), MacPorts, Linux, Nix, and
+// any setup where the user has put tmux elsewhere on $PATH. Try $TMUX_BIN
+// override first, then $PATH lookup, then a small allowlist of known
+// install locations.
+let tmuxBinary: String = {
+    if let env = ProcessInfo.processInfo.environment["TMUX_BIN"],
+       FileManager.default.isExecutableFile(atPath: env) {
+        return env
+    }
+    // `which tmux` via PATH lookup.
+    if let path = ProcessInfo.processInfo.environment["PATH"] {
+        for dir in path.split(separator: ":") {
+            let candidate = String(dir) + "/tmux"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+    }
+    // Fallbacks for common install layouts.
+    for candidate in ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"] {
+        if FileManager.default.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+    }
+    return "/usr/bin/tmux"
+}()
 let socketName = "clawdmeter-probe-\(getpid())"
 
 func log(_ s: String) {
