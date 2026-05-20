@@ -101,6 +101,10 @@ struct ClawdmeterMacApp: App {
                 CodexSDKSettingsView()
                     .tabItem { Label("Codex SDK", systemImage: "swift") }
 
+                // v0.7.7: Antigravity SDK toggle UI (D3 completion).
+                AntigravitySDKSettingsView()
+                    .tabItem { Label("Antigravity", systemImage: "sparkles") }
+
                 DiagnosticsSettingsView()
                     .tabItem { Label("Diagnostics", systemImage: "stethoscope") }
 

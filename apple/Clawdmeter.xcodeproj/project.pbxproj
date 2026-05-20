@@ -102,6 +102,7 @@
 		906808FD1730A88D3E1E065A /* PermissionModeChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E0AF7F2D36777237BB36333 /* PermissionModeChip.swift */; };
 		91F59FC843FCFADA8995B62C /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */; };
 		96389D247535DF202C123C35 /* GeminiQuotaLiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57ABA1D6213482514E812CB9 /* GeminiQuotaLiveActivityCoordinator.swift */; };
+		9B745EEC0D89D86854AA8A44 /* AntigravitySDKSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5879DA60299076F9623FD8E4 /* AntigravitySDKSettingsView.swift */; };
 		9FAE5ED0012F3AA0FCE24F13 /* iOSSessionControlsStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = C36A898E076F41B5BA9001E2 /* iOSSessionControlsStrip.swift */; };
 		A13F0D46B10F8CAF93CD356E /* PlanApprovalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77FDB4429B0506B4FCAED27D /* PlanApprovalView.swift */; };
 		A2CA9959AFA87857A2BD8831 /* MacComposerSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D3F0399FF3C5DFC23B1532 /* MacComposerSender.swift */; };
@@ -269,6 +270,7 @@
 		5497BA15075A9EDF75AB2A3B /* CodexSDKEventIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexSDKEventIngestor.swift; sourceTree = "<group>"; };
 		57628CCF5D9B28CF5F0F0F3B /* LiveActivitySetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivitySetupView.swift; sourceTree = "<group>"; };
 		57ABA1D6213482514E812CB9 /* GeminiQuotaLiveActivityCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiQuotaLiveActivityCoordinator.swift; sourceTree = "<group>"; };
+		5879DA60299076F9623FD8E4 /* AntigravitySDKSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravitySDKSettingsView.swift; sourceTree = "<group>"; };
 		59E7B70E400451C1AF93243A /* TmuxSupervisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmuxSupervisor.swift; sourceTree = "<group>"; };
 		5A19E721D40E87BC2B99E71F /* iOSAntigravityPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSAntigravityPlanView.swift; sourceTree = "<group>"; };
 		5A23F364449BE819FB2D8BA0 /* PairingQRPopoverContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingQRPopoverContent.swift; sourceTree = "<group>"; };
@@ -521,6 +523,7 @@
 			isa = PBXGroup;
 			children = (
 				A9E7176EBAE8AB4546A14340 /* AnalyticsView.swift */,
+				5879DA60299076F9623FD8E4 /* AntigravitySDKSettingsView.swift */,
 				A7EDE305AE4E9350183F0920 /* AppDelegate.swift */,
 				1C8B7786D0757B0411303F79 /* AppModel.swift */,
 				5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */,
@@ -1009,6 +1012,7 @@
 				457E68D990E7B761C11DF6CC /* AgentSpawner.swift in Sources */,
 				4FB6359FF046EE6E55273043 /* AnalyticsView.swift in Sources */,
 				F54AA92455AB651F391E0FB3 /* AntigravityPlanPane.swift in Sources */,
+				9B745EEC0D89D86854AA8A44 /* AntigravitySDKSettingsView.swift in Sources */,
 				17B9A55BA4BA2A2FA8722959 /* AntigravitySidecarManager.swift in Sources */,
 				03A84A49FEA03B5FE83AAB9D /* AppDelegate.swift in Sources */,
 				75338A54670234E6728EACB9 /* AppModel.swift in Sources */,
