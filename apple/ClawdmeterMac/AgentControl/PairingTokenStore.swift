@@ -22,6 +22,14 @@ public final class PairingTokenStore: @unchecked Sendable {
 
     private let service = "com.clawdmeter.mac.pairing"
     private let account = "daemon-bearer-token"
+    /// P1-Mac-17: persisted "revoked" sentinel. While present, `validate()`
+    /// fails closed for every input — `revoke()` previously deleted the
+    /// Keychain row but the next `currentToken()` call silently generated
+    /// a new one, contradicting the settings UI's "daemon refuses every
+    /// connection until relaunch" copy. The sentinel is cleared by
+    /// `regenerate()` (deliberate user action), not by an implicit
+    /// regenerate on the read path.
+    private let revokedKey = "clawdmeter.pairing.revoked"
 
     private let lock = NSLock()
     private var cachedToken: String?
@@ -32,6 +40,11 @@ public final class PairingTokenStore: @unchecked Sendable {
 
     /// Returns the current pairing token, generating one on first use.
     /// 32 random bytes → base64url-encoded string (43 chars, no padding).
+    ///
+    /// Note: while `isRevoked` is true, the returned value is display-only —
+    /// `validate()` fails closed for every input regardless of what this
+    /// returns. Pairing-UI callers should branch on `isRevoked` and show a
+    /// "Generate new token" affordance instead of the QR.
     public func currentToken() -> String {
         lock.lock()
         defer { lock.unlock() }
@@ -47,13 +60,22 @@ public final class PairingTokenStore: @unchecked Sendable {
         return fresh
     }
 
-    /// Generate a fresh token, replacing the old one. Returns the new value.
-    /// iPhone clients with the old token will start failing auth — they
-    /// must re-pair via QR.
+    /// True when the token is in the revoked/disabled state. While true,
+    /// `validate()` returns false for every input.
+    public var isRevoked: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isRevokedLocked
+    }
+
+    /// Generate a fresh token, replacing the old one and clearing any
+    /// revoked sentinel. iPhone clients with the old token will start
+    /// failing auth — they must re-pair via QR.
     @discardableResult
     public func regenerate() -> String {
         lock.lock()
         defer { lock.unlock() }
+        clearRevokedLocked()
         let fresh = Self.generateToken()
         writeToKeychain(fresh)
         cachedToken = fresh
@@ -61,21 +83,28 @@ public final class PairingTokenStore: @unchecked Sendable {
         return fresh
     }
 
-    /// Remove the token entirely. The next `currentToken()` call generates
-    /// a fresh one. Useful for "log out all devices" UX.
+    /// Move the daemon into a revoked state: drop the Keychain row AND
+    /// persist a `revoked` sentinel so subsequent `currentToken()` calls
+    /// don't silently regenerate, and `validate()` rejects every input.
+    /// The user must explicitly call `regenerate()` (via the
+    /// pairing-settings "Generate new token" button) to re-enable pairing.
     public func revoke() {
         lock.lock()
         defer { lock.unlock() }
         deleteFromKeychain()
         cachedToken = nil
-        pairingLogger.warning("Pairing token revoked; daemon will not accept any token until next launch generates one")
+        markRevokedLocked()
+        pairingLogger.warning("Pairing token revoked; daemon will reject every connection until a new token is generated")
     }
 
     // MARK: - Constant-time compare for auth path
 
     /// Validate a presented token against the stored one in constant time.
     /// Avoids timing-side-channel leaks from `String == String` short-circuits.
+    /// Fails closed when the token has been revoked, regardless of what
+    /// `currentToken()` returns.
     public func validate(_ presented: String) -> Bool {
+        if isRevoked { return false }
         let expected = currentToken()
         guard presented.utf8.count == expected.utf8.count else { return false }
         var mismatch: UInt8 = 0
@@ -83,6 +112,21 @@ public final class PairingTokenStore: @unchecked Sendable {
             mismatch |= a ^ b
         }
         return mismatch == 0
+    }
+
+    // MARK: - Revoke sentinel
+
+    /// Caller MUST hold `lock`.
+    private var isRevokedLocked: Bool {
+        UserDefaults.standard.bool(forKey: revokedKey)
+    }
+
+    private func markRevokedLocked() {
+        UserDefaults.standard.set(true, forKey: revokedKey)
+    }
+
+    private func clearRevokedLocked() {
+        UserDefaults.standard.removeObject(forKey: revokedKey)
     }
 
     // MARK: - Token generation
