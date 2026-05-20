@@ -7,18 +7,23 @@
 - **Tier**: Standard (fixes critical + high + medium severity)
 - **Framework**: SwiftUI native (Mac/iOS/Watch) + Swift daemon (AgentControlServer on Tailscale-bound HTTP/WS)
 
-## Summary
+## Summary (final after round 2)
 
 | | Count |
 |---|---|
 | Issues found | 4 |
-| Fixed (verified) | 2 |
-| Deferred (pre-existing on main, out of v0.8 scope) | 2 |
+| Fixed (verified end-to-end) | **4** |
+| Deferred | 0 |
 | Build matrix end state | Mac/iOS/Watch all green |
 | `swift test` end state | 490/490 |
+| Mac XCTest end state | 6/6 (AgentSpawnerChatArgvTests) |
 | Health score (baseline) | 70/100 |
-| Health score (final) | 85/100 |
-| Delta | +15 |
+| Health score (final) | **97/100** |
+| Delta | **+27** |
+
+### Summary (round 1, kept for the audit trail)
+
+Initial pass fixed 2 (ISSUE-001 + ISSUE-003 first site), deferred 2 (ISSUE-002 + ISSUE-004 as "pre-existing TmuxControlClient bugs out of v0.8 scope"). User then asked to fix ISSUE-002 + ISSUE-004 inline. Root-cause investigation surfaced that they were actually TWO compounding bugs (single-command spawn + parser-drops-body-lines), both fixable + verified in 90 minutes.
 
 ## What was verified to work end-to-end
 
@@ -96,7 +101,37 @@ Why TaskGroup didn't work: `withThrowingTaskGroup`'s closure scope waits for ALL
 
 ---
 
-### ISSUE-002 (High, **deferred**) — TmuxControlClient wedges on launch when a tmux server already exists on the clawdmeter socket
+### ISSUE-002 (High, **fixed**) — TmuxControlClient single-command spawn pattern exits the control client; parser drops command-response body lines
+
+**Round 2 root-cause analysis** revealed TWO compounding bugs, not the environmental orphan-tmux theory I initially guessed.
+
+**Bug A: single-command spawn pattern.** `tmux -C -L clawdmeter new-session -A -s control -d -- /bin/bash -l` makes tmux treat the control-mode client as one-shot: run new-session, emit `%begin/%end` framing, then `%exit`. The session stays on the server but the daemon's PTY child dies immediately. The first subsequent `command()` call writes to a now-dead PTY and waits forever for `%end`.
+
+**Bug B: parser silently dropped command-response body lines.** `ControlModeParser.feed()` discarded every non-`%`-prefixed line with a comment that consumers should "subscribe to %begin/%end boundaries." But `TmuxControlClient.handle()` only accumulated `currentCommandBody` from `.unknown` frames (which are %-prefixed). So every `newWindow -P -F '#{window_id} #{pane_id}'` got `CommandResult(lines: [])`, hit `parts.count == 2` guard, threw `commandFailed("new-window returned unexpected: ")`. tmux DID create the window, the daemon just couldn't hear the reply. This explains why my fresh dev-build POST returned 500 quickly (not 504 timeout) on the second QA pass.
+
+**Why this hid until now**: every existing newWindow call site happened to not depend on the parsed return — code-session spawn went through paths that didn't synchronously need the window id. Chat tab is the first caller that synchronously needs `newWindow` to return real ids.
+
+**Fix (three pieces)**:
+1. **Two-phase startup in `TmuxControlClient.start()`**: Phase A = regular (non-control) `tmux new-session -A -s control -d` via ShellRunner (idempotent, exits cleanly, ensures session exists). Phase B = long-running `tmux -C attach -t control` over the PTY (no subcommand other than attach — control client stays alive as long as PTY master is open). Pre-step: `tmux kill-server` on the socket so we never inherit a zombie session.
+2. **New `ControlModeFrame.body(line: String)` case**, emitted by `ControlModeParser.feed()` for non-`%`-prefixed lines.
+3. **`TmuxControlClient.handle()` accumulates `.body` into currentCommandBody** while currentCommandNumber is set (between %begin and %end).
+
+**Commit**: `a1b2b08`.
+
+**Files**: `apple/ClawdmeterMac/AgentControl/TmuxControlClient.swift`, `apple/ClawdmeterMac/AgentControl/ControlModeParser.swift`, `apple/ClawdmeterMac/AgentControl/ControlModeFrame.swift`.
+
+**Verification (after fix)**:
+- POST /chat-sessions Claude → HTTP 200 in 0s, real `tmuxWindowId: "@1"` + `tmuxPaneId: "%1"` populated, chat-cwd dir created.
+- POST /sessions (Code) → HTTP 200 in 0s with full AgentSession including window/pane ids.
+- POST /chat-sessions Codex SDK → HTTP 200 in 1s (no tmux — relay path).
+- DELETE /sessions/:id → HTTP 200, chat-cwd cleaned up.
+- tmux survives multiple sequential spawns on the same long-running control client (no PTY EOF between commands).
+
+**Classification**: verified.
+
+### ISSUE-002 (round 1 deferred analysis, kept for audit trail)
+
+Initial theory was that the orphan tmux server from prior Clawdmeter instances was causing the wedge. The `-A -d` "attach if exists" theory was directionally right (the daemon's control client did exit immediately on attach to a stale session), but missed the deeper truth that the single-command pattern caused exits even on FRESH state — the orphan tmux just made it slightly worse. The full fix needed both two-phase startup AND parser body-line capture.
 
 **Surface**: `apple/ClawdmeterMac/AgentControl/TmuxControlClient.swift` — `start()` + `command()` + `markExited()` lifecycle.
 
@@ -116,7 +151,23 @@ Why TaskGroup didn't work: `withThrowingTaskGroup`'s closure scope waits for ALL
 
 ---
 
-### ISSUE-004 (Medium, **deferred**) — Code-session spawn flow not exhaustively re-validated
+### ISSUE-004 (Medium, **fixed**) — Code-session spawn flow not exhaustively re-validated → re-validated and works
+
+Was deferred in round 1 because the underlying tmux wedge (ISSUE-002) blocked Code-session spawn too. After ISSUE-002 was fixed in round 2, re-tested:
+
+```bash
+curl -X POST http://127.0.0.1:21731/sessions \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"repoKey":"/Users/darshanbathija_1/Downloads/CC Watch/Clawdmeter","agent":"claude","planMode":true,"useWorktree":false}'
+```
+
+Returned `HTTP 200` in 0s with a full AgentSession (`kind: "code"`, `tmuxWindowId: "@N"`, `tmuxPaneId: "%N"`). tmux's `list-windows -t control` showed the new code-session window alongside the chat window.
+
+**Resolution**: closed by ISSUE-002 fix (`a1b2b08`).
+
+**Classification**: verified.
+
+### ISSUE-004 (round 1 deferred analysis, kept for audit trail)
 
 **Surface**: `apple/ClawdmeterMac/AgentControl/AgentControlServer.swift` — `handlePostSession` and the broader Code tab flow.
 
@@ -133,14 +184,21 @@ Why TaskGroup didn't work: `withThrowingTaskGroup`'s closure scope waits for ALL
 ## Files modified
 
 - `apple/ClawdmeterMac/AgentControl/AgentControlServer.swift` — ISSUE-001 fix (continuation-race timeout + ResumeOnceBox helper)
-- `apple/ClawdmeterMac/AgentControl/DaemonChatStoreRegistry.swift` — ISSUE-003 fix (sdkOnly store for all chat sessions)
+- `apple/ClawdmeterMac/AgentControl/DaemonChatStoreRegistry.swift` — ISSUE-003 fix part 1 (daemon side: sdkOnly store for all chat sessions)
+- `apple/ClawdmeterMac/SessionsView.swift` — ISSUE-003 fix part 2 (Mac UI side: SessionsModel.chatStore mirror fix)
+- `apple/ClawdmeterMac/AgentControl/TmuxControlClient.swift` — ISSUE-002/004 fix (two-phase startup + kill-server pre-step + .body frame accumulation)
+- `apple/ClawdmeterMac/AgentControl/ControlModeParser.swift` — ISSUE-002 fix (emit .body for non-%-prefixed command-response lines)
+- `apple/ClawdmeterMac/AgentControl/ControlModeFrame.swift` — new .body(line: String) enum case
 
 ## Commits
 
-- `82c79e9` — fix(qa): ISSUE-003 — chat sessions render unrelated Claude JSONLs
-- `ed934fb` — fix(qa): ISSUE-001 — POST /chat-sessions leaks orphan sessions on tmux hang (round 1, TaskGroup)
+- `82c79e9` — fix(qa): ISSUE-003 — chat sessions render unrelated Claude JSONLs (daemon side)
+- `ed934fb` — fix(qa): ISSUE-001 — POST /chat-sessions leaks orphan sessions on tmux hang (round 1, TaskGroup — didn't work, replaced)
 - `ab2ce90` — fix(qa): ISSUE-001 (round 2) — continuation-race timeout that survives wedged tmux
+- `6676168` — qa(v0.8): report for Chat tab — 4 issues found, 2 fixed, 2 deferred (round 1 report)
+- `a1b2b08` — fix(qa): ISSUE-002 + ISSUE-004 — TmuxControlClient broken since v0.7.x (two-phase startup + parser body lines)
+- `68ea90b` — fix(qa): ISSUE-003 (second site) — Mac SessionsModel.chatStore had its own fuzzy resolver
 
-## PR Summary
+## PR Summary (final)
 
-QA found 4 issues, fixed 2 (both v0.8 Chat regressions: orphan session leak on tmux hang + wrong JSONL displayed for chat thread). 2 deferred as pre-existing TmuxControlClient bugs on main. Health score 70 → 85 (+15). Mac/iOS/Watch builds + `swift test` 490/490 all green at v0.8.0 build 65.
+QA found 4 issues, **fixed ALL 4**. ISSUE-001 was a v0.8 chat regression (orphan sessions on tmux hang); fixed with a continuation-race timeout that survives wedged tmux. ISSUE-003 was a pre-existing fuzzy-resolver bug that surfaced for chat sessions; fixed at both daemon-side (DaemonChatStoreRegistry.createStore) and Mac-UI-side (SessionsModel.chatStore). ISSUE-002 + ISSUE-004 were a pre-existing TmuxControlClient bug pair (single-command spawn pattern exits the control client, plus a parser that silently dropped command-response body lines); fixed with a two-phase startup + new ControlModeFrame.body case that captures the response body. Code-session spawn (POST /sessions) now also returns HTTP 200 cleanly. Health score 70 → **97** (+27). Mac/iOS/Watch builds + `swift test` 490/490 + Mac XCTest 6/6 all green at v0.8.0 build 65.
