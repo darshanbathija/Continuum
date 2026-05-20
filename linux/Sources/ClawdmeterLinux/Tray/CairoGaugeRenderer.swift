@@ -46,12 +46,12 @@ public final class CairoGaugeRenderer: @unchecked Sendable {
         let filename = "\(provider.rawValue)-\(seq).png"
         let url = LinuxConfigPaths.gaugePNGDir.appendingPathComponent(filename)
         let bytes = renderPNG(provider: provider, usage: usage)
-        let tempURL = url.appendingPathExtension("tmp")
-        try bytes.write(to: tempURL, options: .atomic)
-        try FileManager.default.replaceItem(
-            at: url, withItemAt: tempURL,
-            backupItemName: nil, options: [], resultingItemURL: nil
-        )
+        // P0-2: avoid FileManager.replaceItem on Linux — Swift Corelibs
+        // Foundation throws when the destination doesn't exist yet, which
+        // is exactly the first-run state for the gauge directory. `Data.write`
+        // with `.atomic` writes to a sibling temp and renames into place on
+        // both Darwin and Linux, and handles the missing-destination case.
+        try bytes.write(to: url, options: .atomic)
         // Prune previous gauge files (older than 60s) so tmpfs doesn't fill.
         pruneOldFiles(for: provider, keeping: url)
         return url

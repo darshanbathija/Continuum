@@ -85,9 +85,11 @@ struct InAppBrowser: View {
     private func loadCurrentURL() {
         let trimmed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         let candidate = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
-        if let url = URL(string: candidate) {
-            loadedURL = url
-        }
+        guard let url = URL(string: candidate),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https"
+        else { return }
+        loadedURL = url
     }
 
     private var commentSheet: some View {
@@ -127,7 +129,9 @@ struct InAppBrowser: View {
     }
 
     private func sendComment() {
-        let prompt = "[BROWSER COMMENT @ \(commentSelector)] \(commentText)"
+        let safeSelector = Self.sanitizeForPaste(commentSelector, maxLength: 240)
+        let safeText = Self.sanitizeForPaste(commentText, maxLength: 4_000)
+        let prompt = "[BROWSER COMMENT @ \(safeSelector)] \(safeText)"
         guard let runtime = AppDelegate.runtime,
               let pane = session.tmuxPaneId ?? session.tmuxWindowId
         else { return }
@@ -135,6 +139,26 @@ struct InAppBrowser: View {
         Task {
             try? await runtime.tmuxClient.pasteBytes(paneId: pane, bytes: bytes)
         }
+    }
+
+    /// Drop CR/LF and ASCII control bytes so DOM-injected text cannot
+    /// terminate the prompt line and inject a fresh shell command into the
+    /// pasted bytes. Bounded so a malicious page can't blow up the chat
+    /// transcript with a multi-MB selector either.
+    static func sanitizeForPaste(_ raw: String, maxLength: Int) -> String {
+        var out = String.UnicodeScalarView()
+        out.reserveCapacity(min(raw.unicodeScalars.count, maxLength))
+        for scalar in raw.unicodeScalars {
+            if out.count >= maxLength { break }
+            // Skip C0 controls (incl. NUL/CR/LF/TAB), DEL, and the C1 range.
+            // Allow ordinary spaces — they're fine for tmux paste.
+            if (scalar.value < 0x20) || scalar.value == 0x7F || (0x80...0x9F).contains(scalar.value) {
+                out.append(UnicodeScalar(0x20)!)
+                continue
+            }
+            out.append(scalar)
+        }
+        return String(out)
     }
 }
 
