@@ -2300,38 +2300,35 @@ public final class AgentControlServer {
             return
         } else {
             // CLI chat path: spawn tmux window in the chat-cwd. v0.8 QA
-            // surfaced a wedged-tmux scenario where tmux.start() returned
-            // but tmux.newWindow hung forever — the handler never returned,
-            // and the AgentSession + chat-cwd were left orphaned in the
-            // registry. Wrap the spawn in a TaskGroup with a 10s deadline:
-            // if it doesn't complete, rollback registry + chat-cwd and
-            // return 504 so the iOS sheet can surface a real error.
+            // surfaced a wedged-tmux scenario where tmux.newWindow hung
+            // forever — the handler never returned, AgentSession +
+            // chat-cwd were left orphaned in the registry. Use a
+            // continuation-race timeout that returns even when the
+            // underlying tmux await is unrecoverably stuck (Swift Task
+            // cancellation is cooperative; tmux.command's
+            // withCheckedThrowingContinuation never resumes on a wedged
+            // PTY). The spawn task may leak if tmux stays wedged, but
+            // leaking one wrapping Task is much better than leaking a
+            // registry entry + chat-cwd dir + a confused user.
             let tmuxRef = self.tmux
-            let spawnResult: (windowId: String, paneId: String)?
-            do {
-                spawnResult = try await withThrowingTaskGroup(of: (String, String)?.self) { group in
-                    group.addTask {
+            let spawnResult: (windowId: String, paneId: String)? = await withCheckedContinuation { (cont: CheckedContinuation<(String, String)?, Never>) in
+                let resumedBox = ResumeOnceBox()
+                Task {
+                    do {
                         try await tmuxRef.start()
                         let window = try await tmuxRef.newWindow(cwd: chatCwd, child: argv)
-                        return (window.windowId, window.paneId)
+                        if resumedBox.tryClaim() { cont.resume(returning: (window.windowId, window.paneId)) }
+                    } catch {
+                        if resumedBox.tryClaim() { cont.resume(returning: nil) }
                     }
-                    group.addTask {
-                        try await Task.sleep(nanoseconds: 10_000_000_000)
-                        return nil
-                    }
-                    let first = try await group.next()
-                    group.cancelAll()
-                    return first ?? nil
                 }
-            } catch {
-                serverLogger.error("chat spawn failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                registry.delete(id: session.id)
-                try? ChatCwdManager.remove(for: session.id)
-                sendResponse(.internalError, on: connection)
-                return
+                Task {
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    if resumedBox.tryClaim() { cont.resume(returning: nil) }
+                }
             }
             guard let spawn = spawnResult else {
-                serverLogger.error("chat spawn timed out for \(session.id.uuidString, privacy: .public) — tmux unresponsive after 10s")
+                serverLogger.error("chat spawn failed or timed out for \(session.id.uuidString, privacy: .public) — tmux unresponsive after 10s")
                 registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
                 sendResponse(HTTPResponse(
@@ -2515,6 +2512,24 @@ public final class AgentControlServer {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
             sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+        }
+    }
+
+    /// One-shot guard for a CheckedContinuation race. Used by
+    /// handlePostChatSession's tmux-timeout path: two Tasks (spawn +
+    /// 10s sleep) race to resume the continuation; only the first
+    /// claim wins. The other resume call is silently dropped, which
+    /// also prevents Swift's runtime trap on double-resume.
+    /// `final class` + atomic-style flag keeps the Sendable story
+    /// simple — the box is captured by both racing Tasks.
+    fileprivate final class ResumeOnceBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var claimed = false
+        func tryClaim() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard !claimed else { return false }
+            claimed = true
+            return true
         }
     }
 
