@@ -242,10 +242,18 @@ final class GitDiffStore: ObservableObject {
         source.setEventHandler { [weak self] in
             self?.refresh()
         }
+        // Codex fix: capture the fd STRONGLY in the cancel handler. The
+        // previous `[weak self]` capture meant that on deinit (when the
+        // store has already begun deallocation), `self` is nil and the
+        // fd never closes — opening / closing diff panes leaked an
+        // fd per pane. The local `let fd = fd` capture is independent
+        // of the store's lifetime and the cancel handler is guaranteed
+        // to run exactly once after cancel(), so the close is safe
+        // either way. `self.watchedFD` is still nilled inside the
+        // weak-self path so stop()'s post-cancel close is a no-op.
         source.setCancelHandler { [weak self] in
-            if let self, self.watchedFD != -1 {
-                close(self.watchedFD); self.watchedFD = -1
-            }
+            close(fd)
+            self?.watchedFD = -1
         }
         source.resume()
         self.watcher = source

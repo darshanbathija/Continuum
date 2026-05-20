@@ -52,6 +52,14 @@ public final class AgentEventStream: WSChannel {
         self.connection = connection
         self.registry = registry
         self.sinceSeq = sinceSeq
+        // Codex fix: seed `lastSentSeq` from `sinceSeq` so a client
+        // reconnecting at the current tail doesn't trigger a duplicate
+        // flush of every retained event the first time
+        // `eventRecorded` fires. Before this, `lastSentSeq` defaulted
+        // to 0, the startup replay sent nothing (no events past
+        // current tail), and the next recorded event made
+        // `flushPending` re-send every retained event whose seq > 0.
+        self.lastSentSeq = sinceSeq
     }
 
     public func start() {

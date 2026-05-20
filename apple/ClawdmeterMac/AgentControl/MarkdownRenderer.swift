@@ -93,9 +93,20 @@ struct MarkdownRenderer: View {
         Task.detached(priority: .userInitiated) {
             let prepared = Self.prepare(source: src)
             await MainActor.run {
-                // Persist `(src, prepared)` together so the body's
-                // `cache.source == source` guard discards results from
-                // older parses if a newer source arrived first.
+                // Codex fix: an older parse can complete AFTER a newer
+                // one when SwiftUI recycles the row from source A to
+                // source B and B parses faster. If we unconditionally
+                // stored `(A, parsed_A)` here, body's `cache.source !=
+                // source` filter would render nothing AND no
+                // onChange/onAppear would fire again for B (the source
+                // already changed) — that message stays blank
+                // indefinitely. Only commit the result when it matches
+                // the View's CURRENT `source`; otherwise re-kick a
+                // parse for the live source so the row renders.
+                guard source == src else {
+                    kickParseIfNeeded(for: source)
+                    return
+                }
                 cache = CacheEntry(source: src, chunks: prepared)
             }
         }
