@@ -105,6 +105,14 @@ public final class GeminiTokenProvider: TokenProvider, @unchecked Sendable {
     public var hasToken: Bool { currentAccessToken != nil }
 
     /// Re-read the file so we pick up rotations the Gemini CLI does on its own.
+    ///
+    /// P1-Mac-10: when the loaded token has already expired by its
+    /// `expiryDate`, refreshIfNeeded() returned the rotation-status bool
+    /// (so callers couldn't tell expired-vs-fresh apart) and the UI only
+    /// flipped to `needsReauth` when refresh THREW `.authExpired`. Now
+    /// any load that surfaces an expired bundle throws `.authExpired`,
+    /// so the AppModel's "did the refresh throw expired?" guard fires
+    /// reliably whenever the user needs to re-sign-in to Gemini.
     @discardableResult
     public func refreshIfNeeded() async throws -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -114,6 +122,12 @@ public final class GeminiTokenProvider: TokenProvider, @unchecked Sendable {
             cached = try loadFromDisk()
         } catch {
             throw AISourceError.authExpired
+        }
+        if let expiryMs = cached?.expiryDate {
+            let expirySec = TimeInterval(expiryMs) / 1000
+            if Date().timeIntervalSince1970 > expirySec {
+                throw AISourceError.authExpired
+            }
         }
         return cached?.accessToken != previous
     }
