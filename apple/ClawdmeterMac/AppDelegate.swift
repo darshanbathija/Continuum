@@ -134,6 +134,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    /// v0.7.7: NSUserActivity Handoff receiver. iOS advertises
+    /// `com.clawdmeter.continue-codex-thread` with userInfo[threadId];
+    /// macOS receives it here, focuses the dashboard, and broadcasts a
+    /// notification SessionsView observes to highlight the matching
+    /// thread.
+    func application(_ application: NSApplication,
+                     continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        guard userActivity.activityType == "com.clawdmeter.continue-codex-thread",
+              let threadId = userActivity.userInfo?["threadId"] as? String,
+              !threadId.isEmpty
+        else { return false }
+        showDashboard()
+        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(
+            name: AppDelegate.continueCodexThreadFromHandoff,
+            object: nil,
+            userInfo: ["threadId": threadId]
+        )
+        return true
+    }
+
     /// Called when the dashboard window has just been closed (X button or
     /// Cmd+W). Drops the app to `.accessory` so the Dock icon disappears,
     /// leaving the menu bar items as the only visible surface.
@@ -170,6 +192,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Internal — only used to bridge `showDashboard()` into the SwiftUI
     /// hierarchy so we can call `openWindow(id:)`.
     static let openDashboardRequest = Notification.Name("clawdmeter.openDashboardRequest")
+
+    /// v0.7.7: posted when an NSUserActivity Handoff from iOS lands.
+    /// `userInfo["threadId"]` carries the Codex SDK threadId; the
+    /// SessionsView observer focuses the matching thread.
+    static let continueCodexThreadFromHandoff =
+        Notification.Name("clawdmeter.continueCodexThreadFromHandoff")
 
     private func applyVisibilityFromPrefs() {
         let defaults = UserDefaults.standard

@@ -26,5 +26,15 @@
 	<string>Clawdmeter records audio for voice dictation in the agent composer (Ctrl+M). Recording only happens while you hold the mic button.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Clawdmeter uses speech recognition to dictate messages into the agent composer (Ctrl+M). Audio is processed on-device when possible.</string>
+	<!-- v0.7.7: NSUserActivity Handoff for the iOS Codex resume sheet's
+	     "Continue on Mac" button. iPhone advertises an activity with the
+	     threadId; macOS receives it via NSApplicationDelegate's continue:
+	     and focuses the matching Sessions tab. Works across same-Apple-ID
+	     devices on the same Wi-Fi via Continuity — no apple.com domain
+	     required (that's only needed for Universal Links). -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>com.clawdmeter.continue-codex-thread</string>
+	</array>
 </dict>
 </plist>

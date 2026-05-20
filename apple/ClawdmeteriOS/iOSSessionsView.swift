@@ -1855,17 +1855,12 @@ private struct CodexResumeResultSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Divider()
                     Button {
-                        // Cross-device handoff (focus session on Mac) is
-                        // deferred — needs Handoff/Universal Links setup
-                        // with an apple.com domain. For now expose the
-                        // threadId so the user can paste it into a
-                        // follow-up draft to continue the same SDK turn.
                         UIPasteboard.general.string = result.threadId
                     } label: {
                         Label("Copy thread ID", systemImage: "doc.on.doc")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                 }
                 .padding()
             }
@@ -1875,6 +1870,22 @@ private struct CodexResumeResultSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done", action: onDismiss)
                 }
+            }
+            // v0.7.7 Handoff: advertise the thread to the user's Mac
+            // via Continuity. The user picks up the Handoff icon in
+            // the Mac dock and the Mac focuses the matching Sessions
+            // tab (handled in `Application(_:continue:restorationHandler:)`).
+            .userActivity(
+                "com.clawdmeter.continue-codex-thread",
+                isActive: !result.threadId.isEmpty
+            ) { activity in
+                activity.title = "Continue Codex thread"
+                activity.targetContentIdentifier = result.threadId
+                activity.userInfo = ["threadId": result.threadId]
+                activity.requiredUserInfoKeys = ["threadId"]
+                activity.isEligibleForHandoff = true
+                activity.isEligibleForSearch = false
+                activity.isEligibleForPublicIndexing = false
             }
         }
     }
