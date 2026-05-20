@@ -78,11 +78,27 @@ public final class iOSNotificationManager: ObservableObject {
     @discardableResult
     public func performRefresh() async -> Bool {
         guard client.isConfigured else { return false }
+        // P1-Mac-21: don't ack notifications the user never saw. Skip the
+        // refresh entirely if notification authorization is denied, and
+        // only advance `lastAckId` for events whose local enqueue actually
+        // succeeded — otherwise a transient UNUserNotificationCenter error
+        // or a denied state silently dropped plan-ready / session-done
+        // events because the ack races past them.
+        let authStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        guard authStatus == .authorized || authStatus == .provisional || authStatus == .ephemeral else {
+            return false
+        }
         let events = await client.fetchNeedsAttention()
         guard !events.isEmpty else { return true }
         var maxId: UInt64 = lastAckId
         for event in events where event.id > lastAckId {
-            await postLocalNotification(event)
+            let delivered = await postLocalNotification(event)
+            guard delivered else {
+                // Stop advancing on first failure so subsequent retry can
+                // re-deliver. ackNotifications below covers everything up
+                // to the highest *successfully* delivered id.
+                break
+            }
             maxId = max(maxId, event.id)
         }
         if maxId > lastAckId {
@@ -93,7 +109,8 @@ public final class iOSNotificationManager: ObservableObject {
         return true
     }
 
-    private func postLocalNotification(_ event: NotificationEvent) async {
+    @discardableResult
+    private func postLocalNotification(_ event: NotificationEvent) async -> Bool {
         let content = UNMutableNotificationContent()
         content.title = event.title
         content.body = event.body
@@ -108,6 +125,12 @@ public final class iOSNotificationManager: ObservableObject {
             content: content,
             trigger: nil  // fire immediately
         )
-        try? await UNUserNotificationCenter.current().add(request)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            return true
+        } catch {
+            notifLogger.warning("Failed to enqueue local notification for event \(event.id): \(error.localizedDescription)")
+            return false
+        }
     }
 }
