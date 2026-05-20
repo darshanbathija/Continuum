@@ -152,8 +152,33 @@ public protocol LinuxDrawingArea: LinuxUIWidget {
 /// On macOS dev: backed by `MacStubAdapter` so `swift build` works for
 /// pure-Swift correctness checks without GTK installed.
 public enum LinuxUI {
-    /// Globally selected adapter. Set at app entry (`main.swift`).
-    nonisolated(unsafe) public static var adapter: LinuxUIAdapter = StubAdapter()
+    /// Globally selected adapter. Configure exactly once at app entry
+    /// (`main.swift`) via `configure(adapter:)`. After that it's a frozen
+    /// reference — reads are lock-free.
+    ///
+    /// P1-Linux-6: previously declared as `nonisolated(unsafe) public static var`,
+    /// which allowed unsynchronized writes from any thread. Background
+    /// tasks (tray poll loop, HTTP server) read it concurrently with the
+    /// main thread's initial assignment. Now there's a tiny lock guarding
+    /// the install path and reads only happen after install, so the
+    /// `nonisolated(unsafe)` escape hatch is unnecessary.
+    private static let adapterLock = NSLock()
+    private static var _adapter: LinuxUIAdapter = StubAdapter()
+
+    public static var adapter: LinuxUIAdapter {
+        adapterLock.lock()
+        defer { adapterLock.unlock() }
+        return _adapter
+    }
+
+    /// Install the production adapter exactly once. Subsequent calls log
+    /// and ignore — flipping the adapter mid-run was never supported and
+    /// almost certainly indicates a bug.
+    public static func configure(adapter: LinuxUIAdapter) {
+        adapterLock.lock()
+        defer { adapterLock.unlock() }
+        _adapter = adapter
+    }
 
     public static func window(title: String) -> LinuxWindow {
         adapter.makeWindow(title: title)

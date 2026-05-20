@@ -43,14 +43,37 @@ public enum LinuxConfigPaths {
         return URL(fileURLWithPath: "/tmp").appendingPathComponent("clawdmeter-\(uid)", isDirectory: true)
     }
 
-    /// Ensures a directory exists, creating it with mode 0700 if needed.
-    /// Throws on I/O failure (caller decides whether to fall back).
+    /// Errors thrown by `ensureDirectory` when we can't get an owner-private
+    /// directory at the requested path.
+    public enum LinuxConfigPathError: Error {
+        case unsafeOwnership(path: String)
+    }
+
+    /// Ensures a directory exists with mode 0700 owned by the current uid.
+    /// Throws on I/O failure or if the existing entry is a symlink / owned
+    /// by another uid (potential symlink attack on `/tmp` fallback paths).
+    ///
+    /// P1-Linux-5: when XDG_RUNTIME_DIR isn't set, runtimeDir falls back
+    /// to `/tmp/clawdmeter-<uid>/`. `/tmp` is world-writable, so a local
+    /// attacker can pre-create that path as a symlink to redirect daemon
+    /// writes. Validate ownership + mode + non-symlink before trusting the
+    /// directory; refuse to use it otherwise.
     @discardableResult
     public static func ensureDirectory(_ url: URL) throws -> URL {
         let fm = FileManager.default
-        if !fm.fileExists(atPath: url.path) {
+        let path = url.path
+        if !fm.fileExists(atPath: path) {
             try fm.createDirectory(at: url, withIntermediateDirectories: true,
                                    attributes: [.posixPermissions: 0o700])
+        }
+        // Post-conditions: not a symlink, owned by us, mode tight enough.
+        // lstat(2) reports the link itself; stat(2) follows.
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return url }
+        let isSymlink = (st.st_mode & S_IFMT) == S_IFLNK
+        let ownedByUs = st.st_uid == getuid()
+        if isSymlink || !ownedByUs {
+            throw LinuxConfigPathError.unsafeOwnership(path: path)
         }
         return url
     }
