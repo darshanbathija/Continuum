@@ -1112,7 +1112,19 @@ private struct SessionDetailView: View {
                     )
                 }
             case .plan:
-                iOSPlanTrackerView(session: session)
+                // v0.7.8: Codex SDK sessions get the dedicated Plan
+                // view backed by WireChatSnapshot.codexTodos. All other
+                // agents keep the existing iOSPlanTrackerView (mines
+                // steps from chat text).
+                if session.agent == .codex {
+                    iOSCodexPlanView(
+                        chatStore: iOSChatStoreCache.shared.store(
+                            for: session.id, client: client
+                        )
+                    )
+                } else {
+                    iOSPlanTrackerView(session: session)
+                }
             case .diff:
                 iOSDiffView(session: session, client: client)
             case .pr:

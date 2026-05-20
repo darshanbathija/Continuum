@@ -40,6 +40,12 @@ public enum WatchPlanBridge {
         // task.md headline. Receiver writes to App Group UserDefaults
         // and the .accessoryCorner complication reads from there.
         public var currentTaskHeadline: String?
+        // v0.7.8 — Codex SDK task complication. First 18 chars of the
+        // active Codex SDK session's in-progress todo (falls back to
+        // first pending). Same pattern as currentTaskHeadline:
+        // receiver writes to App Group UserDefaults and the watch
+        // CodexTaskComplication reads from there.
+        public var codexCurrentTodo: String?
         /// Server-time of payload send. Lets the watch detect stale
         /// payloads (>30s old) and pull a fresh context.
         public var sentAt: Date
@@ -51,6 +57,7 @@ public enum WatchPlanBridge {
             latestSessionId: String? = nil,
             sessionsSummaryJSON: String? = nil,
             currentTaskHeadline: String? = nil,
+            codexCurrentTodo: String? = nil,
             sentAt: Date = Date()
         ) {
             self.planWaitingCount = planWaitingCount
@@ -59,6 +66,7 @@ public enum WatchPlanBridge {
             self.latestSessionId = latestSessionId
             self.sessionsSummaryJSON = sessionsSummaryJSON
             self.currentTaskHeadline = currentTaskHeadline
+            self.codexCurrentTodo = codexCurrentTodo
             self.sentAt = sentAt
         }
 
@@ -73,6 +81,7 @@ public enum WatchPlanBridge {
             if let v = latestSessionId { dict["latestSessionId"] = v }
             if let v = sessionsSummaryJSON { dict["sessionsSummaryJSON"] = v }
             if let v = currentTaskHeadline { dict["currentTaskHeadline"] = v }
+            if let v = codexCurrentTodo { dict["codexCurrentTodo"] = v }
             dict["sentAt"] = ISO8601DateFormatter().string(from: sentAt)
             return dict
         }
@@ -87,6 +96,7 @@ public enum WatchPlanBridge {
             payload.latestSessionId = dict["latestSessionId"] as? String
             payload.sessionsSummaryJSON = dict["sessionsSummaryJSON"] as? String
             payload.currentTaskHeadline = dict["currentTaskHeadline"] as? String
+            payload.codexCurrentTodo = dict["codexCurrentTodo"] as? String
             if let raw = dict["sentAt"] as? String, let date = ISO8601DateFormatter().date(from: raw) {
                 payload.sentAt = date
             }
@@ -110,6 +120,7 @@ public enum WatchPlanBridge {
                 latestSessionId ?? "-",
                 sessionsSummaryJSON ?? "-",
                 currentTaskHeadline ?? "-",
+                codexCurrentTodo ?? "-",
             ]
             let canonical = parts.joined(separator: "|")
             let data = Data(canonical.utf8)

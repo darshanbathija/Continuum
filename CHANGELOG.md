@@ -4,6 +4,54 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.8 build 54] - 2026-05-20
+
+Codex SDK parity ship. Closes the three surfaces Antigravity SDK has
+and Codex SDK didn't: Plan pane on Mac, Plan tab on iOS, task
+complication on watchOS. Also fixes a v0.6.0 oversight where
+`AntigravityTaskComplication` shipped but was never registered in
+the WidgetBundle.
+
+### Added
+
+- **`CodexTodoItem` Codable model.** Preserves the structured todo
+  list from Codex SDK `todo_list` stream events instead of flattening
+  to a meta chat row. Status field kept as a raw string (`pending` /
+  `in_progress` / `completed`) so a future SDK release adding a new
+  status decodes cleanly.
+- **`ChatSnapshot.codexTodos` field.** The CodexSDKEventIngestor
+  now writes parsed todos through `SessionChatStore.setCodexTodos`
+  which propagates them via the existing 16ms staging commit. Empty
+  for non-Codex / pre-todo_list sessions.
+- **`WireChatSnapshot.codexTodos` field.** Wire-level pass-through
+  with `decodeIfPresent` back-compat so v6/v7 paired clients reading
+  a v8 payload still decode (the field defaults to empty).
+- **Mac `CodexPlanPane`.** New Plan tab content for Codex sessions
+  in SessionWorkspaceView. Renders the structured todos grouped by
+  status (In progress / Pending / Done) with a count badge in the
+  header. Non-Codex sessions keep the existing `PlanTrackerPane`.
+- **iOS `iOSCodexPlanView`.** Matching Plan tab content for Codex
+  sessions in `SessionDetailView`. Reads
+  `iOSChatStore.snapshot.codexTodos`; no new daemon endpoint —
+  the chat-subscribe pipeline already carries the data.
+- **Watch `CodexTaskComplication`.** `.accessoryCorner` widget that
+  shows the first 18 chars of the active Codex SDK session's
+  in-progress todo (falls back to first pending). Reads the
+  `clawdmeter.watch.codexCurrentTodo` App Group key written by
+  `WatchPlanBridge`. New iOS-side `activeCodexTodoHeadline()` picks
+  the most-recently-active Codex session's chat-store snapshot.
+- **`WatchPlanBridge.Payload.codexCurrentTodo` field.** Mirror of
+  the v0.6.0 `currentTaskHeadline` field with the same encode/decode/
+  hash plumbing. Added to the SendGate content hash so a stable todo
+  doesn't wake the Watch.
+
+### Fixed
+
+- **`AntigravityTaskComplication` now registered in WidgetBundle.**
+  The widget file shipped in v0.6.0 but the bundle registration was
+  missed — the complication never appeared in the watch face picker.
+  Fixed alongside the new `CodexTaskComplication` registration.
+
 ## [0.7.7 build 53] - 2026-05-20
 
 Closes every remaining v0.6.0 plan deferral and every v0.7.4

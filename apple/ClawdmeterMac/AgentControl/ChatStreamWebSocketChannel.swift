@@ -118,6 +118,7 @@ public final class ChatStreamWebSocketChannel: WSChannel {
             planSteps: snapshot.planSteps,
             sourceEntries: snapshot.sourceEntries,
             artifactEntries: snapshot.artifactEntries,
+            codexTodos: snapshot.codexTodos,
             totalInputTokens: snapshot.totalInputTokens,
             totalOutputTokens: snapshot.totalOutputTokens,
             lastEventAt: snapshot.lastEventAt ?? session.lastEventAt,

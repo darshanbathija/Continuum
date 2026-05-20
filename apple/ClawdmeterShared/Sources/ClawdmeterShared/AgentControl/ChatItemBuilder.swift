@@ -283,6 +283,31 @@ public struct PlanStep: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
+/// One todo from a Codex SDK `todo_list` stream event. v0.7.8 model
+/// added so the SDK event's structure survives all the way through to
+/// the Mac Plan pane + iOS Plan tab + Watch complication — previously
+/// the ingestor flattened it to a "Todo list updated, N items" meta
+/// chat row which lost the actual content.
+///
+/// The Codex SDK fires three statuses: pending, in_progress, completed.
+/// We keep the raw string instead of an enum so a future Codex SDK
+/// release adding a new status (e.g. "blocked") decodes cleanly.
+public struct CodexTodoItem: Identifiable, Hashable, Sendable, Codable {
+    public let id: String
+    public let text: String
+    public let status: String  // "pending" | "in_progress" | "completed" | future statuses
+
+    public init(id: String, text: String, status: String) {
+        self.id = id
+        self.text = text
+        self.status = status
+    }
+
+    public var isCompleted: Bool { status == "completed" }
+    public var isInProgress: Bool { status == "in_progress" }
+    public var isPending: Bool { status == "pending" }
+}
+
 /// One file path or URL the agent referenced (Read/Grep/Glob/WebFetch/etc.).
 /// Sortable by `count` for "most-cited" surfacing.
 public struct SourceEntry: Identifiable, Hashable, Sendable, Codable {

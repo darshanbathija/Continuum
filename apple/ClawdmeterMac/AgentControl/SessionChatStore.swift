@@ -52,6 +52,11 @@ public final class SessionChatStore: ObservableObject {
         public let planSteps: [PlanStep]
         public let sourceEntries: [SourceEntry]
         public let artifactEntries: [ArtifactEntry]
+        /// v0.7.8: latest `todo_list` event payload from the Codex SDK
+        /// stream. Empty for non-SDK / non-Codex sessions. Drives the
+        /// Mac CodexPlanPane + iOS CodexPlanView + Watch
+        /// CodexTaskComplication parity surfaces.
+        public let codexTodos: [CodexTodoItem]
         /// Fresh input tokens (`message.usage.input_tokens`). Held
         /// separately from cache_creation and cache_read so the cost
         /// estimator can apply the right rate per category — Sonnet's
@@ -91,6 +96,7 @@ public final class SessionChatStore: ObservableObject {
             planSteps: [PlanStep] = [],
             sourceEntries: [SourceEntry] = [],
             artifactEntries: [ArtifactEntry] = [],
+            codexTodos: [CodexTodoItem] = [],
             totalInputTokens: Int = 0,
             totalOutputTokens: Int = 0,
             totalCacheCreationTokens: Int = 0,
@@ -108,6 +114,7 @@ public final class SessionChatStore: ObservableObject {
             self.planSteps = planSteps
             self.sourceEntries = sourceEntries
             self.artifactEntries = artifactEntries
+            self.codexTodos = codexTodos
             self.totalInputTokens = totalInputTokens
             self.totalOutputTokens = totalOutputTokens
             self.totalCacheCreationTokens = totalCacheCreationTokens
@@ -159,6 +166,15 @@ public final class SessionChatStore: ObservableObject {
     /// single source of truth for the Plan tab.
     public func setPlanText(_ text: String?) {
         Task { [staging] in await staging.setPlanText(text) }
+    }
+
+    /// v0.7.8: replace the Codex SDK todo list snapshot. Called from
+    /// CodexSDKEventIngestor when the SDK fires a `todo_list` event.
+    /// Pass an empty array to clear (the SDK does NOT emit a final
+    /// "list closed" event, so clearing on session end is up to the
+    /// caller).
+    public func setCodexTodos(_ todos: [CodexTodoItem]) {
+        Task { [staging] in await staging.setCodexTodos(todos) }
     }
 
     /// v0.7.4: ingest Codex SDK stream events into the same staging pipeline
@@ -890,6 +906,10 @@ actor StagingParser {
     /// `SessionChatStore.setPlanText`. Drives the `planSteps` precompute
     /// alongside steps mined from assistant messages.
     private var planText: String? = nil
+    /// v0.7.8: latest Codex SDK `todo_list` event payload. Set by
+    /// `setCodexTodos(_:)`, surfaced in ChatSnapshot for the CodexPlanPane
+    /// (Mac), iOSCodexPlanView (iOS), and CodexTaskComplication (Watch).
+    private var codexTodos: [CodexTodoItem] = []
     /// Accumulated tokens for the session metadata strip — split into
     /// the four billable categories so the cost estimator can apply
     /// the right rate per category. Pulled from `message.usage` on
@@ -1026,6 +1046,16 @@ actor StagingParser {
         updateCounter &+= 1
     }
 
+    /// v0.7.8: latest Codex SDK `todo_list` event snapshot. Each event
+    /// the SDK fires REPLACES the list (the SDK doesn't emit deltas;
+    /// the latest emission is the canonical state), so the setter
+    /// overwrites rather than merging.
+    func setCodexTodos(_ todos: [CodexTodoItem]) {
+        guard codexTodos != todos else { return }
+        codexTodos = todos
+        updateCounter &+= 1
+    }
+
     /// Hardening: clear all accumulated state without re-instantiating
     /// the actor. Called by `SessionChatStore.start()` when re-entering
     /// after a prior `stop()` so untracked in-flight ingests can't bleed
@@ -1034,6 +1064,7 @@ actor StagingParser {
         sortedMessages.removeAll(keepingCapacity: false)
         seenIds.removeAll(keepingCapacity: false)
         planText = nil
+        codexTodos.removeAll(keepingCapacity: false)
         fileCounts.removeAll(keepingCapacity: false)
         urlCounts.removeAll(keepingCapacity: false)
         artifactPaths.removeAll(keepingCapacity: false)
@@ -1120,6 +1151,7 @@ actor StagingParser {
             planSteps: steps,
             sourceEntries: sources,
             artifactEntries: artifacts,
+            codexTodos: codexTodos,
             totalInputTokens: totalInputTokens,
             totalOutputTokens: totalOutputTokens,
             totalCacheCreationTokens: totalCacheCreationTokens,

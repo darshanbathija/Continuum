@@ -180,13 +180,27 @@ public final class CodexSDKEventIngestor {
                        body: query.isEmpty ? "(no query)" : query,
                        at: timestamp)
         case "todo_list":
-            // Surface the headline only; the chat is the wrong place for
-            // a full todo list dump. The Plan tab parses these separately.
-            let count = (item["todos"] as? [Any])?.count ?? 0
+            // v0.7.8: parse the structured todos so the Plan surfaces
+            // (Mac CodexPlanPane, iOS CodexPlanView, Watch task
+            // complication) can render the full list — the previous
+            // implementation dropped the items and surfaced only a
+            // "Todo list updated, N items" meta row.
+            let rawTodos = (item["todos"] as? [[String: Any]]) ?? []
+            let parsed: [CodexTodoItem] = rawTodos.enumerated().compactMap { (idx, raw) in
+                let text = (raw["text"] as? String) ?? (raw["title"] as? String) ?? ""
+                guard !text.isEmpty else { return nil }
+                let status = (raw["status"] as? String) ?? "pending"
+                let id = (raw["id"] as? String) ?? "\(itemId)-todo-\(idx)"
+                return CodexTodoItem(id: id, text: text, status: status)
+            }
+            store.setCodexTodos(parsed)
+            // Also keep a lightweight meta entry in the chat for
+            // scrollback continuity — the Plan surfaces are the
+            // primary read path, this is just a breadcrumb.
             appendMeta(store: store,
                        id: "\(itemId)-todos",
                        title: "Todo list updated",
-                       body: "\(count) item\(count == 1 ? "" : "s")",
+                       body: "\(parsed.count) item\(parsed.count == 1 ? "" : "s")",
                        at: timestamp)
         case "error":
             let body = (item["message"] as? String) ?? "Tool error"

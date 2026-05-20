@@ -1242,6 +1242,11 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
     public let planSteps: [PlanStep]
     public let sourceEntries: [SourceEntry]
     public let artifactEntries: [ArtifactEntry]
+    /// v0.7.8: Codex SDK `todo_list` events surface here so the iOS
+    /// Plan tab + Watch complication can render structured todos.
+    /// Empty for non-Codex sessions and for Codex sessions that
+    /// haven't received a todo_list event yet.
+    public let codexTodos: [CodexTodoItem]
     public let totalInputTokens: Int
     public let totalOutputTokens: Int
     public let cacheReadTokens: Int
@@ -1255,6 +1260,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         planSteps: [PlanStep],
         sourceEntries: [SourceEntry],
         artifactEntries: [ArtifactEntry],
+        codexTodos: [CodexTodoItem] = [],
         totalInputTokens: Int,
         totalOutputTokens: Int,
         cacheReadTokens: Int = 0,
@@ -1267,12 +1273,38 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         self.planSteps = planSteps
         self.sourceEntries = sourceEntries
         self.artifactEntries = artifactEntries
+        self.codexTodos = codexTodos
         self.totalInputTokens = totalInputTokens
         self.totalOutputTokens = totalOutputTokens
         self.cacheReadTokens = cacheReadTokens
         self.cacheCreationTokens = cacheCreationTokens
         self.lastEventAt = lastEventAt
         self.updateCounter = updateCounter
+    }
+
+    // v0.7.8: custom decoder so older paired Macs (pre-codexTodos)
+    // still produce a valid struct — missing field defaults to empty.
+    private enum CodingKeys: String, CodingKey {
+        case sessionId, items, planSteps, sourceEntries, artifactEntries
+        case codexTodos
+        case totalInputTokens, totalOutputTokens, cacheReadTokens, cacheCreationTokens
+        case lastEventAt, updateCounter
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionId = try c.decode(UUID.self, forKey: .sessionId)
+        self.items = try c.decode([ChatItem].self, forKey: .items)
+        self.planSteps = try c.decode([PlanStep].self, forKey: .planSteps)
+        self.sourceEntries = try c.decode([SourceEntry].self, forKey: .sourceEntries)
+        self.artifactEntries = try c.decode([ArtifactEntry].self, forKey: .artifactEntries)
+        self.codexTodos = try c.decodeIfPresent([CodexTodoItem].self, forKey: .codexTodos) ?? []
+        self.totalInputTokens = try c.decode(Int.self, forKey: .totalInputTokens)
+        self.totalOutputTokens = try c.decode(Int.self, forKey: .totalOutputTokens)
+        self.cacheReadTokens = try c.decodeIfPresent(Int.self, forKey: .cacheReadTokens) ?? 0
+        self.cacheCreationTokens = try c.decodeIfPresent(Int.self, forKey: .cacheCreationTokens) ?? 0
+        self.lastEventAt = try c.decodeIfPresent(Date.self, forKey: .lastEventAt)
+        self.updateCounter = try c.decode(UInt64.self, forKey: .updateCounter)
     }
 }
 

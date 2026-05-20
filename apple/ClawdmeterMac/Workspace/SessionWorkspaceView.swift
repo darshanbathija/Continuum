@@ -2163,7 +2163,16 @@ private struct ReviewPane: View {
         switch selectedTab {
         case .plan:
             if let chatStore {
-                PlanTrackerPane(session: session, chatStore: chatStore, onApprove: onApprove)
+                // v0.7.8: Codex SDK sessions get the dedicated
+                // CodexPlanPane that reads the structured todo_list
+                // events the ingestor stores on the snapshot. Claude
+                // + Antigravity + Codex-CLI keep the existing
+                // PlanTrackerPane (which mines steps from chat text).
+                if session.agent == .codex {
+                    CodexPlanPane(chatStore: chatStore)
+                } else {
+                    PlanTrackerPane(session: session, chatStore: chatStore, onApprove: onApprove)
+                }
             } else {
                 placeholder(text: "Waiting for agent JSONL…")
             }

@@ -71,6 +71,16 @@ public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
         // otherwise the watch's `if let json = context[...]` keeps the
         // previous list visible.
         context["sessionsSummaryJSON"] = encodedSessionsSummary() ?? "[]"
+        // v0.7.8: also forward the active Codex SDK session's current
+        // in-progress todo so the Watch CodexTaskComplication can render
+        // it. Picks the most recently active Codex session and reads its
+        // chat-store snapshot's codexTodos; falls back to the first
+        // pending if no in_progress exists.
+        if let todo = activeCodexTodoHeadline() {
+            context["codexCurrentTodo"] = todo
+        } else {
+            context["codexCurrentTodo"] = nil
+        }
         // Drop nil-typed values WCSession refuses to encode.
         context = context.compactMapValues { $0 is NSNull ? nil : $0 }
         do {
@@ -78,6 +88,27 @@ public final class WatchPlanBridgeIOS: NSObject, WCSessionDelegate {
         } catch {
             bridgeLogger.debug("updateApplicationContext failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Pulls the in-progress (or first pending) todo from the most
+    /// recently active Codex session's iOSChatStore. Returns the text
+    /// truncated to 18 chars to match the Watch complication's display
+    /// budget. Nil when no Codex SDK session has fired a todo_list yet.
+    @MainActor
+    private func activeCodexTodoHeadline() -> String? {
+        let codexSessions = client.sessions
+            .filter { $0.agent == .codex && $0.archivedAt == nil }
+            .sorted { $0.lastEventAt > $1.lastEventAt }
+        for session in codexSessions {
+            let store = iOSChatStoreCache.shared.store(for: session.id, client: client)
+            let todos = store.snapshot.codexTodos
+            let pick = todos.first(where: \.isInProgress) ?? todos.first(where: \.isPending)
+            if let todo = pick {
+                let text = todo.text
+                return text.count > 18 ? String(text.prefix(18)) : text
+            }
+        }
+        return nil
     }
 
     /// Sessions v2 Phase 6: build a compact `[WatchSessionSummary]` from

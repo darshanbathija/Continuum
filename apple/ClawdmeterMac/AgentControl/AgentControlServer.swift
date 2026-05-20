@@ -1760,6 +1760,10 @@ public final class AgentControlServer {
             planSteps: [],
             sourceEntries: [],
             artifactEntries: [],
+            // v0.7.8: forward Codex SDK todos when the warm store has them.
+            // Cold fallback keeps empty — codex todos only land via SDK
+            // events, which the store accumulates while live.
+            codexTodos: registryStore?.snapshot.codexTodos ?? [],
             totalInputTokens: 0,
             totalOutputTokens: 0,
             lastEventAt: snapshotLastEventAt,

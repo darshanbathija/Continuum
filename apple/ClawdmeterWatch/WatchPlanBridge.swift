@@ -94,6 +94,22 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
                 planBridgeLogger.warning("sessionsSummaryJSON decode failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+        // v0.6.0 Antigravity task headline.
+        if let headline = context["currentTaskHeadline"] as? String {
+            defaults?.set(headline, forKey: "clawdmeter.watch.currentTaskHeadline")
+        } else {
+            defaults?.removeObject(forKey: "clawdmeter.watch.currentTaskHeadline")
+        }
+        // v0.7.8: Codex SDK in-progress todo headline. Falls back to nil
+        // when no active Codex SDK session has emitted a todo_list. Watch
+        // CodexTaskComplication reads the same App Group key.
+        let priorCodex = defaults?.string(forKey: "clawdmeter.watch.codexCurrentTodo")
+        if let codexTodo = context["codexCurrentTodo"] as? String {
+            defaults?.set(codexTodo, forKey: "clawdmeter.watch.codexCurrentTodo")
+        } else {
+            defaults?.removeObject(forKey: "clawdmeter.watch.codexCurrentTodo")
+        }
+        let codexChanged = priorCodex != (context["codexCurrentTodo"] as? String)
         // P1-Watch-1: push a fresh timeline to the plan-waiting complication
         // whenever the count moves. The complication provider schedules its
         // next refresh 30 minutes out; without this reload the watch face
@@ -101,6 +117,15 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
         if planWaitingChanged {
             reloadPlanWaitingComplication()
         }
+        if codexChanged {
+            reloadCodexTaskComplication()
+        }
+    }
+
+    private func reloadCodexTaskComplication() {
+#if canImport(WidgetKit)
+        WidgetCenter.shared.reloadTimelines(ofKind: "Clawdmeter.codexTask")
+#endif
     }
 
     private func reloadPlanWaitingComplication() {

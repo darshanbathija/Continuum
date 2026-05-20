@@ -13,6 +13,13 @@ struct ClawdmeterWatchWidgetsBundle: WidgetBundle {
     var body: some Widget {
         ClaudeComplication()
         PlanWaitingComplication()
+        // v0.6.0: Antigravity task headline. The complication file
+        // shipped in v0.6.0 but the bundle registration was missed —
+        // so the widget never appeared in the watch face picker. Fixed
+        // alongside the v0.7.8 Codex task complication ship.
+        AntigravityTaskComplication()
+        // v0.7.8: Codex SDK in-progress todo on the wrist.
+        CodexTaskComplication()
     }
 }
 
