@@ -4,6 +4,21 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.5 build 51] - 2026-05-20
+
+### Fixed
+
+- **Mac composer: Gemini agent now shows Gemini models.** The
+  composer's `ModelEffortChip` filtered the catalog via a 2-way
+  ternary that defaulted everything-not-Claude to Codex, so picking
+  Gemini in the chip strip surfaced GPT-5.x entries instead of the
+  three bundled Gemini models (`gemini-3.1-pro-high`, `gemini-3.1-pro-low`,
+  `gemini-3-flash`). Same fallthrough also leaked into the standalone
+  `ModelPicker` section header (rendered "Codex" for Gemini). Both
+  sites now switch over `AgentKind` exhaustively — adding a future
+  provider will fail at compile time instead of silently aliasing
+  to Codex.
+
 ## [0.7.4 build 50] - 2026-05-20
 
 The deferred v0.7.3 codex-sdk feature work, now landed cleanly on top
