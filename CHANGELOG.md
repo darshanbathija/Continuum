@@ -4,6 +4,136 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.7.1 build 47] - 2026-05-20
+
+Codex SDK observation mode — real provisioning + observer/resume
+subcommands + iOS subtitle + bundled Node. v0.7.0 shipped the
+scaffolding (skeleton sidecar, manager scaffolds, wire v8 field);
+v0.7.1 fills in everything the v0.7.0 CHANGELOG marked "deferred to
+v0.7.1". Same auth contract: `~/.codex/auth.json` chatgpt OAuth, no
+per-token API billing.
+
+Shipped as 4 commits on `feat/codex-sdk-v071`, fast-forward merged
+to `main`. Mac BUILD SUCCEEDED in both with-bundle (`~120MB Node arm64
+embedded`) and skip-bundle (`CLAWDMETER_SKIP_BUNDLED_NODE=1` for dev
+iteration) paths. Sidecar Node tests still 4/4 passing.
+
+### Real npm install provisioning
+
+`CodexSDKManager.enableSDKMode(progress:)` now actually provisions:
+
+1. Validates a `node` binary is reachable. Preference: bundled →
+   Homebrew arm64 → Homebrew Intel → /usr/bin → `which node`.
+2. Creates `~/Library/Application Support/Clawdmeter/codex-sdk/`.
+   Writes a synthetic `package.json` declaring `@openai/codex-sdk@^0.131.0`.
+3. Copies `main.mjs` from `Bundle.main.url(forResource:"main",
+   withExtension:"mjs")` (production) or the repo path (dev).
+4. Runs `npm install --no-audit --no-fund --no-progress` in the
+   AppSupport dir. Cold cache ~25s, warm cache ~3s. Non-zero exit
+   surfaces the last 5 lines of stderr in `lastProvisioningError`
+   for Settings → Diagnostics.
+5. Probes the now-provisioned sidecar with `agent: "probe"`. Expects
+   `{type:"ready",version:"0.7.1-sdk"}` + `{type:"probe_ok",
+   sdkVersion:"0.7.1-sdk"}` within 30s.
+6. On success: persists `clawdmeter.codex.sdkProvisioned = true`,
+   records the SDK version, flips the toggle ON. Subsequent ON
+   cycles fast-path the install step.
+
+Verified end-to-end against `@openai/codex-sdk@0.131.0`:
+`npm install` + probe completed in ~2s on a warm cache.
+
+### Sidecar real-impl: observer + resume
+
+`main.mjs` rewritten as self-bootstrapping. On startup
+`await import("@openai/codex-sdk")` — when reachable, emits
+`0.7.1-sdk` ready and dispatches real subcommands; when not
+reachable, falls back to v0.7.0 skeleton error responses so the
+CodexSDKManager probe path still works.
+
+- **observer (long-running)**: accepts `{op:"start"|"resume"|"stop"|
+  "shutdown"}` over stdin. Each `start`/`resume` spawns
+  `thread.runStreamed(prompt)` and emits every SDK event back as
+  `{type:"stream_event",subscriptionId,threadId,event}` JSON-lines.
+  Events: `thread.started`, `turn.started`, `item.{started,updated,
+  completed}` (agent_message / reasoning / command_execution /
+  file_change / mcp_tool_call / web_search / todo_list / error),
+  `turn.completed.usage` (input_tokens, cached_input_tokens,
+  output_tokens, reasoning_output_tokens), `turn.failed`. Cancellable
+  per-subscription via AbortController.
+
+- **resume (one-shot)**: `codex.resumeThread(threadId).run(prompt)`,
+  emit `resume_result` with `{finalResponse, items, usage}`. Used by
+  the X1 cross-Apple compose-draft flow: iOS posts a threadId + text
+  via the WS op, Mac resumes the Codex thread + runs the turn to
+  completion without keeping a long-running stream open.
+
+ThreadOptions plumbing: `workingDirectory`, `skipGitRepoCheck`,
+`model`, `sandboxMode`, `modelReasoningEffort`, `approvalPolicy`,
+`additionalDirectories` all forwarded through from the JSON-lines op.
+Undefined fields stripped before passing to the SDK so we don't
+override the CLI's defaults.
+
+### iOS Codex subtitle
+
+iOS `CodexSection` footer now renders `"· SDK mode"` or
+`"· disk mode"` after the "Synced from Mac …" timestamp when the
+paired Mac advertises wire v8+. Field reads from
+`usage.codexSDKModeActive`; nil/false → "disk mode", true → "SDK
+mode" (monospaced caption, with accessibility label). Older v7 Macs
+hide the subtitle entirely (avoids rendering a label users can't
+toggle when their Mac doesn't support the feature).
+
+### Bundled Node binary
+
+`tools/download-bundled-node.sh` downloads Node 24.15.0 (Krypton LTS)
+from nodejs.org into `apple/ClawdmeterMac/Resources/Vendor/node/`:
+- Default: arm64-only (~120 MB)
+- `--universal`: lipo'd arm64+x64 (~245 MB) for Intel Mac DMG builds
+- npm + npx wrappers shipped alongside (~10 MB), guaranteed to use
+  the sibling bundled `node` (never PATH-resolved)
+
+Gitignored (never committed). `project.yml` adds:
+- `Vendor/` folder reference as a `Resources` build phase entry
+  (xcodegen copies the whole tree into `Contents/Resources/Vendor/
+  node/` of the .app)
+- `preBuildScripts` hook that auto-runs `download-bundled-node.sh`
+  before the Resources copy phase. Skip with
+  `CLAWDMETER_SKIP_BUNDLED_NODE=1` for dev iteration where falling
+  back to system Node is acceptable.
+
+`CodexSDKManager.locateNode()` preference order updated:
+  1. `Bundle.main.url(forResource:"node",subdirectory:"Vendor/node/bin")`
+     — bundled, version-pinned, our preferred path
+  2. `/opt/homebrew/bin/node`
+  3. `/usr/local/bin/node`
+  4. `/usr/bin/node`
+  5. `which node`
+
+### Tests
+
+- Swift suite: unchanged (no new public surface needing unit tests
+  beyond what's covered by CodexSDKManager's end-to-end probe).
+- Node suite: 4 tests still passing (skeleton/SDK mode-tolerant
+  shape assertions).
+- E2E provisioning verified manually: tempdir + npm install + node
+  main.mjs probe → ready + probe_ok in ~2s.
+- Mac build: clean in BOTH paths (with-bundle 120MB embed + skip-bundle
+  fallback).
+
+### Deferred to v0.7.2
+
+- Daemon WS subscriber that ingests observer subscription events and
+  pushes them to the existing chat-subscribe channel (right now the
+  observer's stream events sit in stdout of the sidecar process —
+  AgentControlServer needs a CodexSubscriptionRelay to bridge them
+  to clients).
+- X1 compose-draft → resume wire: iOS attaching `codexThreadId` to
+  the compose-draft envelope, daemon dispatching to
+  `CodexSDKManager.runResume()` when present.
+- Settings → Codex pane UI for the SDK mode toggle (currently the
+  toggle is functional via UserDefaults but no SwiftUI surface;
+  toggle ON via `defaults write` for now).
+
 ## [0.7.0 build 46] - 2026-05-20
 
 Codex SDK observation mode. v0.6.0 shipped the Antigravity SDK
