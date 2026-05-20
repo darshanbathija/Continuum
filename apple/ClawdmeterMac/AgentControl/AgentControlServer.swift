@@ -2299,17 +2299,30 @@ public final class AgentControlServer {
             ), on: connection)
             return
         } else {
-            // CLI chat path: spawn tmux window in the chat-cwd.
+            // CLI chat path: spawn tmux window in the chat-cwd. v0.8 QA
+            // surfaced a wedged-tmux scenario where tmux.start() returned
+            // but tmux.newWindow hung forever — the handler never returned,
+            // and the AgentSession + chat-cwd were left orphaned in the
+            // registry. Wrap the spawn in a TaskGroup with a 10s deadline:
+            // if it doesn't complete, rollback registry + chat-cwd and
+            // return 504 so the iOS sheet can surface a real error.
+            let tmuxRef = self.tmux
+            let spawnResult: (windowId: String, paneId: String)?
             do {
-                try await tmux.start()
-                let window = try await tmux.newWindow(cwd: chatCwd, child: argv)
-                registry.updateRuntime(
-                    id: session.id,
-                    worktreePath: chatCwd,
-                    tmuxWindowId: window.windowId,
-                    tmuxPaneId: window.paneId,
-                    mode: .local
-                )
+                spawnResult = try await withThrowingTaskGroup(of: (String, String)?.self) { group in
+                    group.addTask {
+                        try await tmuxRef.start()
+                        let window = try await tmuxRef.newWindow(cwd: chatCwd, child: argv)
+                        return (window.windowId, window.paneId)
+                    }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 10_000_000_000)
+                        return nil
+                    }
+                    let first = try await group.next()
+                    group.cancelAll()
+                    return first ?? nil
+                }
             } catch {
                 serverLogger.error("chat spawn failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 registry.delete(id: session.id)
@@ -2317,6 +2330,24 @@ public final class AgentControlServer {
                 sendResponse(.internalError, on: connection)
                 return
             }
+            guard let spawn = spawnResult else {
+                serverLogger.error("chat spawn timed out for \(session.id.uuidString, privacy: .public) — tmux unresponsive after 10s")
+                registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                sendResponse(HTTPResponse(
+                    status: 504, reason: "Gateway Timeout",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"tmux_unresponsive","hint":"Quit Clawdmeter and relaunch; if the issue persists, kill any stale tmux processes with: pkill -9 -f tmux"}"#.utf8)
+                ), on: connection)
+                return
+            }
+            registry.updateRuntime(
+                id: session.id,
+                worktreePath: chatCwd,
+                tmuxWindowId: spawn.windowId,
+                tmuxPaneId: spawn.paneId,
+                mode: .local
+            )
         }
         AgentEventStream.recordEvent(
             sessionId: session.id, kind: .sessionCreated,
