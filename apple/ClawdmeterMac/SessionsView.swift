@@ -323,7 +323,7 @@ public final class SessionsModel: ObservableObject {
             return existing
         }
         let url: URL? = forcedChatStoreURLs[session.id]
-            ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.repoKey)
+            ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.effectiveCwd)
         guard let url else { return nil }
         let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
         store.start()
@@ -632,9 +632,13 @@ public final class SessionsModel: ObservableObject {
         case .codex:  modelDefault = ModelCatalog.bundled.codex.first?.id
         case .gemini: modelDefault = ModelCatalog.bundled.gemini.first?.id
         }
+        // Outside-JSONL continuation is a code-session-only path; chat
+        // sessions never reach here (no JSONL outside-source). Skip if
+        // somehow the synthetic has no repoKey to keep types honest.
+        guard let syntheticRepoKey = synthetic.repoKey else { return nil }
         do {
             let session = try await spawnSession(
-                repoPath: synthetic.repoKey,
+                repoPath: syntheticRepoKey,
                 agent: synthetic.agent,
                 planMode: false,
                 goal: synthetic.goal,
@@ -714,12 +718,16 @@ public final class SessionsModel: ObservableObject {
               let session = registry.session(id: sessionId)
         else { return }
         guard newMode != session.mode, newMode != .cloud else { return }
+        // v0.8: mode-switch is a code-session concept (Local ↔ Worktree
+        // both require a git repo). Chat sessions don't expose the
+        // chip, so this is unreachable for them — guard for type safety.
+        guard session.kind == .code, let sessionRepoKey = session.repoKey else { return }
         // Tear down the existing agent.
         if let windowId = session.tmuxWindowId {
             try? await runtime.tmuxClient.killWindow(windowId)
         }
         // Pick the new cwd.
-        var newCwd = session.repoKey
+        var newCwd = sessionRepoKey
         var newWorktree: String? = nil
         switch newMode {
         case .worktree:
@@ -730,7 +738,7 @@ public final class SessionsModel: ObservableObject {
             let slug = WorktreeManager.slug(city: city)
             do {
                 newWorktree = try await WorktreeManager.shared.add(
-                    repoRoot: session.repoKey,
+                    repoRoot: sessionRepoKey,
                     slug: slug,
                     branchName: slug
                 )
@@ -748,7 +756,7 @@ public final class SessionsModel: ObservableObject {
         }
         // Re-spawn.
         let argv = AgentSpawner.argv(for: NewSessionRequest(
-            repoKey: session.repoKey,
+            repoKey: sessionRepoKey,
             agent: session.agent,
             model: session.model,
             planMode: session.status == .planning,
@@ -835,9 +843,12 @@ public final class SessionsModel: ObservableObject {
             return
         }
         do { try await runtime.tmuxClient.killWindow(windowId) } catch {}
-        if let worktreePath = session.worktreePath {
+        // v0.8 REV-DELETE: code sessions go through WorktreeManager; chat
+        // sessions get ChatCwdCleaner in Phase 4. Guard here so Phase 2
+        // doesn't crash on a chat session reaching this path.
+        if session.kind == .code, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
             _ = try? await WorktreeManager.shared.delete(
-                repoRoot: session.repoKey,
+                repoRoot: repoRoot,
                 worktreePath: worktreePath,
                 registryOwned: true,
                 attachedPanePaths: []
@@ -859,10 +870,13 @@ public final class SessionsModel: ObservableObject {
         guard let runtime = AppDelegate.runtime,
               let parent = registry.session(id: parentId)
         else { return nil }
+        // v0.8: sub-chats are a code-session-only feature (G17 nested
+        // threaded rows). Chat-tab sessions don't carry sub-chats.
+        guard parent.kind == .code, let parentRepoKey = parent.repoKey else { return nil }
         try? await runtime.tmuxClient.start()
-        let cwd = parent.worktreePath ?? parent.repoKey
+        let cwd = parent.effectiveCwd
         let argv = AgentSpawner.argv(for: NewSessionRequest(
-            repoKey: parent.repoKey,
+            repoKey: parentRepoKey,
             agent: parent.agent,
             model: parent.model,
             planMode: false,
@@ -873,7 +887,7 @@ public final class SessionsModel: ObservableObject {
             guard !argv.isEmpty else { return nil }
             let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
             let child = registry.create(
-                repoKey: parent.repoKey,
+                repoKey: parentRepoKey,
                 repoDisplayName: parent.repoDisplayName,
                 agent: parent.agent,
                 model: parent.model,
@@ -903,7 +917,7 @@ public final class SessionsModel: ObservableObject {
               let session = registry.session(id: sessionId),
               let windowId = session.tmuxWindowId
         else { return nil }
-        let cwd = session.worktreePath ?? session.repoKey
+        let cwd = session.effectiveCwd
         do {
             let paneId = try await runtime.tmuxClient.splitWindow(
                 windowId: windowId, cwd: cwd, horizontal: false
@@ -948,7 +962,7 @@ public final class SessionsModel: ObservableObject {
                 autopilot: false
             )
             guard !argv.isEmpty else { return }
-            let cwd = session.worktreePath ?? session.repoKey
+            let cwd = session.effectiveCwd
             let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
             registry.updateRuntime(
                 id: id,

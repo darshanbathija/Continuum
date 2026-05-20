@@ -106,7 +106,7 @@ struct SourcesPane: View {
     /// UI styling + click behavior. Files resolve relative paths against
     /// the session's repo cwd; URLs open via NSWorkspace.
     private func render(entry: ClawdmeterShared.SourceEntry) -> RenderedSourceEntry {
-        let repoCwd = session.worktreePath ?? session.repoKey
+        let repoCwd = session.effectiveCwd
         switch entry.kind {
         case .file:
             let absolute: String = entry.payload.hasPrefix("/")

@@ -115,7 +115,7 @@ public final class AgentControlServer {
         // path is correct for production; tests pass a tmpdir.
         let resolver = chatFileResolver ?? SessionFileResolver(
             resolveClaudeURL: { session in
-                let cwd = session.worktreePath ?? session.repoKey
+                let cwd = session.effectiveCwd
                 return SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
             }
         )
@@ -1344,18 +1344,24 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
+        // v0.8: autopilot is a code-session concept (requires a trusted
+        // repo). Chat sessions don't run shell or write files so the
+        // trust model doesn't apply — reject the toggle outright.
+        guard session.kind == .code, let repoKey = session.repoKey else {
+            sendResponse(.badRequest, on: connection); return
+        }
         // E7 wire-level guard: enabling autopilot requires the repo to be on
         // the trust list. A peer with the bearer token can't bypass the UI
         // confirm-sheet by hitting this endpoint directly (review §3 finding
         // 2026-05-18). Disabling autopilot is always allowed (kill switch).
-        if req.enabled, !AutopilotState.shared.isRepoTrusted(session.repoKey) {
+        if req.enabled, !AutopilotState.shared.isRepoTrusted(repoKey) {
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordAutopilotToggle(
                 sessionId: uuid, sourcePeer: peer,
-                enabled: false, repoKey: session.repoKey
+                enabled: false, repoKey: repoKey
             )
-            serverLogger.warning("autopilot enable rejected for untrusted repo \(session.repoKey, privacy: .public)")
-            let body = #"{"error":"repo not trusted for autopilot","repoKey":"\#(session.repoKey)"}"#
+            serverLogger.warning("autopilot enable rejected for untrusted repo \(repoKey, privacy: .public)")
+            let body = #"{"error":"repo not trusted for autopilot","repoKey":"\#(repoKey)"}"#
             sendResponse(.forbidden(body: Data(body.utf8)), on: connection)
             return
         }
@@ -1363,7 +1369,7 @@ public final class AgentControlServer {
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordAutopilotToggle(
             sessionId: uuid, sourcePeer: peer,
-            enabled: req.enabled, repoKey: session.repoKey
+            enabled: req.enabled, repoKey: repoKey
         )
         await respondWithSession(uuid: uuid, connection: connection)
     }
@@ -1403,7 +1409,7 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
-        let cwd = session.worktreePath ?? session.repoKey
+        let cwd = session.effectiveCwd
         guard let gitBin = ShellRunner.locateBinary("git") else {
             sendResponse(.internalError, on: connection); return
         }
@@ -1461,7 +1467,7 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection); return
         }
         let req = (try? JSONDecoder().decode(CreatePRRequest.self, from: request.body)) ?? CreatePRRequest()
-        let cwd = session.worktreePath ?? session.repoKey
+        let cwd = session.effectiveCwd
         guard let ghBin = ShellRunner.locateBinary("gh") else {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
@@ -1495,7 +1501,7 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
-        let cwd = session.worktreePath ?? session.repoKey
+        let cwd = session.effectiveCwd
         guard let gitBin = ShellRunner.locateBinary("git") else {
             sendResponse(.internalError, on: connection); return
         }
@@ -1548,7 +1554,7 @@ public final class AgentControlServer {
               !pathArg.isEmpty else {
             sendResponse(.badRequest, on: connection); return
         }
-        let repoCwd = session.worktreePath ?? session.repoKey
+        let repoCwd = session.effectiveCwd
         // Defense-in-depth: refuse to anchor on an empty or non-absolute
         // repoCwd. If the worktree/repo path is missing the prefix check
         // below degenerates (`hasPrefix("/")` matches every absolute
@@ -1677,7 +1683,7 @@ public final class AgentControlServer {
         do {
             let paneId = try await tmux.splitWindow(
                 windowId: windowId,
-                cwd: session.worktreePath ?? session.repoKey,
+                cwd: session.effectiveCwd,
                 horizontal: false
             )
             let pane = TerminalPaneRef(paneId: paneId, title: req.title ?? "", isPrimary: false)
@@ -2293,7 +2299,7 @@ public final class AgentControlServer {
         }
         do {
             try await tmux.killWindow(windowId)
-            let cwd = session.worktreePath ?? session.repoKey
+            let cwd = session.effectiveCwd
             let newWindow = try await tmux.newWindow(cwd: cwd, child: replacementArgv)
             registry.updateRuntime(
                 id: uuid,
@@ -2442,12 +2448,16 @@ public final class AgentControlServer {
                 serverLogger.warning("kill-window \(windowId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
         }
-        // Schedule worktree GC if applicable (24h grace per D12; for v1
-        // we synchronously attempt delete and surface skip-reasons).
-        if let worktreePath = session.worktreePath {
+        // REV-DELETE (v0.8): chat sessions have no git worktree; their cwd
+        // is a plain dir under chat-sessions/. ChatCwdCleaner lands in
+        // Phase 4 to PathValidator-guard the FileManager.removeItem path.
+        // For Phase 2 we just skip the WorktreeManager call for chat
+        // sessions (it would throw on `git status` against a non-repo
+        // dir anyway). Phase 4 wires the proper cleanup branch.
+        if session.kind == .code, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
             do {
                 let result = try await WorktreeManager.shared.delete(
-                    repoRoot: session.repoKey,
+                    repoRoot: repoRoot,
                     worktreePath: worktreePath,
                     registryOwned: true,
                     attachedPanePaths: []
@@ -2713,6 +2723,12 @@ extension AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
+        // REV-Antigravity-polling (v0.8): chat sessions never have an
+        // Antigravity brain — short-circuit before touching session.repoKey
+        // (which is nil for chat sessions, would crash the URL constructor).
+        guard session.kind == .code else {
+            sendResponse(.notFound, on: connection); return
+        }
         // Only respond for Gemini sessions. Claude/Codex sessions don't
         // have an Antigravity brain — return 404 with a clear shape so
         // iOS can fall back to "Plan tab not applicable for this agent".
@@ -2726,7 +2742,9 @@ extension AgentControlServer {
         let stateURL = antigravityDir.appendingPathComponent("antigravity_state.pbtxt", isDirectory: false)
 
         let index = BrainSummaryIndexer.read(at: indexURL)
-        let cwdURL = URL(fileURLWithPath: session.repoKey)
+        // session.repoKey is non-nil here because the kind-guard above
+        // short-circuits chat sessions; force-unwrap is safe.
+        let cwdURL = URL(fileURLWithPath: session.repoKey!)
         var candidateUUIDs = BrainSummaryIndexer.lookup(cwd: cwdURL, in: index)
         if candidateUUIDs.isEmpty {
             // Fallback: glob all brain dirs and let mtime drive the pick.

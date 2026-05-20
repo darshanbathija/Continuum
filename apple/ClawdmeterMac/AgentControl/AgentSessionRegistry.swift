@@ -366,7 +366,16 @@ public final class AgentSessionRegistry: ObservableObject {
     /// name). v1/v2/v3 files decode cleanly because the new keys
     /// default to nil in `AgentSession.init(from:)`. Downgrade path:
     /// older readers silently drop these fields.
-    private static let currentSchemaVersion = 4
+    /// v5 (v0.8 Chat tab): adds optional `kind` (defaults to `.code`),
+    /// `frontierGroupId`, `frontierChildIndex`, `codexChatBackend`,
+    /// `codexChatThreadId`; flips `repoKey` to optional (chat sessions
+    /// run in an empty chat-cwd, not a repo). v3/v4 files decode cleanly
+    /// because all new keys are optional + decoder-tolerant. v4 readers
+    /// reading v5 files see `kind` field ignored — chat sessions are
+    /// just code sessions with a nil repoKey to v4, which crashes on the
+    /// required-String decode. Mitigated by single-step v4→v5 bump (no
+    /// intermediate "kind on v4" wire shape).
+    private static let currentSchemaVersion = 5
 
     private func load() {
         guard FileManager.default.fileExists(atPath: storeURL.path) else { return }

@@ -594,6 +594,45 @@ public enum SessionMode: String, Codable, Hashable, Sendable, CaseIterable {
     case cloud
 }
 
+/// Top-level session category (v0.8 schema v5). Distinguishes coding
+/// sessions (the existing v0.7.x flow that owns a repo + worktree) from
+/// chat sessions (the new v0.8 Chat tab — empty cwd, plan-mode, no repo).
+/// Default `.code` on decode so v3/v4 sessions.json files round-trip
+/// unchanged.
+public enum SessionKind: String, Codable, Hashable, Sendable, CaseIterable {
+    case code
+    case chat
+
+    /// Lenient decoder. Unknown raws (forward-compat) fall back to `.code`
+    /// rather than throwing.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = SessionKind(rawValue: raw) ?? .code
+    }
+}
+
+/// Per-session backend choice for Codex chat (v0.8 schema v5 + RE1
+/// resolution). Customer-selectable; default is `.sdk` because the SDK
+/// surfaces typed events + multi-subscriber + iOS handoff. CLI is the
+/// uniform-with-Claude fallback for users who hit SDK provisioning
+/// trouble or just prefer the tmux path.
+///
+/// **Per-session pinning**: the backend chosen at spawn time is stored on
+/// the AgentSession and used for the lifetime of that chat. Flipping the
+/// global default in Settings does not migrate live sessions.
+public enum CodexChatBackend: String, Codable, Hashable, Sendable, CaseIterable {
+    case sdk
+    case cli
+
+    /// Lenient decoder. Unknown raws fall back to `.sdk` (the default).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = CodexChatBackend(rawValue: raw) ?? .sdk
+    }
+}
+
 // MARK: - Multi-terminal (G12)
 
 /// One tmux pane belonging to a session. A session can own N panes — the
@@ -672,9 +711,17 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// Server-assigned UUID. Used as `Identifiable.id` and as the URL
     /// segment in `/sessions/:id/*` endpoints.
     public let id: UUID
-    /// The repo (canonical) the session is rooted in.
-    public let repoKey: String
+    /// The repo (canonical) the session is rooted in. **Optional in
+    /// schema v5**: chat sessions (`kind == .chat`) leave this nil because
+    /// they run in an empty chat-cwd, not in a git repo. Code sessions
+    /// (`kind == .code`) always carry a non-nil repoKey. The spawn
+    /// dispatcher pattern `session.worktreePath ?? session.repoKey` (~9
+    /// call sites in AgentControlServer.swift) resolves to the chat-cwd
+    /// for chat sessions because `worktreePath` is populated there.
+    public let repoKey: String?
     /// Display label for the repo (denormalized for cheap list rendering).
+    /// For chat sessions, set to a synthetic label like "Chat — {Provider}"
+    /// at creation; `displayLabel` still prefers `customName` when set.
     public let repoDisplayName: String
     /// Which agent CLI is running.
     public let agent: AgentKind
@@ -747,9 +794,39 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// at the daemon's rename handler.
     public let customName: String?
 
+    // MARK: - Sessions v2 schema v5 additions (v0.8 Chat tab)
+    //
+    // All optional + decoder-tolerant so v3/v4 sessions.json files
+    // decode cleanly. v0.8 introduces the Chat tab; chat sessions
+    // (`kind == .chat`) use these fields, code sessions leave them nil.
+
+    /// Top-level session category. Defaults to `.code` on v3/v4 decode for
+    /// back-compat. Chat sessions (`.chat`) ride the same AgentSession
+    /// shape but with `repoKey: nil` and `worktreePath` set to the
+    /// chat-cwd absolute path.
+    public let kind: SessionKind
+    /// When this chat is one of three Frontier siblings, the shared group
+    /// id. Nil for solo chats and all code sessions. Frontier UI ships in
+    /// v0.9; daemon endpoints + WS channel ship in v0.8 for forward-compat.
+    public let frontierGroupId: UUID?
+    /// 0/1/2 child index within a Frontier group. Pinned at spawn.
+    public let frontierChildIndex: Int?
+    /// For `agent == .codex && kind == .chat`, which backend spawned this
+    /// session. Pinned at spawn-time per RE1; `nil` for non-Codex / non-chat
+    /// sessions. v0.9 forward-compat: a future flip of the global default
+    /// (PairingSettings.defaultCodexChatBackend) does not migrate live
+    /// sessions; this field captures the irreversible spawn-time choice.
+    public let codexChatBackend: CodexChatBackend?
+    /// For Codex-SDK chat sessions, the server-side threadId returned by
+    /// the SDK on first turn. Persisted across DG3 idle-evictions so the
+    /// daemon can call `CodexSubscriptionRelay.start(threadId:)` on
+    /// reopening and reconstruct the same conversation (NEW-T13 verified).
+    /// Nil for CLI chat and code sessions.
+    public let codexChatThreadId: String?
+
     public init(
         id: UUID,
-        repoKey: String,
+        repoKey: String?,
         repoDisplayName: String,
         agent: AgentKind,
         model: String?,
@@ -770,7 +847,12 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         effort: ReasoningEffort? = nil,
         abPairSessionId: UUID? = nil,
         abPairDecidedAt: Date? = nil,
-        customName: String? = nil
+        customName: String? = nil,
+        kind: SessionKind = .code,
+        frontierGroupId: UUID? = nil,
+        frontierChildIndex: Int? = nil,
+        codexChatBackend: CodexChatBackend? = nil,
+        codexChatThreadId: String? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -795,12 +877,19 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.abPairSessionId = abPairSessionId
         self.abPairDecidedAt = abPairDecidedAt
         self.customName = customName
+        self.kind = kind
+        self.frontierGroupId = frontierGroupId
+        self.frontierChildIndex = frontierChildIndex
+        self.codexChatBackend = codexChatBackend
+        self.codexChatThreadId = codexChatThreadId
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
-        self.repoKey = try c.decode(String.self, forKey: .repoKey)
+        // v5: repoKey is optional (chat sessions have nil). v3/v4 readers
+        // wrote a non-nil String here; decodeIfPresent handles both.
+        self.repoKey = try c.decodeIfPresent(String.self, forKey: .repoKey)
         self.repoDisplayName = try c.decode(String.self, forKey: .repoDisplayName)
         self.agent = try c.decode(AgentKind.self, forKey: .agent)
         self.model = try c.decodeIfPresent(String.self, forKey: .model)
@@ -831,6 +920,14 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         // so v3 sessions.json files decode cleanly (the field just stays
         // nil).
         self.customName = (try? c.decodeIfPresent(String.self, forKey: .customName)) ?? nil
+        // v0.8 schema v5 additions: kind, frontierGroupId, frontierChildIndex,
+        // codexChatBackend, codexChatThreadId. All optional + decoder-tolerant
+        // so v3/v4 sessions.json files decode unchanged (defaults below).
+        self.kind = (try? c.decodeIfPresent(SessionKind.self, forKey: .kind)) ?? .code
+        self.frontierGroupId = (try? c.decodeIfPresent(UUID.self, forKey: .frontierGroupId)) ?? nil
+        self.frontierChildIndex = (try? c.decodeIfPresent(Int.self, forKey: .frontierChildIndex)) ?? nil
+        self.codexChatBackend = (try? c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)) ?? nil
+        self.codexChatThreadId = (try? c.decodeIfPresent(String.self, forKey: .codexChatThreadId)) ?? nil
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -844,6 +941,19 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         return repoDisplayName
     }
 
+    /// The session's effective working directory — what every filesystem,
+    /// git, tmux, and JSONL operation needs. For code sessions: the
+    /// worktree if `useWorktree` was on at create, else the repo root.
+    /// For chat sessions: the chat-cwd in `worktreePath` (always set
+    /// at spawn). The daemon enforces the invariant that at least one
+    /// of (worktreePath, repoKey) is non-nil at persistence time;
+    /// preconditionFailure here catches any drift in that invariant.
+    public var effectiveCwd: String {
+        if let wt = worktreePath, !wt.isEmpty { return wt }
+        if let rk = repoKey, !rk.isEmpty { return rk }
+        preconditionFailure("AgentSession \(id) has neither worktreePath nor repoKey — daemon spawned an invalid session (kind=\(kind))")
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, repoKey, repoDisplayName, agent, model, goal,
              worktreePath, tmuxWindowId, tmuxPaneId,
@@ -851,7 +961,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              mode, archivedAt,
              terminalPanes, scheduledFollowUps, parentSessionId,
              effort, abPairSessionId, abPairDecidedAt,
-             customName
+             customName,
+             kind, frontierGroupId, frontierChildIndex,
+             codexChatBackend, codexChatThreadId
     }
 }
 

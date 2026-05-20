@@ -60,7 +60,7 @@ struct ArtifactsPane: View {
         guard counter != lastVerifiedCounter else { return }
         lastVerifiedCounter = counter
         let entries = chatStore.snapshot.artifactEntries
-        let repoCwd = session.worktreePath ?? session.repoKey
+        let repoCwd = session.effectiveCwd
         Task.detached(priority: .userInitiated) {
             var out: [Artifact] = []
             var seen: Set<String> = []

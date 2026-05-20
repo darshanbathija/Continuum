@@ -174,7 +174,7 @@ public final class DaemonChatStoreRegistry {
     /// `approve-plan` doesn't break continuity.
     @MainActor
     public static func defaultResolveURL(sessionId: UUID, session: AgentSession) -> URL? {
-        let cwd = session.worktreePath ?? session.repoKey
+        let cwd = session.effectiveCwd
         if session.agent == .claude {
             return SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
         } else {
