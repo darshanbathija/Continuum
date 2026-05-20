@@ -108,28 +108,63 @@ public actor ShellRunner {
             errDone.signal()
         }
 
-        // Wait with timeout. Process.waitUntilExit doesn't take a timeout,
-        // so we poll. Cooperative cancellation across Tasks is handled by
-        // calling `terminate()` on the process if the surrounding Task is
-        // cancelled.
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning {
-            if Task.isCancelled {
-                process.terminate()
-                shellLogger.warning("\(executable, privacy: .public): task cancelled, sent SIGTERM")
-                break
+        // P2-Shared-2: wait via terminationHandler + a racing timeout Task
+        // instead of a 50ms poll. The previous form burned a wakeup every
+        // 50ms for the lifetime of every shell-out (a 30s tmux command
+        // cost 600 cooperative-pool wakes) and added up to 50ms of
+        // post-exit latency. terminationHandler fires the instant the
+        // child reaps, so exit latency drops to one continuation hop.
+        let exitedNormally: Bool = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            // `terminationHandler` runs on a background queue exactly once
+            // when the process is reaped. Resume the continuation with
+            // `true` to signal a clean wait (the timeout path resumes with
+            // `false` below before terminate() is called).
+            let resumed = ResumeOnce()
+            process.terminationHandler = { _ in
+                if resumed.fire() { cont.resume(returning: true) }
             }
-            if Date() > deadline {
+            // Timeout / cancellation race. We can't structurally cancel a
+            // `withCheckedContinuation`, so spin a child Task that resumes
+            // the continuation with `false` if it fires first.
+            Task {
+                let deadline = ContinuousClock.now + .seconds(timeout)
+                while ContinuousClock.now < deadline {
+                    if !process.isRunning {
+                        // terminationHandler will have resumed already, or
+                        // will momentarily — bail without racing it.
+                        return
+                    }
+                    if Task.isCancelled {
+                        if resumed.fire() { cont.resume(returning: false) }
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                if process.isRunning, resumed.fire() {
+                    cont.resume(returning: false)
+                }
+            }
+        }
+        if !exitedNormally {
+            // Task cancelled OR deadline hit. Tear the child down. SIGTERM
+            // first, give it 200ms, then SIGKILL.
+            if process.isRunning {
                 process.terminate()
-                shellLogger.warning("\(executable, privacy: .public): timed out after \(timeout)s, sent SIGTERM")
-                // Give it a beat to die from SIGTERM; otherwise SIGKILL.
+                shellLogger.warning("\(executable, privacy: .public): terminating (cancelled or timed out after \(timeout)s)")
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 if process.isRunning {
                     kill(process.processIdentifier, SIGKILL)
                 }
-                throw ShellError.timedOut(after: timeout)
             }
-            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms poll
+            if Task.isCancelled {
+                // Best-effort drain so caller observation is consistent.
+                outDone.wait()
+                errDone.wait()
+                throw CancellationError()
+            }
+            outDone.wait()
+            errDone.wait()
+            throw ShellError.timedOut(after: timeout)
         }
 
         outDone.wait()
@@ -238,4 +273,19 @@ public actor ShellRunner {
 /// is the right shape here.
 private final class DataBox: @unchecked Sendable {
     var data = Data()
+}
+
+/// Single-shot guard so the terminationHandler and the timeout/cancellation
+/// race can both attempt to resume the continuation without double-resume
+/// traps. `fire()` returns true exactly once for the first caller.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    func fire() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if fired { return false }
+        fired = true
+        return true
+    }
 }
