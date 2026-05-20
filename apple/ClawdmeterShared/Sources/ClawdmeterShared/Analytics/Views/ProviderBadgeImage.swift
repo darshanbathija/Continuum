@@ -1,4 +1,4 @@
-#if !os(watchOS)
+#if !os(watchOS) && canImport(SwiftUI)
 import SwiftUI
 
 #if canImport(AppKit)

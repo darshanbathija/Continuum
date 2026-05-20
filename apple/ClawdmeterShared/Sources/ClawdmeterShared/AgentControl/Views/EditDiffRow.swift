@@ -1,3 +1,4 @@
+#if canImport(SwiftUI)
 import SwiftUI
 
 /// v0.5.5 chat row for an `Edit` / `MultiEdit` / `Write` tool call.
@@ -132,3 +133,4 @@ public struct EditDiffRow: View {
         Color(red: 0xE6 / 255.0, green: 0x4B / 255.0, blue: 0x4B / 255.0)
     }
 }
+#endif
