@@ -130,6 +130,17 @@ public final class iOSChatStore: ObservableObject {
 
     private func runSubscriptionLoop() async {
         while !Task.isCancelled {
+            // P2-iOS-4: bail out completely when the client has been
+            // deallocated (user unpaired, re-paired, or scene torn down).
+            // The previous loop kept spinning forever in HTTP fallback
+            // even after the client was nil because `weak` guards only
+            // existed inside `openAndStreamWS`/`refresh`, not at the
+            // top of the loop.
+            guard client != nil else {
+                chatStoreLogger.info("chat-subscribe: client deallocated, exiting loop")
+                stop()
+                return
+            }
             // Wire-version gate. If the Mac is too old for chat-subscribe,
             // stay on the HTTP fallback indefinitely. The fallback ladder
             // periodically rechecks (a Mac upgrade lands → next cycle
@@ -221,12 +232,25 @@ public final class iOSChatStore: ObservableObject {
     /// Run a bounded sequence of HTTP `refresh()` polls before attempting
     /// to re-open the WS subscription. Bounded because we want to recover
     /// to the cheap WS path as soon as the daemon is healthy again.
+    ///
+    /// P2-iOS-5: the 3-second `Task.sleep` was interruptible by Task
+    /// cancellation (which throws CancellationError) but the `try?`
+    /// swallowed it, so foregrounding the app left HTTP fallback stuck
+    /// for the rest of the sleep. Drop the `try?` and let cancellation
+    /// short-circuit the sleep so the caller can re-enter the WS path.
     private func runHTTPFallbackCycles(reason: String) async {
         chatStoreLogger.info("chat-subscribe: HTTP fallback (reason=\(reason, privacy: .public))")
         for _ in 0..<Self.httpFallbackCycles {
             if Task.isCancelled { return }
             await refresh()
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+            } catch {
+                // CancellationError — caller cancelled (e.g., scenePhase
+                // → active or wsTask reset). Return immediately so the
+                // outer loop can try WS again.
+                return
+            }
         }
     }
 
