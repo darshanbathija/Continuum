@@ -29,6 +29,7 @@ public final class AgentEventStream: WSChannel {
     private let sinceSeq: UInt64
 
     private var observerCancellable: AnyCancellable?
+    private var recordedCancellable: AnyCancellable?
     private var lastSentSeq: UInt64 = 0
 
     /// In-memory ring of recent events. Retention: last 1024 events or
@@ -38,6 +39,14 @@ public final class AgentEventStream: WSChannel {
     private static var nextGlobalSeq: UInt64 = 1
     private static let maxRetention = 1024
     private static let retentionWindow: TimeInterval = 3_600
+
+    /// P2-Mac-1: `recordEvent` was only delivered to subscribers when a
+    /// later `registry.$sessions` mutation triggered `emitDiff`. Plan-mode
+    /// + done-detector watchers emit events without mutating the registry,
+    /// so those events sat undelivered until something unrelated bumped
+    /// the registry. This subject lets every active stream wake up the
+    /// moment a new event lands in the log.
+    private static let eventRecorded = PassthroughSubject<Void, Never>()
 
     public init(connection: NWConnection, registry: AgentSessionRegistry, sinceSeq: UInt64) {
         self.connection = connection
@@ -69,13 +78,33 @@ public final class AgentEventStream: WSChannel {
                         await self?.emitDiff(currentSessions: sessions)
                     }
                 }
+            // P2-Mac-1: also wake up the moment `recordEvent` appends to
+            // the log so JSONL-driven events (planReady, doneDetected)
+            // don't wait for an unrelated registry mutation to flush.
+            recordedCancellable = Self.eventRecorded
+                .sink { [weak self] _ in
+                    Task { @MainActor in
+                        await self?.flushPending()
+                    }
+                }
         }
     }
 
     public func stop() {
         observerCancellable?.cancel()
         observerCancellable = nil
+        recordedCancellable?.cancel()
+        recordedCancellable = nil
         connection.cancel()
+    }
+
+    /// Flush any events with seq > `lastSentSeq` to this connection.
+    /// Called by the eventRecorded subject after `recordEvent` appends.
+    private func flushPending() async {
+        let toSend = Self.globalEventLog.filter { $0.eventSeq > lastSentSeq }
+        for event in toSend {
+            await sendEvent(event)
+        }
     }
 
     // MARK: - Snapshot + emit
@@ -162,6 +191,9 @@ public final class AgentEventStream: WSChannel {
             globalEventLog.removeFirst(globalEventLog.count - maxRetention)
         }
         eventLogger.debug("Recorded event seq=\(seq) kind=\(kind.rawValue) session=\(sessionId.uuidString, privacy: .public)")
+        // P2-Mac-1: wake every active AgentEventStream so JSONL-driven
+        // events deliver without waiting for a registry mutation.
+        eventRecorded.send(())
     }
 }
 
