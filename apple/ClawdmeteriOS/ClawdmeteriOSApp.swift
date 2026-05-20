@@ -27,10 +27,18 @@ struct ClawdmeteriOSApp: App {
             // instance in ContentView shares UserDefaults state.
             let client = AgentControlClient()
             let manager = iOSNotificationManager(client: client)
-            Task { @MainActor in
+            let refreshTask = Task { @MainActor in
                 let ok = await manager.performRefresh()
                 manager.scheduleBackgroundRefresh()
                 task.setTaskCompleted(success: ok)
+            }
+            // P2-iOS-6: iOS will hard-kill the app if the BG task runs
+            // past its budget without responding to the expiration signal.
+            // Cancel the in-flight refresh and report failure so the task
+            // completes cleanly within the deadline.
+            task.expirationHandler = {
+                refreshTask.cancel()
+                task.setTaskCompleted(success: false)
             }
         }
     }
