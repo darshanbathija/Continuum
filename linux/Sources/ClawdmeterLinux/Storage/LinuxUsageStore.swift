@@ -42,22 +42,18 @@ public actor LinuxUsageStore {
         loaded = true
     }
 
-    /// Atomic write: temp file + rename(2). Guards against torn JSON on
-    /// daemon crash mid-write.
+    /// Atomic write: `Data.write(options: .atomic)` writes to a sibling
+    /// temp and renames into place, on both Darwin and Linux.
+    ///
+    /// P0-2: avoid `FileManager.replaceItem` on Linux — Swift Corelibs
+    /// Foundation throws if the destination doesn't exist yet (first-run
+    /// state), which would crash the daemon before any usage data persists.
     private func persist() throws {
         let url = LinuxConfigPaths.usageStoreFile
-        let temp = url.appendingPathExtension("tmp-\(UUID().uuidString.prefix(8))")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(providers)
-        try data.write(to: temp, options: .atomic)
-        // rename(2) is atomic on POSIX filesystems for files on the same FS.
-        try FileManager.default.replaceItem(
-            at: url, withItemAt: temp,
-            backupItemName: nil,
-            options: [],
-            resultingItemURL: nil
-        )
+        try data.write(to: url, options: .atomic)
     }
 
     // MARK: - Public API (mirrors UsageStore's shape)
