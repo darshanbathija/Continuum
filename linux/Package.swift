@@ -29,13 +29,7 @@ let package = Package(
         .executableTarget(
             name: "ClawdmeterDaemon",
             dependencies: [
-                .product(name: "ClawdmeterShared", package: "ClawdmeterShared"),
-                // Codex fix to P1-Linux-4: the daemon now constructs
-                // HummingbirdTransport + LinuxPairingTokenStore from
-                // ClawdmeterLinux, so this target must depend on it
-                // (previously declared as just ClawdmeterShared, which
-                // broke the Ubuntu `swift build`).
-                "ClawdmeterLinux"
+                .product(name: "ClawdmeterShared", package: "ClawdmeterShared")
             ],
             path: "Sources/ClawdmeterDaemon"
         ),

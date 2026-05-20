@@ -133,7 +133,11 @@ public actor ShellRunner {
                 // Timeout race only — caller cancellation is delivered
                 // through the outer onCancel below.
                 Task {
-                    let deadline = ContinuousClock.now + .seconds(timeout)
+                    // Codex fix: `Duration.seconds(_:)` only accepts
+                    // BinaryInteger — passing a TimeInterval (Double)
+                    // doesn't compile. Convert through milliseconds so
+                    // sub-second `timeout` values still work.
+                    let deadline = ContinuousClock.now + .milliseconds(Int(timeout * 1000))
                     while ContinuousClock.now < deadline {
                         if !process.isRunning { return }
                         try? await Task.sleep(for: .milliseconds(200))
