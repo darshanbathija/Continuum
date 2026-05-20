@@ -285,11 +285,17 @@ public final class iOSChatStore: ObservableObject {
         let elapsed = Date().timeIntervalSince(lastFrameAt)
         guard elapsed > Self.foregroundResyncThreshold else { return }
         chatStoreLogger.info("chat-subscribe: foreground resync (\(Int(elapsed))s stale)")
-        // Cancel the current WS and let the subscription loop reconnect.
-        // The HTTP fallback path also benefits — it picks up faster after
-        // background-resume because the cancellation interrupts its
-        // current 3-second sleep.
+        // Codex fix to P2-iOS-5: cancelling only `wsTask` resyncs the
+        // WebSocket path but does nothing while the loop is in HTTP
+        // fallback (`wsTask` is nil there). Restart by cancelling the
+        // subscription Task itself — its loop body picks `Task.isCancelled`
+        // up immediately, the sleep in `runHTTPFallbackCycles` throws
+        // CancellationError, and `start()` is re-armed against the
+        // resync. wsTask is also closed so any orphan WS frame is dropped.
         wsTask?.cancel(with: .normalClosure, reason: nil)
+        subscribeTask?.cancel()
+        subscribeTask = nil
+        start()
     }
 }
 
