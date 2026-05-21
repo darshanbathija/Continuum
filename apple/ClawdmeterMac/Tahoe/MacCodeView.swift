@@ -73,19 +73,19 @@ public struct MacCodeView: View {
                 expanded = Set(data.repos.prefix(2).map { $0.key })
             }
         }
-        .onChange(of: data.repos.map { $0.key }) { _, keys in
-            // Keep the open-id valid as repos refresh; if the previously
-            // open session disappeared, pick the first available.
-            let allIds = data.repos.flatMap { $0.sessions.map { $0.id } }
-            if let oid = openId, !allIds.contains(oid) {
-                openId = data.repos.first?.sessions.first?.id
+        .onChange(of: data.repos.flatMap { $0.sessions.map { $0.id } }) { _, ids in
+            // Watch the FULL session id set, not just repo keys — sessions
+            // can be archived while their repo persists. Keep the open-id
+            // valid: if the previously open session vanished, pick the
+            // first available one in the first repo with sessions.
+            if let oid = openId, !ids.contains(oid) {
+                openId = data.repos.first(where: { !$0.sessions.isEmpty })?.sessions.first?.id
             }
-            // Auto-expand newly-appearing repos with live sessions so users
-            // see new work without manual clicking.
+            // Auto-expand any repo with live sessions so users see new work
+            // without manual clicking.
             for repo in data.repos where repo.liveSessionCount > 0 {
                 expanded.insert(repo.key)
             }
-            _ = keys // silence unused
         }
     }
 }
@@ -517,27 +517,9 @@ private struct PlanHalo: View {
     }
 
     private func parsePlanText(for session: TahoeCodeSession) -> [String]? {
-        // The real AgentSession.planText carries free-form markdown from the
-        // agent's ExitPlanMode tool call. Split on markdown-list bullets so
-        // each bullet becomes a numbered step in the halo card. Falls back
-        // to line-split if no bullets are present.
         guard let raw = session.runtimePlanText, !raw.isEmpty else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let bulletLines = trimmed
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .compactMap { line -> String? in
-                var s = String(line).trimmingCharacters(in: .whitespaces)
-                for prefix in ["- ", "* ", "• ", "1. ", "2. ", "3. ", "4. ", "5. ", "6. ", "7. ", "8. ", "9. "] {
-                    if s.hasPrefix(prefix) {
-                        s = String(s.dropFirst(prefix.count))
-                        break
-                    }
-                }
-                return s.isEmpty ? nil : s
-            }
-        guard !bulletLines.isEmpty else { return nil }
-        // Keep up to 8 steps so the halo card doesn't overflow.
-        return Array(bulletLines.prefix(8))
+        let lines = TahoePlanParser.steps(from: raw, cap: 8)
+        return lines.isEmpty ? nil : lines
     }
 
     var body: some View {
@@ -837,16 +819,8 @@ private struct ReviewPlan: View {
 
     private var steps: [String] {
         if let raw = session?.runtimePlanText, !raw.isEmpty {
-            let parsed = raw
-                .split(separator: "\n", omittingEmptySubsequences: true)
-                .compactMap { line -> String? in
-                    var s = String(line).trimmingCharacters(in: .whitespaces)
-                    for prefix in ["- ", "* ", "• ", "1. ", "2. ", "3. ", "4. ", "5. ", "6. ", "7. ", "8. ", "9. "] {
-                        if s.hasPrefix(prefix) { s = String(s.dropFirst(prefix.count)); break }
-                    }
-                    return s.isEmpty ? nil : s
-                }
-            if !parsed.isEmpty { return Array(parsed.prefix(12)) }
+            let parsed = TahoePlanParser.steps(from: raw, cap: 12)
+            if !parsed.isEmpty { return parsed }
         }
         return TahoeDemo.plan
     }

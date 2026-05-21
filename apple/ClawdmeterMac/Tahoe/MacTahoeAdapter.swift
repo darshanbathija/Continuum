@@ -55,8 +55,11 @@ extension AppRuntime {
         let nowDate = Date()
 
         let mappedRepos: [TahoeCodeRepo] = repos.map { repo in
+            // Explicit nil check — chat sessions (repoKey == nil) live in
+            // their own bucket; never let them collide with a real repo
+            // whose key is the empty string.
             let sessions = liveSessions
-                .filter { ($0.repoKey ?? "") == repo.key }
+                .filter { $0.repoKey == repo.key }
                 .sorted { $0.lastEventAt > $1.lastEventAt }
                 .map { tahoeSession($0, now: nowDate) }
             let recents: [TahoeCodeRecent] = repo.recentSessions.prefix(4).map { r in

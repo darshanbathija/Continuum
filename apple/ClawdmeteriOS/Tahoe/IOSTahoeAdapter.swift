@@ -15,10 +15,13 @@ extension AgentControlClient {
         let now = Date()
 
         // Group sessions by repo key. Chat sessions (repoKey == nil) bucket
-        // under a synthetic key so they still render.
-        let grouped: [String: [AgentSession]] = Dictionary(grouping: live, by: { $0.repoKey ?? "__chat__" })
+        // under a namespaced synthetic key — `clawd:chat` rather than a
+        // bare token, so it can't collide with any plausible file system
+        // path that real repos could legitimately produce.
+        let chatBucketKey = "clawd:chat-sessions"
+        let grouped: [String: [AgentSession]] = Dictionary(grouping: live, by: { $0.repoKey ?? chatBucketKey })
         let displayName: (String, [AgentSession]) -> String = { key, sessions in
-            if key == "__chat__" { return "Chat sessions" }
+            if key == chatBucketKey { return "Chat sessions" }
             return sessions.first?.repoDisplayName ?? URL(fileURLWithPath: key).lastPathComponent
         }
 
