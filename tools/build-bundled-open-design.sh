@@ -56,12 +56,19 @@ fi
 command -v pnpm >/dev/null 2>&1 || { echo "✗ pnpm not installed (npm i -g pnpm)" >&2; exit 1; }
 
 # Fast path: if pinned version + plugin sources haven't changed, skip rebuild.
+# Stamp uses tar-of-listing | shasum so paths with spaces don't break xargs.
 STAMP="$VENDOR_DIR/.clawdmeter-stamp"
-EXPECTED_STAMP="od=$PINNED_VERSION plugin=$(find "$PLUGIN_SRC" -type f 2>/dev/null | sort | xargs shasum 2>/dev/null | shasum | cut -d' ' -f1) bridge=$(find "$BRIDGE_SRC" -type f 2>/dev/null | sort | xargs shasum 2>/dev/null | shasum | cut -d' ' -f1)"
+hash_dir() {
+  local dir="$1"
+  if [[ ! -d "$dir" ]]; then echo "0"; return; fi
+  ( cd "$dir" && find . -type f -print0 | sort -z | tar --null --no-recursion -cf - --files-from=- 2>/dev/null | shasum | cut -d' ' -f1 ) || echo "0"
+}
+EXPECTED_STAMP="od=$PINNED_VERSION plugin=$(hash_dir "$PLUGIN_SRC") bridge=$(hash_dir "$BRIDGE_SRC")"
 if [[ -f "$STAMP" ]] && [[ "$(cat "$STAMP")" == "$EXPECTED_STAMP" ]]; then
   echo "✓ Bundle already up-to-date (stamp matches). Delete $STAMP to force rebuild."
   exit 0
 fi
+echo "▸ Stamp: $EXPECTED_STAMP"
 
 # ────────────────────────────────────────────────────────────────────────
 # 1. Build Open Design (pnpm install + per-package build)
@@ -111,7 +118,10 @@ TMP_DEPLOY="$(mktemp -d -t clawdmeter-od-deploy-XXXXXX)"
 trap 'rm -rf "$TMP_DEPLOY"' EXIT
 (
   cd "$OPEN_DESIGN_SRC"
-  pnpm -F @open-design/daemon deploy --prod --no-optional "$TMP_DEPLOY/daemon" 2>&1 | tail -5
+  # --legacy: pnpm v10+ requires either inject-workspace-packages=true or
+  # --legacy for `deploy`. Open Design's workspace doesn't set the former
+  # so we use the latter to ship a self-contained node_modules tree.
+  pnpm --filter @open-design/daemon deploy --prod --legacy "$TMP_DEPLOY/daemon" 2>&1 | tail -10
 )
 if [[ -d "$TMP_DEPLOY/daemon/node_modules" ]]; then
   rsync -a "$TMP_DEPLOY/daemon/node_modules/" "$VENDOR_DIR/apps/daemon/node_modules/"

@@ -95,9 +95,13 @@ public final class OpenDesignDaemonManager: ObservableObject {
         Bundle.main.url(forResource: "node", withExtension: nil, subdirectory: "Vendor/node/bin")
     }
 
-    /// Bundled Open Design daemon CLI entrypoint.
+    /// Bundled Open Design daemon entry. We use the **sidecar** entry
+    /// (`apps/daemon/dist/sidecar/index.js`) rather than the standalone
+    /// `cli.js` so the daemon opens its IPC socket — required for the
+    /// bridge sidecar's REGISTER_DESKTOP_AUTH handshake.
+    /// Sidecar mode is a superset of CLI mode (HTTP + IPC).
     private func locateDaemonCLI() -> URL? {
-        Bundle.main.url(forResource: "cli", withExtension: "js", subdirectory: "Vendor/open-design/apps/daemon/dist")
+        Bundle.main.url(forResource: "index", withExtension: "js", subdirectory: "Vendor/open-design/apps/daemon/dist/sidecar")
     }
 
     /// Bundled bridge sidecar entrypoint.
@@ -191,9 +195,20 @@ public final class OpenDesignDaemonManager: ObservableObject {
         await update(.loading, "Starting Open Design daemon…")
         let daemon = Process()
         daemon.executableURL = nodeURL
-        daemon.arguments = [daemonCLI.path, "--no-open"]
+        // Sidecar-mode stamp flags (required by apps/daemon/dist/sidecar/index.js's
+        // readProcessStamp call). The combination opens the IPC socket at
+        // /tmp/open-design/ipc/<namespace>/daemon.sock which the bridge connects to.
+        daemon.arguments = [
+            daemonCLI.path,
+            "--od-stamp-app=daemon",
+            "--od-stamp-mode=runtime",
+            "--od-stamp-namespace=clawdmeter",
+            "--od-stamp-source=packaged",
+            "--od-stamp-ipc=daemon.sock",
+        ]
         daemon.environment = env
-        daemon.currentDirectoryURL = daemonCLI.deletingLastPathComponent()
+        // cwd is two levels up so relative imports inside dist/sidecar/ resolve correctly.
+        daemon.currentDirectoryURL = daemonCLI.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         attachStdoutPipe(daemon, label: "daemon")
         attachStderrPipe(daemon, label: "daemon")
         setProcessGroup(daemon)
