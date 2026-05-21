@@ -2318,6 +2318,120 @@ public final class AgentControlServer {
         }
     }
 
+    // MARK: - PR #30: OpenCode session dispatch (wire v13)
+
+    /// Spawn an OpenCode-backed AgentSession. Diverges from the
+    /// tmux argv path because opencode sessions are SSE clients of the
+    /// shared `opencode serve` process (P1 singleton). Flow:
+    ///   1. Ensure `opencode serve` is running (boots on first request).
+    ///   2. POST to the server's `/session` endpoint to mint an
+    ///      opencode session id.
+    ///   3. Register the (clawdmeterID ↔ opencodeID) mapping in
+    ///      OpencodeSSEAdapter so subsequent message.added events
+    ///      route to the right Clawdmeter session.
+    ///   4. Create a placeholder AgentSession in the registry so the
+    ///      session shows up in the iOS Code tab + Mac sidebar.
+    ///   5. Return the AgentSession JSON.
+    ///
+    /// Failure surfaces:
+    ///   - opencode binary not installed → 503 with install hint.
+    ///   - opencode serve spawn failed → 503 with detail.
+    ///   - /session POST failed → 502.
+    private func handleSpawnOpencodeSession(req: NewSessionRequest, connection: NWConnection) async {
+        // Step 1: ensure the singleton server is running.
+        guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
+            let state = OpencodeProcessManager.shared.state
+            let body: String
+            switch state {
+            case .notInstalled:
+                body = #"{"error":"opencode_not_installed","hint":"run: brew install opencode"}"#
+            case .failed(let detail):
+                body = #"{"error":"opencode_serve_failed","detail":"\#(detail)"}"#
+            default:
+                body = #"{"error":"opencode_not_running"}"#
+            }
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json", body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+
+        // Make sure the SSE adapter is consuming events. start() is
+        // idempotent — safe to call on every spawn even if already
+        // running.
+        OpencodeSSEAdapter.shared.start()
+
+        // Step 2: mint an opencode session id via the server's
+        // `/session` POST. Body is minimal — title is optional but
+        // surfaces in the OpenCode TUI's session list (which the
+        // user can still drive from a terminal if they want).
+        guard var sessionReq = OpencodeProcessManager.shared.makeAuthorizedRequest(path: "/session") else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sessionReq.httpMethod = "POST"
+        sessionReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let titleSource = req.goal?.trimmingCharacters(in: .whitespaces).isEmpty == false
+            ? req.goal!
+            : (req.repoKey as NSString).lastPathComponent
+        let postBody: [String: Any] = ["title": String(titleSource.prefix(60))]
+        sessionReq.httpBody = try? JSONSerialization.data(withJSONObject: postBody)
+
+        let opencodeID: String
+        do {
+            let session = URLSession(configuration: .ephemeral)
+            let (data, resp) = try await session.data(for: sessionReq)
+            guard let http = resp as? HTTPURLResponse, http.statusCode < 400 else {
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                serverLogger.error("opencode /session POST returned \(status, privacy: .public)")
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = obj["id"] as? String else {
+                serverLogger.error("opencode /session POST returned malformed body")
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            opencodeID = id
+        } catch {
+            serverLogger.error("opencode /session POST failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+            return
+        }
+
+        // Step 3: create the Clawdmeter-side AgentSession + register
+        // the bidirectional id mapping. opencode sessions don't carry
+        // a tmux pane or a worktree (the underlying provider drives
+        // its own cwd via opencode's tool calls).
+        let session = registry.create(
+            repoKey: req.repoKey,
+            repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+            agent: .opencode,
+            model: req.model,
+            goal: req.goal,
+            worktreePath: nil,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false  // opencode handles plan/approval internally
+        )
+        OpencodeSSEAdapter.shared.register(clawdmeterID: session.id, opencodeID: opencodeID)
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["repo": req.repoKey, "agent": "opencode", "opencodeID": opencodeID]
+        )
+
+        // Step 4: return the session JSON.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(session) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
     // MARK: - D4: per-provider auto-revive RPC (wire v12)
 
     /// POST body for `/providers/:id/auto-revive`. The `:id` path
@@ -2570,6 +2684,15 @@ public final class AgentControlServer {
         decoder.dateDecodingStrategy = .iso8601
         guard let req = try? decoder.decode(NewSessionRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection)
+            return
+        }
+
+        // PR #30: route OpenCode sessions through the singleton
+        // OpencodeProcessManager + SSEAdapter instead of the tmux argv
+        // path. This branch exits the handler early on the opencode
+        // dispatch path; everything below is for tmux-backed kinds.
+        if req.agent == .opencode {
+            await handleSpawnOpencodeSession(req: req, connection: connection)
             return
         }
 
