@@ -4,6 +4,56 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.14.0 build 74] - 2026-05-22 — Mac Code IDE ReviewPane wired end-to-end + sidebar filter (`feat/mac-code-reviewpane`)
+
+PR #24b — the second half of the Code IDE work. After this PR the Mac
+Code IDE is feature-complete: every tab in the right ReviewPane shows
+real data, the sidebar filter actually filters, and there are no more
+demo-only buttons in production.
+
+### Added
+
+- **ReviewPane Diff tab** embeds the existing `GitDiffPane` (633 LOC,
+  pre-existing in `apple/ClawdmeterMac/Workspace/`). Reads `git diff
+  HEAD` against the session's worktree; renders structured hunks with
+  stage/unstage interactions.
+- **ReviewPane Sources tab** embeds the existing `SourcesPane`. Reads
+  the session's `SessionChatStore` (per-session chat-snapshot path).
+- **ReviewPane PR tab** embeds the existing `PRReviewPane` + the
+  `PRMirror` singleton (per session). Auto-detects GitHub PR URLs from
+  the chat transcript and polls `gh pr view --json` every 30s.
+- **ReviewPane Term tab** embeds `MacTerminalView` (SwiftTerm-backed)
+  over the local loopback WS. `paneId=nil` connects to the session's
+  primary tmux pane.
+- **Sidebar filter SwiftUI Menu** (D8): Status / Provider / Sort
+  sections, persisted to UserDefaults
+  (`clawdmeter.codeIDE.filter.*`). Filter applies before the repo
+  ForEach; no-match repos collapse with a helpful empty-state.
+
+### Changed
+
+- ReviewPane no longer hides Diff / Sources / PR / Term in production
+  — they show alongside Plan. Demo bindings keep the JSX-fixture
+  fallbacks for SwiftUI Previews; production shows in-process embeds
+  per X1 (no new HTTP endpoints needed).
+- `MacCodeView` now accepts `runtime: AppRuntime?` so ReviewPane
+  embeds can reach `agentSessionRegistry`, `sessionsModel`,
+  `agentControlServer`, `tmuxClient`. Mac-target-only; nil falls back
+  to demo content for Previews.
+- `MacCodeView` + its enums + types dropped `public` (internal access
+  is sufficient — this view only ever runs inside the Mac app target).
+
+### Test deliverables
+
+The ReviewPane embeds are wrappers around components that already have
+their own coverage (`GitDiffStore.parseTests`, `PRMirror` polling
+tests, etc.) — the wrapper code is mostly init/teardown plumbing that
+XCTest UI tests would cover better than unit tests. UI test scaffolding
+deferred to a follow-up branch. Build verification on all three
+platforms guards the structural correctness.
+
+Builds clean on Mac + iOS + Watch.
+
 ## [0.13.0 build 73] - 2026-05-22 — Mac loopback transport, ComposerSendController, real Code IDE actions (`feat/mac-loopback-transport`)
 
 PR #24a (the first half of the Code IDE work, per the X2 plan split).

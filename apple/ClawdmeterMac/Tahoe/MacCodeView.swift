@@ -11,13 +11,13 @@ import ClawdmeterShared
 /// (`data.isDemo == false`) the IDE renders empty-state placeholders
 /// rather than the JSX fixture data — so a user can't approve a fake
 /// plan or read a hardcoded diff thinking it's their real session.
-public struct MacCodeView: View {
+struct MacCodeView: View {
     @Environment(\.tahoe) private var t
 
-    public enum ComposerState: String { case idle, running, plan }
-    public enum ReviewTab: String, CaseIterable { case plan, diff, sources, pr, term }
+    enum ComposerState: String { case idle, running, plan }
+    enum ReviewTab: String, CaseIterable { case plan, diff, sources, pr, term }
 
-    public var data: TahoeCodeBindings
+    var data: TahoeCodeBindings
     /// Caller-provided callbacks. `onNewSession(key)` is fired by the
     /// per-repo `+` button (key = repo path) and the sidebar `+` icon
     /// (key = nil, sheet lets user pick). Defaults to `{ _ in }` so the
@@ -30,6 +30,11 @@ public struct MacCodeView: View {
     /// Nil when the local agent server failed to bind ports — actions
     /// disable themselves rather than crash.
     var loopbackClient: AgentControlClient?
+    /// Optional Mac runtime ref for the in-process ReviewPane tab embeds
+    /// (PR #24b D9 + X1). Nil in Previews — ReviewPane falls back to the
+    /// existing demo / placeholder content when no runtime is available.
+    /// Mac-target only (`AppRuntime` is internal to ClawdmeterMac).
+    var runtime: AppRuntime?
 
     @State private var openId: UUID? = nil
     @State private var composerState: ComposerState = .idle
@@ -52,16 +57,18 @@ public struct MacCodeView: View {
     /// session.
     @StateObject private var composerController: ComposerSendController
 
-    public init(
+    init(
         data: TahoeCodeBindings = .demo,
         onNewSession: @escaping (String?) -> Void = { _ in },
         onOpenPRInBrowser: (() -> Void)? = nil,
-        loopbackClient: AgentControlClient? = nil
+        loopbackClient: AgentControlClient? = nil,
+        runtime: AppRuntime? = nil
     ) {
         self.data = data
         self.onNewSession = onNewSession
         self.onOpenPRInBrowser = onOpenPRInBrowser
         self.loopbackClient = loopbackClient
+        self.runtime = runtime
         // Construct a controller bound to the loopback client when
         // available. In Previews / no-client mode, build a dummy
         // controller bound to a UserDefaults-backed client so the view
@@ -130,7 +137,12 @@ public struct MacCodeView: View {
 
             if showRight {
                 TahoeGlass(radius: 20, tone: .panel) {
-                    ReviewPane(tab: $rightTab, session: openSession, isDemo: data.isDemo)
+                    ReviewPane(
+                        tab: $rightTab,
+                        session: openSession,
+                        isDemo: data.isDemo,
+                        runtime: runtime
+                    )
                 }
                 .frame(width: 380)
             }
@@ -363,6 +375,97 @@ private struct Sidebar: View {
     @Binding var expanded: Set<String>
     var onNewSession: (String?) -> Void
 
+    /// D8 sidebar filter (PR #24b). Persisted to UserDefaults so the
+    /// user's view sticks across launches.
+    @AppStorage("clawdmeter.codeIDE.filter.status") private var statusFilterRaw: String = StatusFilter.all.rawValue
+    @AppStorage("clawdmeter.codeIDE.filter.sort") private var sortKeyRaw: String = SortKey.lastActive.rawValue
+    @AppStorage("clawdmeter.codeIDE.filter.providerClaude") private var providerClaudeEnabled: Bool = true
+    @AppStorage("clawdmeter.codeIDE.filter.providerCodex") private var providerCodexEnabled: Bool = true
+    @AppStorage("clawdmeter.codeIDE.filter.providerGemini") private var providerGeminiEnabled: Bool = true
+
+    private var statusFilter: StatusFilter {
+        StatusFilter(rawValue: statusFilterRaw) ?? .all
+    }
+    private var sortKey: SortKey {
+        SortKey(rawValue: sortKeyRaw) ?? .lastActive
+    }
+
+    enum StatusFilter: String, CaseIterable {
+        case all = "all"
+        case live = "live"
+        case paused = "paused"
+        case done = "done"
+
+        var label: String {
+            switch self {
+            case .all: return "All sessions"
+            case .live: return "Live only"
+            case .paused: return "Paused only"
+            case .done: return "Done only"
+            }
+        }
+    }
+
+    enum SortKey: String, CaseIterable {
+        case lastActive = "lastActive"
+        case name = "name"
+        case liveCount = "liveCount"
+
+        var label: String {
+            switch self {
+            case .lastActive: return "Sort: Last active"
+            case .name: return "Sort: Name"
+            case .liveCount: return "Sort: Live count"
+            }
+        }
+    }
+
+    /// Apply status + provider filters and sort the repos.
+    private var filteredRepos: [TahoeCodeRepo] {
+        let providerAllowed: (TahoeProvider) -> Bool = { p in
+            switch p {
+            case .claude: return providerClaudeEnabled
+            case .codex: return providerCodexEnabled
+            case .gemini: return providerGeminiEnabled
+            }
+        }
+        let statusAllowed: (TahoeCodeSession.Status) -> Bool = { s in
+            switch self.statusFilter {
+            case .all: return true
+            case .live: return s == .running || s == .planning
+            case .paused: return s == .paused
+            case .done: return s == .done
+            }
+        }
+        let processed: [TahoeCodeRepo] = repos.map { repo in
+            let kept = repo.sessions.filter { s in
+                providerAllowed(s.agent) && statusAllowed(s.status)
+            }
+            return TahoeCodeRepo(
+                key: repo.key,
+                name: repo.name,
+                tint: repo.tint,
+                liveSessionCount: repo.liveSessionCount,
+                sessions: kept,
+                recents: repo.recents
+            )
+        }
+        // Drop repos that now have neither sessions nor recents.
+        let nonEmpty = processed.filter {
+            !$0.sessions.isEmpty || !$0.recents.isEmpty
+        }
+        switch sortKey {
+        case .lastActive:
+            // TahoeCodeSession doesn't carry lastEventAt yet; the
+            // server's already-sorted order is "last active first".
+            return nonEmpty
+        case .name:
+            return nonEmpty.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        case .liveCount:
+            return nonEmpty.sorted { $0.liveSessionCount > $1.liveSessionCount }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // search
@@ -390,16 +493,15 @@ private struct Sidebar: View {
 
             // Projects header — `folderPlus` opens NewSessionMacSheet with no
             // repo pre-selected (the sheet's picker shows the full list).
-            // Filter is reserved for a future "live only" / "by provider"
-            // filter sheet; left as a no-op rather than dropped so the UI
-            // alignment matches the JSX.
+            // `filter` opens a SwiftUI Menu with status/provider/sort
+            // controls (D8, PR #24b).
             HStack(spacing: 4) {
                 Text("PROJECTS")
                     .font(TahoeFont.body(11, weight: .bold))
                     .tracking(0.5)
                     .foregroundStyle(t.fg3)
                 Spacer()
-                SidebarIconBtn(icon: "filter")
+                filterMenu
                 SidebarIconBtn(icon: "folderPlus", action: { onNewSession(nil) })
             }
             .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 6)
@@ -417,8 +519,19 @@ private struct Sidebar: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.horizontal, 10).padding(.vertical, 14)
+                    } else if filteredRepos.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("No matches")
+                                .font(TahoeFont.body(13, weight: .semibold))
+                                .foregroundStyle(t.fg2)
+                            Text("Adjust the filter in the funnel icon above to see more sessions.")
+                                .font(TahoeFont.body(11.5))
+                                .foregroundStyle(t.fg3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 14)
                     } else {
-                        ForEach(repos) { repo in
+                        ForEach(filteredRepos) { repo in
                             RepoSection(
                                 repo: repo,
                                 expanded: expanded.contains(repo.key),
@@ -436,6 +549,53 @@ private struct Sidebar: View {
                 .padding(.horizontal, 6).padding(.bottom, 12)
             }
         }
+    }
+
+    /// D8: SwiftUI Menu with Status / Provider / Sort sections.
+    /// `ModelPicker.swift` is the template pattern for chip-styled menus.
+    @ViewBuilder
+    private var filterMenu: some View {
+        Menu {
+            Section("Status") {
+                ForEach(StatusFilter.allCases, id: \.rawValue) { opt in
+                    Button {
+                        statusFilterRaw = opt.rawValue
+                    } label: {
+                        HStack {
+                            Text(opt.label)
+                            if statusFilter == opt {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+            Section("Provider") {
+                Toggle("Claude", isOn: $providerClaudeEnabled)
+                Toggle("Codex", isOn: $providerCodexEnabled)
+                Toggle("Antigravity", isOn: $providerGeminiEnabled)
+            }
+            Section("Sort") {
+                ForEach(SortKey.allCases, id: \.rawValue) { opt in
+                    Button {
+                        sortKeyRaw = opt.rawValue
+                    } label: {
+                        HStack {
+                            Text(opt.label)
+                            if sortKey == opt {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            TahoeIcon("filter", size: 13).foregroundStyle(t.fg3).frame(width: 24, height: 24)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Filter sessions")
     }
 }
 
@@ -1146,21 +1306,37 @@ private struct ReviewPane: View {
     @Environment(\.tahoe) private var t
     @Binding var tab: MacCodeView.ReviewTab
     var session: TahoeCodeSession?
-    /// Demo bindings expose all five tabs (Plan / Diff / Sources / PR / Term)
-    /// since each has rich JSX fixture content. Production hides everything
-    /// except Plan until the real diff/PR/term wires ship — otherwise the
-    /// pane shows hardcoded fake diffs that a user could approve.
+    /// Demo bindings still expose JSX fixture content for the Diff /
+    /// Sources / PR / Term tabs (used by SwiftUI Previews). Production
+    /// (`!isDemo`) shows all 5 tabs too — they embed the existing
+    /// in-process Mac views (GitDiffPane, SourcesPane, PRReviewPane,
+    /// MacTerminalView) per X1 / PR #24b.
     var isDemo: Bool
+    /// Mac runtime — when present, ReviewPane embeds the real
+    /// in-process views. Nil falls back to the demo placeholders so
+    /// Previews keep working.
+    var runtime: AppRuntime?
 
+    /// All 5 tabs visible in both demo and production after PR #24b.
     private var visibleTabs: [(MacCodeView.ReviewTab, String, String)] {
-        let all: [(MacCodeView.ReviewTab, String, String)] = [
+        [
             (.plan, "Plan", "doc"),
             (.diff, "Diff", "diff"),
             (.sources, "Sources", "search"),
             (.pr, "PR", "pull"),
             (.term, "Term", "terminal"),
         ]
-        return isDemo ? all : all.filter { $0.0 == .plan }
+    }
+
+    /// Resolve the open session's `AgentSession` (the registry shape
+    /// the in-process Mac views expect) from the loopback client.
+    /// Returns nil when the session was archived mid-view or runtime is
+    /// nil. The fallback content surfaces "Session unavailable".
+    @MainActor
+    private func agentSession() -> AgentSession? {
+        guard let runtime, let id = session?.id else { return nil }
+        return runtime.loopbackClient?.sessions.first(where: { $0.id == id })
+            ?? runtime.agentSessionRegistry.sessions.first(where: { $0.id == id })
     }
 
     var body: some View {
@@ -1189,14 +1365,6 @@ private struct ReviewPane: View {
                 }
             }
             .padding(10)
-            .onAppear {
-                // If production starts on a tab that's now hidden, snap to
-                // the only available one — Plan.
-                if !isDemo && tab != .plan { tab = .plan }
-            }
-            .onChange(of: isDemo) { _, demo in
-                if !demo && tab != .plan { tab = .plan }
-            }
 
             TahoeHair()
 
@@ -1204,15 +1372,104 @@ private struct ReviewPane: View {
                 Group {
                     switch tab {
                     case .plan:    ReviewPlan(session: session, isDemo: isDemo)
-                    case .diff:    if isDemo { ReviewDiff() } else { EmptyView() }
-                    case .sources: if isDemo { ReviewSources() } else { EmptyView() }
-                    case .pr:      if isDemo { ReviewPR() } else { EmptyView() }
-                    case .term:    if isDemo { ReviewTerm() } else { EmptyView() }
+                    case .diff:    diffTab
+                    case .sources: sourcesTab
+                    case .pr:      prTab
+                    case .term:    termTab
                     }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    // MARK: - Real-view embeds (PR #24b D9 + X1)
+
+    @ViewBuilder
+    private var diffTab: some View {
+        if let agentSession = agentSession() {
+            GitDiffPane(repoCwd: agentSession.effectiveCwd)
+        } else if isDemo {
+            ReviewDiff()
+        } else {
+            placeholder(title: "Diff unavailable",
+                        body: "Open a session with a worktree to see the live `git diff HEAD`.")
+        }
+    }
+
+    @ViewBuilder
+    private var sourcesTab: some View {
+        if let runtime,
+           let agentSession = agentSession(),
+           let chatStore = runtime.agentControlServer.chatStore(for: agentSession) {
+            SourcesPane(session: agentSession, chatStore: chatStore)
+        } else if isDemo {
+            ReviewSources()
+        } else {
+            placeholder(title: "Sources unavailable",
+                        body: "Waiting for the session's transcript to materialize.")
+        }
+    }
+
+    @ViewBuilder
+    private var prTab: some View {
+        if let runtime, let agentSession = agentSession() {
+            // SessionsModel.prMirror(for:) returns a non-nil PRMirror
+            // singleton per session — it auto-detects PR URLs from the
+            // chat transcript and polls `gh pr view --json`.
+            PRReviewPane(
+                session: agentSession,
+                mirror: runtime.sessionsModel.prMirror(for: agentSession)
+            )
+        } else if isDemo {
+            ReviewPR()
+        } else {
+            placeholder(title: "No PR detected",
+                        body: "The agent hasn't surfaced a GitHub PR URL in this session yet.")
+        }
+    }
+
+    @ViewBuilder
+    private var termTab: some View {
+        if let runtime,
+           let agentSession = agentSession(),
+           let wsPort = runtime.agentControlServer.boundWsPort {
+            MacTerminalView(
+                sessionId: agentSession.id,
+                host: "127.0.0.1",
+                wsPort: Int(wsPort),
+                token: runtime.agentControlServer.localLoopbackToken,
+                paneId: nil
+            )
+            // SwiftTerm wraps an NSView and ignores .frame heights from
+            // the wrapping VStack; force a minimum so it doesn't collapse
+            // to zero height inside the ReviewPane scroll container.
+            .frame(minHeight: 320)
+            .id(agentSession.id) // recreate on session swap
+        } else if isDemo {
+            ReviewTerm()
+        } else {
+            placeholder(title: "Terminal unavailable",
+                        body: "Open a session to see live agent output.")
+        }
+    }
+
+    @ViewBuilder
+    private func placeholder(title: String, body: String) -> some View {
+        VStack(alignment: .center, spacing: 8) {
+            TahoeIcon("chat", size: 22).foregroundStyle(t.fg4)
+            Text(title)
+                .font(TahoeFont.body(13, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text(body)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 280)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
     }
 }
 
