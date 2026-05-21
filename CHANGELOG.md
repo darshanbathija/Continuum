@@ -4,6 +4,43 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.15.0 build 75] - 2026-05-22 — iOS chat composer wired + reply icons cleaned up (`feat/chat-pipeline`)
+
+PR #25 partial — D1 (chat pipeline) iOS half + D7 (reply icons
+cleanup). Mac chat composer wiring deferred to a v1.x follow-up since
+it's parallel work the v1.0 ship doesn't depend on.
+
+### Added
+
+- **iOS chat composer is a real TextField + send button.** Bound
+  through `ComposerSendController` (shared module). First send creates
+  a chat session via `client.createChatSession(provider:.claude)`
+  and dispatches the text as the first turn. ChatGPT-style sendable
+  TextField with `.submitLabel(.send)`.
+- **Copy reply on iOS assistant cards** — uses `UIPasteboard.general.string`.
+
+### Changed
+
+- **D7 cleanup**: refresh + star reply icons retired (drop on iOS).
+  Copy remains (was previously a placeholder `IOSReplyAction(icon:
+  "doc")` with empty action).
+- `IOSChatView.init` now accepts optional `agentClient` so the
+  composer can dispatch through it. Nil disables the composer.
+- `IOSRootView` passes the live `agentClient` through.
+
+### Deferred (v1.x follow-up)
+
+- Mac chat composer wiring (the wire is structurally the same; lands
+  in a small follow-up PR).
+- Broadcast streaming UI with per-provider columns + WS subscription
+  (`MacChatTranscriptStore`).
+- History row navigation.
+- Cost-per-send Pricing helper.
+- PickWinnerButton wiring (needs the active session's
+  `frontierGroupId`).
+
+Builds clean on Mac + iOS + Watch.
+
 ## [0.14.0 build 74] - 2026-05-22 — Mac Code IDE ReviewPane wired end-to-end + sidebar filter (`feat/mac-code-reviewpane`)
 
 PR #24b — the second half of the Code IDE work. After this PR the Mac

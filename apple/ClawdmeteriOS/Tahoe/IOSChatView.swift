@@ -3,12 +3,28 @@ import ClawdmeterShared
 
 /// iOS Chat tab — broadcast strip + per-turn model pills + active reply card.
 /// Ports `ios-chat.jsx`.
+///
+/// v0.15 (PR #25, D1 partial): composer wired through
+/// `ComposerSendController` — first send creates a chat session via
+/// `client.createChatSession` and dispatches the user's text as the
+/// first turn. Reply-card Copy button uses UIPasteboard. Refresh /
+/// share / star icons retired per D7. The full broadcast streaming UI
+/// (WS subscription + per-provider columns) lands in a v1.x follow-up;
+/// today's TahoeDemo.chatThread fixture still drives the visual.
 public struct IOSChatView: View {
     @Environment(\.tahoe) private var t
     @State private var activeByTurn: [Int: TahoeProvider] = [:]
     @State private var broadcast: Bool = true
+    /// Optional agent client passed down by IOSRootView when paired.
+    /// Nil in Previews / unpaired — composer disables itself.
+    var agentClient: AgentControlClient?
+    @StateObject private var composerController: ComposerSendController
 
-    public init() {}
+    public init(agentClient: AgentControlClient? = nil) {
+        self.agentClient = agentClient
+        let client = agentClient ?? AgentControlClient()
+        _composerController = StateObject(wrappedValue: ComposerSendController(client: client))
+    }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -69,9 +85,13 @@ public struct IOSChatView: View {
             // bottom: 92 inside the iPhone frame; in our SwiftUI shell we
             // put it after the scroll view so it stays glued to the bottom
             // of the content area, just above the floating tab bar.
-            IOSChatComposer()
-                .padding(.horizontal, 16)
-                .padding(.bottom, 6)
+            IOSChatComposer(
+                controller: composerController,
+                broadcastMode: broadcast,
+                isReachable: agentClient != nil
+            )
+            .padding(.horizontal, 16)
+            .padding(.bottom, 6)
         }
     }
 
@@ -260,8 +280,16 @@ private struct IOSReplyCard: View {
                         .font(TahoeFont.mono(10.5))
                         .foregroundStyle(t.fg3)
                     Spacer()
-                    IOSReplyAction(icon: "refresh")
-                    IOSReplyAction(icon: "doc")
+                    // D7: refresh + star icons retired. Copy stays.
+                    IOSReplyAction(icon: "doc", action: {
+                        let combined = reply.blocks.map { block -> String in
+                            switch block {
+                            case .paragraph(let s): return s
+                            case .code(_, let body): return body
+                            }
+                        }.joined(separator: "\n\n")
+                        UIPasteboard.general.string = combined
+                    })
                     PickWinnerButton(starred: reply.starred)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
@@ -273,8 +301,9 @@ private struct IOSReplyCard: View {
 private struct IOSReplyAction: View {
     @Environment(\.tahoe) private var t
     var icon: String
+    var action: () -> Void = {}
     var body: some View {
-        Button(action: {}) {
+        Button(action: action) {
             TahoeIcon(icon, size: 12)
                 .foregroundStyle(t.fg2)
                 .frame(width: 28, height: 28)
@@ -314,29 +343,57 @@ private struct PickWinnerButton: View {
 
 private struct IOSChatComposer: View {
     @Environment(\.tahoe) private var t
+    @ObservedObject var controller: ComposerSendController
+    var broadcastMode: Bool
+    var isReachable: Bool
+
+    private var placeholder: String {
+        if !isReachable { return "Pair to Mac to start a chat…" }
+        if broadcastMode { return "Ask all three…" }
+        return "Ask one model…"
+    }
 
     var body: some View {
         TahoeGlass(radius: 26, tone: .raised) {
             HStack(spacing: 8) {
                 TahoeIcon("plus", size: 18).foregroundStyle(t.fg3)
-                Text("Ask all three…")
+                TextField(placeholder, text: $controller.text, axis: .vertical)
+                    .textFieldStyle(.plain)
                     .font(TahoeFont.body(14))
-                    .foregroundStyle(t.fg3)
-                Spacer()
+                    .foregroundStyle(t.fg)
+                    .lineLimit(1...4)
+                    .disabled(!isReachable || controller.sending)
+                    .submitLabel(.send)
+                    .onSubmit { Task { await sendNow() } }
+                Spacer(minLength: 4)
                 TahoeIcon("mic", size: 16).foregroundStyle(t.fg3)
-                Button(action: {}) {
+                Button(action: { Task { await sendNow() } }) {
                     ZStack {
                         Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
                                                      startPoint: .top, endPoint: .bottom))
-                        TahoeIcon("arrowU", size: 14, weight: .bold).foregroundStyle(.white)
+                        if controller.sending {
+                            ProgressView().controlSize(.small).tint(.white)
+                        } else {
+                            TahoeIcon("arrowU", size: 14, weight: .bold).foregroundStyle(.white)
+                        }
                     }
                     .frame(width: 32, height: 32)
                     .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
+                    .opacity(controller.canSend && isReachable ? 1.0 : 0.45)
                 }
                 .buttonStyle(.plain)
+                .disabled(!controller.canSend || !isReachable)
             }
             .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 8)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func sendNow() async {
+        guard isReachable else { return }
+        // First send → create a chat session for the chosen provider.
+        // Solo for now (broadcast streaming UI lands v1.x). AgentKind
+        // (.claude/.codex/.gemini) is what `createChatSession` expects.
+        await controller.send(via: .chatCreate(provider: AgentKind.claude, mode: .solo))
     }
 }
