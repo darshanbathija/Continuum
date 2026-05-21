@@ -145,13 +145,91 @@ When Antigravity.app is NOT running:
 
 Untested in this Phase 0 (didn't make the HTTP call directly), but binary strings confirm the endpoint exists. Returns user info including subscription tier. v0.8.1's `AntigravitySource` rewrite calls this via the same CSRF-gated HTTP client.
 
-## Untested / pending probes
+## Phase 0.5 verification spike (2026-05-21, post eng-review #2)
 
-These don't block plan revision but should be probed during v0.8.0 implementation:
+Three probes from the revised plan, all resolved against the on-disk artifacts left by the earlier Phase 0 run (Antigravity.app was not running during this probe — the persisted state was enough).
 
-1. **gRPC streaming** for real-time turn observation (alternative to SQLite WAL polling)
-2. **Sub-chats** — `parentConversationId` field in metadata, but `new-conversation` doesn't take a parent flag. May require gRPC `Cascade` API.
-3. **Approval-mode workaround** — `SetUserSettings` gRPC mentioned in binary strings; may allow setting plan/yolo modes server-side per-conversation
-4. **Thinking mode workaround** — same; may be in `staticConfig.codingAgent.{googleMode, agenticMode}` fields visible in metadata
-5. **`/v1internal:fetchUserInfo` actual JSON shape** for quota
-6. **Concurrent agentapi calls** — likely safe (Antigravity.app does this), but should verify under load
+### Probe 1 — `step_payload` blob decode (T7/D11)
+
+`step_payload` in the SQLite `steps` table is **plain protobuf, not encrypted.** Hex dump of first 64 bytes per row shows canonical wire format:
+
+```
+0|14|3|194|080E20032A9A010A0C08E6CCB8D00610C0878DDA031804622464373031626363612D...
+3|9 |3|4082|080920032AA00E0A0C08E8CCB8D0061088E3BDDF01180222B60B0A086967617936726C3312086C6973745F6469721A...
+6|8 |3|1417|080820032AFE040A0C08E9CCB8D0061098BD8C980218022297020A0876646D746E6F74361209766965775F66696C651A...
+```
+
+- Byte 0 = `0x08` (varint, field 1) — step index
+- Byte 2 = `0x20` (varint, field 4) — status-like field
+- Byte 4 = `0x2A` (length-delimited, field 5) — nested message (actual step content)
+- Strings visible inline: `list_dir`, `view_file`, `gigay6rl3`, `vdmtno6` — tool call IDs + tool names readable as plain UTF-8 inside the nested message.
+
+**Verdict: D11 path A** — `ConversationProtoParser.decode(_ data:)` refactor proceeds. The `step_payload` blob feeds the same proto decode as legacy `.pb` files. No pivot to gRPC `StreamGenerateChat` needed.
+
+### Probe 2 — security preset location (T5/D10) — RESOLVED via filesystem, not gRPC
+
+Plan said: probe `GetUserSettings` gRPC for default approval mode. **Reality: lives on disk in `~/.gemini/config/projects/<id>.json` under `settings.*`.** No gRPC call needed.
+
+Example (CC Watch project, `459a1414-...`):
+```json
+"settings": {
+  "fileAccessPolicy":     "AGENT_SETTING_POLICY_ASK",
+  "internetPolicy":       "AGENT_SETTING_POLICY_ASK",
+  "autoExecutionPolicy":  "CASCADE_COMMANDS_AUTO_EXECUTION_OFF",
+  "artifactReviewMode":   "ARTIFACT_REVIEW_MODE_ALWAYS"
+}
+"permissionGrants": {
+  "allow": [
+    "command(find)",
+    "command(grep)"
+  ]
+}
+```
+
+**Display string mapping for chat header (D10):**
+
+| `autoExecutionPolicy` value | Chat-header copy |
+|---|---|
+| `CASCADE_COMMANDS_AUTO_EXECUTION_OFF` | "Antigravity: ask before each tool" |
+| `CASCADE_COMMANDS_AUTO_EXECUTION_ON` (assumed) | "Antigravity: auto-execute tools" |
+| Other | "Antigravity: unknown preset (check app settings)" |
+
+Plus parenthetical `+ N pre-approved commands` when `permissionGrants.allow` non-empty.
+
+**Verdict: D10 simplified.** Replace `LanguageServerClient.getUserSettings()` (gRPC) with `AntigravityProjectSettings.read(forProjectId:)` filesystem helper. Watch the project JSON via FSEvents for live updates. Saves the entire `GetUserSettings` gRPC implementation.
+
+### Probe 3 — `workspace_uri` field (T4/D6) — RESOLVED at `projectResources.resources[].gitFolder.folderUri`
+
+Plan said: scan projects JSON for `workspace_uri` field. **Reality: workspace path at `projectResources.resources[].gitFolder.folderUri`** with URL-encoded paths.
+
+Examples on this machine:
+- `glide.co` → `file:///Users/darshanbathija_1/Downloads/glide.co`
+- `CC Watch` → `file:///Users/darshanbathija_1/Downloads/CC%20Watch` (URL-encoded space)
+- `Defx V3` → `file:///Users/darshanbathija_1/Downloads/Defx%20V3`
+- `outside-of-project` → `projectResources: null` (sentinel for "no specific project")
+
+**Verdict: D6 refined.** `AntigravityProjectResolver`:
+1. Walk `~/.gemini/config/projects/*.json`
+2. For each: `data.projectResources?.resources[].gitFolder?.folderUri` → strip `file://` prefix → URL-decode
+3. Canonicalize via `RepoIdentity.normalize`
+4. Match against `RepoIdentity.normalize(session.repoKey)`
+5. Cache `[normalizedRepoKey: projectId]`
+6. Skip records where `projectResources == nil`
+7. Honor `gitFolder.allowWrite` if present — when `false`, surface read-only banner.
+
+### Pending probes (not blocking v0.8.0 commits)
+
+These don't block any code path locked in the plan. Resolve during v0.8.0 implementation if convenient.
+
+1. `/v1internal:fetchUserInfo` exact JSON shape (needs LS running). D9 ships with a tolerant decoder + 'Open Antigravity' fallback.
+2. Concurrent `agentapi new-conversation` under load — verify multiplex works for ≥3 simultaneous calls.
+3. `setUserSettings` writeback — if we ever want to flip approval policy from Clawdmeter (not in v0.8.0).
+4. Sub-chats parent-child linkage — Antigravity-side gRPC `Cascade`, deferred to v0.9.
+
+## Untested / pending probes from original Phase 0
+
+1. **gRPC streaming** for real-time turn observation — DEFERRED (D11 path A makes SQLite WAL the primary observation source).
+2. **Sub-chats** — Deferred to v0.9.
+3. **`SetUserSettings` gRPC** — OBSOLETE per Probe 2 (filesystem path works).
+4. **`/v1internal:fetchUserInfo` shape** — pending, non-blocking.
+5. **Concurrent agentapi calls** — likely safe, verify during implementation.
