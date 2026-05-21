@@ -86,14 +86,25 @@ struct SessionWorkspaceView: View {
             HStack(spacing: 0) {
                 ZStack {
                     if let session = model.openSession {
-                        CenterThread(
-                            session: session,
-                            isReadOnly: model.openSessionIsReadOnly,
-                            model: model,
-                            onModeSwitch: { newMode in
-                                Task { await switchMode(session: session, to: newMode) }
+                        VStack(spacing: 0) {
+                            // v0.8 QA: same AskUserQuestion-style card the
+                            // chat workspace uses — surfaces CLI permission
+                            // prompts (Codex trust dialog, future Claude
+                            // tool-permission requests) at the top of the
+                            // center column. Renders only when the store
+                            // has a pending prompt; otherwise zero-height.
+                            if let store = model.chatStore(for: session) {
+                                PermissionPromptCard(store: store, sessionId: session.id)
                             }
-                        )
+                            CenterThread(
+                                session: session,
+                                isReadOnly: model.openSessionIsReadOnly,
+                                model: model,
+                                onModeSwitch: { newMode in
+                                    Task { await switchMode(session: session, to: newMode) }
+                                }
+                            )
+                        }
                     } else {
                         centerEmpty
                     }

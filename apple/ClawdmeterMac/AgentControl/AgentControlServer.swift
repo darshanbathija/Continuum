@@ -1141,12 +1141,13 @@ public final class AgentControlServer {
                 }
             }
         }
-        // v0.8 QA: for chat-mode CLI sessions, wait for the warmup task
-        // (trust prompt + update prompt dismissal) to finish before pasting
-        // the user's first prompt. Without this barrier, sends sent within
-        // ~3s of session creation race the dismissal — bytes land in the
-        // wrong screen and either trigger options (1/2/3) or are dropped.
-        if session.kind == .chat, let warmupTask = chatWarmupTasks[uuid] {
+        // v0.8 QA: for CLI sessions (code or chat), wait for the warmup
+        // task (trust prompt + update prompt dismissal) to finish before
+        // pasting the user's first prompt. Without this barrier, sends
+        // arriving within ~3s of session creation race the dismissal —
+        // bytes land in the wrong screen and either trigger options
+        // (1/2/3) or are dropped.
+        if let warmupTask = chatWarmupTasks[uuid] {
             await warmupTask.value
         }
         do {
@@ -2318,6 +2319,23 @@ public final class AgentControlServer {
                 kind: .sessionCreated,
                 payload: ["repo": req.repoKey, "agent": req.agent.rawValue]
             )
+            // v0.8 QA: same permission-prompt warmup as chat sessions.
+            // Code sessions usually run in trusted git repos and don't
+            // see Codex's "trust this directory" prompt, but they can
+            // still hit the "Update available!" splash on first launch
+            // — those get auto-accepted per user spec. If the trust
+            // prompt does fire (e.g. brand-new worktree), it surfaces
+            // through the same PermissionPromptCard the chat workspace
+            // renders.
+            let warmupSession = session
+            let warmupPane = window.paneId
+            let warmupTask = Task { [weak self] in
+                await self?.warmupCLIPane(session: warmupSession, paneId: warmupPane)
+                await MainActor.run { [weak self] in
+                    self?.chatWarmupTasks[warmupSession.id] = nil
+                }
+            }
+            chatWarmupTasks[session.id] = warmupTask
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             if let body = try? encoder.encode(session) {
@@ -2472,7 +2490,7 @@ public final class AgentControlServer {
             let warmupSession = registry.session(id: session.id) ?? session
             let warmupPane = spawn.paneId
             let warmupTask = Task { [weak self] in
-                await self?.warmupChatPane(session: warmupSession, paneId: warmupPane)
+                await self?.warmupCLIPane(session: warmupSession, paneId: warmupPane)
                 await MainActor.run { [weak self] in
                     self?.chatWarmupTasks[warmupSession.id] = nil
                 }
@@ -2675,20 +2693,26 @@ public final class AgentControlServer {
         }
     }
 
-    /// v0.8 QA: prepare the CLI pane for the user's first prompt:
-    /// - **Codex update prompt**: auto-update (per user request — always
-    ///   take the latest version, no question asked).
-    /// - **Codex trust prompt**: surface to user via AskUserQuestion-style
-    ///   card. Awaits the user's response, never auto-dismisses.
+    /// v0.8 QA: prepare a CLI pane (code or chat) for the user's first
+    /// prompt. Same flow either way:
+    /// - **Codex update prompt**: auto-update (per user spec — always
+    ///   take the latest, no question asked).
+    /// - **Codex trust prompt**: surface to the user via the
+    ///   PermissionPromptCard; await their click; never auto-dismiss.
     /// - **Claude welcome**: just give the TUI time to render.
     ///
-    /// Mid-session prompt detection (e.g. Claude per-tool approvals)
-    /// happens in `pollPermissionPrompts(...)`, started after warmup.
-    private func warmupChatPane(session: AgentSession, paneId: String) async {
-        guard session.kind == .chat else { return }
+    /// Renamed from `warmupChatPane` — the flow works for both code and
+    /// chat sessions. Code sessions usually skip the trust prompt (they
+    /// run in trusted git repos) so the cycle is fast.
+    private func warmupCLIPane(session: AgentSession, paneId: String) async {
         switch session.agent {
         case .codex:
-            guard session.codexChatBackend == .cli else { return }
+            // For code sessions, the embedded terminal IS the input path
+            // already — no backend gate. For chat sessions we restrict
+            // to CLI backend (SDK has no tmux pane).
+            if session.kind == .chat, session.codexChatBackend != .cli {
+                return
+            }
             // First pane probe lets the CLI render its initial screen.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             // Step 1: auto-update if the update prompt is showing. Per
