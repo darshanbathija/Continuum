@@ -22,28 +22,19 @@ struct ContentView: View {
     }
 
     var body: some View {
-        TabView {
-            iOSChatView(client: agentClient)
-                .tabItem {
-                    Label("Chat", systemImage: "bubble.left.and.bubble.right")
-                }
-
-            iOSAnalyticsView(model: model, agentClient: agentClient, showingSettings: $showingSettings)
-                .tabItem {
-                    Label("Analytics", systemImage: "chart.bar")
-                }
-
-            iOSSessionsView(client: agentClient)
-                .tabItem {
-                    Label("Code", systemImage: "chevron.left.forwardslash.chevron.right")
-                }
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(model: model)
-        }
-        .task {
-            await notifManager.requestAuthorizationIfNeeded()
-            notifManager.scheduleBackgroundRefresh()
-        }
+        // Tahoe 26 redesign: the four-tab IOSRootView (Chat | Live |
+        // Analytics | Code) replaces the previous 3-tab `TabView`. The
+        // existing models, agent client, and notification manager are
+        // kept on this view so the background lifecycle hooks and the
+        // settings sheet still wire up; real-data binding into the new
+        // Tahoe views lands as a follow-up.
+        IOSRootView()
+            .sheet(isPresented: $showingSettings) {
+                SettingsView(model: model)
+            }
+            .task {
+                await notifManager.requestAuthorizationIfNeeded()
+                notifManager.scheduleBackgroundRefresh()
+            }
     }
 }
