@@ -161,6 +161,15 @@ final class AppRuntime: ObservableObject {
         let sessionsEnabled = UserDefaults.standard.object(forKey: "clawdmeter.sessions.enabled") as? Bool ?? true
         if sessionsEnabled {
             self.tmuxSupervisor.start()
+            // v0.14.0 (plan v2.1 T20): wire the design-bridge port provider
+            // BEFORE the server starts handling requests so /design/import-folder
+            // doesn't 503 in the race window. The provider closure is read on
+            // each request; the OpenDesignDaemonManager populates bridgePort
+            // when it spawns the sidecar (lazy).
+            let bridgeAtomic = openDesignDaemon.bridgePortAtomic
+            self.agentControlServer.attachDesignBridge {
+                bridgeAtomic.get()
+            }
             self.agentControlServer.start()
             // PR #24a A1: synchronous loopback bootstrap. `start()` above
             // is sync and assigns `boundPort`/`boundWsPort` before

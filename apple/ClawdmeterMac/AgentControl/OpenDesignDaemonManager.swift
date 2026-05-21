@@ -31,6 +31,17 @@ import OSLog
 import ClawdmeterShared
 #endif
 
+/// Sendable atomic wrapper for the bridge port — read by AgentControlServer
+/// request handlers that run off the @MainActor and so can't access the
+/// @Published `bridgePort` directly. Wrote-once-by-MainActor, read by many.
+public final class BridgePortAtomic: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int?
+    public init() {}
+    public func get() -> Int? { lock.lock(); defer { lock.unlock() }; return value }
+    public func set(_ v: Int?) { lock.lock(); value = v; lock.unlock() }
+}
+
 @MainActor
 public final class OpenDesignDaemonManager: ObservableObject {
 
@@ -42,6 +53,10 @@ public final class OpenDesignDaemonManager: ObservableObject {
     @Published public private(set) var lifecycleStatus: String = ""
     @Published public private(set) var daemonPort: Int? = nil
     @Published public private(set) var bridgePort: Int? = nil
+    /// Thread-safe atomic mirror of `bridgePort` for use from Sendable
+    /// closures (T20 — AgentControlServer's bridgePortProvider reads
+    /// this from request-handling actors that aren't @MainActor).
+    public let bridgePortAtomic = BridgePortAtomic()
     @Published public private(set) var lastError: String? = nil
     @Published public private(set) var activeProjectName: String? = nil
 
@@ -503,6 +518,7 @@ public final class OpenDesignDaemonManager: ObservableObject {
     private func setReady(daemonPort: Int, bridgePort: Int, attached: Bool) async {
         self.daemonPort = daemonPort
         self.bridgePort = bridgePort == 0 ? nil : bridgePort
+        self.bridgePortAtomic.set(bridgePort == 0 ? nil : bridgePort)
         self.lifecycle = .ready
         self.lifecycleStatus = attached ? "Attached to existing daemon" : "Ready"
         self.lastError = nil
