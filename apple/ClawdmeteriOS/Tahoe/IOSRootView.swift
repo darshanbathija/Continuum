@@ -62,7 +62,10 @@ public struct IOSRootView: View {
     private func contentView(live: TahoeLiveBindings, code: TahoeCodeBindings) -> some View {
         switch pushedScreen {
         case .pairing:
-            IOSPairingView(onClose: { pushedScreen = nil })
+            IOSPairingView(
+                client: agentClient,
+                onClose: { pushedScreen = nil }
+            )
         case .sessionDetail(let id):
             IOSSessionDetailView(
                 agentClient: agentClient,

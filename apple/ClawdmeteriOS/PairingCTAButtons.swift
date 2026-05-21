@@ -3,9 +3,10 @@ import ClawdmeterShared
 
 /// Reusable side-by-side "Scan QR" + "Paste URL" CTA used by every iOS
 /// empty state that needs the user to pair with a Mac: Sessions tab,
-/// Analytics tab, and the Codex card on the Live tab. Each tap opens
-/// the same `PairingFlow` sheet but pre-targeted to the chosen tab so
-/// the user doesn't have to flip the segmented control after landing.
+/// Analytics tab, and the Codex card on the Live tab. Each tap opens the
+/// Tahoe `IOSPairingView` sheet — D3 retired the legacy `PairingFlow`,
+/// so both buttons present the same sheet (the segmented picker is gone,
+/// the new view exposes both Scan + Paste from one screen).
 struct PairingCTAButtons: View {
     @ObservedObject var client: AgentControlClient
 
@@ -15,7 +16,6 @@ struct PairingCTAButtons: View {
     var compact: Bool = false
 
     @State private var showingPairing: Bool = false
-    @State private var initialMode: PairingFlow.PairingMode = .scan
 
     private var terraCotta: Color {
         Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
@@ -24,7 +24,6 @@ struct PairingCTAButtons: View {
     var body: some View {
         HStack(spacing: 10) {
             Button {
-                initialMode = .scan
                 showingPairing = true
             } label: {
                 Label("Scan QR", systemImage: "qrcode.viewfinder")
@@ -36,7 +35,6 @@ struct PairingCTAButtons: View {
             .tint(terraCotta)
 
             Button {
-                initialMode = .paste
                 showingPairing = true
             } label: {
                 Label("Paste URL", systemImage: "doc.on.clipboard")
@@ -48,11 +46,18 @@ struct PairingCTAButtons: View {
             .tint(terraCotta)
         }
         .sheet(isPresented: $showingPairing) {
-            PairingFlow(
-                client: client,
-                isPresented: $showingPairing,
-                initialMode: initialMode
-            )
+            // D3: present the full-screen IOSPairingView. The sheet's
+            // onClose dismisses both the pairing screen + the sheet
+            // wrapper. The TahoeWallpaperView background ensures the
+            // sheet renders correctly outside the IOSRootView ZStack.
+            ZStack {
+                TahoeWallpaperView()
+                IOSPairingView(
+                    client: client,
+                    onClose: { showingPairing = false }
+                )
+            }
+            .background(Color.black.opacity(0.001))
         }
     }
 }
