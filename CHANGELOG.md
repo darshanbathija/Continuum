@@ -4,6 +4,42 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.16.0 build 76] - 2026-05-22 — iOS session search + Mac titlebar truth (`feat/wiring-polish` partial)
+
+PR #26 partial — D5 (iOS session search) and D6 (Mac titlebar
+wiring). D3 (IOSPairingView replace), D4 (setAutoRevive RPC), and X3
+(AgentKind.unknown forward-compat) deferred to a v1.0 follow-up
+branch.
+
+### Added
+
+- **iOS session search (D5)**: real `TextField` in `IOSCodeView`'s
+  search row, filters repos + sessions by case-insensitive contains
+  on title and repo name. Clear button (×) appears when query
+  non-empty. Empty query is regression-safe (identical to today).
+- **Mac titlebar truth (D6)**: replaced the lying `"Updated 14s ago"`
+  label with a live "N repos tracked" pill. "Sync with iPhone" / "iPhone
+  paired" chips now reflect real pairing state from
+  `PairingTokenStore.shared.hasAnyPaired` (new public property —
+  true when a token's been issued and not revoked). Usage-tab chip
+  is now a Button (target: QR popover in a v1.0 follow-up).
+
+### Changed
+
+- `PairingTokenStore.hasAnyPaired: Bool` — new public accessor for
+  the titlebar (and any future "paired devices" UI).
+
+### Deferred to v1.0 follow-up
+
+- **D3** — `IOSPairingView` rewrite + `PairingFlow.swift` retirement.
+- **D4** — `setAutoRevive(provider:enabled:)` daemon RPC + iOS toggle wire.
+- **X3** — `AgentKind.unknown` forward-compat for PR #27 safety. **Required
+  before PR #27 lands** to avoid mislabeling OpenCode sessions on
+  v0.16 clients.
+- Mac titlebar "Sync with iPhone" tap → QR popover (currently no-op).
+
+Builds clean on Mac + iOS + Watch.
+
 ## [0.15.0 build 75] - 2026-05-22 — iOS chat composer wired + reply icons cleaned up (`feat/chat-pipeline`)
 
 PR #25 partial — D1 (chat pipeline) iOS half + D7 (reply icons

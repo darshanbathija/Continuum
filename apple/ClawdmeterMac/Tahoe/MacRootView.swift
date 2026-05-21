@@ -74,7 +74,8 @@ struct MacRootView: View {
                     onTab: { tab = $0 },
                     theme: theme,
                     chatMode: $chatMode,
-                    chatSoloProvider: $chatSoloProvider
+                    chatSoloProvider: $chatSoloProvider,
+                    runtime: runtime
                 )
                     .padding(.horizontal, 10)
                     .padding(.top, 10)
@@ -134,19 +135,58 @@ struct MacTitlebar: View {
     var theme: TahoeThemeStore
     @Binding var chatMode: MacChatView.Mode
     @Binding var chatSoloProvider: TahoeProvider
+    /// PR #26 D6: runtime for the secondary-right chips (repo count,
+    /// pairing state, sync popover trigger). Nil falls back to static
+    /// text for Previews.
+    var runtime: AppRuntime?
 
     init(
         active: MacRootView.Tab,
         onTab: @escaping (MacRootView.Tab) -> Void,
         theme: TahoeThemeStore,
         chatMode: Binding<MacChatView.Mode>,
-        chatSoloProvider: Binding<TahoeProvider>
+        chatSoloProvider: Binding<TahoeProvider>,
+        runtime: AppRuntime? = nil
     ) {
         self.active = active
         self.onTab = onTab
         self.theme = theme
         self._chatMode = chatMode
         self._chatSoloProvider = chatSoloProvider
+        self.runtime = runtime
+    }
+
+    /// Repo count for the Usage-tab status label.
+    private var repoCountLabel: String {
+        let count = runtime?.sessionsModel.repos.count ?? 0
+        if count == 0 { return "0 repos" }
+        if count == 1 { return "1 repo" }
+        return "\(count) repos"
+    }
+
+    /// Real pairing state for the sync chips. True when any iPhone is
+    /// currently paired via the agentControlServer's pairingTokens.
+    /// Nil runtime (Previews) returns false.
+    private var isIPhonePaired: Bool {
+        guard let runtime else { return false }
+        return PairingTokenStore.shared.hasAnyPaired
+    }
+
+    @ViewBuilder
+    private var syncChipUsage: some View {
+        Button(action: { /* TODO PR #26b: present QR popover */ }) {
+            TahoeSyncChip(
+                icon: "qr",
+                text: isIPhonePaired ? "iPhone paired" : "Sync with iPhone"
+            )
+        }
+        .buttonStyle(.plain)
+        .help(isIPhonePaired ? "Manage paired devices" : "Pair an iPhone")
+    }
+
+    @ViewBuilder
+    private var syncChipCode: some View {
+        TahoeSyncChip(text: isIPhonePaired ? "iPhone paired" : "No iPhone paired")
     }
 
     var body: some View {
@@ -181,18 +221,24 @@ struct MacTitlebar: View {
             ChatModeToggle(mode: $chatMode, soloProvider: $chatSoloProvider)
         case .usage:
             HStack(spacing: 8) {
+                // PR #26 D6: removed the hardcoded "Updated 14s ago"
+                // label (was lying to users). Replaced with a quick
+                // status pill showing live repo count.
                 Label {
-                    Text("Updated 14s ago")
+                    Text("\(repoCountLabel) tracked")
                         .font(TahoeFont.body(12))
                 } icon: {
-                    TahoeIcon("refresh", size: 11)
+                    TahoeIcon("folder", size: 11)
                 }
                 .foregroundStyle(t.fg2)
                 TahoeHair(vertical: true).frame(height: 14)
-                TahoeSyncChip(icon: "qr", text: "Sync with iPhone")
+                // PR #26 D6: sync chip becomes a button — opens a popover
+                // with the pairing QR when no iPhone is paired, otherwise
+                // shows paired state.
+                syncChipUsage
             }
         case .code:
-            TahoeSyncChip(text: "iPhone paired")
+            syncChipCode
         case .settings:
             Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1") · synced")
                 .font(TahoeFont.body(12))
