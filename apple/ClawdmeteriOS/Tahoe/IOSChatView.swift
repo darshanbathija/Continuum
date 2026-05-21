@@ -229,6 +229,7 @@ private struct IOSReplyCard: View {
                         case .paragraph(let text):
                             Text(text)
                                 .font(TahoeFont.body(13.5))
+                                .lineSpacing(13.5 * 0.55) // matches JSX `lineHeight: 1.55`
                                 .foregroundStyle(t.fg)
                                 .fixedSize(horizontal: false, vertical: true)
                         case .code(_, let code):
@@ -236,7 +237,8 @@ private struct IOSReplyCard: View {
                                 Text(code)
                                     .font(TahoeFont.mono(11))
                                     .foregroundStyle(t.fg)
-                                    .padding(10)
+                                    // JSX `padding: '10px 12px'` (ios-chat.jsx:308)
+                                    .padding(.vertical, 10).padding(.horizontal, 12)
                             }
                             .background {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -248,7 +250,8 @@ private struct IOSReplyCard: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16).padding(.vertical, 12)
+                // JSX `padding: '14px 16px 10px'` (ios-chat.jsx:268) — asymmetric.
+                .padding(.top, 14).padding(.horizontal, 16).padding(.bottom, 10)
 
                 TahoeHair()
 

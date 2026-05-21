@@ -57,7 +57,9 @@ public struct MacMenubarPopover: View {
                 }
                 .padding(.horizontal, 4)
 
-                TahoeHair().padding(.vertical, 10)
+                // JSX `<Hair style={{ margin: '12px 0 10px' }} />` (mac-dashboard.jsx:646)
+                // — asymmetric: 12pt above, 10pt below.
+                TahoeHair().padding(.top, 12).padding(.bottom, 10)
 
                 HStack(spacing: 6) {
                     TahoeGhostButton(size: .s) {

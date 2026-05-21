@@ -90,6 +90,16 @@ public struct IOSTabBar: View {
                                     .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
                             }
                         }
+                        .overlay {
+                            // JSX active tab has TWO shadow layers — the
+                            // first is the elevation shadow above, the
+                            // second is `0 0 0 0.5px rgba(0,0,0,0.08)`
+                            // (a hairline stroke). Render as overlay.
+                            if active {
+                                Capsule(style: .continuous)
+                                    .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
                 }
