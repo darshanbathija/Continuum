@@ -47,6 +47,15 @@ struct iOSChatSoloView: View {
         }
         .onAppear { store.start() }
         .onDisappear { store.stop() }
+        // v0.8 QA F5: floating permission-prompt tray (mirror of Mac
+        // PermissionPromptCard). Renders when the WS snapshot carries a
+        // pendingPermissionPrompt; user taps an option → POST
+        // /permission-respond → daemon dismisses the prompt.
+        .overlay(alignment: .bottom) {
+            iOSPermissionPromptCard(store: store, sessionId: session.id, client: client)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+        }
     }
 
     @ViewBuilder
@@ -179,5 +188,132 @@ struct iOSChatSoloView: View {
             .background(Color.secondary.opacity(0.2), in: Circle())
             .foregroundStyle(.primary)
             .padding(.top, 2)
+    }
+}
+
+/// v0.8 QA F5: iOS counterpart of the Mac `PermissionPromptCard`. Reads
+/// the pending permission prompt off the WS-streamed snapshot, renders
+/// it as a floating bottom tray with option rows, and POSTs the user's
+/// choice through `AgentControlClient.respondToPermissionPrompt`. Same
+/// "never auto-dismiss, no skip" semantics as the Mac surface.
+@available(iOS 16, *)
+struct iOSPermissionPromptCard: View {
+    @ObservedObject var store: iOSChatStore
+    let sessionId: UUID
+    @ObservedObject var client: AgentControlClient
+
+    @State private var isResponding: Bool = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        if let prompt = store.snapshot.pendingPermissionPrompt {
+            VStack(spacing: 0) {
+                // Header row: chip + title
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(prompt.header)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(.yellow.opacity(0.18), in: Capsule())
+                    Text(prompt.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    if isResponding {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
+
+                if let detail = prompt.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                }
+
+                // Option rows
+                VStack(spacing: 1) {
+                    ForEach(Array(prompt.options.enumerated()), id: \.element.id) { idx, option in
+                        Button(action: { respond(promptId: prompt.id, optionId: option.id) }) {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(option.label)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundStyle(option.isDestructive ? Color.red : Color.primary)
+                                        if option.isRecommended {
+                                            Text("recommended")
+                                                .font(.system(size: 9, weight: .medium))
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 1)
+                                                .background(.secondary.opacity(0.15), in: Capsule())
+                                        }
+                                    }
+                                    if let desc = option.description, !desc.isEmpty {
+                                        Text(desc)
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                if idx + 1 <= 9 {
+                                    Text("\(idx + 1)")
+                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 20, height: 20)
+                                        .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isResponding)
+                    }
+                }
+                .padding(.bottom, 8)
+
+                if let err = errorMessage {
+                    Text(err)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(.regularMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 6)
+        }
+    }
+
+    private func respond(promptId: String, optionId: String) {
+        guard !isResponding else { return }
+        isResponding = true
+        errorMessage = nil
+        Task {
+            await client.respondToPermissionPrompt(
+                sessionId: sessionId,
+                promptId: promptId,
+                optionId: optionId
+            )
+            await MainActor.run { isResponding = false }
+        }
     }
 }

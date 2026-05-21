@@ -137,19 +137,41 @@ public final class DaemonChatStoreRegistry {
            session.kind == .chat {
             let desiredURL: URL?
             if session.agent == .codex, session.codexChatBackend == .cli {
-                desiredURL = Self.newestCodexJSONL()
+                // F1: bind to THIS session's rollout by matching
+                // session_meta.cwd against effectiveCwd, gated by
+                // session.createdAt so prior rollouts are excluded.
+                // Falls back to nil (no swap) when no matching rollout
+                // exists yet, instead of grabbing an unrelated one.
+                desiredURL = Self.newestCodexJSONLMatching(
+                    cwd: session.effectiveCwd,
+                    after: session.createdAt
+                )
             } else if session.agent == .claude {
                 desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
             } else {
                 desiredURL = nil
             }
             if let desired = desiredURL, entry.store.currentFileURL != desired {
-                entry.store.switchTailedFile(to: desired)
-                var refreshed = entry
-                refreshed.lastTouchedAt = Date()
-                entries[session.id] = refreshed
-                registryLogger.info("snapshot-cache file-swap session=\(session.id.uuidString, privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
-                return entry.store
+                // F1 follow-up: if the existing entry is an sdkOnly
+                // fallback (e.g. Codex CLI chat created before its first
+                // rollout existed), switchTailedFile is a no-op. Drop
+                // the entry and let createStore rebuild — this is the
+                // one place where @ObservedObject invalidation is
+                // acceptable because the user hasn't started interacting
+                // with the chat yet (no rollout = no turns).
+                if entry.store.isSDKOnly {
+                    entry.store.stop()
+                    entries.removeValue(forKey: session.id)
+                    // Fall through to the "no entry" path which calls
+                    // createStore — which now finds the matching rollout.
+                } else {
+                    entry.store.switchTailedFile(to: desired)
+                    var refreshed = entry
+                    refreshed.lastTouchedAt = Date()
+                    entries[session.id] = refreshed
+                    registryLogger.info("snapshot-cache file-swap session=\(session.id.uuidString, privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
+                    return entry.store
+                }
             }
         }
         if var entry = entries[session.id] {
@@ -244,6 +266,64 @@ public final class DaemonChatStoreRegistry {
         return newest
     }
 
+    /// v0.8 QA F1: find the newest Codex rollout whose `session_meta.cwd`
+    /// matches `cwd` AND whose mtime is >= `after`. This isolates a
+    /// chat-mode Codex CLI session's rollout from any other Codex
+    /// activity on the machine — without this, `newestCodexJSONL()`
+    /// surfaces ANY codex run's transcript (concurrent chat, another
+    /// worktree, manual `codex` in Terminal). Returns nil when no
+    /// rollout for this session exists yet (e.g. before the user's first
+    /// prompt processes).
+    nonisolated public static func newestCodexJSONLMatching(cwd: String, after: Date) -> URL? {
+        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sessions", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: sessionsDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        // Gather candidates sorted by mtime desc so we can early-exit
+        // on the first cwd match.
+        var candidates: [(URL, Date)] = []
+        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            // Skip rollouts that predate session creation — those are
+            // from prior runs, can't belong to this session.
+            guard date >= after else { continue }
+            candidates.append((url, date))
+        }
+        candidates.sort { $0.1 > $1.1 }
+        let targetCwd = (cwd as NSString).standardizingPath
+        for (url, _) in candidates {
+            if let metaCwd = readSessionMetaCwd(from: url),
+               (metaCwd as NSString).standardizingPath == targetCwd {
+                return url
+            }
+        }
+        return nil
+    }
+
+    /// Peek the first line of a Codex rollout JSONL and return its
+    /// `session_meta.cwd` value, or nil if the file is empty / malformed /
+    /// not yet a session_meta record.
+    nonisolated private static func readSessionMetaCwd(from url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else {
+            return nil
+        }
+        // First line only — session_meta is always the first record.
+        guard let newlineIdx = data.firstIndex(of: 0x0a) else { return nil }
+        let firstLine = data.prefix(newlineIdx)
+        guard let json = try? JSONSerialization.jsonObject(with: firstLine) as? [String: Any] else {
+            return nil
+        }
+        guard (json["type"] as? String) == "session_meta",
+              let payload = json["payload"] as? [String: Any],
+              let cwd = payload["cwd"] as? String else {
+            return nil
+        }
+        return cwd
+    }
+
     // MARK: - Internals
 
     private func createStore(for session: AgentSession) -> SessionChatStore? {
@@ -287,11 +367,20 @@ public final class DaemonChatStoreRegistry {
                 store.start()
                 return store
             }
-            // Codex CLI chat: use the legacy newest-rollout resolver. Safe
-            // because Codex CLI rollouts are per-process; the freshly-spawned
-            // chat session's rollout will be the newest one in `~/.codex/sessions/`.
+            // Codex CLI chat: bind to the rollout whose session_meta.cwd
+            // matches this session's chat-cwd. Without the cwd gate, any
+            // concurrent codex run on the machine (another chat, another
+            // worktree, manual `codex` in Terminal) would surface its
+            // transcript inside THIS chat's UI. After-gate excludes
+            // pre-existing rollouts. Falls through to sdkOnly when the
+            // user hasn't sent their first prompt yet (no rollout
+            // written) — snapshotStore upgrades the store later via the
+            // file-swap path when the matching rollout appears.
             if session.agent == .codex && session.codexChatBackend == .cli {
-                if let url = Self.newestCodexJSONL() {
+                if let url = Self.newestCodexJSONLMatching(
+                    cwd: session.effectiveCwd,
+                    after: session.createdAt
+                ) {
                     let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
                     store.start()
                     return store

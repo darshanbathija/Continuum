@@ -112,15 +112,26 @@ public final class AgentControlServer {
     /// at which point the warmup / poll loop proceeds with the chosen
     /// dispatch keys.
     private var pendingPermissionContinuations: [UUID: CheckedContinuation<String, Never>] = [:]
+    /// v0.8 QA F4: matches the currently-pending promptId so
+    /// handlePermissionRespond can reject stale clicks (paired iOS
+    /// surface with a stale prompt, or v0.8.x Claude per-tool flow
+    /// where multiple prompts per session is real). Cleared alongside
+    /// the continuation.
+    private var pendingPermissionPromptIds: [UUID: String] = [:]
     /// Pending prompt → option-id → tmux key sequence map. Server-side
     /// because the wire never carries raw key sequences (security).
     private var permissionOptionDispatch: [UUID: [String: [String]]] = [:]
+    /// v0.8 QA F2: sentinel optionId resumed by handleDeleteSession /
+    /// stop() so any in-flight warmup task wakes up and returns
+    /// cleanly instead of waiting forever for the user.
+    private static let cancelledPermissionOptionId = "__cancelled__"
 
-    /// v0.8 QA: per-session background poll task that watches the CLI's
-    /// pane for permission prompts after warmup. Lets us surface mid-
-    /// session prompts (e.g. Claude's per-tool requests) the same way
-    /// we surface startup ones.
-    private var chatPermissionPollTasks: [UUID: Task<Void, Never>] = [:]
+    // v0.8.x: a per-session pane-scanner task for mid-conversation
+    // permission prompts (e.g. Claude per-tool approvals) will land
+    // here. The startup-time prompt path is wired through
+    // chatWarmupTasks above; the scanner is the next increment.
+    // Declared lazily when the v0.8.x scanner ships — keeping the
+    // var here today would be dead code that misleads readers.
 
     /// v0.8 QA: same-process accessor so Mac UI's SessionsModel can read
     /// from the daemon's SessionChatStore (the one CodexSDKEventIngestor
@@ -2754,6 +2765,12 @@ public final class AgentControlServer {
                     prompt: prompt,
                     dispatch: dispatch
                 )
+                // v0.8 QA F2: handleDeleteSession may wake us with the
+                // cancellation sentinel. Bail without dispatching keys —
+                // the session is being torn down anyway.
+                if chosen == Self.cancelledPermissionOptionId {
+                    return
+                }
                 if chosen == "no" {
                     return
                 }
@@ -2784,9 +2801,10 @@ public final class AgentControlServer {
         prompt: PendingPermissionPrompt,
         dispatch: [String: [String]]
     ) async -> String {
-        // Register the dispatch map so handlePermissionRespond can look
-        // up the keys when the user clicks.
+        // Register the dispatch map + promptId so handlePermissionRespond
+        // can look up the keys (F2) and reject stale clicks (F4).
         permissionOptionDispatch[session.id] = dispatch
+        pendingPermissionPromptIds[session.id] = prompt.id
         // Publish the prompt to the store so the Mac UI re-renders.
         if let store = chatStoreRegistry.snapshotStore(for: session) {
             store.setPendingPermissionPrompt(prompt)
@@ -2795,18 +2813,22 @@ public final class AgentControlServer {
         let optionId: String = await withCheckedContinuation { cont in
             pendingPermissionContinuations[session.id] = cont
         }
-        // Clear the published prompt + dispatch map.
+        // Clear the published prompt + dispatch map + promptId.
         if let store = chatStoreRegistry.snapshotStore(for: session) {
             store.setPendingPermissionPrompt(nil)
         }
         permissionOptionDispatch[session.id] = nil
+        pendingPermissionPromptIds[session.id] = nil
         return optionId
     }
 
     /// POST `/sessions/:id/permission-respond` body `{promptId, optionId}`.
-    /// Validates that the option belongs to the currently-pending prompt
-    /// (rejects stale clicks) and resumes the warmup/poll continuation
-    /// with the chosen optionId.
+    /// Validates that both the promptId AND optionId belong to the
+    /// currently-pending prompt (rejects stale clicks where the UI is
+    /// behind the daemon's current prompt — e.g. iOS surface with a
+    /// cached prompt, or future Claude per-tool flow where multiple
+    /// prompts queue per session). Resumes the warmup/poll continuation
+    /// with the chosen optionId on success.
     private func handlePermissionRespond(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId) else {
             sendResponse(.notFound, on: connection); return
@@ -2814,9 +2836,10 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(PermissionRespondRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
-        // Look up the pending continuation + dispatch.
-        guard let cont = pendingPermissionContinuations.removeValue(forKey: uuid) else {
-            // No prompt pending — stale click after dismissal.
+        // Reject stale clicks where the UI's promptId doesn't match the
+        // currently-pending prompt. Done BEFORE removing the continuation
+        // so legitimate clicks against the live prompt still succeed.
+        guard let currentPromptId = pendingPermissionPromptIds[uuid] else {
             sendResponse(HTTPResponse(
                 status: 409, reason: "Conflict",
                 contentType: "application/json",
@@ -2824,17 +2847,52 @@ public final class AgentControlServer {
             ), on: connection)
             return
         }
+        guard currentPromptId == req.promptId else {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"stale_prompt","current":"\#(currentPromptId)"}"#.utf8)
+            ), on: connection)
+            return
+        }
         guard let dispatch = permissionOptionDispatch[uuid],
               dispatch[req.optionId] != nil else {
-            // Unknown option id — restore the continuation so the UI can
-            // re-click and try again.
-            pendingPermissionContinuations[uuid] = cont
             sendResponse(.badRequest, on: connection)
+            return
+        }
+        guard let cont = pendingPermissionContinuations.removeValue(forKey: uuid) else {
+            // Should not happen given the promptId check above, but be
+            // defensive — promptId map and continuation map can briefly
+            // disagree under concurrent cancellation.
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"no_pending_prompt"}"#.utf8)
+            ), on: connection)
             return
         }
         serverLogger.info("permission respond session=\(uuid.uuidString, privacy: .public) option=\(req.optionId, privacy: .public)")
         cont.resume(returning: req.optionId)
         sendJSON(["ok": true], on: connection)
+    }
+
+    /// v0.8 QA F2: wake any pending permission continuation with the
+    /// cancel sentinel. Used by handleDeleteSession and stop() so
+    /// orphaned warmup tasks don't hang waiting for a user click on a
+    /// session that's been torn down. Idempotent — safe to call when
+    /// nothing is pending.
+    @MainActor
+    private func cancelPendingPermissionPrompt(sessionId: UUID) {
+        guard let cont = pendingPermissionContinuations.removeValue(forKey: sessionId) else {
+            return
+        }
+        pendingPermissionPromptIds[sessionId] = nil
+        permissionOptionDispatch[sessionId] = nil
+        if let session = registry.session(id: sessionId),
+           let store = chatStoreRegistry.snapshotStore(for: session) {
+            store.setPendingPermissionPrompt(nil)
+        }
+        cont.resume(returning: Self.cancelledPermissionOptionId)
     }
 
     /// One-shot guard for a CheckedContinuation race. Used by
@@ -3135,6 +3193,16 @@ public final class AgentControlServer {
               let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection)
             return
+        }
+        // v0.8 QA F2: wake any pending permission continuation BEFORE
+        // teardown so a stuck warmup task can return cleanly instead of
+        // hanging on a session we're about to delete. Idempotent.
+        cancelPendingPermissionPrompt(sessionId: uuid)
+        // v0.8 QA F2: cancel the warmup task (lets it return early via
+        // the cancellation sentinel from the line above), and drop the
+        // entry from the map so handleSendPrompt can't await it later.
+        if let task = chatWarmupTasks.removeValue(forKey: uuid) {
+            task.cancel()
         }
         // v0.8 Phase 4.5: tear down any SDK chat infrastructure first
         // (ingestor sink + relay sidecar). Idempotent on non-SDK sessions.

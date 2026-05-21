@@ -292,6 +292,31 @@ public final class CodexSubscriptionRelay {
         // sent `{op:"shutdown"}` to the sidecar one tick after `{op:"start"}`.
         // Net effect: sidecar shut down before the SDK could respond. Cleanup
         // is now strictly explicit (stop / teardownSDKChat / app-quit reaper).
+        //
+        // v0.8 QA F3: BUT we DO need to react to natural process death —
+        // if the Node sidecar crashes or exits, we need to remove
+        // active[sessionId] so isActive() returns false and the next
+        // user send respawns a fresh sidecar. Without this, follow-up
+        // sends write to a dead pipe and silently fail. terminationHandler
+        // runs on a background queue when the process exits for ANY
+        // reason (graceful stop, crash, signal). MainActor-hop to mutate
+        // the actor-isolated state.
+        let sessionId = session.id
+        process.terminationHandler = { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // Only clean up if THIS handle is still the active one —
+                // a concurrent stop() may have already swapped it.
+                if self.active[sessionId] === handle {
+                    self.active.removeValue(forKey: sessionId)
+                }
+                if let subject = self.subjects.removeValue(forKey: sessionId) {
+                    subject.send(completion: .finished)
+                }
+                handle.continuation.finish()
+                relayLogger.info("Codex relay sidecar exited for session=\(sessionId.uuidString, privacy: .public); active map cleared")
+            }
+        }
 
         return CodexRelaySubscription(
             sessionId: session.id,

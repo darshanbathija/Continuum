@@ -206,6 +206,18 @@ public final class AgentControlClient: ObservableObject {
                         body: SendPromptRequest(text: text, asFollowUp: asFollowUp))
     }
 
+    /// v0.8 QA F5: answer a CLI permission prompt (e.g. Codex's "Trust
+    /// this directory?"). The daemon dispatches the key sequence
+    /// corresponding to `optionId` and clears the published prompt on
+    /// the session's store. iOS UI uses this when the user taps an
+    /// option on `iOSPermissionPromptCard`.
+    public func respondToPermissionPrompt(sessionId: UUID, promptId: String, optionId: String) async {
+        await postBody(
+            path: "/sessions/\(sessionId.uuidString)/permission-respond",
+            body: PermissionRespondRequest(promptId: promptId, optionId: optionId)
+        )
+    }
+
     /// Upload raw image bytes to the daemon's per-session staging dir.
     /// The Mac writes them to `~/Library/Application Support/Clawdmeter/
     /// attachments/<sessionId>/<uuid>.<ext>` (or the Codex worktree's

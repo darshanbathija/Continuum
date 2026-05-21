@@ -258,6 +258,12 @@ public final class SessionChatStore: ObservableObject {
     /// Codex CLI sessions (Codex CLI writes a fresh rollout per turn).
     public var currentFileURL: URL { sessionFileURL }
 
+    /// v0.8 QA F1: lets the registry detect an sdkOnly fallback store
+    /// and rebuild it as a JSONL-backed store once a matching rollout
+    /// finally appears on disk (Codex CLI chat created before the
+    /// user's first prompt = no rollout yet at createStore time).
+    public var isSDKOnly: Bool { sdkOnly }
+
     /// v0.8 QA: re-aim the JSONLTail at a new file in place. Used when
     /// Codex CLI rotates its rollout per turn — without this, the daemon
     /// would have to create a NEW SessionChatStore which would
@@ -271,10 +277,16 @@ public final class SessionChatStore: ObservableObject {
         guard !sdkOnly else { return }
         guard newURL != sessionFileURL else { return }
         chatLogger.info("Switching tailed file for session \(self.sessionId.uuidString, privacy: .public): \(self.sessionFileURL.lastPathComponent, privacy: .public) → \(newURL.lastPathComponent, privacy: .public)")
-        // Stop the current tail + cancel in-flight ingest tasks. We
-        // explicitly DON'T reset the staging actor — the snapshot
-        // continues to accumulate items from both files, which matches
-        // user expectation (the chat thread shows the full session).
+        // Stop the current tail + cancel in-flight ingest tasks, then
+        // re-aim and re-start. start() resets the staging actor (bumps
+        // parseGeneration + Task.detached staging.reset), so the new
+        // snapshot starts empty and gets repopulated from the new file.
+        // For Codex CLI this is correct because each rotated rollout
+        // contains the full conversation history (the CLI passes the
+        // previous threadId on resume), so no entries are lost in the
+        // user-visible chat thread. If we ever wire this for an agent
+        // that doesn't carry forward history per file (e.g. a future
+        // Claude rotation path), revisit whether to preserve staging.
         tail?.stop()
         tail = nil
         ingestTailTask?.cancel()
