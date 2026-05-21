@@ -25,6 +25,9 @@ struct ChatSoloView: View {
             header
             Divider()
             transcript
+            if let store = chatStore {
+                PermissionPromptCard(store: store, sessionId: session.id)
+            }
             Divider()
             composer
         }
@@ -202,6 +205,116 @@ struct ChatSoloView: View {
         _ = try? await URLSession.shared.data(for: req)
         // Local registry mirror catches up via the next refresh.
         await model.refresh()
+    }
+}
+
+/// v0.8 QA: AskUserQuestion-style card surfacing a CLI permission prompt.
+/// Renders when the SessionChatStore has a pending prompt (e.g. Codex's
+/// "Trust this directory?"); user clicks an option → POST to daemon →
+/// daemon dispatches the corresponding keys to the CLI's TUI → card
+/// disappears. Recommended option gets the prominent button style.
+@available(macOS 14, *)
+struct PermissionPromptCard: View {
+    @ObservedObject var store: SessionChatStore
+    let sessionId: UUID
+
+    @State private var isResponding: Bool = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        if let prompt = store.pendingPermissionPrompt {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Text(prompt.header)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.secondary.opacity(0.12), in: Capsule())
+                    Spacer()
+                    if isResponding {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                Text(prompt.title)
+                    .font(.system(size: 14, weight: .semibold))
+                if let detail = prompt.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 8) {
+                    ForEach(prompt.options) { option in
+                        Button(action: { respond(promptId: prompt.id, optionId: option.id) }) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.label)
+                                    .font(.system(size: 12, weight: .medium))
+                                if let desc = option.description, !desc.isEmpty {
+                                    Text(desc)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(buttonTint(for: option))
+                        .disabled(isResponding)
+                    }
+                }
+                if let err = errorMessage {
+                    Text(err).font(.system(size: 11)).foregroundStyle(.red)
+                }
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1)
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+    }
+
+    private func buttonTint(for option: PermissionOption) -> Color {
+        if option.isDestructive { return .red }
+        if option.isRecommended { return .accentColor }
+        return .gray
+    }
+
+    private func respond(promptId: String, optionId: String) {
+        guard !isResponding else { return }
+        isResponding = true
+        errorMessage = nil
+        Task {
+            defer { Task { @MainActor in isResponding = false } }
+            guard let runtime = AppDelegate.runtime,
+                  let port = runtime.agentControlServer.boundPort else {
+                await MainActor.run { errorMessage = "Daemon not running." }
+                return
+            }
+            let token = PairingTokenStore.shared.currentToken()
+            guard let url = URL(string: "http://127.0.0.1:\(port)/sessions/\(sessionId.uuidString)/permission-respond") else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 5
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let body = PermissionRespondRequest(promptId: promptId, optionId: optionId)
+            req.httpBody = try? JSONEncoder().encode(body)
+            do {
+                let (_, resp) = try await URLSession.shared.data(for: req)
+                if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                    await MainActor.run { errorMessage = "Daemon HTTP \(http.statusCode)" }
+                }
+            } catch {
+                await MainActor.run { errorMessage = error.localizedDescription }
+            }
+        }
     }
 }
 

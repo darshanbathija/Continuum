@@ -1419,6 +1419,14 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
     /// Empty for non-Codex sessions and for Codex sessions that
     /// haven't received a todo_list event yet.
     public let codexTodos: [CodexTodoItem]
+    /// v0.8 QA: a CLI permission prompt that needs user input —
+    /// e.g. Codex's "Do you trust this directory?", Claude's per-tool
+    /// approval requests. The Mac/iOS chat UI renders this as an
+    /// AskUserQuestion-style card with option buttons; selecting one
+    /// POSTs to `/sessions/:id/permission-respond` and the daemon
+    /// dispatches the appropriate keys to the CLI's TUI. Nil when no
+    /// prompt is pending.
+    public let pendingPermissionPrompt: PendingPermissionPrompt?
     public let totalInputTokens: Int
     public let totalOutputTokens: Int
     public let cacheReadTokens: Int
@@ -1433,6 +1441,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         sourceEntries: [SourceEntry],
         artifactEntries: [ArtifactEntry],
         codexTodos: [CodexTodoItem] = [],
+        pendingPermissionPrompt: PendingPermissionPrompt? = nil,
         totalInputTokens: Int,
         totalOutputTokens: Int,
         cacheReadTokens: Int = 0,
@@ -1446,6 +1455,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         self.sourceEntries = sourceEntries
         self.artifactEntries = artifactEntries
         self.codexTodos = codexTodos
+        self.pendingPermissionPrompt = pendingPermissionPrompt
         self.totalInputTokens = totalInputTokens
         self.totalOutputTokens = totalOutputTokens
         self.cacheReadTokens = cacheReadTokens
@@ -1459,6 +1469,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case sessionId, items, planSteps, sourceEntries, artifactEntries
         case codexTodos
+        case pendingPermissionPrompt
         case totalInputTokens, totalOutputTokens, cacheReadTokens, cacheCreationTokens
         case lastEventAt, updateCounter
     }
@@ -1471,12 +1482,85 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         self.sourceEntries = try c.decode([SourceEntry].self, forKey: .sourceEntries)
         self.artifactEntries = try c.decode([ArtifactEntry].self, forKey: .artifactEntries)
         self.codexTodos = try c.decodeIfPresent([CodexTodoItem].self, forKey: .codexTodos) ?? []
+        self.pendingPermissionPrompt = try c.decodeIfPresent(PendingPermissionPrompt.self, forKey: .pendingPermissionPrompt)
         self.totalInputTokens = try c.decode(Int.self, forKey: .totalInputTokens)
         self.totalOutputTokens = try c.decode(Int.self, forKey: .totalOutputTokens)
         self.cacheReadTokens = try c.decodeIfPresent(Int.self, forKey: .cacheReadTokens) ?? 0
         self.cacheCreationTokens = try c.decodeIfPresent(Int.self, forKey: .cacheCreationTokens) ?? 0
         self.lastEventAt = try c.decodeIfPresent(Date.self, forKey: .lastEventAt)
         self.updateCounter = try c.decode(UInt64.self, forKey: .updateCounter)
+    }
+}
+
+/// v0.8 QA: a CLI-side permission prompt surfaced to the user. The card
+/// renders the title + detail and one button per option; the recommended
+/// option is highlighted. Identifies are scoped per-session — the same
+/// physical CLI prompt re-detected in the pane gets the same id so the
+/// UI doesn't double-render.
+public struct PendingPermissionPrompt: Codable, Sendable, Hashable, Identifiable {
+    public let id: String
+    /// One-line question shown as the card title (e.g. "Trust this directory?").
+    public let title: String
+    /// Optional longer body (e.g. the chat-cwd path or the tool that's
+    /// being requested). Nil for prompts where the title is sufficient.
+    public let detail: String?
+    /// Short chip label shown above the title — matches the
+    /// AskUserQuestion "header" field (e.g. "Codex trust", "Claude tool").
+    public let header: String
+    public let options: [PermissionOption]
+    public let surfacedAt: Date
+
+    public init(
+        id: String,
+        title: String,
+        detail: String? = nil,
+        header: String,
+        options: [PermissionOption],
+        surfacedAt: Date = Date()
+    ) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.header = header
+        self.options = options
+        self.surfacedAt = surfacedAt
+    }
+}
+
+public struct PermissionOption: Codable, Sendable, Hashable, Identifiable {
+    public let id: String
+    public let label: String
+    public let description: String?
+    public let isRecommended: Bool
+    public let isDestructive: Bool
+
+    public init(
+        id: String,
+        label: String,
+        description: String? = nil,
+        isRecommended: Bool = false,
+        isDestructive: Bool = false
+    ) {
+        self.id = id
+        self.label = label
+        self.description = description
+        self.isRecommended = isRecommended
+        self.isDestructive = isDestructive
+    }
+}
+
+/// Request body for `POST /sessions/:id/permission-respond`. The daemon
+/// looks up the pending prompt for the session, validates that
+/// `promptId` matches (rejects stale clicks if the prompt was already
+/// answered), maps `optionId` to the CLI-specific key sequence, sends
+/// it via tmux, and clears the pending prompt on the session's store.
+public struct PermissionRespondRequest: Codable, Sendable {
+    public let promptId: String
+    public let optionId: String
+
+    public init(promptId: String, optionId: String) {
+        self.promptId = promptId
+        self.optionId = optionId
     }
 }
 

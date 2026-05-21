@@ -105,6 +105,23 @@ public final class AgentControlServer {
     /// / update-prompt dismissal. Cleared once the task completes.
     private var chatWarmupTasks: [UUID: Task<Void, Never>] = [:]
 
+    /// v0.8 QA: pending permission-prompt continuations awaiting user
+    /// response. Keyed by sessionId — only one prompt at a time per
+    /// session. The continuation is resumed by handlePermissionRespond
+    /// once the user clicks an option in the AskUserQuestion-style card,
+    /// at which point the warmup / poll loop proceeds with the chosen
+    /// dispatch keys.
+    private var pendingPermissionContinuations: [UUID: CheckedContinuation<String, Never>] = [:]
+    /// Pending prompt → option-id → tmux key sequence map. Server-side
+    /// because the wire never carries raw key sequences (security).
+    private var permissionOptionDispatch: [UUID: [String: [String]]] = [:]
+
+    /// v0.8 QA: per-session background poll task that watches the CLI's
+    /// pane for permission prompts after warmup. Lets us surface mid-
+    /// session prompts (e.g. Claude's per-tool requests) the same way
+    /// we surface startup ones.
+    private var chatPermissionPollTasks: [UUID: Task<Void, Never>] = [:]
+
     /// v0.8 QA: same-process accessor so Mac UI's SessionsModel can read
     /// from the daemon's SessionChatStore (the one CodexSDKEventIngestor
     /// writes to) instead of creating its own empty parallel store. iOS
@@ -888,6 +905,9 @@ public final class AgentControlServer {
         }
         t.register(method: "POST", pattern: "/sessions/:id/interrupt") { [weak self] _, conn, params in
             await self?.handleInterrupt(sessionId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/permission-respond") { [weak self] req, conn, params in
+            await self?.handlePermissionRespond(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
         t.register(method: "POST", pattern: "/sessions/:id/autopilot") { [weak self] req, conn, params in
             await self?.handleSetAutopilot(sessionId: params["id"] ?? "", request: req, connection: conn)
@@ -1904,6 +1924,11 @@ public final class AgentControlServer {
             // Cold fallback keeps empty — codex todos only land via SDK
             // events, which the store accumulates while live.
             codexTodos: registryStore?.snapshot.codexTodos ?? [],
+            // v0.8 QA: forward any pending CLI permission prompt so iOS
+            // (or HTTP-polling clients) can render the AskUserQuestion-
+            // style card too. Mac UI reads the @Published property
+            // directly on SessionChatStore.
+            pendingPermissionPrompt: registryStore?.pendingPermissionPrompt,
             totalInputTokens: 0,
             totalOutputTokens: 0,
             lastEventAt: snapshotLastEventAt,
@@ -2650,63 +2675,152 @@ public final class AgentControlServer {
         }
     }
 
-    /// v0.8 QA: dismiss in-pane prompts that block the CLI from receiving
-    /// the user's first chat prompt. Covers Codex CLI's "Update available!"
-    /// prompt AND its "Do you trust the contents of this directory?" prompt
-    /// (which fires for chat-cwd paths since they're not git repos), plus
-    /// any Claude TUI welcome blurb that swallows the first keystroke.
-    /// Runs after the chat-session spawn returns to the caller, so HTTP
-    /// latency isn't bloated. Best-effort: probe + dismiss with retry, since
-    /// the trust prompt typically lands after the update prompt is cleared.
+    /// v0.8 QA: prepare the CLI pane for the user's first prompt:
+    /// - **Codex update prompt**: auto-update (per user request — always
+    ///   take the latest version, no question asked).
+    /// - **Codex trust prompt**: surface to user via AskUserQuestion-style
+    ///   card. Awaits the user's response, never auto-dismisses.
+    /// - **Claude welcome**: just give the TUI time to render.
+    ///
+    /// Mid-session prompt detection (e.g. Claude per-tool approvals)
+    /// happens in `pollPermissionPrompts(...)`, started after warmup.
     private func warmupChatPane(session: AgentSession, paneId: String) async {
         guard session.kind == .chat else { return }
         switch session.agent {
         case .codex:
-            // Only the CLI backend uses tmux. SDK is dispatched elsewhere.
             guard session.codexChatBackend == .cli else { return }
-            // Loop a few times: each cycle waits for the screen to render,
-            // captures it, and dismisses the recognized prompt. Multiple
-            // prompts can show in sequence (update screen → trust screen).
-            for cycle in 0..<4 {
-                try? await Task.sleep(nanoseconds: cycle == 0 ? 1_500_000_000 : 800_000_000)
-                let captured = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-                if captured.contains("Update available") {
-                    // Options: 1 update, 2 skip, 3 skip until next version.
-                    // Send "2\r" to skip just this version.
-                    serverLogger.info("chat warmup: dismissing Codex update prompt for \(session.id.uuidString, privacy: .public)")
-                    try? await tmux.sendKeys(paneId: paneId, bytes: Data([0x32, 0x0d]))
-                    continue
-                }
-                if captured.contains("Do you trust the contents") {
-                    // The trust dialog ignores a bare Enter — the dialog
-                    // doesn't wire its input handler until the user touches
-                    // a navigation key first. Send Down + Up + Enter so we
-                    // refresh the selection (back to "1. Yes, continue")
-                    // and then commit. Verified by manual repro in tmux.
-                    serverLogger.info("chat warmup: dismissing Codex trust prompt for \(session.id.uuidString, privacy: .public)")
-                    try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
-                    continue
-                }
-                // No known blocking prompt visible — done.
-                break
+            // First pane probe lets the CLI render its initial screen.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            // Step 1: auto-update if the update prompt is showing. Per
+            // user spec we always take the latest version — no UI prompt.
+            var captured = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
+            if captured.contains("Update available") {
+                serverLogger.info("chat warmup: auto-updating Codex CLI for \(session.id.uuidString, privacy: .public)")
+                try? await tmux.sendKeys(paneId: paneId, bytes: Data([0x31, 0x0d]))
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                captured = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
             }
-            // After dismissal, Codex CLI needs ~3s to render its main TUI,
-            // load MCP servers, and wire up the input handler. Sending the
-            // user's first prompt too soon causes the paste to be dropped
-            // and the bare Enter to submit whatever placeholder text is
-            // showing — manifested in the rollout as user messages like
-            // "Summarize recent commits" instead of the actual prompt.
+            // Step 2: surface the trust prompt to the user if shown. Only
+            // surfaces ONCE per warmup — the CLI flickers the trust screen
+            // briefly during MCP init even after dismissal, and the
+            // continuation already resolved so we don't double-prompt.
+            if captured.contains("Do you trust the contents") {
+                serverLogger.info("chat warmup: surfacing Codex trust prompt for \(session.id.uuidString, privacy: .public)")
+                let cwd = session.effectiveCwd
+                let prompt = PendingPermissionPrompt(
+                    id: "codex-trust-\(UUID().uuidString)",
+                    title: "Trust this directory?",
+                    detail: "Codex wants to run in \(cwd). Trusting it allows project-local config, hooks, and exec policies to load. Working with untrusted contents has higher risk of prompt injection.",
+                    header: "Codex CLI",
+                    options: [
+                        PermissionOption(
+                            id: "yes",
+                            label: "Yes, continue",
+                            description: "Trust this directory and allow Codex to run.",
+                            isRecommended: true
+                        ),
+                        PermissionOption(
+                            id: "no",
+                            label: "No, quit",
+                            description: "Quit the Codex CLI for this chat.",
+                            isDestructive: true
+                        ),
+                    ]
+                )
+                let dispatch: [String: [String]] = [
+                    // Down + Up refreshes selection back to option 1
+                    // ("Yes, continue") — the dialog ignores a bare
+                    // Enter until a nav key wakes its input handler.
+                    "yes": ["Down", "Up", "Enter"],
+                    // To select "No, quit" we go Down then Enter.
+                    "no": ["Down", "Enter"],
+                ]
+                let chosen = await surfacePermissionPrompt(
+                    session: session,
+                    prompt: prompt,
+                    dispatch: dispatch
+                )
+                if chosen == "no" {
+                    return
+                }
+                try? await tmux.command(["send-keys", "-t", paneId] + (dispatch[chosen] ?? ["Down", "Up", "Enter"]))
+                // Give the CLI 3s to finish dismissing + start MCP init.
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+            // Give the CLI another 3s to finish MCP setup + wire up its
+            // input handler before the first user prompt can paste.
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         case .claude:
-            // Claude TUI shows "Welcome back" briefly with a tips card,
-            // then auto-renders the input box (❯). A single probe is
-            // enough — the capture gives the TUI ~1.5s to settle.
+            // Claude welcome auto-dismisses on render. Probe to give it
+            // ~1.5s, then drop into the permission-poll loop.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
         case .gemini:
-            // v0.9 path. Nothing to do today.
             break
         }
+    }
+
+    /// Surface a permission prompt to the user via the chat store and
+    /// await their response. Returns the option-id they chose. Never
+    /// times out — the prompt persists until the user clicks (the
+    /// continuation map is the source of truth).
+    @MainActor
+    private func surfacePermissionPrompt(
+        session: AgentSession,
+        prompt: PendingPermissionPrompt,
+        dispatch: [String: [String]]
+    ) async -> String {
+        // Register the dispatch map so handlePermissionRespond can look
+        // up the keys when the user clicks.
+        permissionOptionDispatch[session.id] = dispatch
+        // Publish the prompt to the store so the Mac UI re-renders.
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            store.setPendingPermissionPrompt(prompt)
+        }
+        // Await the user's response via the continuation.
+        let optionId: String = await withCheckedContinuation { cont in
+            pendingPermissionContinuations[session.id] = cont
+        }
+        // Clear the published prompt + dispatch map.
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            store.setPendingPermissionPrompt(nil)
+        }
+        permissionOptionDispatch[session.id] = nil
+        return optionId
+    }
+
+    /// POST `/sessions/:id/permission-respond` body `{promptId, optionId}`.
+    /// Validates that the option belongs to the currently-pending prompt
+    /// (rejects stale clicks) and resumes the warmup/poll continuation
+    /// with the chosen optionId.
+    private func handlePermissionRespond(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let req = try? JSONDecoder().decode(PermissionRespondRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // Look up the pending continuation + dispatch.
+        guard let cont = pendingPermissionContinuations.removeValue(forKey: uuid) else {
+            // No prompt pending — stale click after dismissal.
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"no_pending_prompt"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        guard let dispatch = permissionOptionDispatch[uuid],
+              dispatch[req.optionId] != nil else {
+            // Unknown option id — restore the continuation so the UI can
+            // re-click and try again.
+            pendingPermissionContinuations[uuid] = cont
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        serverLogger.info("permission respond session=\(uuid.uuidString, privacy: .public) option=\(req.optionId, privacy: .public)")
+        cont.resume(returning: req.optionId)
+        sendJSON(["ok": true], on: connection)
     }
 
     /// One-shot guard for a CheckedContinuation race. Used by

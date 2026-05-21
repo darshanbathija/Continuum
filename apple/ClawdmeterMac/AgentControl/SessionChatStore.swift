@@ -159,6 +159,18 @@ public final class SessionChatStore: ObservableObject {
         Self.flattenMessages(from: snapshot.items)
     }
     @Published public private(set) var isLoading: Bool = true
+
+    /// v0.8 QA: a CLI permission prompt awaiting user input. The Mac UI
+    /// renders this as an AskUserQuestion-style card; on user click the
+    /// daemon dispatches the corresponding keys to the CLI's TUI and
+    /// clears this back to nil. Nil for non-chat sessions, sessions
+    /// where no permission is pending, and Codex SDK chat (the SDK
+    /// doesn't surface permission prompts through tmux).
+    @Published public private(set) var pendingPermissionPrompt: PendingPermissionPrompt?
+
+    public func setPendingPermissionPrompt(_ prompt: PendingPermissionPrompt?) {
+        pendingPermissionPrompt = prompt
+    }
     /// External plan text (from AgentSession.planText). When set, the
     /// next staging snapshot extracts steps from this text and merges
     /// them with steps found in chat messages. The view doesn't have to
