@@ -52,6 +52,11 @@ targets:
           # v0.7.15: same exclusion for the bundled uv binary used by
           # the Antigravity SDK toggle's Python venv provisioning.
           - "Resources/Vendor/uv/**"
+          # v0.14.0: bundled Open Design (Node daemon + Next.js static
+          # export + node_modules + plugin + bridge sidecar). Exclude
+          # from source scanning so xcodegen doesn't try to compile any
+          # .ts / .js / .json inside the vendor tree as Swift sources.
+          - "Resources/Vendor/open-design/**"
       # v0.7.1: bundled Node binary is treated as a "Copy Bundle
       # Resources" entry — Xcode copies the whole Vendor/node/ tree
       # into the .app's Contents/Resources/Vendor/node/. The folder
@@ -126,6 +131,24 @@ targets:
           fi
         outputFiles:
           - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/uv/uv
+      - name: Build bundled Open Design (if missing or stale)
+        # v0.14.0: stage Open Design daemon + web + node_modules + plugin
+        # + bridge sidecar under Vendor/open-design/. The script is
+        # stamp-gated (skips when source unchanged). Skip via
+        # CLAWDMETER_SKIP_BUNDLED_OPEN_DESIGN=1 — Design tab will then
+        # be non-functional unless a system Open Design install is
+        # detected (not implemented in v1).
+        script: |
+          if [ "${CLAWDMETER_SKIP_BUNDLED_OPEN_DESIGN:-0}" = "1" ]; then
+            echo "Skipping bundled Open Design build (CLAWDMETER_SKIP_BUNDLED_OPEN_DESIGN=1)"
+            exit 0
+          fi
+          REPO_ROOT="$(cd "$SRCROOT/.." && pwd)"
+          if [ ! -f "$REPO_ROOT/apple/ClawdmeterMac/Resources/Vendor/open-design/apps/daemon/dist/cli.js" ]; then
+            "$REPO_ROOT/tools/build-bundled-open-design.sh"
+          fi
+        outputFiles:
+          - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/open-design/apps/daemon/dist/cli.js
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.mac
