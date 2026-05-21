@@ -4,6 +4,76 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.13.0 build 73] - 2026-05-22 — Mac loopback transport, ComposerSendController, real Code IDE actions (`feat/mac-loopback-transport`)
+
+PR #24a (the first half of the Code IDE work, per the X2 plan split).
+Mac now talks to its own daemon over loopback HTTP/WS — same code path
+iOS uses — so the Code IDE's plan-approve, refine, send-prompt, and
+stop actions all reach the daemon for real. Implements D2 (sessions +
+actions surface only; ReviewPane stays in-process in PR #24b per X1),
+A1 (synchronous bootstrap), A3 (Edit plan = Refine semantically), and
+CQ1 (shared `ComposerSendController` state machine).
+
+### Added
+
+- **`apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AgentControlClient.swift`**:
+  relocated from `apple/ClawdmeteriOS/`. Gains a second initializer
+  `init(host:httpPort:wsPort:token:)` that holds pairing values
+  in-memory per instance (Mac loopback path). Existing zero-arg init
+  (UserDefaults-backed) preserved for iOS. `setPairing` /
+  `clearPairing` are no-ops on explicit-config instances so they
+  cannot corrupt iOS pairing keys.
+- **`apple/ClawdmeterShared/Sources/ClawdmeterShared/Composer/ComposerSendController.swift`**:
+  shared send-state state machine (CQ1). 4 surfaces consume:
+  `text` / `sending` / `lastError` / `canSend` / `send(via: SendKind)`.
+  `SendKind`: `.solo` / `.refine` / `.broadcast` / `.chatCreate`.
+- **`apple/ClawdmeterMac/AgentControl/MacLoopbackClient.swift`**:
+  `@MainActor` factory that builds an `AgentControlClient` for
+  `127.0.0.1` + the local server's bound ports + a fresh loopback
+  token. Returns nil only when the agent server failed to bind any
+  port — surfaces as an `NSAlert` so users aren't left with a
+  silently-broken Code IDE.
+- **`AgentControlServer.localLoopbackToken`**: per-launch random UUID
+  for in-process clients. Auth path now accepts either pairing tokens
+  (iOS) or this loopback token (Mac) via a centralized `isAuthorized`
+  helper.
+- **`AgentControlClientSessionObserver`** (iOS): forwards the new
+  `Notification.Name.agentControlSessionsRefreshed` (posted from
+  Shared) to `LiveActivityCoordinator` + `WatchPlanBridgeIOS`. The two
+  iOS singletons used to be called directly from inside
+  `AgentControlClient.refreshSessions()`; they live in the iOS app
+  target and couldn't follow the client into Shared.
+
+### Changed
+
+- **Mac Code IDE actions** in `MacCodeView.swift` now reach the real
+  daemon:
+  - PlanHalo "Approve & run" → `client.approvePlan(sessionId:)`.
+  - PlanHalo "Refine" + "Edit plan" → modal Refine sheet (TextEditor)
+    → `sendPrompt(asFollowUp:true)`. A3: both buttons share the same
+    wire; Edit plan is just Refine with planText pre-filled.
+  - Composer (idle) Send button → real `TextField` bound to
+    `ComposerSendController.text` → `sendPrompt(asFollowUp:true)`.
+  - LiveTicker Stop → `client.interruptSession(sessionId:)` +
+    composerState reset.
+- **`AppRuntime.loopbackClient`**: optional published property set
+  after `agentControlServer.start()` completes its synchronous bind.
+- **`AppDelegate.configure(runtime:)`**: surfaces server-bind failure
+  via NSAlert (critical-gap fix from the plan's failure-modes table).
+- `AgentControlClient.urlHostLiteral` is now `public` so iOS-target
+  callers (`GeminiQuotaLiveActivityCoordinator`) can still reach it
+  after the relocation.
+
+### Test deliverables (T1)
+
+- **`AgentControlClientInitTests`** (8 tests): regression coverage for
+  the two construction modes; UserDefaults isolation verified;
+  explicit-config setPairing/clearPairing no-ops verified.
+- **`ComposerSendControllerTests`** (9 tests): state-machine coverage
+  including the A3 solo/refine wire-share contract.
+
+Builds clean on Mac + iOS + Watch.
+
 ## [0.11.0 build 72] - 2026-05-21 — Tahoe Code real data, native `.glassEffect`, legacy retirement (`feat/tahoe-code-and-legacy-retirement`)
 
 Finishes the v0.10 redesign with three substantial follow-ups: real

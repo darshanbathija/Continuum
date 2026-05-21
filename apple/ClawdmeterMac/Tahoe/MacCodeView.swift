@@ -26,6 +26,10 @@ public struct MacCodeView: View {
     /// Open a PR in the system browser. Wired only when the PR review
     /// tab is visible (i.e. demo bindings today).
     var onOpenPRInBrowser: (() -> Void)?
+    /// In-process daemon client for Mac IDE actions (PR #24a D2).
+    /// Nil when the local agent server failed to bind ports — actions
+    /// disable themselves rather than crash.
+    var loopbackClient: AgentControlClient?
 
     @State private var openId: UUID? = nil
     @State private var composerState: ComposerState = .idle
@@ -34,14 +38,36 @@ public struct MacCodeView: View {
     @State private var expanded: Set<String> = []
     @State private var didInitComposer: Bool = false
 
+    /// Refine/Edit plan modal state — both share the same wire (A3:
+    /// Edit plan = Refine via sendPrompt). The bool drives sheet
+    /// presentation; the text holds the in-flight user input.
+    @State private var refineSheetPresented: Bool = false
+    @State private var refineText: String = ""
+    @State private var actionAlertMessage: String?
+    @State private var refineSubmitting: Bool = false
+
+    /// Composer send controller for the idle-state composer Send button.
+    /// Owned per-MacCodeView instance; reset when the open session
+    /// changes so a half-typed draft doesn't flow into a different
+    /// session.
+    @StateObject private var composerController: ComposerSendController
+
     public init(
         data: TahoeCodeBindings = .demo,
         onNewSession: @escaping (String?) -> Void = { _ in },
-        onOpenPRInBrowser: (() -> Void)? = nil
+        onOpenPRInBrowser: (() -> Void)? = nil,
+        loopbackClient: AgentControlClient? = nil
     ) {
         self.data = data
         self.onNewSession = onNewSession
         self.onOpenPRInBrowser = onOpenPRInBrowser
+        self.loopbackClient = loopbackClient
+        // Construct a controller bound to the loopback client when
+        // available. In Previews / no-client mode, build a dummy
+        // controller bound to a UserDefaults-backed client so the view
+        // still renders — sends fail-fast on nil host.
+        let clientForController = loopbackClient ?? AgentControlClient()
+        _composerController = StateObject(wrappedValue: ComposerSendController(client: clientForController))
     }
 
     public var body: some View {
@@ -69,8 +95,17 @@ public struct MacCodeView: View {
                         ThreadHeader(session: openSession, isDemo: data.isDemo)
                         TahoeHair()
                     }
-                    Thread(session: openSession, state: composerState, isDemo: data.isDemo)
-                        .frame(maxHeight: .infinity)
+                    Thread(
+                        session: openSession,
+                        state: composerState,
+                        isDemo: data.isDemo,
+                        onApprovePlan: openSession != nil ? {
+                            approvePlan(sessionId: openSession!.id)
+                        } : {},
+                        onRefinePlan: { refineSheetPresented = true },
+                        canAct: loopbackClient != nil && openSession != nil
+                    )
+                    .frame(maxHeight: .infinity)
                     ComposerBar(
                         state: $composerState,
                         isDemo: data.isDemo,
@@ -79,7 +114,15 @@ public struct MacCodeView: View {
                             composerState = composerState == .idle ? .running
                                           : composerState == .running ? .plan
                                           : .idle
-                        }
+                        },
+                        onSend: loopbackClient != nil && openSession != nil ? {
+                            sendComposer(sessionId: openSession!.id)
+                        } : nil,
+                        onStop: loopbackClient != nil && openSession != nil ? {
+                            interrupt(sessionId: openSession!.id)
+                        } : nil,
+                        composerText: loopbackClient != nil ? $composerController.text : nil,
+                        sending: composerController.sending
                     )
                 }
             }
@@ -120,7 +163,7 @@ public struct MacCodeView: View {
                 expanded.insert(repo.key)
             }
         }
-        .onChange(of: openSession?.id) { _, _ in
+        .onChange(of: openSession?.id) { _, newId in
             // Switching to a session with a real plan auto-cycles the
             // composer into plan-mode; otherwise it stays idle so the
             // Refine/Approve actions don't dangle.
@@ -128,6 +171,125 @@ public struct MacCodeView: View {
                 composerState = .plan
             } else if !data.isDemo {
                 composerState = .idle
+            }
+            // Reset composer-controller state so a half-typed draft
+            // doesn't bleed across session switches.
+            if newId != nil { composerController.reset() }
+        }
+        // PR #24a Refine modal (A3: Edit plan reuses this too).
+        .sheet(isPresented: $refineSheetPresented) {
+            refineSheetView
+        }
+        // Action error surface.
+        .alert(
+            "Action failed",
+            isPresented: Binding(
+                get: { actionAlertMessage != nil },
+                set: { if !$0 { actionAlertMessage = nil } }
+            ),
+            actions: { Button("OK", role: .cancel) { actionAlertMessage = nil } },
+            message: { Text(actionAlertMessage ?? "") }
+        )
+    }
+
+    // MARK: - Action helpers (PR #24a)
+
+    /// Refine modal body. Pre-fills with the current planText so the user
+    /// can edit-then-resend. Per A3 (Edit plan = Refine), submission is
+    /// a plain `sendPrompt(asFollowUp:true)`.
+    @ViewBuilder
+    private var refineSheetView: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Refine the plan")
+                .font(.system(size: 16, weight: .semibold))
+            Text("Your message is sent to the agent as a plan-mode follow-up. The agent revises the plan and you re-approve.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            TextEditor(text: $refineText)
+                .font(.system(size: 13))
+                .frame(minHeight: 120)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 0.5)
+                }
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") {
+                    refineSheetPresented = false
+                    refineText = ""
+                }
+                .keyboardShortcut(.cancelAction)
+                Button(refineSubmitting ? "Sending…" : "Send") {
+                    submitRefine()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(refineSubmitting || refineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+    }
+
+    private func approvePlan(sessionId: UUID) {
+        guard let client = loopbackClient else {
+            actionAlertMessage = "Agent server isn't running. Restart Clawdmeter to try again."
+            return
+        }
+        Task { @MainActor in
+            await client.approvePlan(sessionId: sessionId)
+            if let err = client.lastError {
+                actionAlertMessage = err
+            }
+        }
+    }
+
+    private func submitRefine() {
+        guard let client = loopbackClient else {
+            actionAlertMessage = "Agent server isn't running. Restart Clawdmeter to try again."
+            return
+        }
+        guard let session = data.repos.first(where: { repo in
+            repo.sessions.contains { $0.id == (openId ?? data.openSessionId) }
+        })?.sessions.first(where: { $0.id == (openId ?? data.openSessionId) })
+        else {
+            actionAlertMessage = "No session selected."
+            return
+        }
+        let text = refineText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        refineSubmitting = true
+        Task { @MainActor in
+            defer {
+                refineSubmitting = false
+                refineSheetPresented = false
+                refineText = ""
+            }
+            await client.sendPrompt(sessionId: session.id, text: text, asFollowUp: true)
+            if let err = client.lastError {
+                actionAlertMessage = err
+            }
+        }
+    }
+
+    private func sendComposer(sessionId: UUID) {
+        Task { @MainActor in
+            await composerController.send(via: .solo(sessionId: sessionId))
+            if let err = composerController.lastError {
+                actionAlertMessage = err
+            }
+        }
+    }
+
+    private func interrupt(sessionId: UUID) {
+        guard let client = loopbackClient else {
+            actionAlertMessage = "Agent server isn't running."
+            return
+        }
+        Task { @MainActor in
+            await client.interruptSession(sessionId: sessionId)
+            composerState = .idle
+            if let err = client.lastError {
+                actionAlertMessage = err
             }
         }
     }
@@ -455,6 +617,11 @@ private struct Thread: View {
     var session: TahoeCodeSession?
     var state: MacCodeView.ComposerState
     var isDemo: Bool
+    /// PR #24a wires propagated down to PlanHalo for real plan
+    /// approve/refine actions.
+    var onApprovePlan: () -> Void = {}
+    var onRefinePlan: () -> Void = {}
+    var canAct: Bool = false
 
     /// Whether the open session has a real plan from the agent. Drives
     /// whether the PlanHalo renders at all in production — empty plan +
@@ -484,7 +651,13 @@ private struct Thread: View {
                 }
                 if state == .running { RunningRow(providerOverride: session?.agent, isDemo: isDemo) }
                 if state == .plan, (isDemo || hasRealPlan) {
-                    PlanHalo(session: session, isDemo: isDemo)
+                    PlanHalo(
+                        session: session,
+                        isDemo: isDemo,
+                        onApprove: onApprovePlan,
+                        onRefine: onRefinePlan,
+                        canAct: canAct
+                    )
                 }
             }
             .padding(.horizontal, 22).padding(.top, 8).padding(.bottom, 18)
@@ -622,6 +795,16 @@ private struct PlanHalo: View {
     @State private var auraGlow: Bool = false
     var session: TahoeCodeSession?
     var isDemo: Bool
+    /// Wires set by MacCodeView. In production they call
+    /// `loopbackClient.approvePlan(sessionId:)` / open the Refine modal.
+    /// Default `{}` keeps SwiftUI Previews and demo bindings working.
+    var onApprove: () -> Void = {}
+    /// Both "Refine" and "Edit plan" buttons fire this (A3: Edit plan =
+    /// Refine via the same `sendPrompt` wire).
+    var onRefine: () -> Void = {}
+    /// True when the action wires are reachable. False disables the
+    /// Approve & run button so users don't tap into a no-op.
+    var canAct: Bool = false
 
     /// Parse `session.planText` into discrete plan steps when available.
     /// In demo mode, falls back to the JSX fixture plan; in production,
@@ -705,13 +888,13 @@ private struct PlanHalo: View {
                     TahoeHair()
 
                     HStack(spacing: 8) {
-                        TahoeGhostButton(size: .m) {
+                        TahoeGhostButton(size: .m, action: onRefine) {
                             HStack(spacing: 5) {
                                 TahoeIcon("chat", size: 11)
                                 Text("Refine")
                             }
                         }
-                        TahoeGhostButton(size: .m) {
+                        TahoeGhostButton(size: .m, action: onRefine) {
                             Text("Edit plan")
                         }
                         Spacer()
@@ -736,19 +919,19 @@ private struct PlanHalo: View {
                             .font(TahoeFont.body(11))
                             .foregroundStyle(t.fg3)
                         }
-                        // Approve & run remains visible but is disabled in
-                        // production until the daemon wire for plan-approval
-                        // ships — clicking a no-op accent button on top of
-                        // real plan text would be a credible-but-fake
-                        // approval signal.
-                        TahoeAccentButton(size: .m) {
+                        // PR #24a: Approve & run now reaches the daemon via
+                        // loopback. Enabled when `canAct` is true (Mac has
+                        // a live loopback client). Demo bindings stay
+                        // enabled too so Previews render the button as
+                        // interactive.
+                        TahoeAccentButton(size: .m, action: onApprove) {
                             HStack(spacing: 8) {
                                 Text("Approve & run")
                                 Text("\u{21E7}\u{23CE}").opacity(0.7).fontWeight(.regular)
                             }
                         }
-                        .opacity(isDemo ? 1.0 : 0.5)
-                        .disabled(!isDemo)
+                        .opacity((isDemo || canAct) ? 1.0 : 0.5)
+                        .disabled(!(isDemo || canAct))
                     }
                     .padding(.horizontal, 14).padding(.vertical, 12)
                 }
@@ -776,6 +959,16 @@ private struct ComposerBar: View {
     /// since there's nothing to refine.
     var hasRealPlan: Bool
     var onCycle: () -> Void
+    /// PR #24a: real send/stop wires. When non-nil they override the
+    /// demo `onCycle` state-cycler. Production passes both; demo bindings
+    /// leave them nil to preserve the JSX cycle UX.
+    var onSend: (() -> Void)? = nil
+    var onStop: (() -> Void)? = nil
+    /// Composer text binding. Owned by `ComposerSendController` upstream;
+    /// the TextField writes through here.
+    var composerText: Binding<String>? = nil
+    /// Disable the send button while a send is in flight.
+    var sending: Bool = false
     @State private var pulse: Bool = false
 
     var body: some View {
@@ -786,11 +979,29 @@ private struct ComposerBar: View {
             TahoeGlass(radius: 18, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(placeholder(running: running, plan: planMode))
+                        if let composerText {
+                            // PR #24a: real TextField bound to
+                            // ComposerSendController.text. Submit on
+                            // Enter when not running.
+                            TextField(
+                                placeholder(running: running, plan: planMode),
+                                text: composerText,
+                                axis: .vertical
+                            )
+                            .textFieldStyle(.plain)
                             .font(TahoeFont.body(14))
-                            .foregroundStyle(t.fg3)
-                            .frame(maxWidth: .infinity, minHeight: 50, alignment: .topLeading)
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1...6)
+                            .disabled(running || sending)
                             .opacity(running ? 0.55 : 1)
+                            .onSubmit { onSend?() }
+                        } else {
+                            Text(placeholder(running: running, plan: planMode))
+                                .font(TahoeFont.body(14))
+                                .foregroundStyle(t.fg3)
+                                .frame(maxWidth: .infinity, minHeight: 50, alignment: .topLeading)
+                                .opacity(running ? 0.55 : 1)
+                        }
                     }
                     .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
 
@@ -802,9 +1013,14 @@ private struct ComposerBar: View {
                         TahoeComposerChip(icon: "mic")
                         Spacer()
                         if running {
-                            LiveTicker(onStop: onCycle, isDemo: isDemo)
+                            // PR #24a: LiveTicker stop now calls real
+                            // `interruptSession` when wired (onStop != nil);
+                            // demo bindings keep the cycle fallback.
+                            LiveTicker(onStop: { (onStop ?? onCycle)() }, isDemo: isDemo)
                         } else {
-                            SendButton(planMode: planMode, action: onCycle)
+                            SendButton(planMode: planMode, action: { (onSend ?? onCycle)() })
+                                .opacity(sending ? 0.6 : 1.0)
+                                .disabled(sending)
                         }
                     }
                     .padding(.horizontal, 10).padding(.bottom, 10).padding(.top, 6)

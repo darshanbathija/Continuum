@@ -83,6 +83,23 @@ public final class AgentControlServer {
     /// may differ on conflict). Encoded into the pairing QR.
     public private(set) var boundWsPort: UInt16?
 
+    /// Per-launch random token for in-process loopback clients (Mac's
+    /// `MacLoopbackClient` from PR #24a). Generated fresh on each app
+    /// launch, never persisted, never shipped over the wire — only Mac
+    /// code inside this process can read it via `localLoopbackToken`.
+    /// The auth path (`dispatch` + WS handshake) accepts either this
+    /// value OR a valid pairing token, so the iOS pairing flow stays
+    /// independent of Mac loopback config.
+    public let localLoopbackToken: String = UUID().uuidString
+
+    /// Internal helper that returns true if the given Bearer-token
+    /// matches either the loopback token or a registered pairing token.
+    /// Hot path on every request — fail fast on the cheap string compare.
+    internal func isAuthorized(token: String) -> Bool {
+        if token == localLoopbackToken { return true }
+        return pairingTokens.validate(token)
+    }
+
     /// Tracks live connections so we can drain on shutdown.
     private var connections: [ObjectIdentifier: NWConnection] = [:]
 
@@ -398,8 +415,9 @@ public final class AgentControlServer {
             sendWSClose(on: connection, code: .protocolCode(.protocolError))
             return
         }
-        // Auth.
-        guard pairingTokens.validate(envelope.token) else {
+        // Auth — accept either the pairing token (iOS) or the per-launch
+        // loopback token (Mac's in-process MacLoopbackClient, PR #24a).
+        guard isAuthorized(token: envelope.token) else {
             serverLogger.warning("WS: bad bearer token")
             sendWSClose(on: connection, code: .protocolCode(.policyViolation))
             return
@@ -799,9 +817,11 @@ public final class AgentControlServer {
     private func dispatch(request: HTTPRequest, connection: NWConnection) async {
         // Auth: every endpoint requires the bearer token, even loopback
         // (defense-in-depth against local processes that aren't us).
+        // Accept either the pairing token (iOS) or the per-launch loopback
+        // token (Mac's in-process MacLoopbackClient, PR #24a).
         guard let auth = request.headers["authorization"],
               auth.hasPrefix("Bearer "),
-              pairingTokens.validate(String(auth.dropFirst("Bearer ".count)))
+              isAuthorized(token: String(auth.dropFirst("Bearer ".count)))
         else {
             sendResponse(.unauthorized, on: connection)
             return

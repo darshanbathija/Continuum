@@ -1,12 +1,28 @@
 import Foundation
 import CryptoKit
-import ClawdmeterShared
 import OSLog
 
-private let clientLogger = Logger(subsystem: "com.clawdmeter.ios", category: "AgentControlClient")
+private let clientLogger = Logger(subsystem: "com.clawdmeter.client", category: "AgentControlClient")
 
-/// HTTP + WS client for the Mac daemon. Reads pairing config from
-/// UserDefaults + Keychain. Used by iOSSessionsView + iOSNotificationManager.
+/// HTTP + WS client for the Mac daemon. Lives in `ClawdmeterShared` so
+/// both the iOS app (UserDefaults-backed pairing) AND the Mac app's
+/// loopback client (explicit-arg config) can use the same class.
+///
+/// Two construction modes:
+///
+/// 1. **UserDefaults-backed** (existing iOS pairing flow): `AgentControlClient()`
+///    reads host / ports / token from UserDefaults. `setPairing(...)` writes
+///    them. This is the path the iOS app + iOSNotificationManager have always
+///    used.
+/// 2. **In-process explicit** (new in PR #24a for Mac loopback):
+///    `AgentControlClient(host:httpPort:wsPort:token:)` holds the four
+///    values in-memory for this instance only — does NOT read or write
+///    UserDefaults. Mac's `MacLoopbackClient` uses this so localhost
+///    config doesn't collide with the iOS pairing keys.
+///
+/// The pairing properties (`host`, `httpPort`, `wsPort`, `token`) check
+/// the instance override first and fall back to UserDefaults so the
+/// existing iOS code path keeps working unchanged.
 public final class AgentControlClient: ObservableObject {
 
     public static let hostKey = "clawdmeter.sessions.macHost"
@@ -27,26 +43,69 @@ public final class AgentControlClient: ObservableObject {
     @Published public private(set) var serverVersion: String?
     @Published public private(set) var serverWireVersion: Int?
 
+    /// Instance-level overrides for pairing config. Set by the
+    /// explicit-arg init; nil for the UserDefaults-backed path. The
+    /// computed properties below check these first.
+    private let hostOverride: String?
+    private let httpPortOverride: Int?
+    private let wsPortOverride: Int?
+    private let tokenOverride: String?
+
+    /// UserDefaults-backed init — the existing iOS path. Reads pairing
+    /// from `UserDefaults.standard`. `setPairing(...)` writes those keys.
     public init() {
-        self.isConfigured = (host != nil && token != nil)
+        self.hostOverride = nil
+        self.httpPortOverride = nil
+        self.wsPortOverride = nil
+        self.tokenOverride = nil
+        self.isConfigured = (UserDefaults.standard.string(forKey: Self.hostKey) != nil
+                             && UserDefaults.standard.string(forKey: Self.tokenKey) != nil)
+    }
+
+    /// Explicit-config init for in-process clients (Mac loopback). Does
+    /// NOT touch UserDefaults — pairing values are held in-memory for
+    /// this instance only. `setPairing(...)` is a no-op on instances
+    /// constructed this way.
+    public init(host: String, httpPort: Int, wsPort: Int, token: String) {
+        self.hostOverride = host
+        self.httpPortOverride = httpPort
+        self.wsPortOverride = wsPort
+        self.tokenOverride = token
+        self.isConfigured = true
+    }
+
+    /// True when this instance was constructed with explicit pairing
+    /// values (Mac loopback). Used by `setPairing` / `clearPairing` to
+    /// no-op on in-process instances rather than corrupt their in-memory
+    /// config.
+    private var isExplicitConfig: Bool {
+        hostOverride != nil || tokenOverride != nil
     }
 
     // MARK: - Config
 
     public var host: String? {
-        UserDefaults.standard.string(forKey: Self.hostKey)
+        hostOverride ?? UserDefaults.standard.string(forKey: Self.hostKey)
     }
     public var httpPort: Int {
-        UserDefaults.standard.integer(forKey: Self.httpPortKey).nonZeroOrDefault(21731)
+        httpPortOverride ?? UserDefaults.standard.integer(forKey: Self.httpPortKey).nonZeroOrDefault(21731)
     }
     public var wsPort: Int {
-        UserDefaults.standard.integer(forKey: Self.wsPortKey).nonZeroOrDefault(21732)
+        wsPortOverride ?? UserDefaults.standard.integer(forKey: Self.wsPortKey).nonZeroOrDefault(21732)
     }
     public var token: String? {
-        UserDefaults.standard.string(forKey: Self.tokenKey)
+        tokenOverride ?? UserDefaults.standard.string(forKey: Self.tokenKey)
     }
 
     public func setPairing(host: String, httpPort: Int, wsPort: Int, token: String) {
+        // Mac loopback instances built with the explicit-arg init are
+        // immutable — their config came from the local server bootstrap
+        // (PR #24a Step 3) and writing to UserDefaults would corrupt the
+        // iOS pairing keys that live in the same .plist.
+        guard !isExplicitConfig else {
+            clientLogger.warning("setPairing called on explicit-config instance — ignored to preserve in-memory loopback config")
+            return
+        }
         UserDefaults.standard.set(host, forKey: Self.hostKey)
         UserDefaults.standard.set(httpPort, forKey: Self.httpPortKey)
         UserDefaults.standard.set(wsPort, forKey: Self.wsPortKey)
@@ -57,6 +116,10 @@ public final class AgentControlClient: ObservableObject {
     }
 
     public func clearPairing() {
+        guard !isExplicitConfig else {
+            clientLogger.warning("clearPairing called on explicit-config instance — ignored")
+            return
+        }
         for key in [Self.hostKey, Self.httpPortKey, Self.wsPortKey, Self.tokenKey] {
             UserDefaults.standard.removeObject(forKey: key)
         }
@@ -86,7 +149,7 @@ public final class AgentControlClient: ObservableObject {
     /// the Tailscale `tailscale ip -6` output and the pairing URL's
     /// `url.host` field are both unbracketed. Hostnames and IPv4 are
     /// returned untouched.
-    static func urlHostLiteral(_ host: String) -> String {
+    public static func urlHostLiteral(_ host: String) -> String {
         if host.hasPrefix("[") { return host }
         if host.contains(":") { return "[\(host)]" }
         return host
@@ -546,16 +609,15 @@ public final class AgentControlClient: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             self.sessions = try decoder.decode([AgentSession].self, from: data)
-            // Sessions v2 Phase 10: keep the aggregate Live Activity in
-            // sync with the latest session list.
-            LiveActivityCoordinator.shared.refresh(from: sessions)
-            let waiting = sessions.filter { $0.status == .planning && ($0.planText?.isEmpty == false || $0.agent == .codex) }
-            let latest = waiting.max(by: { $0.lastEventAt < $1.lastEventAt })
-            WatchPlanBridgeIOS.shared.updateContext(
-                count: waiting.count,
-                latestGoal: latest?.goal,
-                latestPlanSummary: latest?.planText,
-                latestSessionId: latest?.id
+            // Sessions v2 Phase 10: keep the aggregate Live Activity +
+            // watch bridge in sync. These live in the iOS app target
+            // (LiveActivityCoordinator, WatchPlanBridgeIOS) and can't be
+            // referenced from Shared. Post a notification instead; the
+            // iOS-app-side observer handles the bridging.
+            NotificationCenter.default.post(
+                name: .agentControlSessionsRefreshed,
+                object: self,
+                userInfo: ["sessions": sessions]
             )
         } catch {
             self.lastError = error.localizedDescription
@@ -1026,4 +1088,15 @@ public final class AgentControlClient: ObservableObject {
 
 private extension Int {
     func nonZeroOrDefault(_ defaultValue: Int) -> Int { self == 0 ? defaultValue : self }
+}
+
+public extension Notification.Name {
+    /// Posted by `AgentControlClient.refreshSessions()` after the
+    /// `sessions` array is updated. `userInfo["sessions"]` holds the new
+    /// `[AgentSession]`. The iOS app target observes this to drive
+    /// LiveActivityCoordinator + WatchPlanBridgeIOS (which live in the iOS
+    /// app target and can't be referenced from Shared). The Mac app
+    /// ignores the notification — Live Activities and watch bridging are
+    /// iPhone-only surfaces.
+    static let agentControlSessionsRefreshed = Notification.Name("clawdmeter.agentControl.sessionsRefreshed")
 }

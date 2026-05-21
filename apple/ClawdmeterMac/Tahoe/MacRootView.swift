@@ -95,7 +95,8 @@ struct MacRootView: View {
                             onNewSession: { repoKey in
                                 newSessionPreselectedRepo = repoKey
                                 newSessionPresented = true
-                            }
+                            },
+                            loopbackClient: runtime.loopbackClient
                         )
                     case .settings:
                         MacSettingsView(

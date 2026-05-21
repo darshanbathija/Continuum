@@ -22,6 +22,11 @@ struct ContentView: View {
         WatchPlanBridgeIOS.configure(client: client)
         model.wire(daemonClient: client)
         LiveActivityCoordinator.shared.client = client
+        // Wire the iOS-side bridge so AgentControlClient.refreshSessions
+        // notifications (posted from Shared) reach the iOS-only Live
+        // Activity + watch bridging singletons. See
+        // AgentControlClientSessionObserver.swift for context.
+        AgentControlClientSessionObserver.configure()
     }
 
     var body: some View {
