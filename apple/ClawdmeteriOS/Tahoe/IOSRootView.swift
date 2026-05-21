@@ -79,7 +79,17 @@ public struct IOSRootView: View {
                     onRefresh: { await agentClient.refreshAll() },
                     onOpenSettings: { settingsPresented = true }
                 )
-            case .analytics: IOSAnalyticsView(agentClient: agentClient)
+            case .analytics:
+                // v0.14.0 (plan v2.1 D1): fold Live gauges into Analytics
+                // as a permanent header. Settings sheet trigger moves here
+                // so the gear that used to live in the Live tab still works.
+                IOSAnalyticsView(agentClient: agentClient) {
+                    LiveGaugesHeader(
+                        model: usageModel,
+                        agentClient: agentClient,
+                        showingSettings: $settingsPresented
+                    )
+                }
             case .code:
                 IOSCodeView(
                     data: code,

@@ -49,6 +49,11 @@ struct MacDesignView: View {
                         url: URL(string: "http://127.0.0.1:\(port)/")!,
                         onOpenInCode: onOpenInCode
                     )
+                    // D10: flat surface — no inner glass so Open Design's
+                    // own design isn't double-framed.
+                    .background(Color(.windowBackgroundColor))
+                    .accessibilityLabel("Design canvas — visual design tool")
+                    .accessibilityIdentifier("design-tab-webview")
                 } else {
                     ColdStartCard(status: "Waiting for port…")
                 }

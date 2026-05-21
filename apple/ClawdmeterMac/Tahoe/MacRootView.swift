@@ -41,6 +41,19 @@ struct MacRootView: View {
     @State private var newSessionPreselectedRepo: String? = nil
     @State private var newSessionPresented: Bool = false
 
+    // v0.14.0 (plan v2.1 D6 + D7): handoff toast + reduce-motion guard.
+    @State private var handoffToast: String? = nil
+    @State private var toastDismissTask: Task<Void, Never>? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private func scheduleToastDismiss() {
+        toastDismissTask?.cancel()
+        toastDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if !Task.isCancelled { self.handoffToast = nil }
+        }
+    }
+
     init(runtime: AppRuntime, initialTab: Tab = .chat) {
         self.runtime = runtime
         self.sessionsModel = runtime.sessionsModel
@@ -124,6 +137,42 @@ struct MacRootView: View {
             }
         }
         .frame(minWidth: 1280, minHeight: 820)
+        // v0.14.0 (plan v2.1 T8): Code→Design handoff. When AppRuntime
+        // emits clawdmeterDidOpenInDesign (after bridge mints token +
+        // Open Design returns the projectId), flip to Design tab.
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterDidOpenInDesign)) { note in
+            tab = .design
+            if let projectId = note.userInfo?["projectId"] as? String, !projectId.isEmpty {
+                handoffToast = "Switched to: \(projectId.prefix(40))"
+                scheduleToastDismiss()
+            }
+        }
+        // v0.14.0 (D8): Cmd-1..Cmd-5 keyboard shortcuts for tabs.
+        .background(
+            Group {
+                Button("") { tab = .chat }     .keyboardShortcut("1", modifiers: .command).opacity(0)
+                Button("") { tab = .usage }    .keyboardShortcut("2", modifiers: .command).opacity(0)
+                Button("") { tab = .code }     .keyboardShortcut("3", modifiers: .command).opacity(0)
+                Button("") { tab = .design }   .keyboardShortcut("4", modifiers: .command).opacity(0)
+                Button("") { tab = .settings } .keyboardShortcut("5", modifiers: .command).opacity(0)
+            }
+        )
+        // v0.14.0 (D7): handoff toast overlay — top-anchored Tahoe chip
+        // that autodismisses after 2s. Visible across all tabs.
+        .overlay(alignment: .top) {
+            if let handoffToast {
+                Text(handoffToast)
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
+                    .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
+                    .padding(.top, 56)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .accessibilityLabel(handoffToast)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: handoffToast)
         .tahoeTheme(theme)
         .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 0.94, green: 0.97, blue: 0.98))
         .sheet(isPresented: $newSessionPresented) {

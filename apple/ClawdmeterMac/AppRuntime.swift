@@ -14,6 +14,16 @@ private let runtimeLogger = Logger(subsystem: "com.clawdmeter.mac", category: "A
 /// owning both models here and forwarding their `objectWillChange` to this
 /// runtime, every per-model `@Published` change re-invalidates the parent
 /// scene, which reliably re-snapshots the menu bar label.
+extension Notification.Name {
+    /// Posted by `AppRuntime.openFolderInDesign` when a folder is
+    /// successfully imported into Open Design. UserInfo contains
+    /// `projectId: String` and `baseDir: String`. MacRootView listens
+    /// to flip its tab + navigate the WebView.
+    public static let clawdmeterDidOpenInDesign = Notification.Name("clawdmeter.didOpenInDesign")
+    /// Posted when the bridge sidecar isn't ready — UI can show a toast.
+    public static let clawdmeterDesignBridgeUnavailable = Notification.Name("clawdmeter.designBridgeUnavailable")
+}
+
 @MainActor
 final class AppRuntime: ObservableObject {
 
@@ -37,6 +47,44 @@ final class AppRuntime: ObservableObject {
     // on first appearance so cold start cost is paid only when the
     // user opens the tab.
     let openDesignDaemon: OpenDesignDaemonManager
+
+    /// v0.14.0 (plan v2.1 T8): import a folder into Open Design via the
+    /// bridge sidecar. Posts `.clawdmeterDidOpenInDesign` on success so
+    /// MacRootView can flip its tab + navigate the WebView. Used by the
+    /// "Open in Design" affordance on Code session cards and File menu.
+    public func openFolderInDesign(baseDir: String) async {
+        guard let bridgePort = openDesignDaemon.bridgePortAtomic.get() else {
+            runtimeLogger.warning("openFolderInDesign called but bridge isn't ready yet")
+            NotificationCenter.default.post(
+                name: .clawdmeterDesignBridgeUnavailable,
+                object: nil,
+                userInfo: ["baseDir": baseDir]
+            )
+            return
+        }
+        let url = URL(string: "http://127.0.0.1:\(bridgePort)/import-folder")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["baseDir": baseDir])
+        req.timeoutInterval = 30
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                runtimeLogger.warning("bridge import-folder returned \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+                return
+            }
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let projectId = (json?["projectId"] ?? json?["id"]) as? String ?? ""
+            NotificationCenter.default.post(
+                name: .clawdmeterDidOpenInDesign,
+                object: nil,
+                userInfo: ["projectId": projectId, "baseDir": baseDir]
+            )
+        } catch {
+            runtimeLogger.error("openFolderInDesign failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 
     private var cancellables = Set<AnyCancellable>()
     private var usageQueryService: UsageQueryService?

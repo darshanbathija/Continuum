@@ -183,6 +183,10 @@ public final class OpenDesignDaemonManager: ObservableObject {
         env["OD_DATA_DIR"] = dataDir.path
         env["OD_API_TOKEN"] = apiToken
         env["OD_REQUIRE_DESKTOP_AUTH"] = "1" // v2.1 P0-fix per Codex
+        // v2.1 T8: shared namespace so the bridge sidecar's IPC client
+        // can resolveAppIpcPath() to the daemon's listener. Must match
+        // the value passed to the bridge spawn below.
+        env["OD_SIDECAR_NAMESPACE"] = "clawdmeter"
 
         await update(.loading, "Starting Open Design daemon…")
         let daemon = Process()
@@ -234,6 +238,8 @@ public final class OpenDesignDaemonManager: ObservableObject {
         env["OD_DAEMON_PORT"] = String(daemonPort)
         env["OD_DATA_DIR"] = dataDir.path
         env["CLAWDMETER_BRIDGE_PORT"] = "27457"
+        // v2.1 T8: bridge IPC client must use same namespace as the daemon.
+        env["OD_SIDECAR_NAMESPACE"] = "clawdmeter"
         let bridge = Process()
         bridge.executableURL = nodeURL
         bridge.arguments = [bridgeEntry.path]

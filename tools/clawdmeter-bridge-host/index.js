@@ -70,33 +70,44 @@ async function registerWithDaemon() {
     const protoModule = await tryImportSidecarProto();
     const sidecarModule = await tryImportSidecar();
     if (!protoModule || !sidecarModule) {
-      return { ok: false, reason: "sidecar packages not bundled — see TODO above" };
+      return { ok: false, reason: "sidecar packages not bundled at expected path under apps/daemon/node_modules/@open-design/" };
     }
-    const { SIDECAR_MESSAGES } = protoModule;
+    const { SIDECAR_MESSAGES, OPEN_DESIGN_SIDECAR_CONTRACT, APP_KEYS } = protoModule;
     const { requestJsonIpc, resolveAppIpcPath } = sidecarModule;
-    const ipcPath = resolveAppIpcPath({ dataDir: DATA_DIR });
-    const response = await requestJsonIpc(ipcPath, {
-      kind: SIDECAR_MESSAGES.REGISTER_DESKTOP_AUTH,
-      input: { secret: HMAC_SECRET.toString("base64") },
+    const namespace = process.env.OD_SIDECAR_NAMESPACE || "clawdmeter";
+    const ipcPath = resolveAppIpcPath({
+      app: APP_KEYS.DAEMON,
+      contract: OPEN_DESIGN_SIDECAR_CONTRACT,
+      namespace,
+      env: process.env,
     });
-    return { ok: response?.ok === true, reason: response?.error?.message };
+    const response = await requestJsonIpc(
+      ipcPath,
+      {
+        type: SIDECAR_MESSAGES.REGISTER_DESKTOP_AUTH,
+        input: { secret: HMAC_SECRET.toString("base64") },
+      },
+      { timeoutMs: 5_000 }
+    );
+    // The daemon returns { accepted: true } per RegisterDesktopAuthResult.
+    return { ok: response?.accepted === true, reason: response?.error?.message };
   } catch (err) {
     return { ok: false, reason: `IPC registration failed: ${err.message}` };
   }
 }
 
 async function tryImportSidecarProto() {
-  // The bundled daemon's node_modules has @open-design/sidecar-proto next to
-  // us. Resolve via the daemon's package layout.
+  // The bundled daemon's node_modules ships @open-design/sidecar-proto
+  // next to us. Both packages export ./dist/index.mjs per their package.json.
   const here = dirname(fileURLToPath(import.meta.url));
-  const candidate = join(here, "..", "apps", "daemon", "node_modules", "@open-design", "sidecar-proto", "dist", "index.js");
+  const candidate = join(here, "..", "apps", "daemon", "node_modules", "@open-design", "sidecar-proto", "dist", "index.mjs");
   if (!existsSync(candidate)) return null;
   return await import(candidate);
 }
 
 async function tryImportSidecar() {
   const here = dirname(fileURLToPath(import.meta.url));
-  const candidate = join(here, "..", "apps", "daemon", "node_modules", "@open-design", "sidecar", "dist", "index.js");
+  const candidate = join(here, "..", "apps", "daemon", "node_modules", "@open-design", "sidecar", "dist", "index.mjs");
   if (!existsSync(candidate)) return null;
   return await import(candidate);
 }

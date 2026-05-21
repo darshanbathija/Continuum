@@ -17,8 +17,20 @@ public struct IOSAnalyticsView: View {
     @State private var snapshot: UsageHistorySnapshot?
     @State private var refreshing: Bool = false
 
+    /// v0.14.0 (plan v2.1 D1): optional Live gauges header. When set,
+    /// renders the per-provider live quota gauges above the analytics
+    /// scroll, folding the retired standalone Live tab into Analytics.
+    /// Nil-passing keeps the view backward-compatible.
+    private let liveHeader: AnyView?
+
     public init(agentClient: AgentControlClient) {
         self.agentClient = agentClient
+        self.liveHeader = nil
+    }
+
+    public init<Header: View>(agentClient: AgentControlClient, @ViewBuilder liveHeader: () -> Header) {
+        self.agentClient = agentClient
+        self.liveHeader = AnyView(liveHeader())
     }
 
     public var body: some View {
@@ -26,6 +38,11 @@ public struct IOSAnalyticsView: View {
             VStack(spacing: 0) {
                 IOSLargeTitle(title: "Analytics") {
                     IOSRoundIconBtn("sliders", action: { Task { await refresh() } })
+                }
+                if let liveHeader {
+                    liveHeader
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
                 }
 
                 // Period segmented
