@@ -7,10 +7,16 @@ public struct MacChatView: View {
     @Environment(\.tahoe) private var t
     public enum Mode: String, CaseIterable, Hashable { case broadcast, solo }
 
-    @State private var mode: Mode = .broadcast
-    @State private var soloProvider: TahoeProvider = .claude
+    // JSX puts the MODE toggle INLINE in the titlebar (mac-chat.jsx:175).
+    // We lift the state out to MacRootView so the titlebar can host the
+    // toggle on the Chat tab; this view receives bindings.
+    @Binding var mode: Mode
+    @Binding var soloProvider: TahoeProvider
 
-    public init() {}
+    public init(mode: Binding<Mode>, soloProvider: Binding<TahoeProvider>) {
+        self._mode = mode
+        self._soloProvider = soloProvider
+    }
 
     public var body: some View {
         HStack(spacing: 10) {
@@ -21,10 +27,6 @@ public struct MacChatView: View {
             .frame(width: 248)
 
             VStack(spacing: 10) {
-                ModeToggle(mode: $mode, soloProvider: $soloProvider)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.bottom, 2)
-
                 ChatColumnHeaders(mode: mode, soloProvider: soloProvider, thread: TahoeDemo.chatThread)
 
                 TahoeGlass(radius: 20, tone: .panel) {
@@ -42,10 +44,17 @@ public struct MacChatView: View {
 
 // MARK: - Mode toggle
 
-private struct ModeToggle: View {
+/// Mode + Solo provider segmented toggle. Used by `MacRootView` in the
+/// titlebar when the Chat tab is active (mac-chat.jsx:175).
+struct ChatModeToggle: View {
     @Environment(\.tahoe) private var t
     @Binding var mode: MacChatView.Mode
     @Binding var soloProvider: TahoeProvider
+
+    init(mode: Binding<MacChatView.Mode>, soloProvider: Binding<TahoeProvider>) {
+        self._mode = mode
+        self._soloProvider = soloProvider
+    }
 
     var body: some View {
         HStack(spacing: 8) {

@@ -17,6 +17,12 @@ struct MacRootView: View {
     /// (Chat / Code / Settings) don't depend on it for v1.
     @ObservedObject private var runtime: AppRuntime
 
+    // Chat-tab state hoisted to the root so the titlebar can host the
+    // Broadcast/Solo toggle inline (mac-chat.jsx:175 nests it inside the
+    // tabs chip; we mirror that by passing bindings down to MacChatView).
+    @State private var chatMode: MacChatView.Mode = .broadcast
+    @State private var chatSoloProvider: TahoeProvider = .claude
+
     init(runtime: AppRuntime, initialTab: Tab = .chat) {
         self.runtime = runtime
         _theme = State(initialValue: TahoeThemeStore.loaded())
@@ -30,13 +36,19 @@ struct MacRootView: View {
         return ZStack {
             TahoeWallpaperView()
             VStack(spacing: 0) {
-                MacTitlebar(active: tab, onTab: { tab = $0 }, theme: theme)
+                MacTitlebar(
+                    active: tab,
+                    onTab: { tab = $0 },
+                    theme: theme,
+                    chatMode: $chatMode,
+                    chatSoloProvider: $chatSoloProvider
+                )
                     .padding(.horizontal, 10)
                     .padding(.top, 10)
 
                 Group {
                     switch tab {
-                    case .chat:     MacChatView()
+                    case .chat:     MacChatView(mode: $chatMode, soloProvider: $chatSoloProvider)
                     case .usage:    MacUsageView(data: live)
                     case .code:     MacCodeView()
                     case .settings: MacSettingsView(theme: theme)
@@ -63,9 +75,21 @@ struct MacTitlebar: View {
     var active: MacRootView.Tab
     var onTab: (MacRootView.Tab) -> Void
     var theme: TahoeThemeStore
+    @Binding var chatMode: MacChatView.Mode
+    @Binding var chatSoloProvider: TahoeProvider
 
-    init(active: MacRootView.Tab, onTab: @escaping (MacRootView.Tab) -> Void, theme: TahoeThemeStore) {
-        self.active = active; self.onTab = onTab; self.theme = theme
+    init(
+        active: MacRootView.Tab,
+        onTab: @escaping (MacRootView.Tab) -> Void,
+        theme: TahoeThemeStore,
+        chatMode: Binding<MacChatView.Mode>,
+        chatSoloProvider: Binding<TahoeProvider>
+    ) {
+        self.active = active
+        self.onTab = onTab
+        self.theme = theme
+        self._chatMode = chatMode
+        self._chatSoloProvider = chatSoloProvider
     }
 
     var body: some View {
@@ -97,7 +121,7 @@ struct MacTitlebar: View {
     private var secondaryRight: some View {
         switch active {
         case .chat:
-            EmptyView()
+            ChatModeToggle(mode: $chatMode, soloProvider: $chatSoloProvider)
         case .usage:
             HStack(spacing: 8) {
                 Label {
