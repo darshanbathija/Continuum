@@ -66,6 +66,7 @@
 		4F73308F1D381B3179C1BE3F /* AutopilotChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF71122468E94982651161D9 /* AutopilotChip.swift */; };
 		4FB6359FF046EE6E55273043 /* AnalyticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9E7176EBAE8AB4546A14340 /* AnalyticsView.swift */; };
 		5222E839CB29135AD4571C1D /* iOSDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93D530AD60605887515476C0 /* iOSDiffView.swift */; };
+		5240BAE235CBD12500E5D374 /* AntigravityChatIngestor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD70BFA80A3ABD8BCFCAC347 /* AntigravityChatIngestor.swift */; };
 		5281DED2AAE3EF81A11A7207 /* clawdmeter-agents in Resources */ = {isa = PBXBuildFile; fileRef = E90EC02F84561040F698EE87 /* clawdmeter-agents */; };
 		536D0374AE837765530A760E /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCDF9317290F56870BC0564 /* CommandPalette.swift */; };
 		5384D9EEF60C3B3DC9796E4D /* TmuxControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 840350A245B7AFF9FC1014B3 /* TmuxControlClient.swift */; };
@@ -117,6 +118,7 @@
 		91F59FC843FCFADA8995B62C /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */; };
 		96389D247535DF202C123C35 /* GeminiQuotaLiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57ABA1D6213482514E812CB9 /* GeminiQuotaLiveActivityCoordinator.swift */; };
 		9B745EEC0D89D86854AA8A44 /* AntigravitySDKSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5879DA60299076F9623FD8E4 /* AntigravitySDKSettingsView.swift */; };
+		9D621DC87AF53CD5EDF7A625 /* ChatFrontierView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C560BE224FCEC7684432E66 /* ChatFrontierView.swift */; };
 		9FAE5ED0012F3AA0FCE24F13 /* iOSSessionControlsStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = C36A898E076F41B5BA9001E2 /* iOSSessionControlsStrip.swift */; };
 		A13F0D46B10F8CAF93CD356E /* PlanApprovalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77FDB4429B0506B4FCAED27D /* PlanApprovalView.swift */; };
 		A2CA9959AFA87857A2BD8831 /* MacComposerSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D3F0399FF3C5DFC23B1532 /* MacComposerSender.swift */; };
@@ -340,6 +342,7 @@
 		88501FECEB4876BDEAAF06B7 /* AntigravityPlanPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityPlanPane.swift; sourceTree = "<group>"; };
 		8B6A356416D72BB7ECCD6548 /* ClawdmeterWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeterWatchApp.swift; sourceTree = "<group>"; };
 		8C1B8A7FA6946383349924D1 /* AgentSessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionRegistry.swift; sourceTree = "<group>"; };
+		8C560BE224FCEC7684432E66 /* ChatFrontierView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatFrontierView.swift; sourceTree = "<group>"; };
 		8CB1DCED1C1E9B286E0D594F /* SessionEventWiring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEventWiring.swift; sourceTree = "<group>"; };
 		8CD788C3119613C920DFB7B0 /* ComposerInputCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerInputCore.swift; sourceTree = "<group>"; };
 		8D2932E5B049F7DE99D05C44 /* ClawdmeteriOSWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ClawdmeteriOSWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -387,6 +390,7 @@
 		C36A898E076F41B5BA9001E2 /* iOSSessionControlsStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSSessionControlsStrip.swift; sourceTree = "<group>"; };
 		C3EF56B06A437691BE9EB4EC /* WatchPlanBridgeIOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPlanBridgeIOS.swift; sourceTree = "<group>"; };
 		CCCDF9317290F56870BC0564 /* CommandPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPalette.swift; sourceTree = "<group>"; };
+		CD70BFA80A3ABD8BCFCAC347 /* AntigravityChatIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityChatIngestor.swift; sourceTree = "<group>"; };
 		CE0273C0880168A1CE3A2927 /* AttachmentChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentChip.swift; sourceTree = "<group>"; };
 		CEF05AC9FA45E3C41CA839BF /* ClawdmeteriOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ClawdmeteriOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D10D345820EF090F6426A9E0 /* UsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageModel.swift; sourceTree = "<group>"; };
@@ -492,6 +496,7 @@
 				AF9881A0E3387C6A605D8D83 /* AgentEventStream.swift */,
 				8C1B8A7FA6946383349924D1 /* AgentSessionRegistry.swift */,
 				60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */,
+				CD70BFA80A3ABD8BCFCAC347 /* AntigravityChatIngestor.swift */,
 				A3AC79CBA2A61141DA7FCBCF /* AntigravitySidecarManager.swift */,
 				21239F87404DC4B4E7F21AB7 /* APNSCredentialStore.swift */,
 				FB8D04D48E1D2426976FC898 /* AuditLog.swift */,
@@ -656,6 +661,7 @@
 			children = (
 				88501FECEB4876BDEAAF06B7 /* AntigravityPlanPane.swift */,
 				52CF286759B2554561F8379A /* ArtifactsPane.swift */,
+				8C560BE224FCEC7684432E66 /* ChatFrontierView.swift */,
 				304C6FCF4B01F61CD7913643 /* ChatNewSessionSheet.swift */,
 				6AFFCF97E5DEDFC5EAC765C1 /* ChatSoloView.swift */,
 				085DE5373D32E58177F93585 /* ChatWorkspaceView.swift */,
@@ -1157,6 +1163,7 @@
 				A72C99A824DF7B93FF4CFFC2 /* AgentSessionRegistry.swift in Sources */,
 				457E68D990E7B761C11DF6CC /* AgentSpawner.swift in Sources */,
 				4FB6359FF046EE6E55273043 /* AnalyticsView.swift in Sources */,
+				5240BAE235CBD12500E5D374 /* AntigravityChatIngestor.swift in Sources */,
 				F54AA92455AB651F391E0FB3 /* AntigravityPlanPane.swift in Sources */,
 				9B745EEC0D89D86854AA8A44 /* AntigravitySDKSettingsView.swift in Sources */,
 				17B9A55BA4BA2A2FA8722959 /* AntigravitySidecarManager.swift in Sources */,
@@ -1171,6 +1178,7 @@
 				4F73308F1D381B3179C1BE3F /* AutopilotChip.swift in Sources */,
 				D609B22B0D306509093B09D2 /* AutopilotState.swift in Sources */,
 				37E0278B4547981DAF8C596E /* ChatCwdManager.swift in Sources */,
+				9D621DC87AF53CD5EDF7A625 /* ChatFrontierView.swift in Sources */,
 				24DFD644E0FF86F794A8EB0D /* ChatNewSessionSheet.swift in Sources */,
 				74718CF7361FFB8E78CD98FB /* ChatSoloView.swift in Sources */,
 				EDF8A47DEA8AA968DC543046 /* ChatStreamWebSocketChannel.swift in Sources */,

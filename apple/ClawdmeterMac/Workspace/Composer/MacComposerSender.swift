@@ -62,6 +62,45 @@ final class MacComposerSender {
         _ = try await execute(req)
     }
 
+    /// v0.9 — fan out a prompt to every child of a Frontier group.
+    func frontierSend(groupId: UUID, text: String) async throws {
+        let req = try makeRequest(
+            path: "/chat-sessions/frontier/\(groupId.uuidString)/send",
+            jsonBody: SendPromptRequest(text: text, asFollowUp: false)
+        )
+        _ = try await execute(req)
+    }
+
+    /// v0.9 — archive losing children + return winner.
+    func frontierPickWinner(groupId: UUID, childIndex: Int) async throws {
+        let req = try makeRequest(
+            path: "/chat-sessions/frontier/\(groupId.uuidString)/pick-winner",
+            jsonBody: PickFrontierWinnerRequest(childIndex: childIndex)
+        )
+        _ = try await execute(req)
+    }
+
+    /// v0.9 — re-spawn one failed child slot with the same provider/model.
+    func frontierRetrySlot(groupId: UUID, index: Int) async throws {
+        let req = try makeRequest(
+            path: "/chat-sessions/frontier/\(groupId.uuidString)/retry-slot",
+            jsonBody: RetryFrontierSlotRequest(index: index)
+        )
+        _ = try await execute(req)
+    }
+
+    /// v0.9 — spawn a Frontier group with 2-3 model slots.
+    func createFrontier(clientRequestId: UUID, slots: [FrontierModelSlot]) async throws -> CreateFrontierResponse {
+        let req = try makeRequest(
+            path: "/chat-sessions/frontier",
+            jsonBody: CreateFrontierRequest(clientRequestId: clientRequestId, models: slots)
+        )
+        let data = try await execute(req)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(CreateFrontierResponse.self, from: data)
+    }
+
     // MARK: - HTTP
 
     private func makeRequest<Body: Encodable>(path: String, jsonBody: Body) throws -> URLRequest {
