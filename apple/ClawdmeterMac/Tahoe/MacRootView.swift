@@ -82,7 +82,12 @@ struct MacRootView: View {
 
                 Group {
                     switch tab {
-                    case .chat:     MacChatView(mode: $chatMode, soloProvider: $chatSoloProvider)
+                    case .chat:
+                        MacChatView(
+                            mode: $chatMode,
+                            soloProvider: $chatSoloProvider,
+                            loopbackClient: runtime.loopbackClient
+                        )
                     case .usage:
                         MacUsageView(
                             data: live,
