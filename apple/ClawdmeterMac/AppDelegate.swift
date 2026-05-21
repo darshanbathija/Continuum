@@ -142,18 +142,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication,
                      continue userActivity: NSUserActivity,
                      restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
-        guard userActivity.activityType == "com.clawdmeter.continue-codex-thread",
-              let threadId = userActivity.userInfo?["threadId"] as? String,
-              !threadId.isEmpty
-        else { return false }
-        showDashboard()
-        NSApp.activate(ignoringOtherApps: true)
-        NotificationCenter.default.post(
-            name: AppDelegate.continueCodexThreadFromHandoff,
-            object: nil,
-            userInfo: ["threadId": threadId]
-        )
-        return true
+        // v0.7.7 — codex thread (deep-link to a specific JSONL thread).
+        if userActivity.activityType == "com.clawdmeter.continue-codex-thread",
+           let threadId = userActivity.userInfo?["threadId"] as? String,
+           !threadId.isEmpty {
+            showDashboard()
+            NSApp.activate(ignoringOtherApps: true)
+            NotificationCenter.default.post(
+                name: AppDelegate.continueCodexThreadFromHandoff,
+                object: nil,
+                userInfo: ["threadId": threadId]
+            )
+            return true
+        }
+        // v0.9.x — chat thread Handoff (NEW-E6 from v0.8 plan). iOS
+        // advertises `com.clawdmeter.continue-chat-thread` with the
+        // chat session UUID; we focus the dashboard + broadcast a
+        // notification the Chat tab observer listens for to select
+        // the matching session.
+        if userActivity.activityType == "com.clawdmeter.continue-chat-thread",
+           let sessionIdString = userActivity.userInfo?["sessionId"] as? String,
+           !sessionIdString.isEmpty {
+            showDashboard()
+            NSApp.activate(ignoringOtherApps: true)
+            NotificationCenter.default.post(
+                name: AppDelegate.continueChatSessionFromHandoff,
+                object: nil,
+                userInfo: ["sessionId": sessionIdString]
+            )
+            return true
+        }
+        return false
     }
 
     /// Called when the dashboard window has just been closed (X button or
@@ -198,6 +217,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// SessionsView observer focuses the matching thread.
     static let continueCodexThreadFromHandoff =
         Notification.Name("clawdmeter.continueCodexThreadFromHandoff")
+
+    /// v0.9.x: posted when a chat-tab Handoff from iOS lands.
+    /// `userInfo["sessionId"]` carries the chat AgentSession.id; the
+    /// Chat workspace observer focuses the matching pane.
+    static let continueChatSessionFromHandoff =
+        Notification.Name("clawdmeter.continueChatSessionFromHandoff")
 
     private func applyVisibilityFromPrefs() {
         let defaults = UserDefaults.standard

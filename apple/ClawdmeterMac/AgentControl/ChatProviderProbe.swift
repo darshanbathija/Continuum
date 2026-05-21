@@ -1,0 +1,180 @@
+import Foundation
+import OSLog
+import ClawdmeterShared
+
+private let probeLogger = Logger(subsystem: "com.clawdmeter.mac", category: "ChatProviderProbe")
+
+/// v0.9.x — full ChatProviderProbe (P1 actor) with in-flight de-dup +
+/// 60s TTL cache for `/chat-providers`.
+///
+/// Replaces the minimal inline probe (`handleGetChatProviders` in
+/// AgentControlServer.swift) which built a fresh response per request
+/// from raw binary-on-PATH checks. The actor:
+///   - caches the full ChatProvidersResponse for 60s (Codex P1
+///     thundering-herd risk: 6+ iOS clients all asking on app-launch)
+///   - de-dupes concurrent probes via in-flight Task storage (only
+///     one underlying probe runs even if 10 callers ask simultaneously)
+///   - records per-provider auth state flips from
+///     `ChatProviderAuthObserver` so a recently-failed OAuth surfaces
+///     `authenticated=false` immediately (not 60s later)
+///
+/// The actor is shared (`ChatProviderProbe.shared`) and called from
+/// `handleGetChatProviders` instead of building the response inline.
+public actor ChatProviderProbe {
+
+    public static let shared = ChatProviderProbe()
+
+    private struct CacheEntry {
+        let response: ChatProvidersResponse
+        let computedAt: Date
+    }
+    private var cache: CacheEntry?
+    /// In-flight probe task; subsequent callers await this task instead
+    /// of starting a parallel probe (Codex P1 thundering-herd defense).
+    private var inflight: Task<ChatProvidersResponse, Never>?
+
+    /// Per-provider/backend auth overrides set by AuthObserver. Keyed by
+    /// "claude" / "codex:sdk" / "codex:cli" / "gemini". When present,
+    /// the next probe surfaces these values regardless of what the
+    /// binary checks say. Cleared when the user re-auths (CodexSDKManager
+    /// notify, manual probe invalidate).
+    private var authOverrides: [String: (authenticated: Bool, reason: String?)] = [:]
+
+    /// Cache TTL — how long a probed response stays valid before the
+    /// next request triggers a re-probe. 60s balances freshness against
+    /// the cost of running 4 binary checks per request.
+    public static let cacheTTL: TimeInterval = 60
+
+    public init() {}
+
+    /// Returns the cached probe response if fresh; otherwise launches
+    /// (or joins) the in-flight probe task. Idempotent under concurrent
+    /// callers — only one underlying probe runs at a time.
+    public func currentProviders() async -> ChatProvidersResponse {
+        // Fresh cache: return immediately.
+        if let entry = cache,
+           Date().timeIntervalSince(entry.computedAt) < Self.cacheTTL {
+            return entry.response
+        }
+        // In-flight probe: await it. Multiple callers all join one Task.
+        if let task = inflight {
+            return await task.value
+        }
+        // No fresh cache and no in-flight probe: kick one off.
+        let task = Task { await self.runProbe() }
+        inflight = task
+        let result = await task.value
+        // The probe stores its own result in `cache` before returning;
+        // we clear the in-flight slot here.
+        inflight = nil
+        return result
+    }
+
+    /// Force the next call to re-probe (skip the cache). Called by:
+    ///   - manual user "Re-check" affordance in Settings (TBD)
+    ///   - CodexSDKManager when the user toggles SDK provisioning
+    ///   - ChatProviderAuthObserver when it detects an auth failure
+    public func invalidate() {
+        cache = nil
+    }
+
+    /// Push an auth override from `ChatProviderAuthObserver`. Keyed by
+    /// `providerKey()` — call invalidate() to force a fresh probe that
+    /// reflects this override.
+    public func setAuthOverride(providerKey: String, authenticated: Bool, reason: String?) {
+        authOverrides[providerKey] = (authenticated, reason)
+        cache = nil  // next probe rebuilds with the new override
+    }
+
+    /// Clear an auth override (e.g. when the user re-OAuth's). Frees
+    /// the next probe to derive auth state from the binary check
+    /// instead of the cached failure.
+    public func clearAuthOverride(providerKey: String) {
+        authOverrides.removeValue(forKey: providerKey)
+        cache = nil
+    }
+
+    // MARK: - Probe internals
+
+    private func runProbe() async -> ChatProvidersResponse {
+        let now = Date()
+        // Run the binary checks off the actor to avoid blocking on
+        // ShellRunner.locateBinary's PATH walk. (Actor will serialize
+        // re-entry into this method anyway via `inflight`.)
+        let probes: (claudeAvailable: Bool, codexAvailable: Bool, codexSDKAvailable: Bool, agentapiLive: Bool) = await Task.detached {
+            let claudeAvailable = ShellRunner.locateBinary("claude") != nil
+            let codexAvailable = ShellRunner.locateBinary("codex") != nil
+            // CodexSDKManager is @MainActor — hop for the read.
+            let codexSDKAvailable = await MainActor.run { CodexSDKManager.shared.isProvisioned }
+            // Antigravity LS live probe is cheap (one localhost HEAD).
+            let lsLive: Bool = await MainActor.run {
+                if case .live = LanguageServerClient().discoverLive() { return true }
+                return false
+            }
+            return (claudeAvailable, codexAvailable, codexSDKAvailable, lsLive)
+        }.value
+
+        // Apply per-provider auth overrides. nil override → fall back
+        // to the binary check; non-nil → use the observer's verdict.
+        func resolveAuth(key: String, fallback: Bool) -> (Bool, String?) {
+            if let override = authOverrides[key] {
+                return (override.authenticated, override.reason)
+            }
+            return (fallback, nil)
+        }
+
+        let (claudeAuth, claudeReason) = resolveAuth(key: "claude", fallback: probes.claudeAvailable)
+        let (codexSDKAuth, codexSDKReason) = resolveAuth(key: "codex:sdk", fallback: probes.codexSDKAvailable)
+        let (codexCLIAuth, codexCLIReason) = resolveAuth(key: "codex:cli", fallback: probes.codexAvailable)
+        let (geminiAuth, geminiReason) = resolveAuth(key: "gemini", fallback: probes.agentapiLive)
+
+        let response = ChatProvidersResponse(providers: [
+            ChatProviderEntry(
+                provider: .claude,
+                available: probes.claudeAvailable,
+                authenticated: claudeAuth,
+                capabilityProbePassed: probes.claudeAvailable && claudeAuth,
+                lastProbedAt: now,
+                reason: claudeReason ?? (probes.claudeAvailable ? nil : "claude CLI not on PATH")
+            ),
+            ChatProviderEntry(
+                provider: .codex, codexBackend: .sdk,
+                available: probes.codexSDKAvailable,
+                authenticated: codexSDKAuth,
+                capabilityProbePassed: probes.codexSDKAvailable && codexSDKAuth,
+                lastProbedAt: now,
+                reason: codexSDKReason ?? (probes.codexSDKAvailable ? nil : "Toggle SDK mode in Settings → Codex SDK")
+            ),
+            ChatProviderEntry(
+                provider: .codex, codexBackend: .cli,
+                available: probes.codexAvailable,
+                authenticated: codexCLIAuth,
+                capabilityProbePassed: probes.codexAvailable && codexCLIAuth,
+                lastProbedAt: now,
+                reason: codexCLIReason ?? (probes.codexAvailable ? nil : "codex CLI not on PATH")
+            ),
+            ChatProviderEntry(
+                provider: .gemini,
+                available: probes.agentapiLive,
+                authenticated: geminiAuth,
+                capabilityProbePassed: probes.agentapiLive && geminiAuth,
+                lastProbedAt: now,
+                reason: geminiReason ?? (probes.agentapiLive ? nil : "Open Antigravity 2 to start a Gemini chat")
+            ),
+        ])
+        cache = CacheEntry(response: response, computedAt: now)
+        probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codexSDK=\(probes.codexSDKAvailable, privacy: .public) codexCLI=\(probes.codexAvailable, privacy: .public) gemini=\(probes.agentapiLive, privacy: .public)")
+        return response
+    }
+
+    /// Convenience for AuthObserver. Maps wire shapes into the actor's
+    /// internal override key.
+    public static func providerKey(provider: AgentKind, codexBackend: CodexChatBackend?) -> String {
+        switch provider {
+        case .claude: return "claude"
+        case .codex:
+            return codexBackend == .sdk ? "codex:sdk" : "codex:cli"
+        case .gemini: return "gemini"
+        }
+    }
+}
