@@ -72,7 +72,7 @@ public struct IOSRootView: View {
             )
         case nil:
             switch tab {
-            case .chat:      IOSChatView()
+            case .chat:      IOSChatView(agentClient: agentClient)
             case .live:
                 IOSLiveView(
                     data: live,
