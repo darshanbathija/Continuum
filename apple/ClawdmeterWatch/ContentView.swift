@@ -39,15 +39,18 @@ struct ContentView: View {
                     smallMeter(
                         title: "Codex",
                         usage: codex,
-                        tint: Color(red: 0x5C/255, green: 0x9D/255, blue: 0xFF/255)
+                        // Tahoe 26: Codex's brand halo (OpenAI blue), via the
+                        // shared TahoeProvider tokens.
+                        tint: TahoeProvider.codex.halo.color
                     )
                 }
                 if let gemini = model.geminiUsage {
                     Divider().padding(.top, 4)
                     smallMeter(
-                        title: "Gemini",
+                        title: "Antigravity",
                         usage: gemini,
-                        tint: Color(red: 0x42/255, green: 0x85/255, blue: 0xF4/255)
+                        // Tahoe 26: Antigravity brand halo (renamed from Gemini).
+                        tint: TahoeProvider.gemini.halo.color
                     )
                 }
 
@@ -63,7 +66,7 @@ struct ContentView: View {
                             if bridge.sessionsSummary.contains(where: { $0.needsAttention }) {
                                 Spacer()
                                 Image(systemName: "exclamationmark.circle.fill")
-                                    .foregroundStyle(SessionsV2Theme.accent)
+                                    .foregroundStyle(TahoeAccent.halo.base.color)
                             }
                         }
                     }

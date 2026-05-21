@@ -1,0 +1,153 @@
+#if canImport(SwiftUI)
+import SwiftUI
+
+/// Pill-bar gauge — replaces the original "QuotaOrb" ring (the chat history
+/// explicitly pivoted to bars in chat2). JSX: `mac-dashboard.jsx::QuotaOrb`
+/// with `dense` variant for menu-bar contexts.
+public struct TahoeQuotaBar: View {
+    @Environment(\.tahoe) private var t
+    public var percent: Double  // 0..100
+    public var size: CGFloat
+    public var label: String?
+    public var sublabel: String?
+    public var provider: TahoeProvider
+    public var dense: Bool
+
+    public init(
+        provider: TahoeProvider,
+        percent: Double,
+        size: CGFloat = 260,
+        label: String? = nil,
+        sublabel: String? = nil,
+        dense: Bool = false
+    ) {
+        self.provider = provider
+        self.percent = max(0, min(100, percent))
+        self.size = size
+        self.label = label
+        self.sublabel = sublabel
+        self.dense = dense
+    }
+
+    public var body: some View {
+        if dense {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 1) {
+                    Text("\(Int(percent))")
+                        .font(TahoeFont.rounded(22, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(t.fg)
+                    Text("%")
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                }
+                TahoePillBar(percent: percent, provider: provider, height: 6)
+            }
+            .frame(width: size, alignment: .leading)
+        } else {
+            let numSize = size * 0.36
+            VStack(alignment: .leading, spacing: size * 0.08) {
+                HStack(alignment: .firstTextBaseline) {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text("\(Int(percent))")
+                            .font(TahoeFont.rounded(numSize, weight: .bold))
+                            .monospacedDigit()
+                            .tracking(-1.5)
+                            .foregroundStyle(t.fg)
+                        Text("%")
+                            .font(TahoeFont.body(numSize * 0.42, weight: .semibold))
+                            .foregroundStyle(t.fg3)
+                    }
+                    Spacer(minLength: 8)
+                    if let label {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(label.uppercased())
+                                .font(TahoeFont.body(10.5, weight: .bold))
+                                .tracking(0.5)
+                                .foregroundStyle(t.fg3)
+                            if let sublabel {
+                                Text(sublabel)
+                                    .font(TahoeFont.body(10.5))
+                                    .foregroundStyle(t.fg4)
+                            }
+                        }
+                    }
+                }
+                TahoePillBar(percent: percent, provider: provider, height: 6)
+            }
+            .frame(maxWidth: size * 1.6, alignment: .leading)
+        }
+    }
+}
+
+/// Single horizontal pill bar — matches the weekly bar geometry.
+public struct TahoePillBar: View {
+    @Environment(\.tahoe) private var t
+    public var percent: Double
+    public var provider: TahoeProvider
+    public var height: CGFloat
+
+    public init(percent: Double, provider: TahoeProvider, height: CGFloat = 6) {
+        self.percent = max(0, min(100, percent))
+        self.provider = provider
+        self.height = height
+    }
+
+    public var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.08)
+                                 : Color(.sRGB, white: 15.0/255, opacity: 0.06))
+                Capsule(style: .continuous)
+                    .fill(LinearGradient(
+                        colors: [provider.glow.color, provider.base.color],
+                        startPoint: .leading, endPoint: .trailing))
+                    .frame(width: geo.size.width * percent / 100)
+                    .shadow(color: provider.base.color(opacity: 0.5), radius: 5, x: 0, y: 0)
+                    // Motion polish: smooth fill-in when percent changes.
+                    .animation(.easeInOut(duration: 0.45), value: percent)
+            }
+        }
+        .frame(height: height)
+    }
+}
+
+/// Menu bar popover meter — label + percent + bar + hint, all stacked.
+public struct TahoeMenuBarMeter: View {
+    @Environment(\.tahoe) private var t
+    public var label: String
+    public var percent: Double
+    public var hint: String?
+    public var provider: TahoeProvider
+
+    public init(label: String, percent: Double, hint: String? = nil, provider: TahoeProvider) {
+        self.label = label
+        self.percent = percent
+        self.hint = hint
+        self.provider = provider
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(label)
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Spacer()
+                Text("\(Int(percent))%")
+                    .font(TahoeFont.mono(11))
+                    .monospacedDigit()
+                    .foregroundStyle(t.fg2)
+            }
+            TahoePillBar(percent: percent, provider: provider, height: 6)
+            if let hint {
+                Text(hint)
+                    .font(TahoeFont.mono(10))
+                    .foregroundStyle(t.fg3)
+                    .padding(.top, 2)
+            }
+        }
+    }
+}
+#endif

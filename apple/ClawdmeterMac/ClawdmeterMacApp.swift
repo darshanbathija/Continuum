@@ -31,34 +31,24 @@ struct ClawdmeterMacApp: App {
         // can't do without triggering Tahoe's KVO loop. `NSStatusItem`
         // (managed by AppDelegate) supports `.isVisible` natively.
         Window("Clawdmeter", id: "dashboard") {
-            DashboardView(
-                claudeModel: runtime.claudeModel,
-                codexModel: runtime.codexModel,
-                geminiModel: runtime.geminiModel,
-                usageHistoryStore: runtime.usageHistoryStore,
-                sessionsModel: runtime.sessionsModel
-            )
-            .background(DashboardOpener())   // bridges AppDelegate → openWindow
-            .onAppear {
-                // Late binding: AppDelegate runs before our SwiftUI view
-                // hierarchy materializes, but we can publish the runtime
-                // reference on first appearance and AppDelegate picks it
-                // up via the static var.
-                appDelegate.configure(runtime: runtime)
-                // Notify so the delegate re-applies visibility (no-op if
-                // already configured).
-                NotificationCenter.default.post(
-                    name: UserDefaults.didChangeNotification, object: nil
-                )
-                // Make sure we're a regular app whenever the dashboard is
-                // visible — the Dock icon goes back on.
-                NSApp.setActivationPolicy(.regular)
-            }
+            // Tahoe 26 redesign: the new MacRootView owns the four
+            // titlebar tabs (Chat / Usage / Code / Settings) and the
+            // global TahoeThemeStore. The runtime is threaded in so the
+            // Usage tab + menu-bar popover render live per-provider data
+            // via the `tahoeLive` adapter (see MacTahoeAdapter.swift).
+            MacRootView(runtime: runtime)
+                .background(DashboardOpener())   // bridges AppDelegate → openWindow
+                .onAppear {
+                    appDelegate.configure(runtime: runtime)
+                    NotificationCenter.default.post(
+                        name: UserDefaults.didChangeNotification, object: nil
+                    )
+                    NSApp.setActivationPolicy(.regular)
+                }
         }
-        // Tall enough that the live cards + the analytics row (totals grid +
-        // daily chart + by-repo) are all visible on first open without
-        // scrolling on a typical Mac display.
-        .defaultSize(width: 980, height: 1100)
+        // Sized to comfortably show the three-column Chat compare layout
+        // (sidebar 248 + 3×~340 columns + gaps) at first open.
+        .defaultSize(width: 1320, height: 920)
         .windowResizability(.contentMinSize)
 
         // G14: pop-out window for a single session. Accepts a UUID via the

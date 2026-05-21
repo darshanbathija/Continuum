@@ -1,4 +1,5 @@
 import SwiftUI
+import ClawdmeterShared
 
 /// Watch approval sheet. Reads the latest plan + goal from App Group
 /// UserDefaults (the Watch app's WatchPlanBridge fills these via
@@ -31,12 +32,9 @@ struct PlanApprovalView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(terraCotta)
+            // Tahoe 26 redesign: Halo cyan accent (was terra-cotta).
+            .tint(TahoeAccent.halo.base.color)
         }
         .padding(8)
-    }
-
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
     }
 }

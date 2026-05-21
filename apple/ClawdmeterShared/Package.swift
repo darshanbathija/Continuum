@@ -10,9 +10,12 @@ import PackageDescription
 let package = Package(
     name: "ClawdmeterShared",
     platforms: [
-        .iOS(.v17),
+        // Tahoe 26 redesign: bumped to iOS / macOS 26 for native
+        // Liquid Glass APIs (.glassEffect). Watch stays on v10 — the
+        // redesign explicitly skips Watch.
+        .iOS("26.0"),
         .watchOS(.v10),
-        .macOS(.v14),
+        .macOS("26.0"),
     ],
     products: [
         .library(name: "ClawdmeterShared", targets: ["ClawdmeterShared"]),
@@ -36,6 +39,10 @@ let package = Package(
                 // Embedded LiteLLM pricing snapshot (A3 + A20). Refreshed via
                 // `tools/refresh-pricing.sh`; loaded at runtime by `Pricing`.
                 .process("Analytics/pricing.json"),
+                // Tahoe 26 redesign: provider logos + accent color sets
+                // bundled as a resource asset catalog. Read via
+                // `Image("tahoe-…-mark", bundle: .module)`.
+                .process("Tahoe/Tahoe.xcassets"),
             ]
         ),
         .testTarget(

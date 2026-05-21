@@ -4,6 +4,111 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.10.0 build 71] - 2026-05-21 — Tahoe 26 / iOS 26 liquid-glass redesign (`feat/tahoe-redesign`)
+
+Full visual redesign of the Mac, iOS, and Watch apps to the iOS 26 / macOS 26
+Tahoe liquid-glass language. New theme system, new tab structure, real per-provider
+data plumbed into the new views, and the entire legacy view layer retired.
+
+### Why
+
+The previous Anthropic-terracotta theme was a build-out from when Clawdmeter was a
+Claude-only quota gauge. The product is now a three-provider workspace (Claude /
+Codex / Antigravity) with Chat, Code, Usage, Settings, Live Activities, and a paired
+iPhone surface. The chrome needed to grow up: Apple shipped Liquid Glass in macOS 26
+/ iOS 26, and the redesign brief was explicit — "beat Conductor and Codex in feel,
+look like a native Apple app." This release ships that.
+
+### Added
+
+- **Tahoe foundation** (`ClawdmeterShared/Sources/ClawdmeterShared/Tahoe/`): an
+  observable `TahoeThemeStore` with appearance × surface × accent × wallpaper ×
+  glass-intensity × provider-focus state, OKLCH→sRGB color tokens, glass / pill /
+  accent-button / ghost-button primitives, an SF Symbol bridge for every JSX icon
+  name, a hand-built 34×22 toggle that matches iOS native geometry, a quota
+  pill-bar gauge, and 5 wallpaper backdrops (aurora / dawn / graphite / code /
+  studio).
+- **Mac surfaces**: `MacRootView` with floating titlebar tabs (Chat / Usage / Code
+  / Settings) and a hosted Broadcast/Solo mode toggle inline. `MacChatView`
+  (3-column compare, sidebar with collapsible history, brand-striped reply
+  cards). `MacUsageView` (3 ProviderColumns + analytics row with range selector,
+  stacked spend chart, by-repo bars). `MacCodeView` (sidebar repos + thread +
+  Plan Halo hero + LiquidComposer with LiveTicker + ReviewPane × 5 tabs).
+  `MacSettingsView` driving the global theme. `MacMenubarPopover` replacing the
+  legacy popover with a per-provider segmented + stacked meters.
+- **iOS surfaces**: `IOSRootView` with floating glass tab bar (Chat | Live |
+  Analytics | Code). `IOSChatView` (broadcast strip, model pills, reply cards).
+  `IOSLiveView` (per-provider segmented, hero QuotaBar, Weekly + Auto-revive).
+  `IOSCodeView` + `IOSSessionDetailView` with repo expand/collapse + Plan-halo
+  mini. `IOSAnalyticsView` (period segmented, total card, mini stacked chart).
+  `IOSPairingView` rendering a real `CIQRCodeGenerator` QR with halo brackets.
+- **Live data wiring**: `TahoeBindings` value structs + Mac/iOS adapter extensions
+  (`MacTahoeAdapter`, `IOSTahoeAdapter`) lower AppRuntime / UsageModel into the
+  Tahoe views. Mac Usage + Menu Bar Popover render real per-provider session %,
+  weekly %, reset times, and revive state from the running pollers.
+- **Watch port**: `ClawdmeterWatch` + `ClawdmeterWatchWidgets` migrated off the
+  legacy terra-cotta tokens to `TahoeAccent.halo` / `TahoeProvider.*.halo`,
+  keeping the Watch in the same visual language as Mac + iOS.
+- **Motion polish**: 1.8s pulse on the ComposerBar accent rim while running,
+  smooth state transitions between idle / running / plan, 4s aura breath on
+  PlanHalo, fill-in animation on QuotaBar percent changes.
+
+### Changed
+
+- **Deployment targets** bumped: macOS 14 → 26, iOS 17 → 26 (Tahoe / iOS 26
+  required for native Liquid Glass APIs). Watch stays on watchOS 10.
+- **Tab structure**: macOS gains a new Chat tab as the primary entry point;
+  Sessions renamed to "Code" in every user-visible label. iOS gains Live as a
+  distinct tab (separated out from Analytics).
+- **Mode toggle hosted in the titlebar** on the Chat tab (mac-chat.jsx:175 parity)
+  — state lifted from `MacChatView` up to `MacRootView` so the segmented control
+  renders inline with the tabs chip instead of as its own row.
+- **`AppDelegate` menu bar popover** swapped from the legacy `PopoverView` to
+  `MacMenubarPopover`, with `runtime.tahoeLive` passed through so each provider's
+  status item opens the same 3-provider segmented popover preselected to the
+  clicked provider.
+- **iOS shell**: `ContentView` now hosts `IOSRootView(usageModel:)`; background
+  refresh, notification manager, and live-activity coordinators preserved.
+
+### Removed
+
+Legacy view files retired and deleted:
+- `apple/ClawdmeterMac/DashboardView.swift`
+- `apple/ClawdmeterMac/PopoverView.swift`
+- `apple/ClawdmeteriOS/iOSChatView.swift`
+- `apple/ClawdmeteriOS/iOSChatFrontierView.swift`
+- `apple/ClawdmeteriOS/iOSChatProviderPicker.swift`
+- `apple/ClawdmeteriOS/iOSAnalyticsView.swift`
+
+`MenuBarGaugeView.swift`, `SessionsView.swift`, `iOSSessionsView.swift`,
+`PairingScannerView.swift`, and `iOSChatSoloView.swift` are kept for now — each
+still has hot dependencies (status-item icon rendering, NewSessionMacSheet,
+PairingFlow, iOSPermissionPromptCard). A follow-up will retire them once their
+non-view callers are migrated.
+
+### Verifier loop
+
+Built `apple/tools/tahoe-verify` for screenshot capture and ran a 5-round
+recursive Explore-agent audit per surface (foundation + 5 Mac + 7 iOS) against
+the JSX source of truth. The agents partially hallucinated comparisons; spot-
+checks against the actual JSX confirmed most flagged defects were false
+positives, but the loop did surface real fixes that landed in this branch:
+iOS tab-bar active state needed a second hairline-stroke shadow layer; iOS
+Reply Card padding was symmetric where the JSX is asymmetric (14 top / 16 H /
+10 bottom); the CompareIcon in the Mac chat mode toggle had been mapped to
+`chart.bar` SF Symbol but the JSX is a custom 3-vertical-bar Path; the iOS Chat
+floating composer placement was overlapping the tab bar.
+
+### Risk / out-of-scope
+
+- The Tahoe views use SwiftUI `.regularMaterial` for the glass effect rather than
+  the new macOS 26 / iOS 26 `.glassEffect()` API. Visually close; we can swap
+  once `.glassEffect` ships in a stable SDK without availability gates.
+- Mac Chat broadcast send and iOS Code session list still render demo data —
+  real `AgentControlClient` wiring lands in a follow-up.
+- Watch is a colors-only Tahoe port; the Watch app's information architecture is
+  unchanged.
+
 ## [0.9.2 build 70] - 2026-05-21 — SDK chat transcript mirror (`feat/chat-v0.9.x.1`)
 
 Fixes the "chat history vanishes after 5 min idle" bug for Codex SDK and
