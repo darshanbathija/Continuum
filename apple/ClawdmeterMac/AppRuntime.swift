@@ -32,6 +32,12 @@ final class AppRuntime: ObservableObject {
     let sessionsModel: SessionsModel
     let sessionScheduler: SessionScheduler
 
+    // Design tab (v0.14.0 — plan v2.1). Owns the bundled Open Design
+    // daemon + bridge sidecar lifecycle. Lazy-started by MacDesignView
+    // on first appearance so cold start cost is paid only when the
+    // user opens the tab.
+    let openDesignDaemon: OpenDesignDaemonManager
+
     private var cancellables = Set<AnyCancellable>()
     private var usageQueryService: UsageQueryService?
     private var sessionsRefreshTask: Task<Void, Never>?
@@ -117,6 +123,9 @@ final class AppRuntime: ObservableObject {
             registry: self.agentSessionRegistry
         )
         self.notificationDispatcher = NotificationDispatcher()
+        // Design tab daemon manager (lazy — first ensureRunning() comes
+        // from MacDesignView.onAppear, not from app launch).
+        self.openDesignDaemon = OpenDesignDaemonManager()
         self.agentControlServer = AgentControlServer(
             repoIndex: self.repoIndex,
             registry: self.agentSessionRegistry,

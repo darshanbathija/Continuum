@@ -7,7 +7,7 @@ import ClawdmeterShared
 /// Settings) and the menu bar window. Tab routing is purely local — each
 /// tab is its own view file under `Tahoe/`.
 struct MacRootView: View {
-    enum Tab: String, CaseIterable, Hashable { case chat, usage, code, settings }
+    enum Tab: String, CaseIterable, Hashable { case chat, usage, code, design, settings }
 
     @State private var theme: TahoeThemeStore
     @State private var tab: Tab
@@ -74,7 +74,8 @@ struct MacRootView: View {
                     onTab: { tab = $0 },
                     theme: theme,
                     chatMode: $chatMode,
-                    chatSoloProvider: $chatSoloProvider
+                    chatSoloProvider: $chatSoloProvider,
+                    openDesignDaemon: runtime.openDesignDaemon
                 )
                     .padding(.horizontal, 10)
                     .padding(.top, 10)
@@ -98,6 +99,15 @@ struct MacRootView: View {
                             },
                             loopbackClient: runtime.loopbackClient,
                             runtime: runtime
+                        )
+                    case .design:
+                        MacDesignView(
+                            daemon: runtime.openDesignDaemon,
+                            onOpenInCode: { _ in
+                                // Bridge plugin "Open in Code →" → flip tab.
+                                // Per-repo pre-select integration pending T8 wiring.
+                                tab = .code
+                            }
                         )
                     case .settings:
                         MacSettingsView(
@@ -134,19 +144,22 @@ struct MacTitlebar: View {
     var theme: TahoeThemeStore
     @Binding var chatMode: MacChatView.Mode
     @Binding var chatSoloProvider: TahoeProvider
+    @ObservedObject var openDesignDaemon: OpenDesignDaemonManager
 
     init(
         active: MacRootView.Tab,
         onTab: @escaping (MacRootView.Tab) -> Void,
         theme: TahoeThemeStore,
         chatMode: Binding<MacChatView.Mode>,
-        chatSoloProvider: Binding<TahoeProvider>
+        chatSoloProvider: Binding<TahoeProvider>,
+        openDesignDaemon: OpenDesignDaemonManager
     ) {
         self.active = active
         self.onTab = onTab
         self.theme = theme
         self._chatMode = chatMode
         self._chatSoloProvider = chatSoloProvider
+        self.openDesignDaemon = openDesignDaemon
     }
 
     var body: some View {
@@ -162,6 +175,7 @@ struct MacTitlebar: View {
                     TahoeDashTab("Chat",     active: active == .chat)     { onTab(.chat) }
                     TahoeDashTab("Usage",    active: active == .usage)    { onTab(.usage) }
                     TahoeDashTab("Code",     active: active == .code)     { onTab(.code) }
+                    TahoeDashTab("Design",   active: active == .design)   { onTab(.design) }
                     TahoeDashTab("Settings", active: active == .settings) { onTab(.settings) }
                     Spacer(minLength: 0)
                     secondaryRight
@@ -193,10 +207,46 @@ struct MacTitlebar: View {
             }
         case .code:
             TahoeSyncChip(text: "iPhone paired")
+        case .design:
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(designHealthColor)
+                    .frame(width: 8, height: 8)
+                Text(designChipText)
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 200, alignment: .leading)
+            }
         case .settings:
             Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1") · synced")
                 .font(TahoeFont.body(12))
                 .foregroundStyle(t.fg2)
+        }
+    }
+
+    private var designHealthColor: Color {
+        switch openDesignDaemon.lifecycle {
+        case .ready:                                 return .green
+        case .starting, .loading, .restarting:       return .orange
+        case .crashed, .failed:                      return .red
+        case .idle:                                  return .gray
+        }
+    }
+
+    private var designChipText: String {
+        if let name = openDesignDaemon.activeProjectName, !name.isEmpty {
+            return name
+        }
+        switch openDesignDaemon.lifecycle {
+        case .ready:    return "No project open"
+        case .starting: return "Starting…"
+        case .loading:  return "Loading…"
+        case .crashed:  return "Daemon crashed"
+        case .failed:   return "Daemon failed"
+        case .restarting: return "Restarting…"
+        case .idle:     return "Not started"
         }
     }
 }
