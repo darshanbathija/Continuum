@@ -205,6 +205,7 @@ public struct IOSAnalyticsView: View {
         case .claude: return .claude
         case .codex:  return .codex
         case .gemini: return .gemini
+        case .opencode: return .opencode  // PR #31
         }
     }
 

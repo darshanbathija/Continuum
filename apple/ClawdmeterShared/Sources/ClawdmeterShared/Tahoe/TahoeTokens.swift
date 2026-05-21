@@ -52,6 +52,10 @@ public enum TahoeAccent: String, CaseIterable, Sendable, Codable, Identifiable {
 
 public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable {
     case claude, codex, gemini
+    /// OpenCode — added PR #31 (v0.20.0). 4th lane in every provider
+    /// switcher. Brand color is OpenCode violet (#6B5DD3) to disambiguate
+    /// from Codex blue + Antigravity violet-blue.
+    case opencode
     public var id: String { rawValue }
 
     /// User-visible name. Note: internal key for the third provider stays
@@ -62,6 +66,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .claude: return "Claude"
         case .codex:  return "Codex"
         case .gemini: return "Antigravity"
+        case .opencode: return "OpenCode"
         }
     }
 
@@ -70,6 +75,10 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .claude: return OKLCH(l: 0.72, c: 0.13, h: 45)
         case .codex:  return OKLCH(l: 0.30, c: 0.01, h: 260)
         case .gemini: return OKLCH(l: 0.62, c: 0.20, h: 255)
+        // OpenCode violet — h≈285 is in the purple-pink region, more
+        // saturated than Antigravity's blue-violet to keep them
+        // visually distinct in the per-provider segmented control.
+        case .opencode: return OKLCH(l: 0.55, c: 0.18, h: 295)
         }
     }
 
@@ -78,6 +87,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .claude: return OKLCH(l: 0.83, c: 0.10, h: 50)
         case .codex:  return OKLCH(l: 0.55, c: 0.02, h: 260)
         case .gemini: return OKLCH(l: 0.78, c: 0.18, h: 250)
+        case .opencode: return OKLCH(l: 0.75, c: 0.16, h: 295)
         }
     }
 
@@ -86,16 +96,18 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .claude: return OKLCH(l: 0.48, c: 0.14, h: 35)
         case .codex:  return OKLCH(l: 0.12, c: 0.01, h: 260)
         case .gemini: return OKLCH(l: 0.45, c: 0.22, h: 265)
+        case .opencode: return OKLCH(l: 0.38, c: 0.20, h: 295)
         }
     }
 
     /// Outer-glow halo color — Claude warm orange, Codex OpenAI cool blue,
-    /// Antigravity vivid violet. Used by `TahoeProviderGlyph`.
+    /// Antigravity vivid violet, OpenCode magenta-violet.
     public var halo: OKLCH {
         switch self {
         case .claude: return OKLCH(l: 0.78, c: 0.16, h: 50)
         case .codex:  return OKLCH(l: 0.70, c: 0.16, h: 235)
         case .gemini: return OKLCH(l: 0.72, c: 0.22, h: 285)
+        case .opencode: return OKLCH(l: 0.72, c: 0.20, h: 305)
         }
     }
 
@@ -105,6 +117,11 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .claude: return "tahoe-claude-mark"
         case .codex:  return "tahoe-codex-mark"
         case .gemini: return "tahoe-antigravity-mark"
+        // PR #31: bundled asset added separately; until art lands,
+        // TahoeProviderGlyph falls back to AgentKindUI.assetName which
+        // points at "OpencodeLogo". Naming kept consistent for the
+        // future Tahoe-art swap.
+        case .opencode: return "tahoe-opencode-mark"
         }
     }
 
@@ -114,6 +131,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         switch self {
         case .claude, .codex: return true
         case .gemini:         return false
+        case .opencode:       return true
         }
     }
 }

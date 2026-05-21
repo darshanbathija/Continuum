@@ -382,6 +382,7 @@ private struct Sidebar: View {
     @AppStorage("clawdmeter.codeIDE.filter.providerClaude") private var providerClaudeEnabled: Bool = true
     @AppStorage("clawdmeter.codeIDE.filter.providerCodex") private var providerCodexEnabled: Bool = true
     @AppStorage("clawdmeter.codeIDE.filter.providerGemini") private var providerGeminiEnabled: Bool = true
+    @AppStorage("clawdmeter.codeIDE.filter.providerOpenCode") private var providerOpenCodeEnabled: Bool = true
 
     private var statusFilter: StatusFilter {
         StatusFilter(rawValue: statusFilterRaw) ?? .all
@@ -427,6 +428,7 @@ private struct Sidebar: View {
             case .claude: return providerClaudeEnabled
             case .codex: return providerCodexEnabled
             case .gemini: return providerGeminiEnabled
+            case .opencode: return providerOpenCodeEnabled  // PR #31
             }
         }
         let statusAllowed: (TahoeCodeSession.Status) -> Bool = { s in
@@ -574,6 +576,7 @@ private struct Sidebar: View {
                 Toggle("Claude", isOn: $providerClaudeEnabled)
                 Toggle("Codex", isOn: $providerCodexEnabled)
                 Toggle("Antigravity", isOn: $providerGeminiEnabled)
+                Toggle("OpenCode", isOn: $providerOpenCodeEnabled)  // PR #31
             }
             Section("Sort") {
                 ForEach(SortKey.allCases, id: \.rawValue) { opt in

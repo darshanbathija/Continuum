@@ -68,12 +68,7 @@ extension AgentControlClient {
             case .claude: return .claude
             case .codex:  return .codex
             case .gemini: return .gemini
-            case .opencode:
-                // PR #29: TahoeProvider stays 3-case through v1.1.
-                // Visually map opencode to .codex (closest cousin —
-                // silhouette + dark accent). AgentKindUI remains the
-                // source of truth for the OpenCode brand color/label.
-                return .codex
+            case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
             case .unknown:
                 // X3: visual fallback for raws this client doesn't
                 // recognize. Degrades to Claude styling.
