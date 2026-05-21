@@ -194,7 +194,40 @@ if [[ -d "$MOUNT_POINT/${APP_NAME}.app" ]]; then
 else
   echo "✗ DMG mounted but no ${APP_NAME}.app inside"
 fi
+
+# v0.14.0 (plan v2.1 T17): smoke-check that the bundled Open Design tree
+# made it into the .app — Design tab will be broken otherwise. Runs while
+# the DMG is still mounted so paths are valid.
+if [[ -d "$MOUNT_POINT/${APP_NAME}.app" ]]; then
+  OD_DAEMON="$MOUNT_POINT/${APP_NAME}.app/Contents/Resources/Vendor/open-design/apps/daemon/dist/cli.js"
+  OD_WEB="$MOUNT_POINT/${APP_NAME}.app/Contents/Resources/Vendor/open-design/apps/web/out/index.html"
+  OD_BRIDGE="$MOUNT_POINT/${APP_NAME}.app/Contents/Resources/Vendor/open-design/bridge-host/index.js"
+  if [[ -f "$OD_DAEMON" && -f "$OD_WEB" && -f "$OD_BRIDGE" ]]; then
+    echo "✓ Vendor/open-design/ daemon + web + bridge present in DMG"
+  else
+    echo "⚠ Vendor/open-design/ tree incomplete inside DMG (Design tab inert):"
+    [[ -f "$OD_DAEMON" ]] || echo "    missing: apps/daemon/dist/cli.js"
+    [[ -f "$OD_WEB"    ]] || echo "    missing: apps/web/out/index.html"
+    [[ -f "$OD_BRIDGE" ]] || echo "    missing: bridge-host/index.js"
+    echo "  Run tools/build-bundled-open-design.sh and re-run this script."
+  fi
+fi
 hdiutil detach "$MOUNT_POINT" -quiet
+
+# v0.14.0 (plan v2.1 T17): DMG size budget guard. Soft budget 350MB,
+# hard limit 400MB to catch regressions.
+DMG_BYTES="$(stat -f%z "$DMG_PATH")"
+BUDGET_MB=350
+HARD_MB=400
+DMG_MB=$((DMG_BYTES / 1024 / 1024))
+if (( DMG_MB > HARD_MB )); then
+  echo "✗ DMG size ${DMG_MB}MB exceeds hard limit ${HARD_MB}MB"
+  exit 1
+elif (( DMG_MB > BUDGET_MB )); then
+  echo "⚠ DMG size ${DMG_MB}MB exceeds budget ${BUDGET_MB}MB — review what grew"
+else
+  echo "✓ DMG size ${DMG_MB}MB within budget (${BUDGET_MB}MB soft / ${HARD_MB}MB hard)"
+fi
 
 echo ""
 echo "✅ Done."
