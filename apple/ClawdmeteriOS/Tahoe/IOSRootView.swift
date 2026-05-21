@@ -80,7 +80,8 @@ public struct IOSRootView: View {
                 IOSLiveView(
                     data: live,
                     onRefresh: { await agentClient.refreshAll() },
-                    onOpenSettings: { settingsPresented = true }
+                    onOpenSettings: { settingsPresented = true },
+                    agentClient: agentClient
                 )
             case .analytics: IOSAnalyticsView(agentClient: agentClient)
             case .code:

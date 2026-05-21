@@ -171,6 +171,13 @@ public final class AgentControlServer {
         chatStoreRegistry.snapshotStore(for: session)
     }
 
+    /// D4 (v0.17, wire v12): callback that fans the iOS-side per-provider
+    /// auto-revive toggle out to the matching AppModel.setAutoReviveEnabled.
+    /// AppRuntime injects this at startup; the server just dispatches.
+    /// Nil means D4 isn't wired (test-time / Previews) and the endpoint
+    /// returns 503.
+    public var setAutoReviveCallback: (@MainActor (AgentKind, Bool) -> Void)?
+
     public init(
         pairingTokens: PairingTokenStore = .shared,
         repoIndex: RepoIndex,
@@ -997,6 +1004,16 @@ public final class AgentControlServer {
         }
         t.register(method: "POST", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
             await self?.handleRegisterPushToken(request: req, connection: conn)
+        }
+        // D4 (v0.17): per-provider auto-revive toggle. iOS Live tab
+        // fans the per-provider switch through here; the daemon dispatches
+        // to the right AppModel.setAutoReviveEnabled. Wire v12.
+        t.register(method: "POST", pattern: "/providers/:id/auto-revive") { [weak self] req, conn, params in
+            await self?.handleSetAutoRevive(
+                providerId: params["id"] ?? "",
+                request: req,
+                connection: conn
+            )
         }
         t.register(method: "POST", pattern: "/devices/ack-notifications") { [weak self] req, conn, _ in
             await self?.handleAckNotifications(request: req, connection: conn)
@@ -2291,6 +2308,59 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    // MARK: - D4: per-provider auto-revive RPC (wire v12)
+
+    /// POST body for `/providers/:id/auto-revive`. The `:id` path
+    /// component carries the AgentKind raw value (`claude`/`codex`/`gemini`);
+    /// body carries `{"enabled": Bool}`. Forward-compat: an unknown id
+    /// returns 400 (X3 unknown kinds aren't user-toggleable).
+    private struct SetAutoReviveBody: Codable {
+        let enabled: Bool
+    }
+
+    /// D4 (v0.17): handle `POST /providers/:id/auto-revive`. iOS Live tab
+    /// sends a per-provider toggle here; the daemon dispatches to the
+    /// matching AppModel.setAutoReviveEnabled via `setAutoReviveCallback`.
+    /// Returns 200 with `{"ok": true}` on success, 400 on unknown
+    /// provider, 503 if the callback isn't wired (test/Preview paths).
+    private func handleSetAutoRevive(
+        providerId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        // X3 / D4: only known AgentKind raws are accepted. `.unknown`
+        // sessions never reach here from the iOS UI (the toggle isn't
+        // rendered for unknown providers), and an arbitrary path id
+        // should 400 rather than silently fall through to `.unknown`.
+        guard let kind = AgentKind(rawValue: providerId),
+              kind != .unknown else {
+            sendResponse(
+                .badRequest,
+                on: connection
+            )
+            return
+        }
+        guard let body = try? JSONDecoder().decode(SetAutoReviveBody.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        guard let callback = setAutoReviveCallback else {
+            // No AppRuntime wired (test harness / Preview) — surface a
+            // 503 so the caller knows the daemon isn't ready instead of
+            // pretending success.
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        await MainActor.run {
+            callback(kind, body.enabled)
+        }
+        serverLogger.info("auto-revive toggle: \(providerId, privacy: .public) → \(body.enabled, privacy: .public)")
+        sendResponse(
+            .ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)),
+            on: connection
+        )
     }
 
     // MARK: - Phase 10: ActivityKit push-token registration

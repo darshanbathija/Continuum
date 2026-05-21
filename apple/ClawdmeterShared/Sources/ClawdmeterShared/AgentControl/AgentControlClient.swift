@@ -367,6 +367,19 @@ public final class AgentControlClient: ObservableObject {
                         body: AutopilotRequest(enabled: enabled))
     }
 
+    /// D4 (v0.17, wire v12): toggle the Mac's per-provider auto-revive
+    /// state from iOS. The Mac daemon fans the call out to the matching
+    /// `AppModel.setAutoReviveEnabled` via `setAutoReviveCallback`.
+    /// `.unknown` is intentionally not supported (the X3 forward-compat
+    /// sentinel — the iOS Live tab never renders an auto-revive toggle
+    /// for unknown providers).
+    @MainActor
+    public func setAutoRevive(provider: AgentKind, enabled: Bool) async {
+        guard provider != .unknown else { return }
+        await postBody(path: "/providers/\(provider.rawValue)/auto-revive",
+                        body: SetAutoReviveRequest(enabled: enabled))
+    }
+
     /// v0.5.4: set or clear the session's user-facing display name. The
     /// daemon normalizes empty/whitespace-only strings to nil. Pass nil
     /// to clear and fall back to `repoDisplayName`.

@@ -11,6 +11,12 @@ import ClawdmeterShared
 public struct IOSLiveView: View {
     @Environment(\.tahoe) private var t
     @State private var provider: TahoeProvider = .claude
+    /// D4 (v0.17, wire v12): the auto-revive toggle now drives a real
+    /// RPC — `agentClient.setAutoRevive(provider:enabled:)` — and the
+    /// state is mirrored from a local cache so the switch flips
+    /// instantly while the network roundtrip happens. The dictionary is
+    /// the source of truth for the picker; the Mac's `setAutoReviveEnabled`
+    /// is the source of truth for AutoReviver behavior.
     @State private var autoRevive: [TahoeProvider: Bool] = [
         .claude: true, .codex: true, .gemini: true
     ]
@@ -21,15 +27,32 @@ public struct IOSLiveView: View {
     /// for SwiftUI Previews; production always injects.
     var onRefresh: (() async -> Void)?
     var onOpenSettings: (() -> Void)?
+    /// D4: daemon client for the per-provider auto-revive RPC. Optional
+    /// so Previews can render without one — production always injects.
+    var agentClient: AgentControlClient?
 
     public init(
         data: TahoeLiveBindings = .demo,
         onRefresh: (() async -> Void)? = nil,
-        onOpenSettings: (() -> Void)? = nil
+        onOpenSettings: (() -> Void)? = nil,
+        agentClient: AgentControlClient? = nil
     ) {
         self.data = data
         self.onRefresh = onRefresh
         self.onOpenSettings = onOpenSettings
+        self.agentClient = agentClient
+    }
+
+    /// D4: TahoeProvider → AgentKind for the RPC dispatch. Tahoe + wire
+    /// enums happen to align value-for-value; this stays a tiny mapper
+    /// rather than a global helper because IOSLiveView is the only
+    /// caller today.
+    private func agentKind(for p: TahoeProvider) -> AgentKind {
+        switch p {
+        case .claude: return .claude
+        case .codex:  return .codex
+        case .gemini: return .gemini
+        }
     }
 
     public var body: some View {
@@ -134,7 +157,24 @@ public struct IOSLiveView: View {
                         Spacer()
                         TahoeToggleView(on: Binding(
                             get: { autoRevive[provider] ?? false },
-                            set: { autoRevive[provider] = $0 }
+                            set: { newValue in
+                                // Optimistic UI: flip the local state
+                                // immediately, then fire the RPC. The
+                                // Mac's AutoReviver runs the toggle on
+                                // its own AppModel; we don't await the
+                                // response here because the UI hint is
+                                // the latest user intent.
+                                autoRevive[provider] = newValue
+                                if let agentClient {
+                                    let kind = agentKind(for: provider)
+                                    Task { @MainActor in
+                                        await agentClient.setAutoRevive(
+                                            provider: kind,
+                                            enabled: newValue
+                                        )
+                                    }
+                                }
+                            }
                         ))
                     }
                     .padding(.horizontal, 16).padding(.vertical, 14)

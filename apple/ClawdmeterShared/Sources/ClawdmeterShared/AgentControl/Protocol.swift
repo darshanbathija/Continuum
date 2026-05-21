@@ -1357,6 +1357,17 @@ public struct AutopilotRequest: Codable, Sendable {
     }
 }
 
+/// `POST /providers/:id/auto-revive` body. D4 (v0.17, wire v12). iOS
+/// Live tab fans the per-provider auto-revive toggle through here; the
+/// Mac daemon dispatches to the matching AppModel.setAutoReviveEnabled.
+public struct SetAutoReviveRequest: Codable, Sendable {
+    public let enabled: Bool
+
+    public init(enabled: Bool) {
+        self.enabled = enabled
+    }
+}
+
 /// `POST /sessions/:id/ab-pair/pick-winner` body + response. Atomic CAS
 /// via daemon (E3): first request locks `abPairDecidedAt`; second returns
 /// 409 with the winning sibling id.
