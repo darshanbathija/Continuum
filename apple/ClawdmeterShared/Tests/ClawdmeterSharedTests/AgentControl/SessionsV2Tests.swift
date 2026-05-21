@@ -259,7 +259,10 @@ final class SessionsV2Tests: XCTestCase {
         // agentapiMinimum=10 gates the Mac UI's agentapi spawn path;
         // antigravityChatMinimum=11 keeps iOS gated until v0.8.2
         // migrates daemon POST /sessions (Codex P1.4 deferral).
-        XCTAssertEqual(AgentControlWireVersion.current, 10)
+        // v0.9 bumped current to 11; future bumps are fine. The exact
+        // value is pinned in WireV11Tests, this assertion is just the
+        // floor.
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 11)
 
         XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
         XCTAssertEqual(AgentControlWireVersion.chatSubscribeMinimum, 5)

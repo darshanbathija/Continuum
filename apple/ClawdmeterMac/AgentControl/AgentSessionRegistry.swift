@@ -71,7 +71,8 @@ public final class AgentSessionRegistry: ObservableObject {
         // conversation UUID instead so SessionChatStore can attach to
         // the right SQLite DB.
         geminiBackend: GeminiBackend? = nil,
-        antigravityConversationId: UUID? = nil
+        antigravityConversationId: UUID? = nil,
+        antigravityProjectId: String? = nil
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -96,7 +97,8 @@ public final class AgentSessionRegistry: ObservableObject {
             effort: effort,
             abPairSessionId: abPairSessionId,
             geminiBackend: geminiBackend,
-            antigravityConversationId: antigravityConversationId
+            antigravityConversationId: antigravityConversationId,
+            antigravityProjectId: antigravityProjectId
         )
         sessions.append(session)
         save()
@@ -105,13 +107,19 @@ public final class AgentSessionRegistry: ObservableObject {
 
     /// v0.8 Chat tab: create a chat-kind session. Stores the chat-cwd in
     /// `worktreePath` (so the existing `effectiveCwd` dispatch resolves to
-    /// it) and leaves `repoKey` nil (chat sessions have no repo).
+    /// it) and leaves `repoKey` nil (chat sessions have no repo). v0.9
+    /// adds the agentapi binding fields so Gemini chat sessions can
+    /// persist their conversation/project ids at create time without a
+    /// separate update pass.
     public func createChat(
         provider: AgentKind,
         model: String?,
         chatCwd: String,
         codexChatBackend: CodexChatBackend? = nil,
-        effort: ReasoningEffort? = nil
+        effort: ReasoningEffort? = nil,
+        geminiBackend: GeminiBackend? = nil,
+        antigravityConversationId: UUID? = nil,
+        antigravityProjectId: String? = nil
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -134,11 +142,35 @@ public final class AgentSessionRegistry: ObservableObject {
             mode: .local,
             effort: effort,
             kind: .chat,
-            codexChatBackend: codexChatBackend
+            codexChatBackend: codexChatBackend,
+            geminiBackend: geminiBackend,
+            antigravityConversationId: antigravityConversationId,
+            antigravityProjectId: antigravityProjectId
         )
         sessions.append(session)
         save()
         return session
+    }
+
+    /// v0.9 — patch the agentapi binding fields on an existing chat
+    /// session after the daemon's POST /chat-sessions handler kicks off
+    /// agentapi `new-conversation`. Two-phase create because the
+    /// chat-cwd needs to exist before we know the conversation id, but
+    /// the session record needs to exist before we can store the
+    /// chat-cwd. Idempotent.
+    public func setAntigravityChatBinding(
+        id: UUID,
+        conversationId: UUID,
+        projectId: String
+    ) {
+        update(id: id) { s in
+            with(
+                s,
+                geminiBackend: .agentapi,
+                antigravityConversationId: conversationId,
+                antigravityProjectId: projectId
+            )
+        }
     }
 
     /// Update the persisted codex thread id for an SDK chat session after
@@ -358,6 +390,9 @@ public final class AgentSessionRegistry: ObservableObject {
         abPairDecidedAt: Date?? = nil,
         customName: String?? = nil,
         codexChatThreadId: String?? = nil,
+        geminiBackend: GeminiBackend?? = nil,
+        antigravityConversationId: UUID?? = nil,
+        antigravityProjectId: String?? = nil,
         lastEventSeq: UInt64? = nil
     ) -> AgentSession {
         AgentSession(
@@ -393,11 +428,15 @@ public final class AgentSessionRegistry: ObservableObject {
             codexChatBackend: s.codexChatBackend,
             codexChatThreadId: Self.resolve(codexChatThreadId, fallback: s.codexChatThreadId),
             // v0.8.1 schema v6 (agy-migration): geminiBackend +
-            // antigravityConversationId only get set at create-time
-            // (via `create(...)` overload). Mutations intentionally
-            // preserve them across status/model/effort updates.
-            geminiBackend: s.geminiBackend,
-            antigravityConversationId: s.antigravityConversationId
+            // antigravityConversationId usually only get set at
+            // create-time, but v0.9 adds a two-phase bind via
+            // setAntigravityChatBinding so chat-sessions can promote
+            // from a placeholder record to a real agentapi binding once
+            // the daemon's POST /chat-sessions has run new-conversation.
+            // Resolve-with-fallback so non-binding mutations preserve.
+            geminiBackend: Self.resolve(geminiBackend, fallback: s.geminiBackend),
+            antigravityConversationId: Self.resolve(antigravityConversationId, fallback: s.antigravityConversationId),
+            antigravityProjectId: Self.resolve(antigravityProjectId, fallback: s.antigravityProjectId)
         )
     }
 

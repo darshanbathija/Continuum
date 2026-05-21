@@ -1241,29 +1241,157 @@ public final class AgentControlServer {
         content: String
     ) async throws {
         let lsClient = LanguageServerClient()
-        let projectsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".gemini/config/projects", isDirectory: true)
-        let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-        // Resolve project from session's repoKey. Fall back to the
-        // conversation ID's existing project record if the repoKey-based
-        // lookup fails — Antigravity already accepted the conversation
-        // at spawn, so the agentapi RPC can use any valid projectId.
         let projectId: String
-        // v0.8.1 + chat-tab merge: AgentSession.repoKey is now String?
-        // (chat sessions have nil). For agentapi sessions, repoKey must
-        // be non-nil — they were spawned via SessionsView's code path,
-        // not the chat-tab createChat() path. Treat nil as "lost project
-        // mapping" and surface notRunning so the caller shows the CTA.
-        guard let repoKey = session.repoKey,
-              let info = await resolver.resolve(forRepoKey: repoKey) else {
-            throw LanguageServerClientError.notRunning
+        // v0.9: prefer the persisted `antigravityProjectId` (chat
+        // sessions set this at create-time; v0.9+ code sessions can opt
+        // in too). Fall back to the v0.8.1 repoKey-resolution path so
+        // pre-v0.9 sessions.json records still send cleanly.
+        if let persistedProjectId = session.antigravityProjectId {
+            projectId = persistedProjectId
+        } else {
+            let projectsDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".gemini/config/projects", isDirectory: true)
+            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
+            guard let repoKey = session.repoKey,
+                  let info = await resolver.resolve(forRepoKey: repoKey) else {
+                throw LanguageServerClientError.notRunning
+            }
+            projectId = info.id
         }
-        projectId = info.id
         try await lsClient.sendMessage(
             conversationId: conversationId.uuidString,
             content: content,
             projectId: projectId
         )
+    }
+
+    /// v0.9 — daemon-side spawn for Gemini chat sessions. Picks the
+    /// first available Antigravity project as a scratch workspace
+    /// (chat has no repoKey), creates a placeholder conversation via
+    /// agentapi `new-conversation`, persists conversationId + projectId
+    /// on the session, and warms the chat store so chat-subscribe WS
+    /// clients can attach immediately. Errors surface as 503 with
+    /// structured CTA bodies the iOS Chat tab can map directly to
+    /// user-facing prompts.
+    private func handlePostGeminiChatSession(
+        model: String?,
+        effort: ReasoningEffort?,
+        connection: NWConnection
+    ) async {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let projectsDir = home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
+        let lsClient = LanguageServerClient()
+        let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
+
+        let install = await AntigravityInstall.preflight(
+            forRepoKey: "",
+            isLanguageServerLive: {
+                if case .live = lsClient.discoverLive() { return true }
+                return false
+            },
+            resolveProject: { _ in
+                let projects = await resolver.allProjects()
+                return projects.first?.id
+            },
+            homeDirectory: home,
+            applicationsRoot: URL(fileURLWithPath: "/Applications", isDirectory: true)
+        )
+
+        let projectId: String
+        switch install {
+        case .absent:
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable", contentType: "application/json",
+                body: Data(#"{"error":"antigravity_absent","cta":"Install Antigravity 2 from antigravity.google to start a Gemini chat."}"#.utf8)
+            ), on: connection); return
+        case .installedNotSignedIn:
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable", contentType: "application/json",
+                body: Data(#"{"error":"antigravity_not_signed_in","cta":"Sign into Antigravity 2 first, then try again."}"#.utf8)
+            ), on: connection); return
+        case .appOnlyNotRunning:
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable", contentType: "application/json",
+                body: Data(#"{"error":"antigravity_not_running","cta":"Open Antigravity 2 to start a Gemini chat."}"#.utf8)
+            ), on: connection); return
+        case .noProjectForRepo:
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable", contentType: "application/json",
+                body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first — Clawdmeter Chat uses your first available project as a scratch workspace."}"#.utf8)
+            ), on: connection); return
+        case .ready(_, let resolvedProjectId):
+            projectId = resolvedProjectId
+        }
+
+        let session = registry.createChat(
+            provider: .gemini,
+            model: model,
+            chatCwd: "",
+            effort: effort
+        )
+        let chatCwd: String
+        do {
+            let url = try ChatCwdManager.ensure(for: session.id)
+            chatCwd = url.path
+        } catch {
+            serverLogger.error("agentapi chat-cwd create failed: \(error.localizedDescription, privacy: .public)")
+            registry.delete(id: session.id)
+            sendResponse(.internalError, on: connection); return
+        }
+        registry.updateRuntime(
+            id: session.id, worktreePath: chatCwd,
+            tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
+        )
+
+        let modelTier = AgentapiModelTier.from(modelCatalogId: model)
+        do {
+            let conversationIdString = try await lsClient.newConversation(
+                modelTier: modelTier,
+                prompt: "(starting new chat)",
+                projectId: projectId
+            )
+            guard let conversationId = UUID(uuidString: conversationIdString) else {
+                serverLogger.error("agentapi returned non-UUID conversation id: \(conversationIdString, privacy: .public)")
+                registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                sendResponse(.internalError, on: connection); return
+            }
+            registry.setAntigravityChatBinding(
+                id: session.id,
+                conversationId: conversationId,
+                projectId: projectId
+            )
+            let updated = registry.session(id: session.id) ?? session
+            _ = chatStoreRegistry.snapshotStore(for: updated)
+            AgentEventStream.recordEvent(sessionId: session.id, kind: .sessionCreated, payload: [
+                "agent": "gemini",
+                "geminiBackend": "agentapi",
+                "conversationId": conversationId.uuidString,
+                "projectId": projectId
+            ])
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(updated) {
+                sendResponse(HTTPResponse(
+                    status: 201, reason: "Created",
+                    contentType: "application/json", body: body
+                ), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch let LanguageServerClientError.notRunning {
+            registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable", contentType: "application/json",
+                body: Data(#"{"error":"antigravity_not_running","cta":"Open Antigravity 2 to continue this session"}"#.utf8)
+            ), on: connection)
+        } catch {
+            serverLogger.error("agentapi new-conversation failed: \(error.localizedDescription, privacy: .public)")
+            registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(.internalError, on: connection)
+        }
     }
 
     /// `POST /sessions/continue-readonly` — server-side equivalent of the
@@ -2432,16 +2560,19 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection)
             return
         }
-        // Gemini chat is deferred to v0.9 (gemini CLI being replaced by
-        // Antigravity / agy in a parallel thread). Surface 501 with a
-        // clear reason string so iOS knows to show "Coming with
-        // Antigravity" copy instead of a generic error.
+        // v0.9: Gemini chat dispatches to Antigravity 2's agentapi via
+        // a new daemon-side handler. Chat has no repoKey, so the helper
+        // picks the first available Antigravity project as a scratch
+        // workspace. Surfaces 503 with structured CTA bodies when
+        // Antigravity isn't installed / signed in / running / has no
+        // projects open. The v0.8 501 stub is gone now that agentapi-
+        // via-chat is live (wire v11 / antigravityChatMinimum=11 gate).
         if req.provider == .gemini {
-            let body = #"{"error":"not_implemented","reason":"v0.9","provider":"gemini"}"#
-            sendResponse(HTTPResponse(
-                status: 501, reason: "Not Implemented",
-                contentType: "application/json", body: Data(body.utf8)
-            ), on: connection)
+            await handlePostGeminiChatSession(
+                model: req.model,
+                effort: req.effort,
+                connection: connection
+            )
             return
         }
         // Determine the Codex backend choice for this session. For non-

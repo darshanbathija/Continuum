@@ -18,8 +18,12 @@ final class WireV10Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsTen() {
-        XCTAssertEqual(AgentControlWireVersion.current, 10)
+    func test_currentWireVersionIsAtLeastTen() {
+        // v0.9 bumped current to 11; earlier minimums + agentapi flow
+        // still hold. We assert >= 10 here so the v0.8.1 wire test
+        // doesn't go red on every future bump. WireV11Tests pins the
+        // exact value for v0.9.
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 10)
     }
 
     func test_agentapiMinimumIsTen() {
@@ -34,9 +38,10 @@ final class WireV10Tests: XCTestCase {
         XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 11)
     }
 
-    func test_supportsAntigravityChat_falseAtV10() {
-        // v10 Mac UI spawns agentapi; v10 daemon endpoint does not.
-        // iOS gate stays closed until v0.8.2 (when this returns true).
+    func test_supportsAntigravityChat_gatedAtV11() {
+        // v10 Mac UI spawns agentapi; v10 daemon endpoint returns 501.
+        // v11 = v0.9 daemon ships handlePostGeminiChatSession so the
+        // gate opens. v10 stays closed by design.
         XCTAssertFalse(AgentControlWireVersion.supportsAntigravityChat(serverWireVersion: 10))
         XCTAssertTrue(AgentControlWireVersion.supportsAntigravityChat(serverWireVersion: 11))
     }

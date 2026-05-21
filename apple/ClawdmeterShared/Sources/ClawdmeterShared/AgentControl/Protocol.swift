@@ -69,7 +69,12 @@ public enum AgentControlWireVersion {
     /// POST /sessions also dispatches via agentapi — Codex P1.4).
     /// Gates surface "Update Clawdmeter on Mac" copy on older iOS
     /// instead of letting them render a stale Gemini UI.
-    public static let current: Int = 10
+    /// v11 (2026-05-21) Gemini chat live via daemon: POST /chat-sessions
+    /// now dispatches `provider: "gemini"` to agentapi (lifts the v0.8
+    /// 501 stub). `AgentSession` gains optional `antigravityProjectId:
+    /// String?` (additive — decoder-tolerant, no formal schema bump).
+    /// `antigravityChatMinimum = 11` is now reachable.
+    public static let current: Int = 11
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
@@ -121,16 +126,14 @@ public enum AgentControlWireVersion {
     /// works on older Macs because quota is a separate, read-only path.
     public static let agentapiMinimum: Int = 10
 
-    /// Minimum wire version at which the daemon's `POST /sessions`
-    /// endpoint dispatches Gemini through `agentapi`. v0.8.1 (wire v10)
-    /// migrated only the Mac UI's spawn path (`SessionsView`); the
-    /// daemon-side endpoint still goes through `AgentSpawner.argv` →
-    /// tmux + legacy gemini CLI. Setting this to `11` keeps iOS's
-    /// `supportsAntigravityChat` gate closed against v10 Macs so iOS
-    /// users don't see a Start button that posts to an endpoint that
-    /// can't honor the contract. v0.8.2 will migrate the daemon path
-    /// and lower this back to `10` (or bump `current` to `11`).
-    /// Codex P1.4: prevents "claim-capability-you-don't-have" failure.
+    /// Minimum wire version at which the daemon's chat surface dispatches
+    /// Gemini through `agentapi`. v0.8.1 (wire v10) migrated the Mac UI's
+    /// spawn path (`SessionsView.spawnAntigravitySession`); v0.9 (wire v11)
+    /// adds a daemon-side `handlePostGeminiChatSession` that lifts the v0.8
+    /// 501 stub on `POST /chat-sessions {provider: "gemini"}`. iOS gates
+    /// the Gemini chat row on this so older Macs (wire v10 or below)
+    /// surface a "v0.9 required" CTA instead of letting users try a
+    /// POST that returns 501.
     public static let antigravityChatMinimum: Int = 11
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
@@ -956,6 +959,13 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// `nil` for any non-agentapi session.
     public let antigravityConversationId: UUID?
 
+    /// v0.9 — Antigravity's project UUID. Persisted on the session at
+    /// create time so chat sessions (no `repoKey`) can resolve at
+    /// send-time without going through repoKey-based project lookup.
+    /// Pre-v0.9 sessions = nil; sendAntigravityMessage falls back to
+    /// `AntigravityProjectResolver.resolve(forRepoKey:)` for those.
+    public let antigravityProjectId: String?
+
     public init(
         id: UUID,
         repoKey: String?,
@@ -986,7 +996,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         codexChatBackend: CodexChatBackend? = nil,
         codexChatThreadId: String? = nil,
         geminiBackend: GeminiBackend? = nil,
-        antigravityConversationId: UUID? = nil
+        antigravityConversationId: UUID? = nil,
+        antigravityProjectId: String? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -1018,6 +1029,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.codexChatThreadId = codexChatThreadId
         self.geminiBackend = geminiBackend
         self.antigravityConversationId = antigravityConversationId
+        self.antigravityProjectId = antigravityProjectId
     }
 
     public init(from decoder: Decoder) throws {
@@ -1071,6 +1083,12 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         // v0.8.1+ Gemini sessions = `.agentapi`.
         self.geminiBackend = (try? c.decodeIfPresent(GeminiBackend.self, forKey: .geminiBackend)) ?? nil
         self.antigravityConversationId = (try? c.decodeIfPresent(UUID.self, forKey: .antigravityConversationId)) ?? nil
+        // v0.9 schema addition: antigravityProjectId. Persists the agentapi
+        // ANTIGRAVITY_PROJECT_ID on the session so chat sessions (no repoKey)
+        // can resolve at send-time without a forRepoKey lookup. Optional +
+        // decoder-tolerant: any v0.8.1 sessions.json decodes cleanly with
+        // this nil; sendAntigravityMessage falls back to the repoKey path.
+        self.antigravityProjectId = (try? c.decodeIfPresent(String.self, forKey: .antigravityProjectId)) ?? nil
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -1109,7 +1127,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              kind, frontierGroupId, frontierChildIndex,
              codexChatBackend, codexChatThreadId,
              // v0.8.1 schema v6 (agy-migration).
-             geminiBackend, antigravityConversationId
+             geminiBackend, antigravityConversationId,
+             // v0.9 schema addition (chat-via-agentapi).
+             antigravityProjectId
     }
 }
 

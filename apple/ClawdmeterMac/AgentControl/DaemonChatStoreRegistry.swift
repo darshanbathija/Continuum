@@ -50,6 +50,14 @@ public final class DaemonChatStoreRegistry {
     private var pathEntries: [URL: Entry] = [:]
     private var sweepTask: Task<Void, Never>?
     private var warmupTask: Task<Void, Never>?
+    /// v0.9 — Gemini agentapi chat sessions need a per-session ingestor
+    /// that subscribes to the SQLite WAL DB and forwards rows into the
+    /// store's appendSDKMessages pipe. One ingestor per resident
+    /// SessionChatStore; torn down when the entry is evicted (sweep
+    /// guard refuses to evict stores with pending permission prompts;
+    /// no equivalent for agentapi yet — the ingestor restart-via-resume
+    /// on next snapshotStore is safe).
+    private var antigravityIngestors: [UUID: AntigravityChatIngestor] = [:]
 
     /// Idle window after the last subscriber drops before the entry is
     /// evicted. 5 minutes balances "warm enough for tab-back" against
@@ -414,6 +422,26 @@ public final class DaemonChatStoreRegistry {
                     return store
                 }
             }
+            // v0.9: Gemini agentapi chat — start an sdkOnly store and
+            // attach an AntigravityChatIngestor that subscribes to the
+            // conversation's SQLite WAL DB. Each step row becomes a
+            // ChatMessage via appendSDKMessages, so chat-subscribe WS
+            // clients see uniform snapshot shapes across all providers.
+            if session.agent == .gemini && session.geminiBackend == .agentapi,
+               let conversationId = session.antigravityConversationId {
+                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+                store.start()
+                let dbURL = Self.antigravityConversationDBURL(conversationId: conversationId)
+                let ingestor = AntigravityChatIngestor(
+                    sessionId: session.id,
+                    conversationId: conversationId,
+                    dbURL: dbURL,
+                    store: store
+                )
+                antigravityIngestors[session.id] = ingestor
+                Task { await ingestor.start() }
+                return store
+            }
             // Default chat fallback: sdkOnly store. Keeps the rendering empty
             // but never wrong — better than surfacing unrelated transcripts.
             let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
@@ -545,6 +573,11 @@ public final class DaemonChatStoreRegistry {
         guard let entry = entries[sessionId] else { return }
         entry.store.stop()
         entries.removeValue(forKey: sessionId)
+        // v0.9: tear down the matching Gemini agentapi ingestor (if any)
+        // so its background subscription task ends with the store.
+        if let ingestor = antigravityIngestors.removeValue(forKey: sessionId) {
+            Task { await ingestor.stop() }
+        }
         registryLogger.info("evicted session=\(sessionId.uuidString, privacy: .public) resident=\(self.entries.count)")
     }
 

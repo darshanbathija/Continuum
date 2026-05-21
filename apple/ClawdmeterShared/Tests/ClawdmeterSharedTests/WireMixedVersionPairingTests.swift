@@ -69,7 +69,8 @@ final class WireMixedVersionPairingTests: XCTestCase {
     /// Bumping them is intentional (and re-runs this test); flipping
     /// them by accident would silently invalidate the audit.
     func test_minimumsMatchContract() {
-        XCTAssertEqual(AgentControlWireVersion.current, 10)
+        // v0.9 bumped current to 11. Exact value pinned in WireV11Tests.
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 11)
         XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
         XCTAssertEqual(AgentControlWireVersion.chatSubscribeMinimum, 5)
         XCTAssertEqual(AgentControlWireVersion.geminiMinimum, 6)
