@@ -15,12 +15,16 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsTwelve() {
-        // v12 (2026-05-22, X3 hardening for PR #28 OpenCode): forward-
-        // compat `.unknown` sentinel landed on AgentKind. The v11 → v12
-        // bump signals "this client decodes unknown kinds as .unknown
-        // (not .claude)".
-        XCTAssertEqual(AgentControlWireVersion.current, 12)
+    func test_currentWireVersionIsThirteen() {
+        // v13 (2026-05-22, D11/D12 — OpenCode adapter): adds
+        // `AgentKind.opencode` + `UsageRecord.Provider.opencode`.
+        // v12 clients decode the new raw as `.unknown` (X3 fallback);
+        // v13+ clients decode as `.opencode` natively.
+        XCTAssertEqual(AgentControlWireVersion.current, 13)
+    }
+
+    func test_opencodeMinimumIsThirteen() {
+        XCTAssertEqual(AgentControlWireVersion.opencodeMinimum, 13)
     }
 
     func test_antigravityChatMinimumIsEleven() {

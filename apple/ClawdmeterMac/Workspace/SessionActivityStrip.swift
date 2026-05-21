@@ -100,6 +100,18 @@ struct SessionActivityStrip: View {
                         : .default,
                     value: animationOpacity
                 )
+        case .opencode:
+            // PR #29: "Working" matches the OpenCode TUI's status copy.
+            Text(active ? "Working" : "Idle")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .opacity(active ? animationOpacity : 0.5)
+                .animation(
+                    active
+                        ? SessionsV2Theme.pulseAnimation(for: .codex, reduceMotion: reduceMotion)
+                        : .default,
+                    value: animationOpacity
+                )
         case .unknown:
             // X3: forward-compat unknown agent — neutral "Working" label.
             Text(active ? "Working" : "Idle")

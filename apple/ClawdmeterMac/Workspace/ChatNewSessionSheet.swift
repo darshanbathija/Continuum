@@ -97,6 +97,7 @@ struct ChatNewSessionSheet: View {
         case .claude: return ModelCatalog.bundled.claude
         case .codex:  return ModelCatalog.bundled.codex
         case .gemini: return ModelCatalog.bundled.gemini
+        case .opencode: return []  // PR #29: OpenCode resolves model via opencode auth login
         case .unknown: return []  // X3: no catalog for forward-compat unknown
         }
     }

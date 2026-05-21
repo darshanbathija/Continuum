@@ -165,6 +165,11 @@ public enum AgentSpawner {
                 effort: request.effort,
                 autopilot: autopilot
             ) ?? []
+        case .opencode:
+            // PR #29: OpenCode sessions don't use tmux argv. The Mac
+            // dispatcher routes opencode requests to
+            // OpencodeProcessManager + OpencodeSSEAdapter instead.
+            return []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Caller
             // sees missingBinary and surfaces a clean error.
@@ -236,6 +241,10 @@ public enum AgentSpawner {
                 effort: session.effort,
                 autopilot: chatAutopilot
             ) ?? []
+        case (.opencode, _):
+            // PR #29: opencode sessions don't take a tmux argv.
+            // OpencodeProcessManager + SSEAdapter handle spawn.
+            return []
         case (.unknown, _):
             // X3: forward-compat unknown kind — no argv. Caller surfaces
             // a clean error or routes to a future adapter.
@@ -284,6 +293,9 @@ public enum AgentSpawner {
                 acceptEdits: acceptEdits,
                 resumeSessionId: resumeSessionId
             ) ?? []
+        case .opencode:
+            // PR #29: opencode has no tmux respawn path.
+            return []
         case .unknown:
             // X3: forward-compat unknown agent — no respawn argv builder.
             return []

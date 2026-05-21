@@ -114,6 +114,7 @@ public struct AnalyticsTotalsGrid: View {
         case .claude: return "Claude"
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
+        case .opencode: return "OpenCode"
         }
     }
 
@@ -122,16 +123,19 @@ public struct AnalyticsTotalsGrid: View {
         case .claude: return "ClaudeLogo"
         case .codex:  return "CodexLogo"
         case .gemini: return "GeminiLogo"
+        case .opencode: return "OpencodeLogo"
         }
     }
 
     private static func isTemplateAsset(for provider: UsageRecord.Provider) -> Bool {
         // Both Codex (silhouette) and Gemini (G mark) are template assets;
-        // Claude (terra-cotta burst) keeps its color.
+        // Claude (terra-cotta burst) keeps its color. OpenCode is a
+        // silhouette too — template-tints with the violet accent.
         switch provider {
         case .claude: return false
         case .codex:  return true
         case .gemini: return true
+        case .opencode: return true
         }
     }
 }

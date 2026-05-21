@@ -4,6 +4,68 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.18.0 build 78] - 2026-05-22 — OpenCode adapter foundation (D11/D12 — wire v13)
+
+PR #29 lays the wire + enum foundation for the OpenCode adapter (D11/D12).
+This ships the schema migration + cross-version tests so subsequent
+follow-up PRs can layer in the runtime (process manager, SSE adapter,
+usage mapper, settings panel) against a stable wire.
+
+### Added
+
+- **AgentKind.opencode** (wire v13): new 4th provider case. v12 clients
+  fall back to `.unknown` (X3 hardening from PR #28) and render as
+  "Other agent"; v13+ clients decode natively.
+- **UsageRecord.Provider.opencode**: analytics layer's parallel
+  enum. Wired through `AgentKindUI` + `AnalyticsTotalsGrid` +
+  `AnalyticsDailyChart` for display name, asset, template flag, and
+  cost rollup.
+- **AgentControlWireVersion.opencodeMinimum = 13**: new minimum-version
+  gate for clients that want to surface OpenCode UI without falling
+  back to "Other agent".
+- **OpenCode brand styling**: violet accent (`#6B5DD3`) + silhouette
+  template asset across both AgentKindUI surfaces (Mac + iOS).
+- **Tests**: 2 new tests (native `.opencode` decode + opencodeMinimum
+  gate) on top of the updated X3 regression coverage.
+
+### Changed
+
+- `AgentControlWireVersion.current`: 12 → 13.
+- `AgentKind.allCases`: now 4 entries (claude/codex/gemini/opencode).
+  Pickers + segmented controls render the 4th option natively.
+- All ~14 switches on AgentKind across Mac + iOS + Shared get an
+  explicit `.opencode` case with the right semantic fallback (no argv
+  builder, no JSONL transcript, no warmup choreography — opencode
+  sessions route through `OpencodeProcessManager` + SSE adapter when
+  those land; the switch fallbacks document the boundary cleanly).
+- `IOSAnalyticsView`'s `MergedRepoRow` aggregation skips `.opencode`
+  with an explicit comment — the 4th-column UI rewrite is queued for
+  the OpenCode analytics polish PR.
+
+### Known gaps (queued for follow-up PRs)
+
+- **OpencodeProcessManager**: P1 singleton (`opencode serve` per-app
+  process, binary discovery, port pick, restart-on-crash) not yet
+  implemented. Mac dispatcher returns 503 for opencode spawns until
+  it lands.
+- **OpencodeSSEAdapter**: SSE subscription + event → SessionEventEnvelope
+  mapping not yet implemented.
+- **OpencodeUsageMapper + menu-bar dollar gauge (A2)**: not yet
+  implemented.
+- **Settings → Providers row**: install/auth status surfacing not
+  yet wired.
+- **TahoeProvider**: still 3-case (claude/codex/gemini). Mac +
+  iOS visually map opencode → codex as a least-bad fallback; the
+  4th-case TahoeProvider refactor is a wider change deferred to a
+  dedicated UI PR.
+
+### Tests
+
+- 604/604 shared tests pass (up from 602 → +2 new tests for v13
+  opencode decode + opencodeMinimum gate; 3 X3 tests updated for
+  the new "future raw" pattern).
+- Mac + iOS + Watch all build clean.
+
 ## [0.17.0 build 77] - 2026-05-22 — v1.0 polish: X3 + D3 + D4 + Mac chat composer (`feat/v1-polish`)
 
 Closes out the v1.0 polish punch list deferred from PR #26.

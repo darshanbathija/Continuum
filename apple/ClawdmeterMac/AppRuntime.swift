@@ -160,6 +160,14 @@ final class AppRuntime: ObservableObject {
             case .claude: self.claudeModel.setAutoReviveEnabled(enabled)
             case .codex:  self.codexModel.setAutoReviveEnabled(enabled)
             case .gemini: self.geminiModel.setAutoReviveEnabled(enabled)
+            case .opencode:
+                // PR #29: OpenCode doesn't run a 5h-window quota poller,
+                // so the auto-revive concept doesn't apply. The iOS
+                // surface hides the toggle for opencode (the toggle UI
+                // gates on AppModel availability). If a stale client
+                // still posts here, silently ignore — no AutoReviver
+                // to drive.
+                break
             case .unknown:
                 // X3: forward-compat unknown — never user-toggleable.
                 // The handler returns 400 before reaching here.
