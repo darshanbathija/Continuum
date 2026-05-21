@@ -4,6 +4,100 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.17.0 build 77] - 2026-05-22 — v1.0 polish: X3 + D3 + D4 + Mac chat composer (`feat/v1-polish`)
+
+Closes out the v1.0 polish punch list deferred from PR #26.
+
+### Added
+
+- **X3 forward-compat (wire v12)**: new `AgentKind.unknown` sentinel.
+  The lenient decoder folds raws this binary doesn't recognize into
+  `.unknown` instead of `.claude` — protects older clients from
+  silently mislabeling future kinds (e.g. OpenCode in PR #28). UI
+  surfaces render `.unknown` as a neutral "Other agent" tile.
+  `allCases` excludes `.unknown` so pickers + segmented controls stay
+  clean. `AgentControlWireVersion.current` bumps to 12.
+  - 10 regression tests in `AgentKindUnknownTests` cover the decoder
+    contract, allCases hygiene, UI fallbacks, and the cross-version
+    (v12 client + v13 Mac) regression.
+- **D3 IOSPairingView**: replaces the legacy `PairingFlow` surface.
+  Buttons now wire to `AgentControlClient.setPairing(...)` — Scan QR
+  presents `PairingScannerView` as a sheet, Paste URL presents a
+  paste sheet that parses the clawdmeter:// URL via
+  `PairingScannerView.parse(urlString:)`. Both paths land on
+  `applyChallenge` (byte-for-byte identical to PairingFlow's wire).
+  `NewSessionSheet` extracted to its own file. PairingFlow.swift
+  deleted.
+- **D4 setAutoRevive RPC (wire v12)**: new
+  `POST /providers/:id/auto-revive` endpoint on AgentControlServer +
+  `AgentControlClient.setAutoRevive(provider:enabled:)` method.
+  AppRuntime wires the callback to fan out to the matching
+  `AppModel.setAutoReviveEnabled`. iOS Live tab's auto-revive toggle
+  now drives the real RPC with optimistic UI (flip local state, fire
+  the RPC, don't await).
+  - Unknown provider raws + the X3 sentinel return 400 (X3 unknowns
+    are never user-toggleable).
+  - 4 `SetAutoReviveRequestTests` covering encode/decode/round-trip +
+    defensive rejection of malformed body.
+- **Mac chat composer wire**: `ChatComposer` rewritten with a real
+  `TextField` + `@StateObject ComposerSendController`. First send
+  routes through `.chatCreate` (creates session + appends prompt as
+  first turn); subsequent sends route through `.solo` for the
+  cheaper follow-up path. `SendButton` now takes `enabled`/`sending`/
+  `action` so the daemon roundtrip disables the button + spins a
+  ProgressView. Broadcast mode degrades to solo-Claude with a soft
+  warning until the frontier fan-out wire lands.
+
+### Changed
+
+- `AgentKind.allCases` overrides the auto-synthesized CaseIterable
+  conformance to exclude `.unknown`.
+- `AgentControlWireVersion.current`: 11 → 12.
+- `AgentControlServer.setAutoReviveCallback`: new injection point
+  for D4 fan-out.
+- `IOSLiveView`: now takes `agentClient: AgentControlClient?` (was
+  decorative-only). Auto-revive toggle's setter calls
+  `agentClient.setAutoRevive(...)` with optimistic UI.
+- `MacChatView`: now takes `loopbackClient: AgentControlClient?` +
+  tracks `openChatId: UUID?` for follow-up sends.
+- `PairingCTAButtons`: both side-by-side buttons present the same
+  IOSPairingView sheet (segmented mode picker removed; new view
+  exposes Scan + Paste from one screen).
+- All ~20 switches on AgentKind across Mac + iOS + Shared get an
+  explicit `.unknown` case with a sensible semantic fallback.
+
+### Removed
+
+- `apple/ClawdmeteriOS/PairingFlow.swift` — replaced by IOSPairingView.
+  `NewSessionSheet` (which lived in the same file) extracted to its
+  own file at `apple/ClawdmeteriOS/NewSessionSheet.swift`.
+
+### Migration
+
+- Wire version mismatch UX: any v11-or-earlier iOS client paired to a
+  v12 Mac sees `WireVersionMismatchBanner` ("Mac is running a different
+  version. Update the Mac app."); the banner is non-blocking, the
+  app still works.
+- `AgentKind.unknown` is intentionally not added to TahoeProvider —
+  the iOS Live tab keeps its 3-provider segmented control. Unknown
+  AgentKinds map to `.claude` visually as a graceful degradation
+  (semantic correctness lives at the AgentKind layer; X3 prevents
+  silent mislabeling at the wire decoder).
+
+### Tests
+
+- 602/602 shared tests pass (up from 588 → +14 tests for X3 + D4).
+- Mac + iOS + Watch all build clean.
+
+### Known limitations (queued for follow-up)
+
+- Mac ChatStream still renders TahoeDemo.chatThread — the WS-driven
+  MacChatTranscriptStore ships in a follow-up PR. The composer
+  reaches the daemon today; the assistant's reply stream doesn't
+  yet render in the Mac surface (it does on iOS).
+- Broadcast chat fan-out degrades to solo-Claude; the full frontier
+  slot list wire lands with the transcript store.
+
 ## [0.16.0 build 76] - 2026-05-22 — iOS session search + Mac titlebar truth (`feat/wiring-polish` partial)
 
 PR #26 partial — D5 (iOS session search) and D6 (Mac titlebar
