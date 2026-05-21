@@ -1570,6 +1570,14 @@ public final class AgentControlServer {
             // missing-binary surface so the request returns a 4xx
             // instead of silently spawning an empty process.
             argv = []
+        case .opencode:
+            // PR #29: OpenCode sessions don't spawn through tmux argv;
+            // they're SSE clients of the shared `opencode serve`
+            // process. The handler routes opencode spawns to
+            // OpencodeProcessManager + OpencodeSSEAdapter instead;
+            // dropping into the 503 branch here is unreachable in
+            // production but kept for exhaustiveness + safety.
+            argv = []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Fall
             // through to the 503 below so the iOS caller sees a clean
@@ -3296,6 +3304,11 @@ public final class AgentControlServer {
                 try? ChatCwdManager.remove(for: session.id)
                 throw SpawnFailure.message("agentapi_new_conversation_failed: \(error.localizedDescription)")
             }
+        case .opencode:
+            // PR #29: OpenCode in a frontier broadcast slot would
+            // require OpencodeProcessManager+SSE plumbing here. Defer
+            // to a follow-up; surfaces as a slot failure.
+            throw SpawnFailure.message("opencode_frontier_not_implemented")
         case .unknown:
             // X3: forward-compat unknown agent — no frontier-child spawn
             // path. Surfaces as a slot failure to the broadcast caller.
@@ -3513,10 +3526,15 @@ public final class AgentControlServer {
             _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
         case .gemini:
             break
+        case .opencode:
+            // PR #29: opencode sessions never enter the tmux warmup
+            // choreography — they're SSE clients of `opencode serve`,
+            // which OpencodeProcessManager + OpencodeSSEAdapter handle
+            // out-of-band.
+            break
         case .unknown:
             // X3: forward-compat unknown agent — no warmup choreography
-            // plumbed. Future adapters (e.g. opencode in PR #28) take
-            // their own non-tmux warmup path before reaching here.
+            // plumbed.
             break
         }
     }
@@ -3774,6 +3792,12 @@ public final class AgentControlServer {
         case .gemini:
             // approve-plan from Gemini is unsupported in v6 — there's no
             // gemini CLI to respawn. Surfaces as 500 below.
+            argv = nil
+        case .opencode:
+            // PR #29: opencode has no plan-mode → respawn-with-write
+            // flow; OpenCode handles its own tool-call approval inside
+            // `opencode serve`. Surfaces as 500 here so a misrouted
+            // approve-plan from a stale UI doesn't pretend to succeed.
             argv = nil
         case .unknown:
             // X3: forward-compat unknown agent — no respawn path.

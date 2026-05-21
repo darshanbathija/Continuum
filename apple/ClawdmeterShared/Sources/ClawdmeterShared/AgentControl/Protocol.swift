@@ -81,7 +81,19 @@ public enum AgentControlWireVersion {
     /// `.claude` path — they get the audit-flagged bug. v12+ clients
     /// reading v13 payloads render the new kind as "Other agent" via
     /// the UI fallback rather than misclassifying.
-    public static let current: Int = 12
+    /// v13 (2026-05-22, D11/D12 — OpenCode adapter): adds
+    /// `AgentKind.opencode` + `UsageRecord.Provider.opencode`. v12
+    /// clients decode the new raw as `.unknown` (the X3 fallback);
+    /// v13+ clients decode as `.opencode` natively. Schema migration
+    /// audited across `AnalyticsDailyChart` + every `byProvider:`
+    /// consumer.
+    public static let current: Int = 13
+    /// Minimum wire version that exposes `AgentKind.opencode` natively.
+    /// Clients with `serverWireVersion < this` decode opencode sessions
+    /// as `.unknown` (X3 fallback) and render as "Other agent". This is
+    /// the gate the Mac uses to suppress OpenCode-related controls when
+    /// the paired iPhone is too old to render them correctly.
+    public static let opencodeMinimum: Int = 13
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
@@ -658,12 +670,18 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
     /// Gemini Code Assist via Google's `gemini` CLI. Added in wire v6
     /// (2026-05-19).
     case gemini
+    /// OpenCode adapter (D11/D12, v1.1 — wire v13). The Mac spawns a
+    /// shared `opencode serve` process (P1 singleton) and registers
+    /// per-Clawdmeter-session SSE clients against it. Underlying model
+    /// is provider-of-the-user's-choice (Anthropic, OpenAI, Google);
+    /// analytics tag the spend under `.opencode` regardless.
+    case opencode
     /// Forward-compat sentinel for unknown agent kinds (X3, v0.17, wire
-    /// v12). Older clients connecting to a future Mac that supports a
-    /// new agent kind (e.g. `opencode` in PR #28) decode the unknown
-    /// raw into `.unknown` instead of `.claude` — preventing the silent
-    /// mislabeling Codex flagged in the eng-review. UI sites render
-    /// `.unknown` as a neutral "Other agent" tile.
+    /// v12). Older v12 clients connecting to a v13 Mac decode the
+    /// `.opencode` raw into `.unknown` instead of `.claude` —
+    /// preventing the silent mislabeling Codex flagged in the
+    /// eng-review. UI sites render `.unknown` as a neutral
+    /// "Other agent" tile.
     ///
     /// `.unknown` is intentionally NOT user-selectable (`allCases`
     /// excludes it via the custom override below); it only appears on
@@ -672,8 +690,10 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
 
     /// Filter `.unknown` out of `allCases` so pickers and provider
     /// segmented controls don't accidentally render it as a choice.
+    /// `.opencode` is included — v13 clients render it as a real
+    /// picker option.
     public static var allCases: [AgentKind] {
-        [.claude, .codex, .gemini]
+        [.claude, .codex, .gemini, .opencode]
     }
 
     /// Lenient decoder (X3 — wire v12). Forward-compat readers keep

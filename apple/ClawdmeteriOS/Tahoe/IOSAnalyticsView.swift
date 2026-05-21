@@ -228,6 +228,15 @@ public struct IOSAnalyticsView: View {
                 case .claude: current.c += cost
                 case .codex:  current.x += cost
                 case .gemini: current.g += cost
+                case .opencode:
+                    // PR #29: MergedRepoRow is a 3-column structure for
+                    // claude/codex/gemini. Surfacing OpenCode in this
+                    // chart needs the row struct extended to 4 columns
+                    // + the chart legend updated — queued for the
+                    // OpenCode analytics polish PR. For now, the outer
+                    // iteration only walks 3 providers, so this case
+                    // is unreachable; kept for switch exhaustiveness.
+                    break
                 }
                 bag[key] = current
             }

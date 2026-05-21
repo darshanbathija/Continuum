@@ -76,6 +76,12 @@ public final class SessionFileResolver: @unchecked Sendable {
             return resolveCodex(session: session)
         case .gemini:
             return resolveGemini(session: session)
+        case .opencode:
+            // PR #29: OpenCode sessions don't have a JSONL transcript
+            // file on disk — the conversation lives inside `opencode
+            // serve`'s shared process state. OpencodeSSEAdapter pulls
+            // transcript events directly off the SSE stream.
+            return nil
         case .unknown:
             // X3: forward-compat unknown agent — no transcript file we
             // know how to locate. UI surfaces render as "Other agent".

@@ -21,7 +21,11 @@ final class AgentKindUnknownTests: XCTestCase {
     // MARK: - Decoder
 
     func test_unknownRawDecodesAsUnknown() throws {
-        let json = Data("\"opencode\"".utf8)
+        // PR #29 (wire v13): `opencode` is now a real AgentKind case,
+        // so it decodes natively instead of falling into `.unknown`.
+        // Test the X3 fallback with a raw this binary genuinely doesn't
+        // recognize (a hypothetical future agent kind).
+        let json = Data("\"future-runtime-v25\"".utf8)
         let decoded = try JSONDecoder().decode(AgentKind.self, from: json)
         XCTAssertEqual(decoded, .unknown,
             "X3: unknown raw must decode as .unknown, not silently as .claude")
@@ -34,11 +38,13 @@ final class AgentKindUnknownTests: XCTestCase {
     }
 
     func test_knownRawsStillDecodeCorrectly() throws {
-        // Regression: X3's lenient decoder must NOT break the happy path.
+        // Regression: X3's lenient decoder must NOT break the happy
+        // path. PR #29 adds `.opencode` as the 4th known raw.
         let cases: [(String, AgentKind)] = [
             ("\"claude\"", .claude),
             ("\"codex\"", .codex),
             ("\"gemini\"", .gemini),
+            ("\"opencode\"", .opencode),
         ]
         for (raw, expected) in cases {
             let decoded = try JSONDecoder().decode(AgentKind.self, from: Data(raw.utf8))
@@ -59,12 +65,15 @@ final class AgentKindUnknownTests: XCTestCase {
         // X3 contract: pickers + segmented controls never offer .unknown
         // as a selectable choice. AgentKind.allCases overrides the
         // auto-synthesized CaseIterable conformance to strip it.
+        // PR #29 (wire v13): allCases now has 4 selectable kinds
+        // (claude/codex/gemini/opencode); .unknown stays excluded.
         XCTAssertFalse(AgentKind.allCases.contains(.unknown),
             "X3: AgentKind.allCases must exclude .unknown so pickers stay clean")
-        XCTAssertEqual(AgentKind.allCases.count, 3)
+        XCTAssertEqual(AgentKind.allCases.count, 4)
         XCTAssertTrue(AgentKind.allCases.contains(.claude))
         XCTAssertTrue(AgentKind.allCases.contains(.codex))
         XCTAssertTrue(AgentKind.allCases.contains(.gemini))
+        XCTAssertTrue(AgentKind.allCases.contains(.opencode))
     }
 
     // MARK: - AgentKindUI fallback rendering
@@ -94,12 +103,35 @@ final class AgentKindUnknownTests: XCTestCase {
 
     // MARK: - Cross-version pairing regression
 
-    func test_v11Client_decodingV13OpenCodePayload_landsOnUnknown() throws {
-        // The whole motivation for X3: a v11 (pre-X3) iOS client talking
-        // to a v13 Mac (post-PR-#28) would silently mislabel OpenCode
-        // sessions as Claude. After X3 lands at v12, the same payload
-        // lands on `.unknown` instead — visible in the UI as "Other
-        // agent" instead of impersonating Claude.
+    func test_v12Client_decodingV14FutureKindPayload_landsOnUnknown() throws {
+        // The whole motivation for X3: cross-version forward-compat.
+        // PR #29 made `.opencode` a real case (v13). This test now
+        // covers the same regression with a hypothetical *future*
+        // kind that this binary doesn't recognize — proving the X3
+        // pattern holds for the next provider added after OpenCode.
+        let sessionJSON = """
+        {
+            "id": "\(UUID().uuidString)",
+            "repoKey": "/Users/test/repo",
+            "repoDisplayName": "Test",
+            "agent": "future-runtime-v14",
+            "status": "running",
+            "createdAt": 0,
+            "lastEventAt": 0,
+            "lastEventSeq": 1
+        }
+        """
+        let data = Data(sessionJSON.utf8)
+        let decoded = try JSONDecoder().decode(AgentSession.self, from: data)
+        XCTAssertEqual(decoded.agent, .unknown,
+            "X3 cross-version regression: future raws must NOT mislabel as claude")
+        XCTAssertNotEqual(decoded.agent, .claude,
+            "X3: future raws must NOT decode as .claude (the bug X3 fixes)")
+    }
+
+    func test_v13Client_decodesOpencodePayloadNatively() throws {
+        // Regression for PR #29: a current v13 client reads its own
+        // wire correctly. opencode → .opencode (not .unknown).
         let sessionJSON = """
         {
             "id": "\(UUID().uuidString)",
@@ -114,9 +146,7 @@ final class AgentKindUnknownTests: XCTestCase {
         """
         let data = Data(sessionJSON.utf8)
         let decoded = try JSONDecoder().decode(AgentSession.self, from: data)
-        XCTAssertEqual(decoded.agent, .unknown,
-            "X3 cross-version regression: v12 client must NOT mislabel opencode as claude")
-        XCTAssertNotEqual(decoded.agent, .claude,
-            "X3: opencode payload must NOT decode as .claude (the bug X3 fixes)")
+        XCTAssertEqual(decoded.agent, .opencode,
+            "PR #29: opencode payload must decode as .opencode on v13 clients")
     }
 }
