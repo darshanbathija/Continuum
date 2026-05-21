@@ -342,7 +342,15 @@ public final class OpenDesignDaemonManager: ObservableObject {
             let data = try JSONEncoder().encode(r)
             try data.write(to: rendezvousTempFile, options: .atomic)
             // rename(2) is atomic on same filesystem; close → open is not.
-            try FileManager.default.replaceItem(at: rendezvousFile, withItemAt: rendezvousTempFile, backupItemName: nil, options: [], resultingItemAt: nil)
+            // Atomic rename via POSIX rename(2) — replaces target if present,
+            // single syscall on the same filesystem. FileManager.replaceItem
+            // has a more complex signature that varies across SDK versions.
+            let from = rendezvousTempFile.path
+            let to = rendezvousFile.path
+            if Darwin.rename(from, to) != 0 {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                              userInfo: [NSLocalizedDescriptionKey: "rename failed: \(String(cString: strerror(errno)))"])
+            }
         } catch {
             logger.error("Failed to write rendezvous: \(error.localizedDescription)")
         }
