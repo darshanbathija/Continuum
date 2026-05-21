@@ -3851,6 +3851,10 @@ public final class AgentControlServer {
             } catch {
                 serverLogger.warning("chat-cwd cleanup failed for \(uuid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
+            // v0.9.x.1: also delete the SDK transcript mirror so a
+            // deleted chat doesn't leak its history under
+            // ~/Library/Application Support/Clawdmeter/sdk-chat-transcripts/.
+            SDKChatTranscriptMirror.removeMirror(sessionId: uuid)
         } else if session.kind == .code, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
             do {
                 let result = try await WorktreeManager.shared.delete(

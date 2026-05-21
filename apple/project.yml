@@ -11,7 +11,7 @@ name: Clawdmeter
 options:
   bundleIdPrefix: com.clawdmeter
   deploymentTarget:
-    macOS: "14.0"
+    macOS: "26.0"
   developmentLanguage: en
   generateEmptyDirectories: true
   createIntermediateGroups: true
@@ -19,8 +19,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.9.1"
-    CURRENT_PROJECT_VERSION: "69"
+    MARKETING_VERSION: "0.9.2"
+    CURRENT_PROJECT_VERSION: "70"
 
 packages:
   ClawdmeterShared:
@@ -134,7 +134,7 @@ targets:
         DEVELOPMENT_TEAM: "76S62SDSD3"
         INFOPLIST_FILE: ClawdmeterMac/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClawdmeterMac/ClawdmeterMac.entitlements
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: NO
 
   # ───────────────────────────────────────────────────────────────
@@ -165,7 +165,7 @@ targets:
         DEVELOPMENT_TEAM: "76S62SDSD3"
         INFOPLIST_FILE: ClawdmeteriOS/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClawdmeteriOS/ClawdmeteriOS.entitlements
-        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_PREVIEWS: YES
@@ -194,7 +194,7 @@ targets:
         DEVELOPMENT_TEAM: "76S62SDSD3"
         INFOPLIST_FILE: ClawdmeteriOSWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClawdmeteriOSWidgets/ClawdmeteriOSWidgets.entitlements
-        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
         SKIP_INSTALL: YES
@@ -282,7 +282,7 @@ targets:
         DEVELOPMENT_TEAM: "76S62SDSD3"
         INFOPLIST_FILE: ClawdmeterMacWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: NO
         SKIP_INSTALL: YES
 
@@ -311,7 +311,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.mac.tests
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "76S62SDSD3"
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_OBJC_BRIDGING_HEADER: ""
         BUNDLE_LOADER: "$(TEST_HOST)"

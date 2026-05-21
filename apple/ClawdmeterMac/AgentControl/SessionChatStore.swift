@@ -201,7 +201,8 @@ public final class SessionChatStore: ObservableObject {
         deltaOutputTokens: Int = 0,
         deltaCacheCreationTokens: Int = 0,
         deltaCacheReadTokens: Int = 0,
-        model: String? = nil
+        model: String? = nil,
+        suppressMirror: Bool = false
     ) {
         guard !messages.isEmpty else { return }
         let line = ParsedLine(
@@ -214,6 +215,14 @@ public final class SessionChatStore: ObservableObject {
             model: model
         )
         Task { [staging] in await staging.ingest(line) }
+        // v0.9.x.1 — mirror every appended message to disk so a fresh
+        // store post-evict can backfill the chat thread. Only sdkOnly
+        // stores need this (CLI/JSONL-backed stores already have a
+        // disk transcript). suppressMirror=true is set during replay
+        // so we don't re-write the same messages on every replay cycle.
+        if sdkOnly && !suppressMirror {
+            SDKChatTranscriptMirror.append(sessionId: sessionId, messages: messages)
+        }
     }
 
     public let sessionId: UUID

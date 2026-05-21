@@ -376,10 +376,15 @@ public final class DaemonChatStoreRegistry {
         //   resolver (good enough for v0.8; the CLI writes to
         //   `~/.codex/sessions/<date>/rollout-...jsonl` keyed by date/uuid).
         if session.kind == .chat {
-            // Codex SDK: sdkOnly (no JSONL exists).
+            // Codex SDK: sdkOnly (no JSONL exists). v0.9.x.1 replays the
+            // disk-backed SDK transcript mirror so chat history survives
+            // idle-eviction — without this, every 5-min idle wipes the
+            // visible thread even though the SDK server-side thread is
+            // still resumable via op:"resume" with the persisted threadId.
             if session.agent == .codex && session.codexChatBackend == .sdk {
                 let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
                 store.start()
+                SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
                 return store
             }
             // Claude chat (CLI): point JSONLTail at the encoded chat-cwd dir.
@@ -398,9 +403,11 @@ public final class DaemonChatStoreRegistry {
                 // snapshotStore() call after that point will see the file.
                 // (For v0.8 the store stays sdkOnly forever; v0.8.x can wire
                 // a directory-watch retry. Acceptable trade — empty thread
-                // beats wrong thread.)
+                // beats wrong thread.) v0.9.x.1: replay the transcript
+                // mirror in case the user opened the chat post-evict.
                 let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
                 store.start()
+                SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
                 return store
             }
             // Codex CLI chat: bind to the rollout whose session_meta.cwd
@@ -431,6 +438,11 @@ public final class DaemonChatStoreRegistry {
                let conversationId = session.antigravityConversationId {
                 let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
                 store.start()
+                // v0.9.x.1: replay transcript mirror so previously-ingested
+                // SQLite WAL rows survive idle-eviction. The ingestor below
+                // will then dedup any rows that the mirror already covers
+                // (StagingParser keys on ChatMessage.id).
+                SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
                 let dbURL = Self.antigravityConversationDBURL(conversationId: conversationId)
                 let ingestor = AntigravityChatIngestor(
                     sessionId: session.id,
@@ -442,10 +454,12 @@ public final class DaemonChatStoreRegistry {
                 Task { await ingestor.start() }
                 return store
             }
-            // Default chat fallback: sdkOnly store. Keeps the rendering empty
-            // but never wrong — better than surfacing unrelated transcripts.
+            // Default chat fallback: sdkOnly store. v0.9.x.1 also replays
+            // the transcript mirror for the rare case where a chat session
+            // landed here via the "unknown agent" fall-through.
             let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
             store.start()
+            SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
             return store
         }
         guard let url = resolveURL(session.id, session) else {

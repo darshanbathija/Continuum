@@ -4,6 +4,52 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.9.2 build 70] - 2026-05-21 — SDK chat transcript mirror (`feat/chat-v0.9.x.1`)
+
+Fixes the "chat history vanishes after 5 min idle" bug for Codex SDK and
+Antigravity agentapi chats.
+
+### Why
+
+`sdkOnly` chat sessions (Codex SDK + Antigravity agentapi) have no
+JSONL transcript on disk — chat state lives in the daemon's
+SessionChatStore in memory + the provider's server-side thread/DB.
+When `DaemonChatStoreRegistry` idle-evicted a store after 5 min of no
+subscribers, the visible chat thread was lost. Re-opening the chat
+created a fresh empty store; even though Codex SDK could still
+`op:"resume"` into the same server-side thread via the persisted
+`codexChatThreadId`, the iOS-visible chat thread started blank.
+
+### Fix
+
+New `SDKChatTranscriptMirror` writes every `appendSDKMessages` write
+as one JSON-line in
+`~/Library/Application Support/Clawdmeter/sdk-chat-transcripts/<sessionId>.jsonl`.
+On store re-create, `replay(into:)` reads the mirror and pushes the
+messages back through `appendSDKMessages(suppressMirror: true)` so
+the snapshot rebuilds without double-writing.
+
+- `SessionChatStore.appendSDKMessages` gains an optional
+  `suppressMirror: Bool = false`. When `sdkOnly && !suppressMirror`,
+  every appended batch is also written to the mirror file.
+- `DaemonChatStoreRegistry.createStore` calls
+  `SDKChatTranscriptMirror.replay` after `store.start()` for all
+  sdkOnly paths (Codex SDK, Claude-no-JSONL-yet fallback,
+  Codex CLI-no-rollout-yet fallback, Gemini agentapi, default
+  sdkOnly fallback). StagingParser's id-based dedup means replay is
+  idempotent against any messages the live ingestor already saw.
+- `handleDeleteSession` calls `SDKChatTranscriptMirror.removeMirror`
+  alongside chat-cwd cleanup so deleted chats don't leak history.
+
+### Limitations
+
+- New mirror files start empty — sessions created BEFORE v0.9.2 won't
+  have history available even after upgrade (the prior turns weren't
+  mirrored). Mitigation: any chat session that survives one new turn
+  on v0.9.2+ gets full mirror coverage from that turn forward.
+- Mirror is per-machine; cross-device sync would need iCloud (out of
+  scope here).
+
 ## [0.9.1 build 69] - 2026-05-21 — Chat v0.9.x polish (`feat/chat-v0.9.x`)
 
 Closes the v0.9.0 polish list: iOS Frontier UI, Royal Frontier sidebar
