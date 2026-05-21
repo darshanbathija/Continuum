@@ -64,13 +64,14 @@ struct ChatWorkspaceView: View {
             .padding(.vertical, 10)
             Divider()
             List(selection: $openSessionId) {
-                ForEach(providerGroups, id: \.provider) { group in
-                    Section(providerLabel(group.provider)) {
-                        ForEach(group.sessions) { session in
-                            sessionRow(session)
-                                .tag(Optional(session.id))
-                        }
-                    }
+                // v0.8 QA: flat list sorted by recency (chatSessions is
+                // already `lastEventAt` desc). Per-provider grouping was
+                // making the user scan two sections to find their most
+                // recent chat — easier to see them all in chronological
+                // order with the provider tag inline on each row.
+                ForEach(chatSessions) { session in
+                    sessionRow(session)
+                        .tag(Optional(session.id))
                 }
                 Section {
                     HStack {
@@ -92,28 +93,6 @@ struct ChatWorkspaceView: View {
         }
     }
 
-    private struct ProviderGroup {
-        let provider: AgentKind
-        let sessions: [AgentSession]
-    }
-
-    private var providerGroups: [ProviderGroup] {
-        let order: [AgentKind] = [.claude, .codex]
-        let grouped = Dictionary(grouping: chatSessions, by: { $0.agent })
-        return order.compactMap { agent in
-            guard let sessions = grouped[agent], !sessions.isEmpty else { return nil }
-            return ProviderGroup(provider: agent, sessions: sessions)
-        }
-    }
-
-    private func providerLabel(_ agent: AgentKind) -> String {
-        switch agent {
-        case .claude: return "Claude"
-        case .codex:  return "Codex"
-        case .gemini: return "Gemini"
-        }
-    }
-
     @ViewBuilder
     private func sessionRow(_ session: AgentSession) -> some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -121,10 +100,19 @@ struct ChatWorkspaceView: View {
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
             HStack(spacing: 5) {
+                // v0.8 QA: provider tag inline on each row, since the
+                // sidebar no longer groups by provider.
+                Text(providerLabel(session.agent))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(.secondary.opacity(0.12), in: Capsule())
                 if let model = session.model, !model.isEmpty {
                     Text(model)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 if session.agent == .codex, let backend = session.codexChatBackend {
                     Text("·").foregroundStyle(.tertiary)
@@ -135,6 +123,14 @@ struct ChatWorkspaceView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private func providerLabel(_ agent: AgentKind) -> String {
+        switch agent {
+        case .claude: return "Claude"
+        case .codex:  return "Codex"
+        case .gemini: return "Gemini"
+        }
     }
 
     private var emptyState: some View {
