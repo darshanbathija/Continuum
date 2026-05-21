@@ -52,7 +52,22 @@ public enum AgentControlWireVersion {
     /// or WS ops in v8 — the SDK observation mode rides on the existing
     /// `/usage` envelope; the field tells iOS to render "· SDK mode" on
     /// the Codex analytics subtitle.
-    public static let current: Int = 8
+    /// v9 is reserved for the parallel `feat/chat-tab-v0.8` branch's
+    /// Chat tab work (`chatMinimum=9`, `frontierMinimum=9`, schema v5
+    /// fields `kind`/`codexChatBackend`/`codexChatThreadId`). The
+    /// `agy-migration` branch SKIPS v9 to avoid clobbering chat-tab's
+    /// in-flight schema. Merges of these two branches into main absorb
+    /// both sets of v9+v10 fields (no field-name overlap).
+    /// v10 (2026-05-21) Antigravity 2 native chat via `agentapi`:
+    /// `AgentSession` gains optional `geminiBackend: GeminiBackend?`
+    /// + `antigravityConversationId: UUID?` (schema v4→v6, skipping
+    /// v5 which chat-tab took). `usage[id]` dict key transitions from
+    /// `"gemini"` literal to `"antigravity"`, with dual-decoder
+    /// fallback (`usage["antigravity"]` first → `usage["gemini"]`).
+    /// New `agentapiMinimum = 10` + `antigravityChatMinimum = 10`
+    /// gates surface "Update Clawdmeter on Mac" copy on older iOS
+    /// instead of letting them render a stale Gemini UI.
+    public static let current: Int = 10
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
@@ -79,6 +94,20 @@ public enum AgentControlWireVersion {
     /// with a v8 iOS hide the "· SDK mode" subtitle and assume Disk
     /// mode by default.
     public static let codexSDKMinimum: Int = 8
+
+    /// Minimum wire version that supports spawning Gemini sessions via
+    /// Antigravity 2's `agentapi` HTTP-RPC (v10). Older Macs can't host
+    /// these sessions — iOS hides the agentapi spawn path and surfaces
+    /// "Update Clawdmeter on Mac" copy. v0.42 quota fallback (D9) still
+    /// works on older Macs because quota is a separate, read-only path.
+    public static let agentapiMinimum: Int = 10
+
+    /// Minimum wire version that exposes `AgentSession.geminiBackend` +
+    /// `antigravityConversationId` fields and the `usage["antigravity"]`
+    /// key (v10). iOS's `supportsAntigravityChat` returns false for
+    /// pre-v10 Macs; the Chat tab disables the Start button for Gemini
+    /// when the paired Mac is below this floor.
+    public static let antigravityChatMinimum: Int = 10
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -127,6 +156,16 @@ public enum AgentControlWireVersion {
     public static func supportsCodexSDK(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= codexSDKMinimum
+    }
+
+    /// Whether the paired Mac is wire v10+ and therefore can host
+    /// Antigravity 2 chat sessions via `agentapi` HTTP-RPC. Used by iOS
+    /// Chat tab to enable the Gemini Start button. When false, iOS
+    /// surfaces "Update Clawdmeter on Mac" instead of letting the user
+    /// click into a session that won't spawn.
+    public static func supportsAntigravityChat(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= antigravityChatMinimum
     }
 }
 
@@ -668,6 +707,27 @@ public enum AgentSessionStatus: String, Codable, Hashable, Sendable {
 }
 
 /// Snapshot of one agent session for list / detail views.
+// MARK: - Gemini backend (v10 agy-migration)
+
+/// Which transport drives a Gemini session.
+///
+/// `nil` (the default for any v0.7-era session that's been persisted) means
+/// "legacy / pre-agy-migration" — at the time those sessions were created,
+/// only the standalone `gemini` CLI v0.42 existed. v0.8.0 onwards uses
+/// `.agentapi` (Antigravity 2's HTTP-RPC mode) for all new Gemini sessions
+/// when Antigravity.app is reachable (D4 hard-stop: no spawn otherwise).
+/// v0.42 is no longer a chat fallback; it stays in the install only as a
+/// no-op for users who haven't installed Antigravity 2 yet (they get a
+/// CTA, not a session).
+///
+/// This is a transport axis, NOT an agent-kind axis — `AgentSession.kind`
+/// (per chat-tab v0.8) means `.code` vs `.chat` and stays orthogonal.
+public enum GeminiBackend: String, Codable, Hashable, Sendable, CaseIterable {
+    /// Antigravity 2's `agentapi` HTTP-RPC mode. Conversations live in
+    /// `~/.gemini/antigravity/conversations/<id>.db` (SQLite WAL).
+    case agentapi
+}
+
 public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// Server-assigned UUID. Used as `Identifiable.id` and as the URL
     /// segment in `/sessions/:id/*` endpoints.
@@ -747,6 +807,32 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// at the daemon's rename handler.
     public let customName: String?
 
+    // MARK: - Schema v6 additions (v0.8.0 agy-migration, wire v10)
+    //
+    // Both optional + decoder-tolerant so v3/v4/v5 sessions.json files
+    // decode cleanly. Downgrade path: older readers (which know no
+    // GeminiBackend or antigravityConversationId) silently drop these
+    // fields — same back-compat pattern as schema v3's effort fields.
+
+    /// Which transport drives this Gemini session. `nil` for any session
+    /// created before agy-migration (those were spawned via `gemini`
+    /// v0.42 CLI; the binary may still be on disk but Clawdmeter doesn't
+    /// re-spawn them in v0.8.0+). `.agentapi` means the session was
+    /// created via Antigravity 2's HTTP-RPC and lives in a SQLite WAL
+    /// DB under `~/.gemini/antigravity/conversations/`.
+    /// Only meaningful when `agent == .gemini`. For Claude/Codex it
+    /// stays nil.
+    public let geminiBackend: GeminiBackend?
+
+    /// Antigravity's conversation UUID, returned by
+    /// `language_server agentapi new-conversation` and used to:
+    ///   - resume the conversation across Clawdmeter restarts
+    ///   - target `agentapi send-message <conv-id> <prompt>` calls
+    ///   - locate the SQLite DB file
+    ///   - thread iOS send-message round-trips
+    /// `nil` for any non-agentapi session.
+    public let antigravityConversationId: UUID?
+
     public init(
         id: UUID,
         repoKey: String,
@@ -770,7 +856,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         effort: ReasoningEffort? = nil,
         abPairSessionId: UUID? = nil,
         abPairDecidedAt: Date? = nil,
-        customName: String? = nil
+        customName: String? = nil,
+        geminiBackend: GeminiBackend? = nil,
+        antigravityConversationId: UUID? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -795,6 +883,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.abPairSessionId = abPairSessionId
         self.abPairDecidedAt = abPairDecidedAt
         self.customName = customName
+        self.geminiBackend = geminiBackend
+        self.antigravityConversationId = antigravityConversationId
     }
 
     public init(from decoder: Decoder) throws {
@@ -831,6 +921,13 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         // so v3 sessions.json files decode cleanly (the field just stays
         // nil).
         self.customName = (try? c.decodeIfPresent(String.self, forKey: .customName)) ?? nil
+        // v0.8.0 schema v6 additions (agy-migration). Same decoder-
+        // tolerant pattern as effort/abPair fields: any earlier-schema
+        // sessions.json decodes cleanly with these as nil. v0.7-era
+        // Gemini sessions = `geminiBackend == nil` (legacy v0.42 era);
+        // v0.8.0+ Gemini sessions = `.agentapi`.
+        self.geminiBackend = (try? c.decodeIfPresent(GeminiBackend.self, forKey: .geminiBackend)) ?? nil
+        self.antigravityConversationId = (try? c.decodeIfPresent(UUID.self, forKey: .antigravityConversationId)) ?? nil
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -851,7 +948,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              mode, archivedAt,
              terminalPanes, scheduledFollowUps, parentSessionId,
              effort, abPairSessionId, abPairDecidedAt,
-             customName
+             customName,
+             // v0.8.0 schema v6 (agy-migration).
+             geminiBackend, antigravityConversationId
     }
 }
 
@@ -1595,9 +1694,22 @@ public struct UsageEnvelope: Codable, Sendable {
     /// this once per provider; the implementation prefers the dict and
     /// falls back to legacy fields independently for each id, preventing
     /// data-loss when the dict is partial.
+    ///
+    /// v10 (agy-migration): the "gemini" provider key transitioned to
+    /// "antigravity" to match the agentapi naming. The dual-key fallback
+    /// preserves v8/v9 iOS readers — a v8 iOS asking for "gemini" still
+    /// receives the data even when a v10 Mac wrote it under
+    /// "antigravity", and vice versa. The provider id "gemini" stays the
+    /// canonical id at the iOS callsite; the wire just shifted the key.
     public func usageData(for providerID: String) -> UsageData? {
-        if let dict = usage, let snapshot = dict[providerID] {
-            return snapshot
+        if let dict = usage {
+            // Direct hit.
+            if let snapshot = dict[providerID] { return snapshot }
+            // v10 dual-key bridge. Gemini provider data may be under
+            // either "gemini" (v6-v9 servers) or "antigravity" (v10+).
+            // Both directions resolve cleanly.
+            if providerID == "gemini",      let snapshot = dict["antigravity"] { return snapshot }
+            if providerID == "antigravity", let snapshot = dict["gemini"]      { return snapshot }
         }
         switch providerID {
         case "claude": return claude

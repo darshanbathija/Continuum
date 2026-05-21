@@ -247,12 +247,19 @@ final class SessionsV2Tests: XCTestCase {
         // UsageData.codexSDKModeActive (decodeIfPresent — back-compat).
         // No new endpoints or WS ops in v8; the field rides on the
         // existing /usage envelope.
-        XCTAssertEqual(AgentControlWireVersion.current, 8)
+        // Bumped 8 → 10 on 2026-05-21 (agy-migration; skips v9 which
+        // chat-tab took). Adds AgentSession.geminiBackend +
+        // antigravityConversationId + usage["gemini"]→"antigravity"
+        // dual-key rename. agentapiMinimum=10 + antigravityChatMinimum=10
+        // gate the Antigravity chat surface on iOS.
+        XCTAssertEqual(AgentControlWireVersion.current, 10)
         XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
         XCTAssertEqual(AgentControlWireVersion.chatSubscribeMinimum, 5)
         XCTAssertEqual(AgentControlWireVersion.geminiMinimum, 6)
         XCTAssertEqual(AgentControlWireVersion.antigravityMinimum, 7)
         XCTAssertEqual(AgentControlWireVersion.codexSDKMinimum, 8)
+        XCTAssertEqual(AgentControlWireVersion.agentapiMinimum, 10)
+        XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 10)
     }
 
     // MARK: - Mid-session change requests

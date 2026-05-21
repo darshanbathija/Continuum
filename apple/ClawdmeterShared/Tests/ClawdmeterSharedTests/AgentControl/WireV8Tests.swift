@@ -9,7 +9,9 @@ import XCTest
 final class WireV8Tests: XCTestCase {
 
     func test_currentWireVersionIsEight() {
-        XCTAssertEqual(AgentControlWireVersion.current, 8)
+        // v0.8.0 agy-migration: bumped to 10 (skips v9 which is chat-tab's).
+        // Test name kept for git-blame continuity; assertion tracks current.
+        XCTAssertEqual(AgentControlWireVersion.current, 10)
     }
 
     func test_codexSDKMinimumIsEight() {
