@@ -4,7 +4,7 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-## [0.8.0 build 65] - 2026-05-21
+## [0.8.0 build 66] - 2026-05-21
 
 ### Added
 
@@ -92,6 +92,36 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
   `codexChatThreadId` unchanged. New `setCodexChatThreadId(id:threadId:)`
   registry method lets the SDK ingestor persist the threadId after
   the first `thread.started` event for resume-after-evict.
+
+### Hardening (post-review)
+
+- **Codex CLI cross-rollout contamination** — `newestCodexJSONL()`
+  was returning the absolute newest rollout under `~/.codex/sessions/`,
+  so any concurrent Codex run (another chat, another worktree, manual
+  `codex` in Terminal) would swap its transcript into the Chat tab.
+  New `newestCodexJSONLMatching(cwd:after:)` peeks each rollout's
+  `session_meta.cwd` and only accepts ones whose cwd matches the
+  session AND whose mtime is ≥ `createdAt`.
+- **Permission continuation leaked on delete.** End-chat while a trust
+  prompt is on screen now wakes the daemon-side continuation via a
+  `cancelledPermissionOptionId` sentinel before the session is torn
+  down, instead of leaving the warmup task parked forever.
+- **Idle eviction now refuses to drop a store with a pending
+  permission prompt** (`pendingPermissionPrompt != nil`), so a chat
+  that trust-prompts and then sits idle 5min keeps the prompt's
+  `@Published` value alive and the next send doesn't hang on a
+  vanished continuation.
+- **`handleDeleteSession` evicts the chat-store registry entry**
+  alongside the registry-record delete, so the store doesn't linger
+  until the next sweep tick.
+- **Codex SDK sidecar termination** — process-side
+  `terminationHandler` now clears the active-sidecar map on natural
+  EOF in addition to the explicit `stop()` path.
+- **Permission-prompt id mismatch** — `/permission-respond` validates
+  `promptId` against the active map and returns 409 on stale resends.
+- **iOS permission card** — same floating bottom tray as the Mac
+  surface (mirror of `AskUserQuestion`), so trust prompts surface on
+  iOS chats instead of falling through to a silent stall.
 
 ### Deferred to v0.9
 
