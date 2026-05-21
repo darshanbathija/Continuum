@@ -29,6 +29,12 @@ public final class AgentControlClient: ObservableObject {
     public static let httpPortKey = "clawdmeter.sessions.httpPort"
     public static let wsPortKey = "clawdmeter.sessions.wsPort"
     public static let tokenKey = "clawdmeter.sessions.token"
+    /// v0.14.0 (plan v2.1): TCP port on the paired Mac that fronts the
+    /// Open Design daemon for iOS. DesignPortForwarder probes from 21732.
+    public static let designPortKey = "clawdmeter.sessions.designPort"
+    /// v0.14.0 (plan v2.1 T19): per-pairing HKDF-derived design credential.
+    /// Stable across daemon restarts; tied to PairingTokenStore lifecycle.
+    public static let designTokenKey = "clawdmeter.sessions.designToken"
 
     @Published public private(set) var isConfigured: Bool = false
     @Published public private(set) var repos: [AgentRepo] = []
@@ -96,6 +102,12 @@ public final class AgentControlClient: ObservableObject {
     public var token: String? {
         tokenOverride ?? UserDefaults.standard.string(forKey: Self.tokenKey)
     }
+    public var designPort: Int {
+        UserDefaults.standard.integer(forKey: Self.designPortKey).nonZeroOrDefault(21732)
+    }
+    public var designToken: String? {
+        UserDefaults.standard.string(forKey: Self.designTokenKey)
+    }
 
     public func setPairing(host: String, httpPort: Int, wsPort: Int, token: String) {
         // Mac loopback instances built with the explicit-arg init are
@@ -115,12 +127,21 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    /// v0.14.0 (plan v2.1): set the Design-tab pairing values discovered
+    /// from the QR payload. Separate method so callers that don't know
+    /// about Design routing don't have to change.
+    public func setDesignPairing(designPort: Int, designToken: String) {
+        guard !isExplicitConfig else { return }
+        UserDefaults.standard.set(designPort, forKey: Self.designPortKey)
+        UserDefaults.standard.set(designToken, forKey: Self.designTokenKey)
+    }
+
     public func clearPairing() {
         guard !isExplicitConfig else {
             clientLogger.warning("clearPairing called on explicit-config instance — ignored")
             return
         }
-        for key in [Self.hostKey, Self.httpPortKey, Self.wsPortKey, Self.tokenKey] {
+        for key in [Self.hostKey, Self.httpPortKey, Self.wsPortKey, Self.tokenKey, Self.designPortKey, Self.designTokenKey] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         DispatchQueue.main.async {
