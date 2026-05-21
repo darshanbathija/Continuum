@@ -61,29 +61,58 @@ Chat tab being almost entirely decorative.
 
 ## Plan for this branch
 
-1. **Phase A — iOS low-hanging** (this branch):
-   - Wire SessionDetail plan-halo Approve & Refine (#1, #2)
-   - Wire LiveView gear → Settings sheet (#5)
-   - Wire LiveView refresh button (#4)
-   - Wire AnalyticsView to `fetchAnalytics()` (#6)
-   - Wire ChatView reply-copy (#7)
-   - Wire ChatView Pick winner (#8) — IF an A/B `groupId` is reachable; otherwise defer
-   - Remove/hide ChatView Broadcast toggle if not wired (decorative cleanup)
-   - Either wire IOSPairingView or delete it (#10)
+### Phase A — iOS low-hanging ✓ LANDED
 
-2. **Phase B — Mac low-hanging** (this branch):
-   - Wire MenubarPopover "Open dashboard" (#11)
-   - Wire MenubarPopover "Sync iPhone" (#12)
-   - Inject `AppRuntime` into Settings + Usage views and wire auto-revive (#13, #14)
-   - Wire CodeView per-repo `+` (#15)
-   - Wire CodeView ReviewPR "Open PR on GitHub" — `NSWorkspace.open`
+- ✓ SessionDetail plan-halo Approve → `client.approvePlan(sessionId:)`
+- ✓ SessionDetail plan-halo Refine → alert + `sendPrompt(...)`
+- ✓ SessionDetail composer (real TextField + send button)
+- ✓ SessionDetail pull-to-refresh
+- ✓ LiveView gear → SettingsView sheet
+- ✓ LiveView footer refresh button + pull-to-refresh
+- ✓ AnalyticsView consumes `fetchAnalytics()` (was 100% demo fixture)
+- ✓ AnalyticsView "sliders" → manual refresh
+- ✓ Settings sheet hoisted to IOSRootView
 
-3. **Phase C — Mac high-effort** (defer to follow-up branch):
-   - Mac chat send pipeline (new broadcast client wire)
-   - Mac CodeView plan approval (new registry method + daemon round-trip)
-   - Mac CodeView composer send
+### Phase B — Mac low-hanging ✓ LANDED
 
-4. **Phase D — Tahoe ChatView composer rebuild** (follow-up):
-   - Make iOS ChatView consume real `client.chatSessions` instead of demo
-   - Add a real `TextField` to the composer
-   - Wire send to `createChatSession` + `sendPrompt` OR `postComposeDraft`
+- ✓ MenubarPopover "Open dashboard" → AppDelegate.showDashboard() path
+- ✓ MenubarPopover "Sync iPhone" → presents `PairingQRPopoverContent` in its own NSPopover
+- ✓ Settings auto-revive toggle → fans out to every AppModel.setAutoReviveEnabled
+- ✓ Settings "Reset to defaults" → `TahoeThemeStore.resetToDefaults()`
+- ✓ UsageView per-provider auto-revive toggle → `AppModel.setAutoReviveEnabled(_:)`
+- ✓ UsageView MenuBarCheckbox → `UserDefaults` pref key (AppDelegate observer picks it up live)
+- ✓ CodeView per-repo `+` → presents NewSessionMacSheet with that repo preselected
+- ✓ CodeView sidebar `folderPlus` → presents NewSessionMacSheet (no preselection)
+- ✓ NewSessionMacSheet accepts `preselectedRepoKey` param
+
+### Phase C — defer to follow-up branch
+
+- Mac chat send pipeline (no `runtime.broadcastClient` exists)
+- Mac CodeView plan approval (no daemon round-trip on Mac yet)
+- Mac CodeView composer send (same)
+- Mac CodeView Plan halo Refine / Edit plan
+- iOS ChatView composer (no `TextField`, needs `createChatSession` + `sendPrompt`)
+- iOS ChatView Pick winner (needs reachable A/B `groupId`)
+- iOS PairingView (entry point doesn't exist; either route to it or delete)
+- iOS LiveView per-provider auto-revive (no `setAutoRevive(provider:enabled:)` RPC)
+- iOS CodeView search field
+- Mac CodeView ReviewPR "Open PR on GitHub" — demo-only surface today
+- Reply "regenerate" — no agent supports it on the wire today
+
+### Phase D — Tahoe ChatView composer rebuild (separate branch)
+
+- Make iOS + Mac ChatView consume real chat sessions instead of demo
+- Add real composer TextField
+- Wire send to `createChatSession` + `sendPrompt` or `postComposeDraft`
+
+## Wiring deltas after Phase A + B
+
+| Platform | Interactive | Wired | Demo-only | No-op |
+|----------|------------|-------|-----------|-------|
+| Mac      | 48         | 22    | 4         | 22    |
+| iOS      | 54         | 47    | 0         | 7     |
+| **Total**| **102**    | **69 (68%)** | **4 (4%)** | **29 (28%)** |
+
+Wired ratio jumped from 48% → 68%. The remaining 28% are dominated by the
+chat-send pipeline (no backend) and the Mac code IDE write path (needs new
+daemon round-trip). Phase C planning lives at the top of this doc.

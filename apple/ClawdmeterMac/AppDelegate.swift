@@ -304,13 +304,58 @@ final class ProviderStatusController: NSObject {
             default:       return .claude
             }
         }()
-        let popoverView = MacMenubarPopover(data: popoverData, initialProvider: providerCase)
+        let popoverView = MacMenubarPopover(
+            data: popoverData,
+            initialProvider: providerCase,
+            onOpenDashboard: { [weak self] in
+                guard let self else { return }
+                self.popover?.performClose(nil)
+                // Same path used by Dock/Spotlight re-launch — restores
+                // activation policy, brings the dashboard window forward.
+                NotificationCenter.default.post(name: AppDelegate.openDashboardRequest, object: nil)
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate(ignoringOtherApps: true)
+            },
+            onSyncIPhone: { [weak self] in
+                self?.showPairingPopover()
+            }
+        )
             .tahoeTheme(TahoeThemeStore.loaded())
             .frame(width: 388)
         let host = NSHostingController(rootView: popoverView)
         host.sizingOptions = NSHostingSizingOptions.preferredContentSize
         pop.contentViewController = host
         popover = pop
+    }
+
+    /// Pairing QR popover — anchored to the same menu-bar button so users
+    /// don't have to dig into Settings → Sessions to pair an iPhone. Closes
+    /// the parent dashboard popover first so the user only sees one popover
+    /// at a time.
+    private var pairingPopover: NSPopover?
+
+    private func showPairingPopover() {
+        popover?.performClose(nil)
+        guard let runtime, let button = statusItem?.button else { return }
+        let pop = pairingPopover ?? {
+            let p = NSPopover()
+            p.behavior = .transient
+            p.contentSize = NSSize(width: 340, height: 460)
+            let view = PairingQRPopoverContent(runtime: runtime)
+                .tahoeTheme(TahoeThemeStore.loaded())
+                .padding(16)
+                .frame(width: 340)
+            let host = NSHostingController(rootView: view)
+            host.sizingOptions = NSHostingSizingOptions.preferredContentSize
+            p.contentViewController = host
+            pairingPopover = p
+            return p
+        }()
+        // Tiny delay so the dashboard popover's dismiss animation can
+        // complete before the new popover takes the same anchor.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
     }
 
     private func refreshImage() {

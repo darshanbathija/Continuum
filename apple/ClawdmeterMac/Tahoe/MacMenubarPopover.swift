@@ -3,16 +3,32 @@ import ClawdmeterShared
 
 /// Replacement for `PopoverView`. Provider segmented + stacked meters.
 /// Ports `mac-dashboard.jsx::MacMenubarPopover`.
+///
+/// v0.12 button-wiring pass: the "Open dashboard" and "Sync iPhone"
+/// ghost buttons in the footer now invoke caller-provided callbacks
+/// (`onOpenDashboard`, `onSyncIPhone`). `ProviderStatusController`
+/// wires them to `AppDelegate.showDashboard()` and a popover hosting
+/// `PairingQRPopoverContent` respectively. Defaults are `{}` so the
+/// view remains preview-friendly.
 public struct MacMenubarPopover: View {
     @Environment(\.tahoe) private var t
     @State private var selected: TahoeProvider
     public var data: TahoeLiveBindings
+    var onOpenDashboard: () -> Void
+    var onSyncIPhone: () -> Void
 
     private let enabled: [TahoeProvider] = [.claude, .codex, .gemini]
 
-    public init(data: TahoeLiveBindings = .demo, initialProvider: TahoeProvider = .claude) {
+    public init(
+        data: TahoeLiveBindings = .demo,
+        initialProvider: TahoeProvider = .claude,
+        onOpenDashboard: @escaping () -> Void = {},
+        onSyncIPhone: @escaping () -> Void = {}
+    ) {
         self.data = data
         self._selected = State(initialValue: initialProvider)
+        self.onOpenDashboard = onOpenDashboard
+        self.onSyncIPhone = onSyncIPhone
     }
 
     public var body: some View {
@@ -62,7 +78,7 @@ public struct MacMenubarPopover: View {
                 TahoeHair().padding(.top, 12).padding(.bottom, 10)
 
                 HStack(spacing: 6) {
-                    TahoeGhostButton(size: .s) {
+                    TahoeGhostButton(size: .s, action: onOpenDashboard) {
                         HStack(spacing: 4) {
                             TahoeIcon("grid", size: 10)
                             Text("Open dashboard")
@@ -70,7 +86,7 @@ public struct MacMenubarPopover: View {
                     }
                     .frame(maxWidth: .infinity)
 
-                    TahoeGhostButton(size: .s) {
+                    TahoeGhostButton(size: .s, action: onSyncIPhone) {
                         HStack(spacing: 4) {
                             TahoeIcon("qr", size: 10)
                             Text("Sync iPhone")

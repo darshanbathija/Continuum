@@ -5,19 +5,39 @@ import ClawdmeterShared
 /// Ports `mac-dashboard.jsx`. Accepts a `TahoeLiveBindings` value (defaults
 /// to the demo fixture); the Mac app injects real AppRuntime-derived data
 /// via `MacRootView.body`.
+///
+/// v0.12 button-wiring pass: ProviderColumn's auto-revive toggle now
+/// writes to `AppModel.setAutoReviveEnabled(_:)`. MenuBarCheckbox now
+/// writes its per-provider visibility preference to `UserDefaults` so the
+/// AppDelegate observer hides/shows the matching status item.
 public struct MacUsageView: View {
     @Environment(\.tahoe) private var t
     public var data: TahoeLiveBindings
+    /// Optional per-provider models — when nil (SwiftUI Previews) the
+    /// auto-revive toggle remains local @State only.
+    var claudeModel: AppModel?
+    var codexModel: AppModel?
+    var geminiModel: AppModel?
 
-    public init(data: TahoeLiveBindings = .demo) { self.data = data }
+    public init(
+        data: TahoeLiveBindings = .demo,
+        claudeModel: AppModel? = nil,
+        codexModel: AppModel? = nil,
+        geminiModel: AppModel? = nil
+    ) {
+        self.data = data
+        self.claudeModel = claudeModel
+        self.codexModel = codexModel
+        self.geminiModel = geminiModel
+    }
 
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
                 HStack(spacing: 14) {
-                    ProviderColumn(provider: .claude, row: data.claude)
-                    ProviderColumn(provider: .codex,  row: data.codex)
-                    ProviderColumn(provider: .gemini, row: data.gemini)
+                    ProviderColumn(provider: .claude, row: data.claude, model: claudeModel)
+                    ProviderColumn(provider: .codex,  row: data.codex,  model: codexModel)
+                    ProviderColumn(provider: .gemini, row: data.gemini, model: geminiModel)
                 }
                 .padding(.horizontal, 6).padding(.bottom, 18)
 
@@ -37,9 +57,24 @@ private struct ProviderColumn: View {
     @Environment(\.tahoe) private var t
     var provider: TahoeProvider
     var row: TahoeLiveRow
+    var model: AppModel?
 
     @State private var menuBar: Bool = true
     @State private var autoRevive: Bool = true
+
+    /// UserDefaults key that AppDelegate's MenuBarController observes to
+    /// hide/show this provider's status item. Mirrors
+    /// `ProviderStatusController.prefKey(_:)` in AppDelegate.swift.
+    private var menuBarPrefKey: String {
+        let id: String = {
+            switch provider {
+            case .claude: return "claude"
+            case .codex:  return "codex"
+            case .gemini: return "gemini"
+            }
+        }()
+        return "clawdmeter.\(id).menuBarShown"
+    }
 
     var body: some View {
         TahoeGlass(radius: 20, tone: .panel) {
@@ -103,8 +138,24 @@ private struct ProviderColumn: View {
             .padding(22)
             .frame(maxWidth: .infinity, minHeight: 380, alignment: .topLeading)
         }
-        .onAppear { autoRevive = row.autoReviveOn }
+        .onAppear {
+            autoRevive = row.autoReviveOn
+            menuBar = UserDefaults.standard.object(forKey: menuBarPrefKey) as? Bool ?? true
+        }
         .onChange(of: row.autoReviveOn) { _, v in autoRevive = v }
+        .onChange(of: autoRevive) { _, v in
+            // Only persist when the user flipped the toggle, not when we're
+            // syncing from row.autoReviveOn on first appear (the values
+            // would already match in that case).
+            guard let model, v != row.autoReviveOn else { return }
+            model.setAutoReviveEnabled(v)
+        }
+        .onChange(of: menuBar) { _, v in
+            UserDefaults.standard.set(v, forKey: menuBarPrefKey)
+            // The AppDelegate has a UserDefaults observer that picks this
+            // up and calls `setVisible(_:)` on the matching status item.
+            // No notification needed.
+        }
     }
 }
 

@@ -18,6 +18,14 @@ public struct MacCodeView: View {
     public enum ReviewTab: String, CaseIterable { case plan, diff, sources, pr, term }
 
     public var data: TahoeCodeBindings
+    /// Caller-provided callbacks. `onNewSession(key)` is fired by the
+    /// per-repo `+` button (key = repo path) and the sidebar `+` icon
+    /// (key = nil, sheet lets user pick). Defaults to `{ _ in }` so the
+    /// view remains preview-friendly.
+    var onNewSession: (String?) -> Void
+    /// Open a PR in the system browser. Wired only when the PR review
+    /// tab is visible (i.e. demo bindings today).
+    var onOpenPRInBrowser: (() -> Void)?
 
     @State private var openId: UUID? = nil
     @State private var composerState: ComposerState = .idle
@@ -26,7 +34,15 @@ public struct MacCodeView: View {
     @State private var expanded: Set<String> = []
     @State private var didInitComposer: Bool = false
 
-    public init(data: TahoeCodeBindings = .demo) { self.data = data }
+    public init(
+        data: TahoeCodeBindings = .demo,
+        onNewSession: @escaping (String?) -> Void = { _ in },
+        onOpenPRInBrowser: (() -> Void)? = nil
+    ) {
+        self.data = data
+        self.onNewSession = onNewSession
+        self.onOpenPRInBrowser = onOpenPRInBrowser
+    }
 
     public var body: some View {
         let effectiveOpenId = openId ?? data.openSessionId
@@ -40,7 +56,8 @@ public struct MacCodeView: View {
                 Sidebar(
                     repos: data.repos,
                     openId: Binding(get: { effectiveOpenId }, set: { openId = $0 }),
-                    expanded: $expanded
+                    expanded: $expanded,
+                    onNewSession: onNewSession
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -182,6 +199,7 @@ private struct Sidebar: View {
     var repos: [TahoeCodeRepo]
     @Binding var openId: UUID?
     @Binding var expanded: Set<String>
+    var onNewSession: (String?) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -208,7 +226,11 @@ private struct Sidebar: View {
             }
             .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 8)
 
-            // Projects header
+            // Projects header — `folderPlus` opens NewSessionMacSheet with no
+            // repo pre-selected (the sheet's picker shows the full list).
+            // Filter is reserved for a future "live only" / "by provider"
+            // filter sheet; left as a no-op rather than dropped so the UI
+            // alignment matches the JSX.
             HStack(spacing: 4) {
                 Text("PROJECTS")
                     .font(TahoeFont.body(11, weight: .bold))
@@ -216,7 +238,7 @@ private struct Sidebar: View {
                     .foregroundStyle(t.fg3)
                 Spacer()
                 SidebarIconBtn(icon: "filter")
-                SidebarIconBtn(icon: "folderPlus")
+                SidebarIconBtn(icon: "folderPlus", action: { onNewSession(nil) })
             }
             .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 6)
 
@@ -243,7 +265,8 @@ private struct Sidebar: View {
                                     else { expanded.insert(repo.key) }
                                 },
                                 openId: openId,
-                                onOpen: { openId = $0 }
+                                onOpen: { openId = $0 },
+                                onNewSession: { onNewSession(repo.key) }
                             )
                         }
                     }
@@ -257,8 +280,9 @@ private struct Sidebar: View {
 private struct SidebarIconBtn: View {
     @Environment(\.tahoe) private var t
     var icon: String
+    var action: () -> Void = {}
     var body: some View {
-        Button(action: {}) {
+        Button(action: action) {
             TahoeIcon(icon, size: 13).foregroundStyle(t.fg3).frame(width: 24, height: 24)
         }
         .buttonStyle(.plain)
@@ -272,6 +296,7 @@ private struct RepoSection: View {
     var onToggle: () -> Void
     var openId: UUID?
     var onOpen: (UUID) -> Void
+    var onNewSession: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -303,11 +328,12 @@ private struct RepoSection: View {
                             Capsule(style: .continuous).fill(t.hair2)
                         }
                 }
-                Button(action: {}) {
+                Button(action: onNewSession) {
                     TahoeIcon("plus", size: 13).foregroundStyle(t.fg3)
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
+                .help("New session in \(repo.name)")
                 .opacity(0.55)
             }
             .padding(.horizontal, 4).padding(.vertical, 7)

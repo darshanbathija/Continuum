@@ -3,20 +3,64 @@ import ClawdmeterShared
 
 /// Mac Settings — drives the global TahoeThemeStore so flipping a switch
 /// here repaints every other surface. Ports `mac-settings.jsx`.
+///
+/// v0.12 button-wiring pass: the Auto-revive toggle now writes to the
+/// per-provider `AppModel.setAutoReviveEnabled(_:)` for every provider
+/// that supports the feature. Mirror-to-iPhone and Notify-at-90% remain
+/// local state with hint copy explaining they're not yet wired (no
+/// daemon endpoints exist for those today). Reset-to-defaults wired to
+/// `TahoeThemeStore.resetToDefaults()`.
 public struct MacSettingsView: View {
     @Environment(\.tahoe) private var t
     @Bindable public var theme: TahoeThemeStore
 
-    @State private var autoRevive: Bool = true
-    @State private var mirrorToiPhone: Bool = true
-    @State private var notifyAt90: Bool = true
+    @ObservedObject var claudeModel: AppModel
+    @ObservedObject var codexModel: AppModel
+    @ObservedObject var geminiModel: AppModel
 
-    public init(theme: TahoeThemeStore) { self.theme = theme }
+    /// Source of truth for the auto-revive toggle. Reads the real state
+    /// off whichever provider supports it (Claude is the canonical one
+    /// today). Setter fans out to every provider that supports auto-revive.
+    @State private var notifyAt90: Bool = true
+    @State private var mirrorToiPhone: Bool = true
+
+    public init(
+        theme: TahoeThemeStore,
+        claudeModel: AppModel,
+        codexModel: AppModel,
+        geminiModel: AppModel
+    ) {
+        self.theme = theme
+        self.claudeModel = claudeModel
+        self.codexModel = codexModel
+        self.geminiModel = geminiModel
+    }
+
+    /// Composite auto-revive state. True when any provider that supports
+    /// auto-revive currently has it enabled. Setter writes to every
+    /// supporting provider so the toggle is "all or nothing" — matches the
+    /// per-provider auto-revive card on MacUsageView's hero column.
+    private var autoReviveBinding: Binding<Bool> {
+        Binding(
+            get: {
+                let providers = [claudeModel, codexModel, geminiModel]
+                    .filter { $0.config.supportsAutoRevive }
+                guard !providers.isEmpty else { return false }
+                return providers.contains { $0.autoReviver.isEnabled }
+            },
+            set: { newValue in
+                for model in [claudeModel, codexModel, geminiModel]
+                    where model.config.supportsAutoRevive {
+                    model.setAutoReviveEnabled(newValue)
+                }
+            }
+        )
+    }
 
     public var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                SettingsHeader()
+                SettingsHeader(onReset: { theme.resetToDefaults() })
 
                 SettingsCard(title: "Appearance",
                              sub: "How the app looks. Independent of your system setting.") {
@@ -63,17 +107,17 @@ public struct MacSettingsView: View {
                 SettingsCard(title: "Quota & sync",
                              sub: "Behavior that affects the menu-bar agent and the paired iPhone.") {
                     SettingsRow(label: "Auto-revive 5h timer",
-                                hint: "Sends a no-op every ~4 hours so you don't lose your rolling session window. Skip if you'd rather see a true reading.") {
-                        TahoeToggleView(on: $autoRevive)
+                                hint: "Sends a no-op every ~4 hours so you don't lose your rolling session window. Applies to every provider that supports it.") {
+                        TahoeToggleView(on: autoReviveBinding)
                     }
                     TahoeHair().padding(.vertical, 14)
                     SettingsRow(label: "Mirror to iPhone",
-                                hint: "Push live gauges to a paired iPhone so you can glance at quota from the Lock Screen.") {
+                                hint: "Push live gauges to a paired iPhone so you can glance at quota from the Lock Screen. (Coming with the next pairing pass.)") {
                         TahoeToggleView(on: $mirrorToiPhone)
                     }
                     TahoeHair().padding(.vertical, 14)
                     SettingsRow(label: "Notify at 90%",
-                                hint: "Send a system notification when any session passes 90% of its rolling window.") {
+                                hint: "Send a system notification when any session passes 90% of its rolling window. (Coming with the next notifications pass.)") {
                         TahoeToggleView(on: $notifyAt90)
                     }
                 }
@@ -89,6 +133,7 @@ public struct MacSettingsView: View {
 
 private struct SettingsHeader: View {
     @Environment(\.tahoe) private var t
+    var onReset: () -> Void
     var body: some View {
         HStack(alignment: .lastTextBaseline) {
             VStack(alignment: .leading, spacing: 4) {
@@ -101,7 +146,7 @@ private struct SettingsHeader: View {
                     .foregroundStyle(t.fg3)
             }
             Spacer()
-            TahoeGhostButton(size: .s) {
+            TahoeGhostButton(size: .s, action: onReset) {
                 HStack(spacing: 5) {
                     TahoeIcon("refresh", size: 10)
                     Text("Reset to defaults")
