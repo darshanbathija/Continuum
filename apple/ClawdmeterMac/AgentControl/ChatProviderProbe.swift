@@ -175,6 +175,7 @@ public actor ChatProviderProbe {
         case .codex:
             return codexBackend == .sdk ? "codex:sdk" : "codex:cli"
         case .gemini: return "gemini"
+        case .unknown: return "unknown"  // X3 forward-compat key
         }
     }
 }

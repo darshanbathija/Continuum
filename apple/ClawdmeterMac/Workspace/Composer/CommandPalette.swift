@@ -98,6 +98,9 @@ final class SkillCatalog: ObservableObject {
             // No Gemini-specific palette yet — reuse Codex's built-in
             // slash commands so the chip shows something useful.
             pool = commands.filter { $0.source == .codexBuiltin }
+        case .unknown:
+            // X3: forward-compat unknown agent — no palette plumbed.
+            pool = []
         }
         if trimmed.isEmpty { return pool }
         return pool.filter {

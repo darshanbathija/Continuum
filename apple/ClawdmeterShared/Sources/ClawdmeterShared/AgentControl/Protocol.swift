@@ -74,7 +74,14 @@ public enum AgentControlWireVersion {
     /// 501 stub). `AgentSession` gains optional `antigravityProjectId:
     /// String?` (additive — decoder-tolerant, no formal schema bump).
     /// `antigravityChatMinimum = 11` is now reachable.
-    public static let current: Int = 11
+    /// v12 (2026-05-22, X3 hardening for PR #28 OpenCode): `AgentKind`
+    /// gains a `.unknown` sentinel + the decoder folds unknown raws
+    /// into it instead of `.claude`. Older v11 clients reading a v13
+    /// (OpenCode) payload still drop into the silently-mislabeled
+    /// `.claude` path — they get the audit-flagged bug. v12+ clients
+    /// reading v13 payloads render the new kind as "Other agent" via
+    /// the UI fallback rather than misclassifying.
+    public static let current: Int = 12
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
@@ -649,23 +656,35 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
     case claude
     case codex
     /// Gemini Code Assist via Google's `gemini` CLI. Added in wire v6
-    /// (2026-05-19). v5 clients fall through `init(from:)` and drop sessions
-    /// tagged with `.gemini` silently instead of erroring the envelope —
-    /// the host's `?? .claude` fallback is a safety net for cases where the
-    /// containing decoder can't tolerate nil. Callers that need to filter
-    /// unknown-agent sessions must compare against `AgentKind.allCases`.
+    /// (2026-05-19).
     case gemini
+    /// Forward-compat sentinel for unknown agent kinds (X3, v0.17, wire
+    /// v12). Older clients connecting to a future Mac that supports a
+    /// new agent kind (e.g. `opencode` in PR #28) decode the unknown
+    /// raw into `.unknown` instead of `.claude` — preventing the silent
+    /// mislabeling Codex flagged in the eng-review. UI sites render
+    /// `.unknown` as a neutral "Other agent" tile.
+    ///
+    /// `.unknown` is intentionally NOT user-selectable (`allCases`
+    /// excludes it via the custom override below); it only appears on
+    /// the read path when decoding payloads we don't recognize.
+    case unknown = "__unknown__"
 
-    /// Lenient decoder (X3-D + Codex P1(5) fix). Forward-compat readers
-    /// keep parsing payloads from newer Macs whose `agent` field carries a
-    /// value this binary doesn't recognize. Unknown raws fold to `.claude`
-    /// rather than throwing the whole AgentSession Codable round-trip.
-    /// Tests assert all known raws (`claude`/`codex`/`gemini`) round-trip
-    /// and an unknown raw (`"future-runtime"`) safely falls back.
+    /// Filter `.unknown` out of `allCases` so pickers and provider
+    /// segmented controls don't accidentally render it as a choice.
+    public static var allCases: [AgentKind] {
+        [.claude, .codex, .gemini]
+    }
+
+    /// Lenient decoder (X3 — wire v12). Forward-compat readers keep
+    /// parsing payloads from newer Macs whose `agent` field carries a
+    /// value this binary doesn't recognize. Unknown raws fold to
+    /// `.unknown` so UI surfaces show "Other agent" instead of
+    /// silently mislabeling as Claude.
     public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         let raw = try c.decode(String.self)
-        self = AgentKind(rawValue: raw) ?? .claude
+        self = AgentKind(rawValue: raw) ?? .unknown
     }
 }
 

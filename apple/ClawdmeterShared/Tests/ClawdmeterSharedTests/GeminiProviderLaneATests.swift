@@ -143,15 +143,21 @@ final class GeminiProviderLaneATests: XCTestCase {
         }
     }
 
-    func test_agentKind_unknownRaw_decodesAsClaude_doesNotThrow() throws {
-        // Older clients reading a future-version payload tagged with an
-        // unknown agent kind must not crash the envelope. The lenient
-        // decoder folds unknowns to `.claude` so downstream callers can
-        // still process the rest of the payload (and surface the unknown
-        // as a Claude session — visible but not load-bearing).
+    func test_agentKind_unknownRaw_decodesAsUnknown_doesNotThrow() throws {
+        // X3 (wire v12, 2026-05-22): older clients reading a future-
+        // version payload tagged with an unknown agent kind must not
+        // crash the envelope. The lenient decoder folds unknowns to
+        // `.unknown` (NOT `.claude` — that was the silent-mislabel bug
+        // Codex flagged in the eng-review). Downstream UI renders these
+        // as "Other agent" instead of impersonating Claude semantics.
+        //
+        // Pre-X3 behavior (wire v11 and earlier) folded unknowns to
+        // `.claude`; PR #28 (OpenCode adapter) depends on the v12 fix
+        // so older v11 iOS clients don't show OpenCode sessions as
+        // Claude.
         let json = Data("\"future-runtime\"".utf8)
         let decoded = try JSONDecoder().decode(AgentKind.self, from: json)
-        XCTAssertEqual(decoded, .claude)
+        XCTAssertEqual(decoded, .unknown)
     }
 
     // MARK: - E3 #1 / X1: wire envelope dual-shape + per-provider fallback

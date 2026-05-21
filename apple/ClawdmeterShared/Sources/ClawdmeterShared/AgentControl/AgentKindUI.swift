@@ -18,6 +18,7 @@ public enum AgentKindUI {
         case .claude: return "ClaudeLogo"
         case .codex:  return "CodexLogo"
         case .gemini: return "GeminiLogo"
+        case .unknown: return "ClaudeLogo" // neutral fallback; UI shows "Other"
         }
     }
 
@@ -27,18 +28,21 @@ public enum AgentKindUI {
     public static func isTemplate(for agent: AgentKind) -> Bool {
         switch agent {
         case .claude: return false
-        case .codex, .gemini: return true
+        case .codex, .gemini, .unknown: return true
         }
     }
 
     /// Provider display label (used in chips, recent rows, session
     /// detail headers, etc.). Matches the CLI binary the user invokes
-    /// (`claude`, `codex`, `gemini`).
+    /// (`claude`, `codex`, `gemini`). `.unknown` renders as "Other agent"
+    /// — the X3 forward-compat fallback for future kinds older clients
+    /// don't recognize yet.
     public static func displayName(for agent: AgentKind) -> String {
         switch agent {
         case .claude: return "Claude"
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
+        case .unknown: return "Other agent"
         }
     }
 
@@ -48,11 +52,13 @@ public enum AgentKindUI {
     /// - Claude: terra-cotta (#D97757)
     /// - Codex: blue (#5C9DFF)
     /// - Gemini: Google blue (#4285F4)
+    /// - Unknown: neutral gray (#888888) — X3 fallback
     public static func accentRGB(for agent: AgentKind) -> (r: Int, g: Int, b: Int) {
         switch agent {
         case .claude: return (0xD9, 0x77, 0x57)
         case .codex:  return (0x5C, 0x9D, 0xFF)
         case .gemini: return (0x42, 0x85, 0xF4)
+        case .unknown: return (0x88, 0x88, 0x88)
         }
     }
 

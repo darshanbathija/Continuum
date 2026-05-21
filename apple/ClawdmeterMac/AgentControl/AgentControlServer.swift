@@ -1553,6 +1553,11 @@ public final class AgentControlServer {
             // missing-binary surface so the request returns a 4xx
             // instead of silently spawning an empty process.
             argv = []
+        case .unknown:
+            // X3: forward-compat unknown agent — no argv builder. Fall
+            // through to the 503 below so the iOS caller sees a clean
+            // failure instead of an empty spawn.
+            argv = []
         }
         guard !argv.isEmpty else {
             sendResponse(HTTPResponse(
@@ -3221,6 +3226,10 @@ public final class AgentControlServer {
                 try? ChatCwdManager.remove(for: session.id)
                 throw SpawnFailure.message("agentapi_new_conversation_failed: \(error.localizedDescription)")
             }
+        case .unknown:
+            // X3: forward-compat unknown agent — no frontier-child spawn
+            // path. Surfaces as a slot failure to the broadcast caller.
+            throw SpawnFailure.message("unknown_agent_kind")
         }
     }
 
@@ -3433,6 +3442,11 @@ public final class AgentControlServer {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
         case .gemini:
+            break
+        case .unknown:
+            // X3: forward-compat unknown agent — no warmup choreography
+            // plumbed. Future adapters (e.g. opencode in PR #28) take
+            // their own non-tmux warmup path before reaching here.
             break
         }
     }
@@ -3690,6 +3704,10 @@ public final class AgentControlServer {
         case .gemini:
             // approve-plan from Gemini is unsupported in v6 — there's no
             // gemini CLI to respawn. Surfaces as 500 below.
+            argv = nil
+        case .unknown:
+            // X3: forward-compat unknown agent — no respawn path.
+            // Surfaces as 500 below.
             argv = nil
         }
         guard let replacementArgv = argv else {

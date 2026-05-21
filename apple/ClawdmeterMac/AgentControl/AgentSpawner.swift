@@ -165,6 +165,10 @@ public enum AgentSpawner {
                 effort: request.effort,
                 autopilot: autopilot
             ) ?? []
+        case .unknown:
+            // X3: forward-compat unknown agent — no argv builder. Caller
+            // sees missingBinary and surfaces a clean error.
+            return []
         }
     }
 
@@ -232,6 +236,10 @@ public enum AgentSpawner {
                 effort: session.effort,
                 autopilot: chatAutopilot
             ) ?? []
+        case (.unknown, _):
+            // X3: forward-compat unknown kind — no argv. Caller surfaces
+            // a clean error or routes to a future adapter.
+            return []
         }
     }
 
@@ -276,6 +284,9 @@ public enum AgentSpawner {
                 acceptEdits: acceptEdits,
                 resumeSessionId: resumeSessionId
             ) ?? []
+        case .unknown:
+            // X3: forward-compat unknown agent — no respawn argv builder.
+            return []
         }
     }
 

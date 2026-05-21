@@ -78,6 +78,7 @@ struct ModelPicker: View {
         case .claude: return catalog.claude
         case .codex:  return catalog.codex
         case .gemini: return catalog.gemini
+        case .unknown: return []  // X3: no catalog slice for forward-compat unknown
         }
     }
 
@@ -86,6 +87,7 @@ struct ModelPicker: View {
         case .claude: return "Claude Code"
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
+        case .unknown: return "Other agent"  // X3
         }
     }
 

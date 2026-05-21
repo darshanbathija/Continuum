@@ -2,7 +2,7 @@ import XCTest
 @testable import ClawdmeterShared
 
 /// Exercises the wire v10 → v11 bump (v0.9 — chat-via-agentapi):
-///   - AgentControlWireVersion.current = 11
+///   - AgentControlWireVersion.current bumped to 12 (X3 unknown hardening)
 ///   - antigravityChatMinimum stays at 11 (now reachable: daemon ships
 ///     handlePostGeminiChatSession lifting the v0.8 501 stub)
 ///   - All v0.8 + v0.8.1 minimums unchanged (composeDraftMinimum,
@@ -15,8 +15,12 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsEleven() {
-        XCTAssertEqual(AgentControlWireVersion.current, 11)
+    func test_currentWireVersionIsTwelve() {
+        // v12 (2026-05-22, X3 hardening for PR #28 OpenCode): forward-
+        // compat `.unknown` sentinel landed on AgentKind. The v11 → v12
+        // bump signals "this client decodes unknown kinds as .unknown
+        // (not .claude)".
+        XCTAssertEqual(AgentControlWireVersion.current, 12)
     }
 
     func test_antigravityChatMinimumIsEleven() {
