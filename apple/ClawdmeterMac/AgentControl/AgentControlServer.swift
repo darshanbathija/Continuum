@@ -126,6 +126,17 @@ public final class AgentControlServer {
     /// cleanly instead of waiting forever for the user.
     private static let cancelledPermissionOptionId = "__cancelled__"
 
+    /// v0.9 — CM5 idempotency: cache of `clientRequestId → groupId` for
+    /// POST /chat-sessions/frontier so a network retry doesn't spawn a
+    /// second 3-pane group. Bounded; entries expire on iterator-based
+    /// sweep when the map crosses 256. Replays return the original
+    /// group's per-slot status (one cached snapshot per groupId).
+    private var frontierGroupIdempotency: [UUID: (groupId: UUID, response: CreateFrontierResponse, createdAt: Date)] = [:]
+    /// Per-group monotonic snapshot counter; advances on every child
+    /// status change. Used by the frontier-subscribe WS channel (TBD)
+    /// and by the response from /retry-slot.
+    private var frontierUpdateCounters: [UUID: Int] = [:]
+
     // v0.8.x: a per-session pane-scanner task for mid-conversation
     // permission prompts (e.g. Claude per-tool approvals) will land
     // here. The startup-time prompt path is wired through
@@ -971,21 +982,21 @@ public final class AgentControlServer {
         t.register(method: "GET", pattern: "/chat-providers") { [weak self] _, conn, _ in
             await self?.handleGetChatProviders(connection: conn)
         }
-        // Frontier endpoints: forward-compat stubs in v0.8. The DTOs +
-        // routes ship so v0.9 (Antigravity-via-agy + 3-pane UI) can swap
-        // in real implementations without another wire bump. v0.8 daemon
-        // returns 501 Not Implemented; iOS doesn't surface the UI yet.
-        t.register(method: "POST", pattern: "/chat-sessions/frontier") { [weak self] _, conn, _ in
-            self?.handleFrontierStub(connection: conn)
+        // v0.9 — Frontier endpoints. v0.8 shipped them as 501 stubs;
+        // v0.9 lights them up alongside the chat-via-agentapi Gemini
+        // backend so 3-pane Frontier (Claude / Codex / Gemini) is the
+        // first surface with true 3-provider comparison.
+        t.register(method: "POST", pattern: "/chat-sessions/frontier") { [weak self] req, conn, _ in
+            await self?.handlePostFrontier(request: req, connection: conn)
         }
-        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/send") { [weak self] _, conn, _ in
-            self?.handleFrontierStub(connection: conn)
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/send") { [weak self] req, conn, params in
+            await self?.handleFrontierSend(request: req, connection: conn, groupId: params["groupId"] ?? "")
         }
-        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/retry-slot") { [weak self] _, conn, _ in
-            self?.handleFrontierStub(connection: conn)
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/retry-slot") { [weak self] req, conn, params in
+            await self?.handleFrontierRetrySlot(request: req, connection: conn, groupId: params["groupId"] ?? "")
         }
-        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/pick-winner") { [weak self] _, conn, _ in
-            self?.handleFrontierStub(connection: conn)
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/pick-winner") { [weak self] req, conn, params in
+            await self?.handlePickFrontierWinner(request: req, connection: conn, groupId: params["groupId"] ?? "")
         }
 
         return t
@@ -2770,12 +2781,422 @@ public final class AgentControlServer {
     /// (real spawn, FrontierWebSocketChannel, per-slot retry, pick-winner
     /// fork) lands in v0.9 alongside the Antigravity replacement so the
     /// 3-pane UI can use the full Claude+Codex+Gemini matrix.
-    private func handleFrontierStub(connection: NWConnection) {
-        let body = #"{"error":"not_implemented","reason":"frontier_ui_lands_in_v0.9"}"#
+    // MARK: - v0.9 Frontier handlers
+
+    /// POST /chat-sessions/frontier — spawn 2-3 sibling chat sessions
+    /// sharing a `frontierGroupId`, one per `FrontierModelSlot` in the
+    /// request. Returns per-slot results (E2): each spawn is independent
+    /// so a partial Frontier (e.g. Gemini fails because Antigravity isn't
+    /// running) still surfaces the live slots + the failure reason.
+    /// CM5: replays the cached response when `clientRequestId` repeats.
+    private func handlePostFrontier(request: HTTPRequest, connection: NWConnection) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(CreateFrontierRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // CM5 idempotency: if we've seen this clientRequestId before,
+        // return the cached response verbatim.
+        if let cached = frontierGroupIdempotency[req.clientRequestId] {
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(cached.response) {
+                sendResponse(HTTPResponse(
+                    status: 200, reason: "OK (idempotent replay)",
+                    contentType: "application/json", body: body
+                ), on: connection)
+                return
+            }
+        }
+        // Slot count guard: 2-3 per v0.9 spec.
+        guard (2...3).contains(req.models.count) else {
+            sendResponse(HTTPResponse(
+                status: 400, reason: "Bad Request",
+                contentType: "application/json",
+                body: Data(#"{"error":"frontier_slot_count","reason":"frontier requires 2-3 slots"}"#.utf8)
+            ), on: connection)
+            return
+        }
+
+        let groupId = UUID()
+        var slotResults: [FrontierSlotResult] = []
+        for (idx, slot) in req.models.enumerated() {
+            do {
+                let session = try await spawnFrontierChild(
+                    groupId: groupId,
+                    childIndex: idx,
+                    slot: slot
+                )
+                slotResults.append(FrontierSlotResult(index: idx, sessionId: session.id, reason: nil))
+            } catch let SpawnFailure.message(reason) {
+                slotResults.append(FrontierSlotResult(index: idx, sessionId: nil, reason: reason))
+            } catch {
+                slotResults.append(FrontierSlotResult(index: idx, sessionId: nil, reason: error.localizedDescription))
+            }
+        }
+        let response = CreateFrontierResponse(groupId: groupId, slots: slotResults)
+        // Cache for CM5 replay. Trim oldest entries when crossing 256.
+        frontierGroupIdempotency[req.clientRequestId] = (groupId, response, Date())
+        if frontierGroupIdempotency.count > 256 {
+            let cutoff = frontierGroupIdempotency.values
+                .sorted { $0.createdAt < $1.createdAt }
+                .prefix(64)
+                .map { $0.groupId }
+            frontierGroupIdempotency = frontierGroupIdempotency.filter {
+                !cutoff.contains($0.value.groupId)
+            }
+        }
+        frontierUpdateCounters[groupId] = 1
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(response) {
+            sendResponse(HTTPResponse(
+                status: 201, reason: "Created",
+                contentType: "application/json", body: body
+            ), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// POST /chat-sessions/frontier/:groupId/send — fan out the prompt
+    /// to every non-failed child. Each child is a regular chat session
+    /// so we reuse the existing /sessions/:id/send semantics by
+    /// dispatching to the underlying send logic per child.
+    private func handleFrontierSend(
+        request: HTTPRequest,
+        connection: NWConnection,
+        groupId: String
+    ) async {
+        guard let uuid = UUID(uuidString: groupId) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let children = registry.frontierGroupChildren(groupId: uuid)
+        guard !children.isEmpty else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let req = try? JSONDecoder().decode(SendPromptRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // Fan-out. Each child swallows + logs its own error so the
+        // others continue (D10 partial). Per-child results are
+        // observable via chat-subscribe WS frames on each session id;
+        // the aggregate HTTP response is just 202 Accepted.
+        for child in children {
+            Task { [weak self] in
+                await self?.forwardFrontierChildSend(session: child, text: req.text)
+            }
+        }
         sendResponse(HTTPResponse(
-            status: 501, reason: "Not Implemented",
-            contentType: "application/json", body: Data(body.utf8)
+            status: 202, reason: "Accepted",
+            contentType: "application/json",
+            body: Data("{\"ok\":true,\"childCount\":\(children.count)}".utf8)
         ), on: connection)
+        if let counter = frontierUpdateCounters[uuid] {
+            frontierUpdateCounters[uuid] = counter + 1
+        }
+    }
+
+    /// Best-effort send to one Frontier child. Mirrors the dispatch
+    /// inside handleSendPrompt (agentapi vs SDK vs tmux) but does NOT
+    /// touch the HTTP connection — Frontier fan-out caller already
+    /// returned a 202. Errors are logged + dropped.
+    private func forwardFrontierChildSend(session: AgentSession, text: String) async {
+        // agentapi (Gemini)
+        if session.geminiBackend == .agentapi,
+           let conversationId = session.antigravityConversationId {
+            do {
+                try await sendAntigravityMessage(
+                    session: session, conversationId: conversationId, content: text
+                )
+            } catch {
+                serverLogger.warning("frontier child gemini send failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
+        // SDK (Codex)
+        if session.kind == .chat && session.agent == .codex && session.codexChatBackend == .sdk {
+            do {
+                let cwd = session.effectiveCwd
+                if session.codexChatThreadId != nil {
+                    try CodexSubscriptionRelay.shared.forwardPrompt(
+                        sessionId: session.id,
+                        workingDirectory: cwd,
+                        prompt: text,
+                        threadId: session.codexChatThreadId,
+                        skipGitRepoCheck: true
+                    )
+                } else {
+                    _ = try CodexSubscriptionRelay.shared.start(
+                        session: session,
+                        workingDirectory: cwd,
+                        initialPrompt: text,
+                        threadId: nil,
+                        sandboxMode: "read-only",
+                        skipGitRepoCheck: true
+                    )
+                }
+            } catch {
+                serverLogger.warning("frontier child codex-sdk send failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
+        // CLI (Claude / Codex CLI)
+        guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+            serverLogger.warning("frontier child has no pane id — skipping send")
+            return
+        }
+        do {
+            let bytes = text.data(using: .utf8) ?? Data()
+            try await tmux.pasteBytes(paneId: paneId, bytes: bytes + Data([0x0D]))
+        } catch {
+            serverLogger.warning("frontier child tmux paste failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// POST /chat-sessions/frontier/:groupId/retry-slot — replace one
+    /// child session with a fresh spawn of the same provider/model.
+    /// Useful when one slot failed at create time (D10) and the user
+    /// wants to try again.
+    private func handleFrontierRetrySlot(
+        request: HTTPRequest,
+        connection: NWConnection,
+        groupId: String
+    ) async {
+        guard let uuid = UUID(uuidString: groupId),
+              let req = try? JSONDecoder().decode(RetryFrontierSlotRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let children = registry.frontierGroupChildren(groupId: uuid)
+        guard !children.isEmpty else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Find the existing child at this index (may exist with failed
+        // status, or may have been hard-deleted). Either way, look up
+        // the original slot spec from one of the surviving siblings'
+        // peer entries — we don't persist the slot spec separately, so
+        // we reconstruct it from the child's session record itself.
+        guard let existing = children.first(where: { $0.frontierChildIndex == req.index }) else {
+            sendResponse(HTTPResponse(
+                status: 404, reason: "Not Found",
+                contentType: "application/json",
+                body: Data(#"{"error":"slot_not_found","index":\#(req.index)}"#.utf8)
+            ), on: connection)
+            return
+        }
+        let slot = FrontierModelSlot(
+            provider: existing.agent,
+            model: existing.model,
+            codexChatBackend: existing.codexChatBackend
+        )
+        // Delete the old session (cleans up chat-cwd + chat store entry).
+        await teardownSDKChat(sessionId: existing.id)
+        if let wiring = sessionWiring.removeValue(forKey: existing.id) {
+            wiring.stop()
+        }
+        chatStoreRegistry.evict(sessionId: existing.id)
+        if existing.kind == .chat {
+            try? ChatCwdManager.remove(for: existing.id)
+        }
+        registry.delete(id: existing.id)
+        // Re-spawn with the same childIndex.
+        do {
+            let fresh = try await spawnFrontierChild(
+                groupId: uuid,
+                childIndex: req.index,
+                slot: slot
+            )
+            if let counter = frontierUpdateCounters[uuid] {
+                frontierUpdateCounters[uuid] = counter + 1
+            }
+            let result = FrontierSlotResult(index: req.index, sessionId: fresh.id, reason: nil)
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(result) {
+                sendResponse(HTTPResponse(
+                    status: 200, reason: "OK",
+                    contentType: "application/json", body: body
+                ), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch let SpawnFailure.message(reason) {
+            let result = FrontierSlotResult(index: req.index, sessionId: nil, reason: reason)
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(result) {
+                sendResponse(HTTPResponse(
+                    status: 200, reason: "OK (still failed)",
+                    contentType: "application/json", body: body
+                ), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// POST /chat-sessions/frontier/:groupId/pick-winner — archive the
+    /// non-winning children, return the winner's sessionId. The winner
+    /// becomes a regular Solo chat (still tagged with frontierGroupId so
+    /// history is preserved; the sidebar promotes it out of the group).
+    private func handlePickFrontierWinner(
+        request: HTTPRequest,
+        connection: NWConnection,
+        groupId: String
+    ) async {
+        guard let uuid = UUID(uuidString: groupId),
+              let req = try? JSONDecoder().decode(PickFrontierWinnerRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let children = registry.frontierGroupChildren(groupId: uuid)
+        guard let winner = children.first(where: { $0.frontierChildIndex == req.childIndex }) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Archive the losers. Existing archive path persists archivedAt
+        // and the sidebar's Show-Archived toggle keeps them reachable.
+        for child in children where child.id != winner.id {
+            registry.archive(id: child.id)
+        }
+        if let counter = frontierUpdateCounters[uuid] {
+            frontierUpdateCounters[uuid] = counter + 1
+        }
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(winner) {
+            sendResponse(HTTPResponse(
+                status: 200, reason: "OK",
+                contentType: "application/json", body: body
+            ), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Internal spawn dispatch shared by handlePostFrontier +
+    /// handleFrontierRetrySlot. Throws SpawnFailure.message on per-slot
+    /// failure so the caller can surface a per-slot reason string.
+    private enum SpawnFailure: Error {
+        case message(String)
+    }
+
+    private func spawnFrontierChild(
+        groupId: UUID,
+        childIndex: Int,
+        slot: FrontierModelSlot
+    ) async throws -> AgentSession {
+        switch slot.provider {
+        case .claude, .codex:
+            // Reuse the same plumbing as Solo chat: createChat → chat-cwd →
+            // spawn tmux (or SDK relay) → warm chat store. We don't need
+            // the full HTTP wrapper since we already have all the data.
+            let codexBackend: CodexChatBackend? = slot.provider == .codex
+                ? (slot.codexChatBackend ?? .sdk)
+                : nil
+            let session = registry.createChat(
+                provider: slot.provider,
+                model: slot.model,
+                chatCwd: "",
+                codexChatBackend: codexBackend,
+                frontierGroupId: groupId,
+                frontierChildIndex: childIndex
+            )
+            let chatCwd: String
+            do {
+                let url = try ChatCwdManager.ensure(for: session.id)
+                chatCwd = url.path
+            } catch {
+                registry.delete(id: session.id)
+                throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
+            }
+            registry.updateRuntime(
+                id: session.id, worktreePath: chatCwd,
+                tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
+            )
+            let updated = registry.session(id: session.id) ?? session
+            let argv = AgentSpawner.argv(for: updated)
+            if argv.isEmpty && updated.agent == .codex && updated.codexChatBackend == .sdk {
+                // SDK: warm store; sidecar starts on first send (per Phase 4.5).
+                _ = chatStoreRegistry.snapshotStore(for: updated)
+                return updated
+            }
+            if argv.isEmpty {
+                registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw SpawnFailure.message("agent_cli_not_found")
+            }
+            // CLI: spawn tmux. Best-effort — children that fail to spawn
+            // are surfaced as a slot failure, not a 500.
+            do {
+                try await tmux.start()
+                let window = try await tmux.newWindow(cwd: chatCwd, child: argv)
+                registry.updateRuntime(
+                    id: session.id, worktreePath: chatCwd,
+                    tmuxWindowId: window.windowId, tmuxPaneId: window.paneId, mode: .local
+                )
+                _ = chatStoreRegistry.snapshotStore(for: registry.session(id: session.id) ?? updated)
+                return registry.session(id: session.id) ?? updated
+            } catch {
+                registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw SpawnFailure.message("tmux_spawn_failed: \(error.localizedDescription)")
+            }
+        case .gemini:
+            // Delegate to the agentapi spawn flow. We can't reuse
+            // handlePostGeminiChatSession directly (it owns the
+            // connection write), but we lift the same body into a
+            // shared helper-style inline call here.
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let projectsDir = home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
+            let lsClient = LanguageServerClient()
+            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
+            let projects = await resolver.allProjects()
+            guard let projectId = projects.first?.id else {
+                throw SpawnFailure.message("antigravity_no_projects")
+            }
+            let session = registry.createChat(
+                provider: .gemini,
+                model: slot.model,
+                chatCwd: "",
+                frontierGroupId: groupId,
+                frontierChildIndex: childIndex
+            )
+            let chatCwd: String
+            do {
+                let url = try ChatCwdManager.ensure(for: session.id)
+                chatCwd = url.path
+            } catch {
+                registry.delete(id: session.id)
+                throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
+            }
+            registry.updateRuntime(
+                id: session.id, worktreePath: chatCwd,
+                tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
+            )
+            let modelTier = AgentapiModelTier.from(modelCatalogId: slot.model)
+            do {
+                let conversationIdString = try await lsClient.newConversation(
+                    modelTier: modelTier,
+                    prompt: "(starting Frontier child)",
+                    projectId: projectId
+                )
+                guard let conversationId = UUID(uuidString: conversationIdString) else {
+                    registry.delete(id: session.id)
+                    try? ChatCwdManager.remove(for: session.id)
+                    throw SpawnFailure.message("agentapi_bad_conversation_id")
+                }
+                registry.setAntigravityChatBinding(
+                    id: session.id, conversationId: conversationId, projectId: projectId
+                )
+                let updated = registry.session(id: session.id) ?? session
+                _ = chatStoreRegistry.snapshotStore(for: updated)
+                return updated
+            } catch let LanguageServerClientError.notRunning {
+                registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw SpawnFailure.message("antigravity_not_running")
+            } catch {
+                registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw SpawnFailure.message("agentapi_new_conversation_failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// v0.8 Phase 4.5: route a prompt for a Codex-SDK chat session to

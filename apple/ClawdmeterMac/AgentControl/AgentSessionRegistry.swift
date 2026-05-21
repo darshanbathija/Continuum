@@ -119,15 +119,26 @@ public final class AgentSessionRegistry: ObservableObject {
         effort: ReasoningEffort? = nil,
         geminiBackend: GeminiBackend? = nil,
         antigravityConversationId: UUID? = nil,
-        antigravityProjectId: String? = nil
+        antigravityProjectId: String? = nil,
+        frontierGroupId: UUID? = nil,
+        frontierChildIndex: Int? = nil
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
         nextEventSeqBySession[id] = 1
+        // v0.9: chat-mode Frontier children carry a slightly different
+        // display label so the sidebar can group them visually under the
+        // group's row. Defaults to the v0.8 "Chat — {Provider}" string.
+        let displayName: String = {
+            if let idx = frontierChildIndex {
+                return "Frontier #\(idx + 1) — \(AgentKindUI.displayName(for: provider))"
+            }
+            return "Chat — \(AgentKindUI.displayName(for: provider))"
+        }()
         let session = AgentSession(
             id: id,
             repoKey: nil,
-            repoDisplayName: "Chat — \(AgentKindUI.displayName(for: provider))",
+            repoDisplayName: displayName,
             agent: provider,
             model: model,
             goal: nil,
@@ -142,6 +153,8 @@ public final class AgentSessionRegistry: ObservableObject {
             mode: .local,
             effort: effort,
             kind: .chat,
+            frontierGroupId: frontierGroupId,
+            frontierChildIndex: frontierChildIndex,
             codexChatBackend: codexChatBackend,
             geminiBackend: geminiBackend,
             antigravityConversationId: antigravityConversationId,
@@ -150,6 +163,15 @@ public final class AgentSessionRegistry: ObservableObject {
         sessions.append(session)
         save()
         return session
+    }
+
+    /// v0.9 — read all sessions in a Frontier group, sorted by
+    /// `frontierChildIndex`. Used by the Frontier WS snapshotter +
+    /// HTTP handlers (send fan-out, retry-slot, pick-winner).
+    public func frontierGroupChildren(groupId: UUID) -> [AgentSession] {
+        sessions
+            .filter { $0.frontierGroupId == groupId }
+            .sorted { ($0.frontierChildIndex ?? Int.max) < ($1.frontierChildIndex ?? Int.max) }
     }
 
     /// v0.9 — patch the agentapi binding fields on an existing chat
