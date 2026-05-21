@@ -206,6 +206,18 @@ public final class AgentControlClient: ObservableObject {
                         body: SendPromptRequest(text: text, asFollowUp: asFollowUp))
     }
 
+    /// v0.8 QA F5: answer a CLI permission prompt (e.g. Codex's "Trust
+    /// this directory?"). The daemon dispatches the key sequence
+    /// corresponding to `optionId` and clears the published prompt on
+    /// the session's store. iOS UI uses this when the user taps an
+    /// option on `iOSPermissionPromptCard`.
+    public func respondToPermissionPrompt(sessionId: UUID, promptId: String, optionId: String) async {
+        await postBody(
+            path: "/sessions/\(sessionId.uuidString)/permission-respond",
+            body: PermissionRespondRequest(promptId: promptId, optionId: optionId)
+        )
+    }
+
     /// Upload raw image bytes to the daemon's per-session staging dir.
     /// The Mac writes them to `~/Library/Application Support/Clawdmeter/
     /// attachments/<sessionId>/<uuid>.<ext>` (or the Codex worktree's
@@ -579,6 +591,65 @@ public final class AgentControlClient: ObservableObject {
         } catch {
             self.lastError = error.localizedDescription
         }
+    }
+
+    // MARK: - v0.8 Chat tab
+
+    /// `POST /chat-sessions` — spawn a new chat-kind AgentSession. Gemini
+    /// returns 501 in v0.8 (deferred to v0.9 alongside Antigravity-via-agy);
+    /// the daemon error surfaces through `lastError` and `nil` return.
+    @MainActor
+    public func createChatSession(
+        provider: AgentKind,
+        model: String? = nil,
+        codexBackend: CodexChatBackend? = nil,
+        effort: ReasoningEffort? = nil
+    ) async -> AgentSession? {
+        let req = CreateChatSessionRequest(
+            provider: provider,
+            model: model,
+            effort: effort,
+            codexChatBackend: codexBackend
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(path: "/chat-sessions", method: "POST", body: body) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let session = try decoder.decode(AgentSession.self, from: data)
+            sessions.append(session)
+            return session
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// `GET /chat-providers` — capability matrix (per provider + Codex
+    /// backend sub-rows). Used by the Chat sidebar to gray disabled rows.
+    @MainActor
+    public func fetchChatProviders() async -> ChatProvidersResponse? {
+        guard let request = makeRequest(path: "/chat-providers", method: "GET") else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(ChatProvidersResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Subset of `sessions` filtered to chat sessions (kind=.chat). Used
+    /// by the Chat tab sidebar; the Code tab uses the inverse filter.
+    public var chatSessions: [AgentSession] {
+        sessions.filter { $0.kind == .chat && $0.archivedAt == nil }
     }
 
     @MainActor

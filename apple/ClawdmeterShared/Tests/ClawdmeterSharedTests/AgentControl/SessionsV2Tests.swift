@@ -247,7 +247,13 @@ final class SessionsV2Tests: XCTestCase {
         // UsageData.codexSDKModeActive (decodeIfPresent — back-compat).
         // No new endpoints or WS ops in v8; the field rides on the
         // existing /usage envelope.
-        XCTAssertEqual(AgentControlWireVersion.current, 8)
+        // Bumped 8 → 9 on 2026-05-21 (v0.8 Chat tab): adds
+        // POST /chat-sessions, /chat-sessions/frontier/*, GET /chat-providers,
+        // frontier-subscribe WS op; AgentSession schema v5 fields
+        // (kind, frontierGroupId, frontierChildIndex, codexChatBackend,
+        // codexChatThreadId, optional repoKey); chatMinimum/frontierMinimum/
+        // codexChatBackendMinimum = 9 gates.
+        XCTAssertEqual(AgentControlWireVersion.current, 9)
         XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
         XCTAssertEqual(AgentControlWireVersion.chatSubscribeMinimum, 5)
         XCTAssertEqual(AgentControlWireVersion.geminiMinimum, 6)

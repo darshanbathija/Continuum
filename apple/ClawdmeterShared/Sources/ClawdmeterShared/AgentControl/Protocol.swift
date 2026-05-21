@@ -52,7 +52,14 @@ public enum AgentControlWireVersion {
     /// or WS ops in v8 — the SDK observation mode rides on the existing
     /// `/usage` envelope; the field tells iOS to render "· SDK mode" on
     /// the Codex analytics subtitle.
-    public static let current: Int = 8
+    /// v9 (2026-05-21) Chat tab: new endpoints (POST /chat-sessions,
+    /// POST /chat-sessions/frontier/*, GET /chat-providers) + Frontier
+    /// WS op (`frontier-subscribe`). AgentSession schema v5 adds
+    /// optional `kind`, `frontierGroupId`, `frontierChildIndex`,
+    /// `codexChatBackend`, `codexChatThreadId`; `repoKey` becomes
+    /// optional. New `chatMinimum/frontierMinimum/codexChatBackendMinimum`
+    /// = 9 gates. iOS Chat tab gates on `serverWireVersion >= chatMinimum`.
+    public static let current: Int = 9
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
@@ -79,6 +86,23 @@ public enum AgentControlWireVersion {
     /// with a v8 iOS hide the "· SDK mode" subtitle and assume Disk
     /// mode by default.
     public static let codexSDKMinimum: Int = 8
+
+    /// Minimum wire version that supports the Chat tab endpoints
+    /// (`POST /chat-sessions`, `GET /chat-providers`, schema v5 fields).
+    /// iOS hides the Chat tab when `serverWireVersion < this`.
+    public static let chatMinimum: Int = 9
+
+    /// Minimum wire version that supports Frontier compare endpoints
+    /// (`POST /chat-sessions/frontier/*`, `frontier-subscribe` WS op).
+    /// Daemon endpoints ship in v0.8 for forward-compat; the Mac/iOS UI
+    /// lands in v0.9 alongside the Antigravity (agy) replacement for
+    /// gemini CLI.
+    public static let frontierMinimum: Int = 9
+
+    /// Minimum wire version that supports the per-session Codex chat
+    /// backend choice (`AgentSession.codexChatBackend`). Older Macs
+    /// ignore the per-request override.
+    public static let codexChatBackendMinimum: Int = 9
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -127,6 +151,27 @@ public enum AgentControlWireVersion {
     public static func supportsCodexSDK(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= codexSDKMinimum
+    }
+
+    /// Whether the paired Mac is wire v9+ and therefore exposes the
+    /// Chat tab endpoints. iOS gates Chat tab visibility on this.
+    public static func supportsChat(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= chatMinimum
+    }
+
+    /// Whether the paired Mac is wire v9+ and therefore exposes the
+    /// Frontier endpoints. iOS gates the (v0.9) Frontier UI on this.
+    public static func supportsFrontier(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= frontierMinimum
+    }
+
+    /// Whether the paired Mac is wire v9+ and therefore honors the
+    /// per-request `codexChatBackend` override on `POST /chat-sessions`.
+    public static func supportsCodexChatBackend(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= codexChatBackendMinimum
     }
 }
 
@@ -333,11 +378,21 @@ public struct ModelCatalog: Codable, Sendable {
             // list so `ModelCatalog.bundled.gemini.first?.id` picks it up
             // as the default for new sessions. Pricing row already in
             // pricing.json under the same id.
-            ModelCatalogEntry(id: "gemini-3.5-flash",      provider: .gemini, displayName: "Gemini 3.5 Flash",      cliAlias: "flash-3.5", supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Antigravity 2 default", badge: "New"),
-            ModelCatalogEntry(id: "gemini-3-pro",          provider: .gemini, displayName: "Gemini 3 Pro",          cliAlias: "pro",       supportsThinking: true,  supportsEffort: false, contextWindow: 2_000_000, recommendedFor: "Deep reasoning",       badge: "Pro"),
-            ModelCatalogEntry(id: "gemini-3.1-pro-high",   provider: .gemini, displayName: "Gemini 3.1 Pro (High)", cliAlias: "pro-high",  supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Deep reasoning",       badge: "High"),
-            ModelCatalogEntry(id: "gemini-3.1-pro-low",    provider: .gemini, displayName: "Gemini 3.1 Pro (Low)",  cliAlias: "pro",       supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Most work",            badge: nil),
-            ModelCatalogEntry(id: "gemini-3-flash",        provider: .gemini, displayName: "Gemini 3 Flash",        cliAlias: "flash",     supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Fast iteration",       badge: "Fast"),
+            ModelCatalogEntry(id: "gemini-3.5-flash",          provider: .gemini, displayName: "Gemini 3.5 Flash",            cliAlias: "flash-3.5",          supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Antigravity 2 default",  badge: "New"),
+            // v0.7.17: Gemini 3.5 Flash's "Extended" thinking mode —
+            // matches the Standard/Extended picker Google ships in the
+            // Antigravity UI. Same base model, but the CLI passes the
+            // `-thinking` suffix so the API enables the higher
+            // thinking_budget configuration. Standard = 0 budget,
+            // Extended ≈ 24576 tokens of thinking before the answer
+            // turn (per Google's published thinking_config spec).
+            ModelCatalogEntry(id: "gemini-3.5-flash-thinking", provider: .gemini, displayName: "Gemini 3.5 Flash (Thinking)", cliAlias: "flash-3.5-thinking", supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Complex problem solving", badge: "Thinking"),
+            ModelCatalogEntry(id: "gemini-3-pro",              provider: .gemini, displayName: "Gemini 3 Pro",                cliAlias: "pro",                supportsThinking: true,  supportsEffort: false, contextWindow: 2_000_000, recommendedFor: "Deep reasoning",         badge: "Pro"),
+            ModelCatalogEntry(id: "gemini-3.1-pro-high",       provider: .gemini, displayName: "Gemini 3.1 Pro (High)",       cliAlias: "pro-high",           supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Deep reasoning",         badge: "High"),
+            ModelCatalogEntry(id: "gemini-3.1-pro-low",        provider: .gemini, displayName: "Gemini 3.1 Pro (Low)",        cliAlias: "pro",                supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Most work",              badge: nil),
+            ModelCatalogEntry(id: "gemini-3-flash",            provider: .gemini, displayName: "Gemini 3 Flash",              cliAlias: "flash",              supportsThinking: false, supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Fast iteration",         badge: "Fast"),
+            // v0.7.17: same Standard/Extended split as 3.5 Flash above.
+            ModelCatalogEntry(id: "gemini-3-flash-thinking",   provider: .gemini, displayName: "Gemini 3 Flash (Thinking)",   cliAlias: "flash-thinking",     supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Complex problem solving", badge: "Thinking"),
         ],
         updatedAt: Date(timeIntervalSince1970: 1747353600) // 2026-05-15
     )
@@ -584,6 +639,45 @@ public enum SessionMode: String, Codable, Hashable, Sendable, CaseIterable {
     case cloud
 }
 
+/// Top-level session category (v0.8 schema v5). Distinguishes coding
+/// sessions (the existing v0.7.x flow that owns a repo + worktree) from
+/// chat sessions (the new v0.8 Chat tab — empty cwd, plan-mode, no repo).
+/// Default `.code` on decode so v3/v4 sessions.json files round-trip
+/// unchanged.
+public enum SessionKind: String, Codable, Hashable, Sendable, CaseIterable {
+    case code
+    case chat
+
+    /// Lenient decoder. Unknown raws (forward-compat) fall back to `.code`
+    /// rather than throwing.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = SessionKind(rawValue: raw) ?? .code
+    }
+}
+
+/// Per-session backend choice for Codex chat (v0.8 schema v5 + RE1
+/// resolution). Customer-selectable; default is `.sdk` because the SDK
+/// surfaces typed events + multi-subscriber + iOS handoff. CLI is the
+/// uniform-with-Claude fallback for users who hit SDK provisioning
+/// trouble or just prefer the tmux path.
+///
+/// **Per-session pinning**: the backend chosen at spawn time is stored on
+/// the AgentSession and used for the lifetime of that chat. Flipping the
+/// global default in Settings does not migrate live sessions.
+public enum CodexChatBackend: String, Codable, Hashable, Sendable, CaseIterable {
+    case sdk
+    case cli
+
+    /// Lenient decoder. Unknown raws fall back to `.sdk` (the default).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = CodexChatBackend(rawValue: raw) ?? .sdk
+    }
+}
+
 // MARK: - Multi-terminal (G12)
 
 /// One tmux pane belonging to a session. A session can own N panes — the
@@ -662,9 +756,17 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// Server-assigned UUID. Used as `Identifiable.id` and as the URL
     /// segment in `/sessions/:id/*` endpoints.
     public let id: UUID
-    /// The repo (canonical) the session is rooted in.
-    public let repoKey: String
+    /// The repo (canonical) the session is rooted in. **Optional in
+    /// schema v5**: chat sessions (`kind == .chat`) leave this nil because
+    /// they run in an empty chat-cwd, not in a git repo. Code sessions
+    /// (`kind == .code`) always carry a non-nil repoKey. The spawn
+    /// dispatcher pattern `session.worktreePath ?? session.repoKey` (~9
+    /// call sites in AgentControlServer.swift) resolves to the chat-cwd
+    /// for chat sessions because `worktreePath` is populated there.
+    public let repoKey: String?
     /// Display label for the repo (denormalized for cheap list rendering).
+    /// For chat sessions, set to a synthetic label like "Chat — {Provider}"
+    /// at creation; `displayLabel` still prefers `customName` when set.
     public let repoDisplayName: String
     /// Which agent CLI is running.
     public let agent: AgentKind
@@ -737,9 +839,39 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// at the daemon's rename handler.
     public let customName: String?
 
+    // MARK: - Sessions v2 schema v5 additions (v0.8 Chat tab)
+    //
+    // All optional + decoder-tolerant so v3/v4 sessions.json files
+    // decode cleanly. v0.8 introduces the Chat tab; chat sessions
+    // (`kind == .chat`) use these fields, code sessions leave them nil.
+
+    /// Top-level session category. Defaults to `.code` on v3/v4 decode for
+    /// back-compat. Chat sessions (`.chat`) ride the same AgentSession
+    /// shape but with `repoKey: nil` and `worktreePath` set to the
+    /// chat-cwd absolute path.
+    public let kind: SessionKind
+    /// When this chat is one of three Frontier siblings, the shared group
+    /// id. Nil for solo chats and all code sessions. Frontier UI ships in
+    /// v0.9; daemon endpoints + WS channel ship in v0.8 for forward-compat.
+    public let frontierGroupId: UUID?
+    /// 0/1/2 child index within a Frontier group. Pinned at spawn.
+    public let frontierChildIndex: Int?
+    /// For `agent == .codex && kind == .chat`, which backend spawned this
+    /// session. Pinned at spawn-time per RE1; `nil` for non-Codex / non-chat
+    /// sessions. v0.9 forward-compat: a future flip of the global default
+    /// (PairingSettings.defaultCodexChatBackend) does not migrate live
+    /// sessions; this field captures the irreversible spawn-time choice.
+    public let codexChatBackend: CodexChatBackend?
+    /// For Codex-SDK chat sessions, the server-side threadId returned by
+    /// the SDK on first turn. Persisted across DG3 idle-evictions so the
+    /// daemon can call `CodexSubscriptionRelay.start(threadId:)` on
+    /// reopening and reconstruct the same conversation (NEW-T13 verified).
+    /// Nil for CLI chat and code sessions.
+    public let codexChatThreadId: String?
+
     public init(
         id: UUID,
-        repoKey: String,
+        repoKey: String?,
         repoDisplayName: String,
         agent: AgentKind,
         model: String?,
@@ -760,7 +892,12 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         effort: ReasoningEffort? = nil,
         abPairSessionId: UUID? = nil,
         abPairDecidedAt: Date? = nil,
-        customName: String? = nil
+        customName: String? = nil,
+        kind: SessionKind = .code,
+        frontierGroupId: UUID? = nil,
+        frontierChildIndex: Int? = nil,
+        codexChatBackend: CodexChatBackend? = nil,
+        codexChatThreadId: String? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -785,12 +922,19 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.abPairSessionId = abPairSessionId
         self.abPairDecidedAt = abPairDecidedAt
         self.customName = customName
+        self.kind = kind
+        self.frontierGroupId = frontierGroupId
+        self.frontierChildIndex = frontierChildIndex
+        self.codexChatBackend = codexChatBackend
+        self.codexChatThreadId = codexChatThreadId
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
-        self.repoKey = try c.decode(String.self, forKey: .repoKey)
+        // v5: repoKey is optional (chat sessions have nil). v3/v4 readers
+        // wrote a non-nil String here; decodeIfPresent handles both.
+        self.repoKey = try c.decodeIfPresent(String.self, forKey: .repoKey)
         self.repoDisplayName = try c.decode(String.self, forKey: .repoDisplayName)
         self.agent = try c.decode(AgentKind.self, forKey: .agent)
         self.model = try c.decodeIfPresent(String.self, forKey: .model)
@@ -821,6 +965,14 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         // so v3 sessions.json files decode cleanly (the field just stays
         // nil).
         self.customName = (try? c.decodeIfPresent(String.self, forKey: .customName)) ?? nil
+        // v0.8 schema v5 additions: kind, frontierGroupId, frontierChildIndex,
+        // codexChatBackend, codexChatThreadId. All optional + decoder-tolerant
+        // so v3/v4 sessions.json files decode unchanged (defaults below).
+        self.kind = (try? c.decodeIfPresent(SessionKind.self, forKey: .kind)) ?? .code
+        self.frontierGroupId = (try? c.decodeIfPresent(UUID.self, forKey: .frontierGroupId)) ?? nil
+        self.frontierChildIndex = (try? c.decodeIfPresent(Int.self, forKey: .frontierChildIndex)) ?? nil
+        self.codexChatBackend = (try? c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)) ?? nil
+        self.codexChatThreadId = (try? c.decodeIfPresent(String.self, forKey: .codexChatThreadId)) ?? nil
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -834,6 +986,19 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         return repoDisplayName
     }
 
+    /// The session's effective working directory — what every filesystem,
+    /// git, tmux, and JSONL operation needs. For code sessions: the
+    /// worktree if `useWorktree` was on at create, else the repo root.
+    /// For chat sessions: the chat-cwd in `worktreePath` (always set
+    /// at spawn). The daemon enforces the invariant that at least one
+    /// of (worktreePath, repoKey) is non-nil at persistence time;
+    /// preconditionFailure here catches any drift in that invariant.
+    public var effectiveCwd: String {
+        if let wt = worktreePath, !wt.isEmpty { return wt }
+        if let rk = repoKey, !rk.isEmpty { return rk }
+        preconditionFailure("AgentSession \(id) has neither worktreePath nor repoKey — daemon spawned an invalid session (kind=\(kind))")
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, repoKey, repoDisplayName, agent, model, goal,
              worktreePath, tmuxWindowId, tmuxPaneId,
@@ -841,7 +1006,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              mode, archivedAt,
              terminalPanes, scheduledFollowUps, parentSessionId,
              effort, abPairSessionId, abPairDecidedAt,
-             customName
+             customName,
+             kind, frontierGroupId, frontierChildIndex,
+             codexChatBackend, codexChatThreadId
     }
 }
 
@@ -1252,6 +1419,14 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
     /// Empty for non-Codex sessions and for Codex sessions that
     /// haven't received a todo_list event yet.
     public let codexTodos: [CodexTodoItem]
+    /// v0.8 QA: a CLI permission prompt that needs user input —
+    /// e.g. Codex's "Do you trust this directory?", Claude's per-tool
+    /// approval requests. The Mac/iOS chat UI renders this as an
+    /// AskUserQuestion-style card with option buttons; selecting one
+    /// POSTs to `/sessions/:id/permission-respond` and the daemon
+    /// dispatches the appropriate keys to the CLI's TUI. Nil when no
+    /// prompt is pending.
+    public let pendingPermissionPrompt: PendingPermissionPrompt?
     public let totalInputTokens: Int
     public let totalOutputTokens: Int
     public let cacheReadTokens: Int
@@ -1266,6 +1441,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         sourceEntries: [SourceEntry],
         artifactEntries: [ArtifactEntry],
         codexTodos: [CodexTodoItem] = [],
+        pendingPermissionPrompt: PendingPermissionPrompt? = nil,
         totalInputTokens: Int,
         totalOutputTokens: Int,
         cacheReadTokens: Int = 0,
@@ -1279,6 +1455,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         self.sourceEntries = sourceEntries
         self.artifactEntries = artifactEntries
         self.codexTodos = codexTodos
+        self.pendingPermissionPrompt = pendingPermissionPrompt
         self.totalInputTokens = totalInputTokens
         self.totalOutputTokens = totalOutputTokens
         self.cacheReadTokens = cacheReadTokens
@@ -1292,6 +1469,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case sessionId, items, planSteps, sourceEntries, artifactEntries
         case codexTodos
+        case pendingPermissionPrompt
         case totalInputTokens, totalOutputTokens, cacheReadTokens, cacheCreationTokens
         case lastEventAt, updateCounter
     }
@@ -1304,12 +1482,85 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         self.sourceEntries = try c.decode([SourceEntry].self, forKey: .sourceEntries)
         self.artifactEntries = try c.decode([ArtifactEntry].self, forKey: .artifactEntries)
         self.codexTodos = try c.decodeIfPresent([CodexTodoItem].self, forKey: .codexTodos) ?? []
+        self.pendingPermissionPrompt = try c.decodeIfPresent(PendingPermissionPrompt.self, forKey: .pendingPermissionPrompt)
         self.totalInputTokens = try c.decode(Int.self, forKey: .totalInputTokens)
         self.totalOutputTokens = try c.decode(Int.self, forKey: .totalOutputTokens)
         self.cacheReadTokens = try c.decodeIfPresent(Int.self, forKey: .cacheReadTokens) ?? 0
         self.cacheCreationTokens = try c.decodeIfPresent(Int.self, forKey: .cacheCreationTokens) ?? 0
         self.lastEventAt = try c.decodeIfPresent(Date.self, forKey: .lastEventAt)
         self.updateCounter = try c.decode(UInt64.self, forKey: .updateCounter)
+    }
+}
+
+/// v0.8 QA: a CLI-side permission prompt surfaced to the user. The card
+/// renders the title + detail and one button per option; the recommended
+/// option is highlighted. Identifies are scoped per-session — the same
+/// physical CLI prompt re-detected in the pane gets the same id so the
+/// UI doesn't double-render.
+public struct PendingPermissionPrompt: Codable, Sendable, Hashable, Identifiable {
+    public let id: String
+    /// One-line question shown as the card title (e.g. "Trust this directory?").
+    public let title: String
+    /// Optional longer body (e.g. the chat-cwd path or the tool that's
+    /// being requested). Nil for prompts where the title is sufficient.
+    public let detail: String?
+    /// Short chip label shown above the title — matches the
+    /// AskUserQuestion "header" field (e.g. "Codex trust", "Claude tool").
+    public let header: String
+    public let options: [PermissionOption]
+    public let surfacedAt: Date
+
+    public init(
+        id: String,
+        title: String,
+        detail: String? = nil,
+        header: String,
+        options: [PermissionOption],
+        surfacedAt: Date = Date()
+    ) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.header = header
+        self.options = options
+        self.surfacedAt = surfacedAt
+    }
+}
+
+public struct PermissionOption: Codable, Sendable, Hashable, Identifiable {
+    public let id: String
+    public let label: String
+    public let description: String?
+    public let isRecommended: Bool
+    public let isDestructive: Bool
+
+    public init(
+        id: String,
+        label: String,
+        description: String? = nil,
+        isRecommended: Bool = false,
+        isDestructive: Bool = false
+    ) {
+        self.id = id
+        self.label = label
+        self.description = description
+        self.isRecommended = isRecommended
+        self.isDestructive = isDestructive
+    }
+}
+
+/// Request body for `POST /sessions/:id/permission-respond`. The daemon
+/// looks up the pending prompt for the session, validates that
+/// `promptId` matches (rejects stale clicks if the prompt was already
+/// answered), maps `optionId` to the CLI-specific key sequence, sends
+/// it via tmux, and clears the pending prompt on the session's store.
+public struct PermissionRespondRequest: Codable, Sendable {
+    public let promptId: String
+    public let optionId: String
+
+    public init(promptId: String, optionId: String) {
+        self.promptId = promptId
+        self.optionId = optionId
     }
 }
 
@@ -1846,5 +2097,228 @@ public struct WireTokenUsage: Codable, Equatable, Sendable {
         self.thoughts = thoughts
         self.cached = cached
         self.isEstimate = isEstimate
+    }
+}
+
+// MARK: - Chat tab (v0.8 — wire v9)
+
+/// `POST /chat-sessions` request body. Spawns a new chat session
+/// (`AgentSession.kind == .chat`) with an empty per-session chat-cwd.
+/// `effort` is optional and only honored by Claude/Codex; gemini chat
+/// returns 501 in v0.8 until the Antigravity (agy) replacement lands
+/// in v0.9. `codexChatBackend` overrides the server-side default per
+/// session; nil means "use the pairing default" (RE1 SDK).
+public struct CreateChatSessionRequest: Codable, Sendable {
+    public let provider: AgentKind
+    public let model: String?
+    public let effort: ReasoningEffort?
+    public let codexChatBackend: CodexChatBackend?
+
+    public init(
+        provider: AgentKind,
+        model: String? = nil,
+        effort: ReasoningEffort? = nil,
+        codexChatBackend: CodexChatBackend? = nil
+    ) {
+        self.provider = provider
+        self.model = model
+        self.effort = effort
+        self.codexChatBackend = codexChatBackend
+    }
+}
+
+/// `POST /chat-sessions/frontier` request body. `clientRequestId`
+/// enables 60s idempotency-keyed dedup per CM5 — retries with the same
+/// id return the existing group instead of spawning duplicates. `models`
+/// is the per-slot model list (2-3 entries in v0.8; v0.9 ships full
+/// 3-pane UI once Gemini joins via agy).
+public struct CreateFrontierRequest: Codable, Sendable {
+    public let clientRequestId: UUID
+    public let models: [FrontierModelSlot]
+
+    public init(clientRequestId: UUID, models: [FrontierModelSlot]) {
+        self.clientRequestId = clientRequestId
+        self.models = models
+    }
+}
+
+/// One slot in a Frontier group spawn request — the provider + model +
+/// optional Codex backend choice for that pane.
+public struct FrontierModelSlot: Codable, Sendable {
+    public let provider: AgentKind
+    public let model: String?
+    public let codexChatBackend: CodexChatBackend?
+
+    public init(
+        provider: AgentKind,
+        model: String? = nil,
+        codexChatBackend: CodexChatBackend? = nil
+    ) {
+        self.provider = provider
+        self.model = model
+        self.codexChatBackend = codexChatBackend
+    }
+}
+
+/// `POST /chat-sessions/frontier` response. Per-slot results (E2):
+/// each spawn attempt reports ok or failed independently so a partial
+/// Frontier (D10) returns the live slots + the failure reasons in one
+/// shot. `groupId` is consistent across retries with the same
+/// `clientRequestId` (CM5 idempotency).
+public struct CreateFrontierResponse: Codable, Sendable {
+    public let groupId: UUID
+    public let slots: [FrontierSlotResult]
+
+    public init(groupId: UUID, slots: [FrontierSlotResult]) {
+        self.groupId = groupId
+        self.slots = slots
+    }
+}
+
+/// One slot's spawn outcome within a Frontier group.
+public struct FrontierSlotResult: Codable, Sendable {
+    public let index: Int
+    /// .ok or .failed — discriminated via `sessionId` (set on ok) vs
+    /// `reason` (set on failed).
+    public let sessionId: UUID?
+    public let reason: String?
+
+    public init(index: Int, sessionId: UUID? = nil, reason: String? = nil) {
+        self.index = index
+        self.sessionId = sessionId
+        self.reason = reason
+    }
+
+    public var isOK: Bool { sessionId != nil }
+}
+
+/// `POST /chat-sessions/frontier/:groupId/retry-slot` request body.
+/// Re-spawns a failed slot per D10 retry affordance.
+public struct RetryFrontierSlotRequest: Codable, Sendable {
+    public let index: Int
+
+    public init(index: Int) {
+        self.index = index
+    }
+}
+
+/// `POST /chat-sessions/frontier/:groupId/pick-winner` request body.
+/// Forks the chosen child into a fresh Solo chat seeded with that
+/// child's transcript. Reuses the existing A/B-pair pick-winner pattern.
+public struct PickFrontierWinnerRequest: Codable, Sendable {
+    public let childIndex: Int
+
+    public init(childIndex: Int) {
+        self.childIndex = childIndex
+    }
+}
+
+/// `frontier-subscribe` WS envelope — typed snapshot per D8 + Codex #5.
+/// Emitted on every debounce tick (100ms, same as chat-subscribe). Each
+/// envelope is self-contained; consumers replace their state with the
+/// latest snapshot rather than diff-applying events.
+public struct FrontierGroupSnapshot: Codable, Sendable {
+    public let groupId: UUID
+    /// Monotonic counter; advances on any child update. Lets the client
+    /// debounce its own UI work if it wants.
+    public let updateCounter: Int
+    public let children: [FrontierChild]
+
+    public init(groupId: UUID, updateCounter: Int, children: [FrontierChild]) {
+        self.groupId = groupId
+        self.updateCounter = updateCounter
+        self.children = children
+    }
+}
+
+/// One child entry inside a `FrontierGroupSnapshot`.
+public struct FrontierChild: Codable, Sendable {
+    public let childIndex: Int
+    public let sessionId: UUID
+    public let modelSlug: String
+    /// Nil when the child failed to spawn (D10 partial Frontier).
+    public let snapshot: WireChatSnapshot?
+    public let status: FrontierChildStatus
+
+    public init(
+        childIndex: Int,
+        sessionId: UUID,
+        modelSlug: String,
+        snapshot: WireChatSnapshot? = nil,
+        status: FrontierChildStatus
+    ) {
+        self.childIndex = childIndex
+        self.sessionId = sessionId
+        self.modelSlug = modelSlug
+        self.snapshot = snapshot
+        self.status = status
+    }
+}
+
+/// Per-child status in a Frontier group. Lenient decode for forward-compat.
+public enum FrontierChildStatus: String, Codable, Hashable, Sendable, CaseIterable {
+    case pending
+    case streaming
+    case complete
+    case failed
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = FrontierChildStatus(rawValue: raw) ?? .pending
+    }
+}
+
+/// `GET /chat-providers` response. Per DG4 capability probe + CM3
+/// observer state. Codex has two sub-rows (sdk + cli); Gemini is
+/// hardcoded `available: false, reason: "v0.9"` until Antigravity
+/// (agy) ships.
+public struct ChatProvidersResponse: Codable, Sendable {
+    public let providers: [ChatProviderEntry]
+
+    public init(providers: [ChatProviderEntry]) {
+        self.providers = providers
+    }
+}
+
+/// One row in `ChatProvidersResponse`. For Codex, two entries (one per
+/// backend) appear; for Claude/Gemini, one entry each.
+public struct ChatProviderEntry: Codable, Sendable {
+    public let provider: AgentKind
+    /// For Codex: the backend variant this row describes. Nil for
+    /// non-Codex.
+    public let codexBackend: CodexChatBackend?
+    /// True when the binary / sidecar is present and reachable.
+    public let available: Bool
+    /// True when the OAuth tokens are present and valid (per the CM3
+    /// observer's last check).
+    public let authenticated: Bool
+    /// True when DG1 + DG4 capability probe passed (no FS mutation,
+    /// no shell exec, no network beyond provider; auth file present;
+    /// transcript parses to expected shape).
+    public let capabilityProbePassed: Bool
+    /// ISO8601 timestamp of the last probe run, or nil if never probed.
+    public let lastProbedAt: Date?
+    /// Optional reason string for `available: false` rows. E.g.
+    /// "v0.9" (Gemini), "Re-authenticate via `codex login`",
+    /// "Codex SDK not provisioned — Toggle in Settings".
+    public let reason: String?
+
+    public init(
+        provider: AgentKind,
+        codexBackend: CodexChatBackend? = nil,
+        available: Bool,
+        authenticated: Bool,
+        capabilityProbePassed: Bool,
+        lastProbedAt: Date? = nil,
+        reason: String? = nil
+    ) {
+        self.provider = provider
+        self.codexBackend = codexBackend
+        self.available = available
+        self.authenticated = authenticated
+        self.capabilityProbePassed = capabilityProbePassed
+        self.lastProbedAt = lastProbedAt
+        self.reason = reason
     }
 }

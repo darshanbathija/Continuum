@@ -4,6 +4,321 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.8.0 build 66] - 2026-05-21
+
+### Added
+
+- **New Chat tab on iOS + Mac.** Non-coding chat with Claude or Codex
+  via your existing subscription auth (Anthropic Pro/Max or ChatGPT
+  Plus/Pro) — no API tokens, no per-token billing. Each chat runs
+  in plan-mode in a fresh empty cwd at
+  `~/Library/Application Support/Clawdmeter/chat-sessions/<uuid>/`,
+  so no filesystem mutation, no shell exec, no network beyond the
+  provider. iOS tab order is **Chat / Analytics / Code**; Mac dashboard
+  gains a `Chat` tab next to `Code`.
+
+- **Codex chat backend choice — SDK or CLI, per-session.** New
+  Settings-driven default (`SDK` recommended, matches the existing
+  `Codex SDK observation mode` provisioning toggle). Per-chat
+  override at create time. SDK backend uses
+  `@openai/codex-sdk` through `CodexSubscriptionRelay` —
+  multi-subscriber Combine, typed events, server-side thread state
+  that survives evict (NEW-T13 spike verified `op:resume`
+  reconstructs history). CLI backend runs `codex --sandbox read-only`
+  in a tmux pane — uniform with Claude chat. The backend choice is
+  pinned to the AgentSession at spawn time so resume + future
+  re-opens always use the original backend even if the global
+  default flips later.
+
+- **Wire protocol v8 → v9.** Additive bump with new minimums:
+  `chatMinimum = 9` (gates POST `/chat-sessions`, GET
+  `/chat-providers`, schema v5 fields), `frontierMinimum = 9` (gates
+  forward-compat Frontier endpoints), `codexChatBackendMinimum = 9`
+  (gates the per-request backend override). All prior minimums
+  unchanged. New helpers
+  `supportsChat/supportsFrontier/supportsCodexChatBackend` mirror the
+  `supportsAntigravityPlan` pattern. iOS Chat tab gates on
+  `serverWireVersion >= chatMinimum` and surfaces
+  "Update Clawdmeter on Mac" on older daemons.
+
+- **Schema v4 → v5.** `AgentSession` gains five optional fields —
+  `kind` (`.code` default; `.chat` for the Chat tab), `frontierGroupId`,
+  `frontierChildIndex`, `codexChatBackend`, `codexChatThreadId` —
+  plus `repoKey` flips from `String` to `String?` (chat sessions run
+  in an empty chat-cwd, not a git repo). v3 and v4 `sessions.json`
+  files decode cleanly into v5 via the existing `decodeIfPresent`
+  pattern; round-trip tests cover both directions.
+
+- **New daemon endpoints.** `POST /chat-sessions`, `GET /chat-providers`
+  (per-provider availability + auth state; Codex carries `sdk` and
+  `cli` sub-rows; Gemini hardcoded `available: false, reason: "v0.9"`
+  until Antigravity replacement ships). Frontier endpoints
+  (`POST /chat-sessions/frontier/*`) ship as 501 stubs in v0.8 for
+  forward-compat — full UI lands in v0.9 with the agy + Gemini-chat
+  bundle so the Royal Frontier ships as the original 3-pane design.
+
+### Changed
+
+- **Nav reshuffle on iOS.** The standalone "Live" tab is dissolved
+  into the Analytics tab's header (`LiveGaugesHeader`) — the same
+  3-way provider toggle + gauges, just embedded above the analytics
+  charts. Frees the tab slot for Chat. "Sessions" tab renamed to
+  "Code" on iOS + Mac dashboard + Mac workspace sidebar header.
+  Mac Settings sub-tab "Sessions" stays (it's settings-related).
+
+- **`AgentSession.repoKey` optional.** Chat sessions have no repo.
+  Migrated 9 cwd-resolution sites across `AgentControlServer.swift`
+  to a new `AgentSession.effectiveCwd` helper (precondition-fails
+  loudly if daemon ever creates an invalid session). Handlers that
+  read `repoKey` directly (autopilot trust, Antigravity Plan,
+  WorktreeManager.delete) now gate on `session.kind == .code` and
+  short-circuit chat sessions where the action doesn't apply.
+
+- **DELETE `/sessions/:id` is kind-aware.** Code sessions still go
+  through `WorktreeManager.delete` (which requires a clean git status
+  — chat-cwds aren't git repos and would have thrown). Chat sessions
+  cleanly remove their `chat-sessions/<uuid>/` directory via
+  `ChatCwdManager.remove()`. SDK chat sessions additionally tear down
+  the `CodexSubscriptionRelay` sidecar + `CodexSDKEventIngestor` sink.
+
+### Fixed
+
+- **`AgentSession.with(...)` helper preserves all v5 fields on
+  mutation.** Before this fix, any `updateStatus` / `setPlanText` /
+  similar call on a chat session would have silently converted it
+  back to a code session because the v5 fields fell back to their
+  init defaults. Now the helper passes through `kind`,
+  `frontierGroupId`, `frontierChildIndex`, `codexChatBackend`,
+  `codexChatThreadId` unchanged. New `setCodexChatThreadId(id:threadId:)`
+  registry method lets the SDK ingestor persist the threadId after
+  the first `thread.started` event for resume-after-evict.
+
+### Hardening (post-review)
+
+- **Codex CLI cross-rollout contamination** — `newestCodexJSONL()`
+  was returning the absolute newest rollout under `~/.codex/sessions/`,
+  so any concurrent Codex run (another chat, another worktree, manual
+  `codex` in Terminal) would swap its transcript into the Chat tab.
+  New `newestCodexJSONLMatching(cwd:after:)` peeks each rollout's
+  `session_meta.cwd` and only accepts ones whose cwd matches the
+  session AND whose mtime is ≥ `createdAt`.
+- **Permission continuation leaked on delete.** End-chat while a trust
+  prompt is on screen now wakes the daemon-side continuation via a
+  `cancelledPermissionOptionId` sentinel before the session is torn
+  down, instead of leaving the warmup task parked forever.
+- **Idle eviction now refuses to drop a store with a pending
+  permission prompt** (`pendingPermissionPrompt != nil`), so a chat
+  that trust-prompts and then sits idle 5min keeps the prompt's
+  `@Published` value alive and the next send doesn't hang on a
+  vanished continuation.
+- **`handleDeleteSession` evicts the chat-store registry entry**
+  alongside the registry-record delete, so the store doesn't linger
+  until the next sweep tick.
+- **Codex SDK sidecar termination** — process-side
+  `terminationHandler` now clears the active-sidecar map on natural
+  EOF in addition to the explicit `stop()` path.
+- **Permission-prompt id mismatch** — `/permission-respond` validates
+  `promptId` against the active map and returns 409 on stale resends.
+- **iOS permission card** — same floating bottom tray as the Mac
+  surface (mirror of `AskUserQuestion`), so trust prompts surface on
+  iOS chats instead of falling through to a silent stall.
+
+### Deferred to v0.9
+
+- **Gemini chat.** Gemini CLI is being replaced with Antigravity (agy)
+  in a parallel thread; the Chat tab spawn path lands then.
+- **Frontier compare UI.** Schema fields, endpoints, and WS channel
+  all ship in v0.8 for forward-compat; the 3-pane UI lands in v0.9
+  once Gemini joins to make the matrix complete.
+- **Full ChatProviderProbe / ChatProviderAuthObserver (CM3).** v0.8
+  surfaces minimal probe state (binary on PATH + `CodexSDKManager.isProvisioned`);
+  P1 in-flight actor + CLI-output auth-error observer land in v0.8.x
+  polish.
+
+## [0.7.18 build 64] - 2026-05-21
+
+### Added
+
+- **"Bypass permissions" now appears in the empty-state composer's
+  Mode menu.** v0.7.16 made bypass actually reach the spawned CLI
+  (via `autopilot:` on `spawnSession` + auto-trust via
+  `AutopilotState.trustRepo` on first-send), but the empty-state mode
+  menu was still hiding `.bypass` from the option list. The
+  `availablePermissionModes` switch in `ComposerInputCore.swift` now
+  returns the full `[.ask, .acceptEdits, .plan, .bypass]` array for
+  both bound + empty-state composers — same `⇧⌘4` shortcut as the
+  bound chip. The auto-trust flow lands the spawn with
+  `--dangerously-skip-permissions` (Claude) /
+  `--dangerously-bypass-approvals-and-sandbox` (Codex) /
+  `--approval-mode yolo` (Gemini) on the very first turn.
+
+## [0.7.17 build 63] - 2026-05-21
+
+### Added
+
+- **Gemini 3.5 Flash (Thinking) + Gemini 3 Flash (Thinking) in the
+  model picker.** Google ships a Standard / Extended thinking-level
+  toggle in the Antigravity UI; Clawdmeter's catalog only carried the
+  Standard variant, so users had no way to pick the Extended thinking
+  budget. Two new `ModelCatalog.bundled.gemini` entries:
+    - `gemini-3.5-flash-thinking` — "Gemini 3.5 Flash (Thinking)",
+      CLI alias `flash-3.5-thinking`, badge "Thinking",
+      `supportsThinking: true`. Recommended for: Complex problem solving.
+    - `gemini-3-flash-thinking` — "Gemini 3 Flash (Thinking)", same
+      shape. Mirrors the 3.5 Flash split.
+  Both variants ride the same `-m <model>` flag the gemini CLI
+  already accepts; the upstream API enables the higher thinking_budget
+  configuration when it sees the `-thinking` suffix. Pricing entries
+  added in `pricing.json` matching the base model's per-token rates
+  (with a note that thinking tokens bill at the output rate per
+  Google's thinking_config spec). Provisional `~` marker stays on
+  Gemini analytics cells until Google publishes an official rate.
+
+## [0.7.16 build 62] - 2026-05-21
+
+### Fixed
+
+- **"Thinking…" indicator no longer overlaps the last message.** The
+  `<Ns> · thinking…` pill at the bottom-leading of the chat thread was
+  rendered as a floating overlay (`VStack { Spacer(); HStack {…} }` on
+  top of the ScrollView with `.allowsHitTesting(false)`). When the
+  user scrolled to the tail, the pill sat on top of the last 1-2 lines
+  of the most recent message bubble — visually unreadable, especially
+  with the asterisk spinner pulsing over the text. Indicator is now a
+  footer row inside the List itself, taking its own ~32pt band below
+  the last chat bubble. It still self-hides when the agent has been
+  idle ≥30s, so quiet sessions get zero vertical space.
+
+## [0.7.15 build 61] - 2026-05-21
+
+Real Antigravity SDK provisioning + composer Bypass mode that actually
+bypasses.
+
+### Added
+
+- **Bundled `uv` binary** (Astral's Python package manager, pinned to
+  0.5.11, ~28MB arm64 static Mach-O). Lives at
+  `Contents/Resources/Vendor/uv/uv` in the .app, downloaded by
+  `tools/download-bundled-uv.sh` (mirrors the Node script pattern).
+  Pre-build hook ensures it's present before the resources phase runs.
+- **Real `AntigravitySidecarManager.enableSDKMode()` implementation.**
+  Replaces the v0.7.14 skeleton. On first-enable:
+    1. Runs `uv venv --python 3.13 ~/Library/Application Support/Clawdmeter/python`
+       to create a sealed venv (~10s cold). Subsequent enables reuse it.
+    2. Runs `uv pip install --python <venv-python> google-antigravity~=0.0.3`
+       (~5s on warm pip cache). Captures stderr so install failures
+       surface the actual pip error in Settings → Antigravity, not a
+       generic "probe failed".
+    3. Probes the sidecar — spawns the venv's Python against
+       `clawdmeter-agents/main.py` which does `import google.antigravity`
+       inside its first JSON line. The Swift side reads
+       `sdk_import_ok: true|false` to confirm the import actually worked.
+  Progress is reported through `provisioningStep` so the Settings sheet
+  shows "Creating Python 3.13 venv (~10s)…" / "Installing
+  google-antigravity (~5s)…" / "Probing sidecar…" instead of a 15-second
+  blank spinner.
+- **Real `tools/clawdmeter-agents/main.py` + `observer.py`** — replaces
+  the v0.6.0 skeleton. `main.py` does the import-check + dispatches to
+  the observer agent; `observer.py` calls `Connection.local()` and polls
+  `total_usage` every 2s, emitting JSON-line `{"type":"usage", uuid,
+  totals:{input, output, cached, thoughts, total}}` deltas the daemon
+  side can map onto `AntigravityObservation.sdk`.
+- **Yellow accent on the Bypass mode chip** — the v0.7.13 uniform-grey
+  styling was wrong for a destructive mode where the agent has carte
+  blanche over the workspace. Bypass now renders as a yellow capsule
+  with a soft border + semibold label; Ask/Edits/Plan stay neutral.
+
+### Fixed
+
+- **Bypass mode picked in the empty-state composer now actually
+  bypasses.** `spawnSession` was hardcoding `autopilot: false` (lines
+  557 + 566 of `SessionsView.swift`), so picking "Bypass permissions"
+  from the chip before the first message silently downgraded the
+  spawned CLI argv back to `--permission-mode ask`. The fix:
+  - Adds `autopilot: Bool` parameter to `spawnSession()`. Threaded
+    through to `claudeArgv` / `codexArgv` / `geminiArgv` — Claude now
+    gets `--dangerously-skip-permissions`, Codex gets
+    `--dangerously-bypass-approvals-and-sandbox`, Gemini gets
+    `--approval-mode yolo`.
+  - `EmptyStateCenteredComposer.firstSend()` records per-repo trust via
+    `AutopilotState.shared.trustRepo(repoKey)` when bypass is picked, so
+    subsequent sessions in the same repo skip the confirmation sheet.
+    Seeds `PermissionModeStore.setBypass(true, sessionId:)` so the
+    bound chip + analytics row both reflect bypass mode immediately.
+  - Bound-session flips (the sheet flow already worked) are unchanged.
+- **The Antigravity SDK toggle now points at a venv-aware probe** —
+  previously the Swift probe used `/usr/bin/env python3` which would
+  pick up system Python (where `google-antigravity` is not installed)
+  even after uv had successfully populated the venv. Probe now uses
+  the venv's `bin/python` directly so the import check exercises the
+  package that was just installed.
+
+### Known limitation
+
+- `google-antigravity~=0.0.3` may not exist on PyPI yet (Google's
+  Antigravity 2.0.0 spec'd the SDK but hasn't published as of
+  2026-05-21). The provisioning surfaces uv's actual stderr in
+  Settings → Antigravity when the install fails, so users see the
+  real error ("No matching distribution found for google-antigravity"
+  or similar) and can wait for Google to publish. The toggle reverts
+  to OFF, Disk mode stays as the default — zero degradation for users
+  who don't care about SDK observation.
+
+## [0.7.14 build 60] - 2026-05-21
+
+### Fixed
+
+- **Antigravity SDK toggle now reaches its (skeleton) sidecar.**
+  Settings → Antigravity → "SDK mode" was reporting "Sidecar probe
+  failed: SDK mode not provisioned: sidecar main.py not found" on
+  the released .app, because `AntigravitySidecarManager.locateSidecarMain()`
+  walked up from CWD looking for `tools/clawdmeter-agents/main.py` —
+  which only works from a dev checkout. The .app's CWD is `/` so the
+  walk never finds anything. The Codex SDK sibling solved this same
+  problem in v0.7.1 by reading `Bundle.main.resourceURL`; the
+  Antigravity sibling was left as a TODO comment.
+  - `project.yml` now bundles `tools/clawdmeter-agents/` as a folder
+    reference under `Contents/Resources/clawdmeter-agents/` (mirrors
+    the `Vendor/node` pattern). All five `.py` files + `pyproject.toml`
+    + `README.md` come along, so v0.6.1's eventual full uv-provisioning
+    work doesn't need a second bundling pass.
+  - `locateSidecarMain()` now checks `Bundle.main.resourceURL/clawdmeter-agents/main.py`
+    first, falls back to the repo walk for dev builds. Matches
+    `CodexSDKManager.locateMainMJSSource()` shape.
+  - Result: toggling SDK mode ON now reaches the Python sidecar,
+    which returns the **honest** v0.6.0 skeleton message — "SDK mode
+    skeleton — full impl ships in v0.6.1. Toggle SDK mode off in
+    Settings to dismiss this warning." — and the toggle reverts to
+    OFF as designed. Disk mode (the default) is unaffected.
+
+### Known limitation (deferred follow-up)
+
+- The Antigravity SDK toggle is still a skeleton in v0.7.14. Real
+  uv-Python provisioning + `pip install google-antigravity` + the
+  full observer.py impl is the v0.6.1 work that was scoped in the
+  original plan but never landed (the v0.7.x line shipped Codex SDK
+  parity instead). Users who want live Gemini token streaming via
+  the official Antigravity SDK will need that follow-up; Disk mode
+  remains the default and reads `~/.gemini/antigravity/brain/`
+  directly without any Python dependency.
+
+## [0.7.13 build 59] - 2026-05-21
+
+### Changed
+
+- **Permission-mode chip now matches the model+effort chip visually.**
+  The "Ask / Edits / Plan / Bypass" pill on the composer bottom bar
+  was wearing its own design language — a leading SF Symbol icon plus
+  a mode-specific tinted background (secondary / accent / yellow). It
+  now renders identically to the right-side `Opus 4.7 (1M) · Max`
+  chip: same `Color.secondary.opacity(0.10)` Capsule, same 11pt-medium
+  primary text, same 8pt-semibold chevron, same padding. No icon, no
+  tint. The popover already shows the active mode via the checkmark
+  on the row, so the chip itself doesn't need to encode it twice; the
+  payoff is a balanced bottom bar instead of chip-soup. Same ⌘⇧1-4
+  keyboard shortcuts, same Menu popover, same `Section("Mode")`
+  structure with the numbered shortcut hints on each row.
+
 ## [0.7.12 build 58] - 2026-05-21
 
 ### Changed

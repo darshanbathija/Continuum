@@ -136,6 +136,17 @@ struct EmptyStateCenteredComposer: View {
             if prompt.isEmpty { return nil }
             return String(prompt.prefix(80))
         }()
+        // v0.7.15: bypass mode picked at empty-state needs to (1) reach
+        // the spawned CLI argv via `autopilot: true`, (2) record per-repo
+        // trust so subsequent sessions in the same repo can be flipped
+        // to bypass without re-prompting, (3) seed AutopilotState for
+        // the new session id so the bound chip + analytics row stay in
+        // sync. Without this whole chain, picking Bypass at empty state
+        // silently downgrades to Ask.
+        let bypassPicked = store.permissionMode == .bypass
+        if bypassPicked {
+            AutopilotState.shared.trustRepo(repoKey)
+        }
         do {
             let session = try await model.spawnSession(
                 repoPath: repoKey,
@@ -144,13 +155,16 @@ struct EmptyStateCenteredComposer: View {
                 goal: goal,
                 mode: store.mode,
                 tmux: runtime.tmuxClient,
-                acceptEdits: store.permissionMode == .acceptEdits
+                acceptEdits: store.permissionMode == .acceptEdits,
+                autopilot: bypassPicked
             )
             // Record the empty-state composer's mode pick on the session
             // so the chip in the bound view reflects it without needing
             // an extra round-trip.
             if store.permissionMode == .acceptEdits {
                 PermissionModeStore.shared.setAcceptEdits(true, sessionId: session.id)
+            } else if bypassPicked {
+                PermissionModeStore.shared.setBypass(true, sessionId: session.id)
             }
             // Wait briefly for the pane to be ready, then post the first prompt.
             try await Task.sleep(nanoseconds: 600_000_000)

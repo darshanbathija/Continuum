@@ -1,55 +1,139 @@
-"""SDK-mode observer. Long-running stdio JSON-lines bridge between the
-Mac daemon's AntigravitySidecarObserver.swift and the running
-Antigravity language_server via `Connection.local()`.
+"""Long-running Antigravity SDK observer.
 
-v0.6.0 ships a skeleton. Real implementation requires:
-    pip install google-antigravity~=0.0.3
+Streams total_usage deltas + active-conversation metadata over stdio
+JSON-lines so the Mac daemon's AntigravitySidecarObserver.swift can
+swap the AntigravityObservation.sdk implementation in for the disk
+parser.
 
-And the live `language_server` running. v0.6.1 fills in:
-    from google.antigravity import Connection
-    conn = Connection.local()
-    for conversation in conn.list_conversations():
-        emit({"type": "conversation", "uuid": conversation.uuid, ...})
-        for delta in conversation.subscribe_total_usage():
-            emit({"type": "total_usage_delta", "delta": delta._asdict()})
+Spawned by main.py when the agent header is `{"agent": "observer"}`.
+Loops until stdin closes (Swift terminates the process on toggle OFF
+or on disable-during-shutdown).
 
-For now: receive cmd lines from stdin, respond with the same
-`sdk_not_provisioned` error so the daemon's fail-soft path exercises.
+Protocol — every line of stdout is a JSON object:
+  {"type": "ready"}                    after Connection bootstrap
+  {"type": "conversations", "items": [{uuid, project_title, cwd, model}]}
+  {"type": "usage", "uuid": "...", "totals": {input, output, cached, total}}
+  {"type": "error", "msg": "..."}      non-fatal observer error
+  {"type": "shutdown"}                  emitted right before exit
+
+Notes:
+- v0.7.15 ships the minimal viable: list_conversations() once at
+  startup + poll active conversation total_usage every 2s. Streaming
+  via SDK callbacks is a v0.8 follow-up if google-antigravity surfaces
+  a subscribe-style API.
+- Errors during polling are emitted as `{"type":"error"}` lines so the
+  Mac side can show a soft banner — we don't tear the observer down.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import time
+import traceback
+from typing import Any
 
 
-def emit(obj: dict) -> None:
+def emit(obj: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(obj))
     sys.stdout.write("\n")
     sys.stdout.flush()
 
 
-def main() -> int:
-    emit({"type": "ready", "agent": "observer"})
-    for raw in sys.stdin:
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            cmd = json.loads(raw)
-        except json.JSONDecodeError:
-            emit({"type": "error", "msg": "bad JSON", "raw": raw[:200]})
-            continue
-        op = cmd.get("op", "")
-        # v0.6.1 will route these to google.antigravity.Connection calls.
+def main(initial_cmd: dict[str, Any]) -> int:
+    """Entry point invoked from main.py. `initial_cmd` is the first
+    stdin line that selected this agent. Returns process exit code."""
+    _ = initial_cmd  # reserved for future options (e.g. poll interval)
+
+    try:
+        from google.antigravity import Connection  # type: ignore[import-not-found]
+    except ImportError as exc:
+        emit({"type": "error", "code": "sdk_import_failed", "msg": str(exc)})
+        return 1
+
+    # Bootstrap the SDK connection. Connection.local() reads the
+    # CSRF token + port from ~/.gemini/antigravity/logs/<TS>/ls-main.log
+    # if Antigravity is running; otherwise raises.
+    try:
+        conn = Connection.local()
+    except Exception as exc:  # noqa: BLE001
         emit({
             "type": "error",
-            "code": "sdk_not_provisioned",
-            "msg": "SDK mode skeleton — toggle off in Settings.",
-            "echoed_op": op,
+            "code": "connection_failed",
+            "msg": f"{type(exc).__name__}: {exc}",
+            "hint": "Antigravity.app may not be running. Launch it and re-enable SDK mode.",
         })
+        return 1
+
+    emit({"type": "ready", "version": "0.7.15"})
+
+    # Initial inventory.
+    try:
+        convos = list(conn.list_conversations())
+        emit({
+            "type": "conversations",
+            "items": [
+                {
+                    "uuid": getattr(c, "uuid", None),
+                    "project_title": getattr(c, "project_title", None),
+                    "cwd": getattr(c, "cwd", None),
+                    "model": getattr(c, "model", None),
+                }
+                for c in convos
+            ],
+        })
+    except Exception as exc:  # noqa: BLE001
+        emit({
+            "type": "error",
+            "code": "list_conversations_failed",
+            "msg": f"{type(exc).__name__}: {exc}",
+        })
+
+    # Polling loop — emit total_usage deltas every 2s. Watches stdin
+    # closing as the shutdown signal (Swift closes when toggle goes OFF).
+    last_totals: dict[str, dict[str, int]] = {}
+    while True:
+        try:
+            import select
+            ready, _, _ = select.select([sys.stdin], [], [], 0)
+            if ready:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                emit({"type": "log", "msg": f"control: {line.strip()!r}"})
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            for c in conn.list_conversations():
+                uuid = getattr(c, "uuid", None)
+                if not uuid:
+                    continue
+                usage = getattr(c, "total_usage", None)
+                if usage is None:
+                    continue
+                totals = {
+                    "input": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "output": int(getattr(usage, "candidate_tokens", 0) or 0),
+                    "cached": int(getattr(usage, "cached_tokens", 0) or 0),
+                    "thoughts": int(getattr(usage, "thoughts_tokens", 0) or 0),
+                }
+                totals["total"] = (
+                    totals["input"] + totals["output"]
+                    + totals["cached"] + totals["thoughts"]
+                )
+                if last_totals.get(uuid) != totals:
+                    last_totals[uuid] = totals
+                    emit({"type": "usage", "uuid": uuid, "totals": totals})
+        except Exception as exc:  # noqa: BLE001
+            emit({
+                "type": "error",
+                "code": "poll_failed",
+                "msg": f"{type(exc).__name__}: {exc}",
+                "trace": traceback.format_exc(limit=2),
+            })
+
+        time.sleep(2.0)
+
+    emit({"type": "shutdown"})
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -1,39 +1,34 @@
 #!/usr/bin/env python3
 """Sidecar dispatcher for Clawdmeter SDK mode.
 
-Spawned by `AntigravitySidecarManager.swift` when the user toggles SDK mode
-ON. Receives the agent name on stdin's first JSON line, then forwards
-subsequent lines to the chosen module.
+Spawned by `AntigravitySidecarManager.swift` when the user toggles SDK
+mode ON. Receives the agent name on stdin's first JSON line, then
+forwards subsequent lines to the chosen module.
 
-Subcommands:
-    observer            — long-running, observes Antigravity SDK + serves
-                          the AntigravityObservation.sdk protocol over
-                          stdio JSON-lines.
-    session-summarizer  — nightly launchd job at 03:00 local.
-    cost-pulse-watcher  — long-running watchdog over total_usage.
-    repo-context-extractor — one-shot, triggered by Plan pane button.
+v0.7.15 — real SDK probe:
+- Emit `{type:"ready", sdk_import_ok:bool, version:"0.7.15"}` as the
+  first line so the Swift probe can immediately see whether the venv
+  has `google-antigravity` installed and importable.
+- On `agent:"probe"`: exit cleanly after the ready line.
+- On `agent:"observer"`: hand off to observer.main(), which keeps the
+  process alive streaming SDK events.
+- On other / unknown agents: emit a clear sdk_not_provisioned-ish
+  error message and exit.
 
-Protocol:
-    Every line on stdin is a JSON object. The first line's `agent` field
-    selects the subcommand. Subsequent lines are forwarded.
-
-    Every line on stdout is a JSON object:
-        {"type": "ready"}     — sidecar initialized
-        {"type": "result", "data": {...}}
-        {"type": "log", "level": "info", "msg": "..."}
-        {"type": "error", "msg": "..."}
-
-The Swift side ships v0.6.0 with this as a SKELETON. Real provisioning
-(uv venv + pip install google-antigravity) happens in v0.6.1; until then
-this script always returns `{"type": "error", "msg": "SDK mode not yet
-provisioned — toggle off."}` so the toggle's failure path is exercised
-without breaking Disk mode users.
+Failure modes:
+- `import google.antigravity` raises → first line carries
+  `{sdk_import_ok:false}`, second line carries
+  `{type:"error", code:"sdk_import_failed", msg:"<exc>"}`. Sidecar
+  exits 1.
+- Header line is missing or unparseable → emit
+  `{type:"error", code:"bad_header"}` and exit 1.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import traceback
 from typing import Any
 
 
@@ -45,33 +40,74 @@ def emit(obj: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    emit({"type": "ready", "version": "0.6.0-skeleton"})
+    # Step 1: try to import the SDK. The result determines whether the
+    # ready line announces sdk_import_ok=true or false. Swift's
+    # AntigravitySidecarManager.probeSidecar reads this directly.
+    sdk_import_ok = False
+    import_err: str | None = None
+    try:
+        import google.antigravity  # type: ignore[import-not-found]  # noqa: F401
+        sdk_import_ok = True
+    except ImportError as exc:
+        import_err = f"{type(exc).__name__}: {exc}"
+    except Exception as exc:  # broader catch — google-antigravity may
+        # raise non-ImportError exceptions during top-level init (e.g.
+        # network failures during package metadata fetch). Still treat
+        # as "not provisioned" rather than crashing.
+        import_err = f"{type(exc).__name__}: {exc}"
 
-    # Read the first line to determine the subcommand.
+    emit({
+        "type": "ready",
+        "version": "0.7.15",
+        "sdk_import_ok": sdk_import_ok,
+    })
+
+    if not sdk_import_ok:
+        emit({
+            "type": "error",
+            "code": "sdk_import_failed",
+            "msg": import_err or "google.antigravity import failed",
+        })
+        return 1
+
+    # Step 2: read the agent header.
     try:
         header = sys.stdin.readline()
         if not header:
-            emit({"type": "error", "msg": "no header line received"})
+            emit({"type": "error", "code": "bad_header", "msg": "no header line received"})
             return 1
         cmd = json.loads(header)
     except json.JSONDecodeError as exc:
-        emit({"type": "error", "msg": f"bad header JSON: {exc}"})
+        emit({"type": "error", "code": "bad_header", "msg": f"bad header JSON: {exc}"})
         return 1
 
     agent = cmd.get("agent")
 
-    # v0.6.0 ships the skeleton only. Real impl lands in v0.6.1 when uv
-    # provisioning is wired through AntigravitySidecarManager.
+    # Step 3: dispatch.
+    if agent == "probe":
+        # Smoke test — already emitted ready above, just exit cleanly.
+        emit({"type": "result", "data": {"probe": "ok"}})
+        return 0
+
+    if agent == "observer":
+        try:
+            import observer  # local sibling module
+            return observer.main(cmd)
+        except Exception as exc:  # noqa: BLE001
+            emit({
+                "type": "error",
+                "code": "observer_failed",
+                "msg": f"{type(exc).__name__}: {exc}",
+                "trace": traceback.format_exc(limit=3),
+            })
+            return 1
+
     emit({
         "type": "error",
-        "code": "sdk_not_provisioned",
-        "msg": (
-            "SDK mode skeleton — full impl ships in v0.6.1. Toggle SDK mode "
-            "off in Settings to dismiss this warning."
-        ),
-        "agent": agent,
+        "code": "unknown_agent",
+        "msg": f"unknown agent: {agent!r}",
     })
-    return 0
+    return 1
 
 
 if __name__ == "__main__":

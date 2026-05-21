@@ -8,8 +8,11 @@ import XCTest
 ///   - v8 round-trip preserves all four optional model/SDK fields
 final class WireV8Tests: XCTestCase {
 
-    func test_currentWireVersionIsEight() {
-        XCTAssertEqual(AgentControlWireVersion.current, 8)
+    func test_currentWireVersionIsAtLeastEight() {
+        // v8 baseline was current==8. v0.8 bumped to 9 (chat tab).
+        // Track current >= 8 rather than ==8 so we don't have to update
+        // this assertion every bump.
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 8)
     }
 
     func test_codexSDKMinimumIsEight() {

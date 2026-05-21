@@ -275,6 +275,9 @@ public final class SessionFileResolver: @unchecked Sendable {
         for session: AgentSession,
         antigravityDataDir: URL? = nil
     ) -> URL? {
+        // v0.8 schema v5: chat sessions have nil repoKey and no Antigravity
+        // brain — short-circuit early so we never feed nil into URL paths.
+        guard session.kind == .code, session.repoKey != nil else { return nil }
         let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         let dataDir = antigravityDataDir
             ?? home.appendingPathComponent(".gemini/antigravity", isDirectory: true)
@@ -301,7 +304,9 @@ public final class SessionFileResolver: @unchecked Sendable {
         // Tier 1: BrainSummaryIndex reverse lookup by cwd.
         let indexURL = dataDir.appendingPathComponent("agyhub_summaries_proto.pb", isDirectory: false)
         let index = BrainSummaryIndexer.read(at: indexURL)
-        let cwdURL = URL(fileURLWithPath: session.repoKey)
+        // Force-unwrap is safe: kind/repoKey guard at the top short-circuited
+        // chat sessions and any code session with nil repoKey.
+        let cwdURL = URL(fileURLWithPath: session.repoKey!)
         let candidates = BrainSummaryIndexer.lookup(cwd: cwdURL, in: index)
         guard !candidates.isEmpty else { return nil }
 

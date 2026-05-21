@@ -168,6 +168,73 @@ public enum AgentSpawner {
         }
     }
 
+    /// v0.8 chat-tab kind-aware dispatch. Branches on `session.kind`:
+    /// - `.code`: identical to the NewSessionRequest path above (existing
+    ///   code-session behavior).
+    /// - `.chat`: forces `planMode = true`, ignores autopilot, and
+    ///   produces the appropriate per-agent argv.
+    ///
+    /// **Codex SDK chat** (`session.codexChatBackend == .sdk`) returns an
+    /// empty array — the SDK path is handled by `CodexSubscriptionRelay`
+    /// directly in Phase 4.5, not through tmux argv. Callers must
+    /// detect this case (`session.agent == .codex && session.kind == .chat
+    /// && session.codexChatBackend == .sdk`) and route to the relay
+    /// instead of spawning a tmux pane.
+    ///
+    /// **Gemini chat** returns an empty array in v0.8 — the gemini CLI
+    /// is being replaced by Antigravity (agy) in a parallel thread; the
+    /// Chat tab spawn path lands in v0.9. The /chat-sessions route
+    /// handler surfaces 501 Not Implemented for `agent == .gemini` chat
+    /// requests.
+    public static func argv(for session: AgentSession, autopilot: Bool = false) -> [String] {
+        // Chat sessions always run in plan-mode regardless of stored
+        // request flags — that's the safety wedge for v0.8.
+        let planMode = session.kind == .chat ? true : (session.status == .planning)
+        // Chat sessions never get autopilot. Trust list is per-repo and
+        // chat sessions have no repo.
+        let chatAutopilot = session.kind == .chat ? false : autopilot
+
+        switch (session.agent, session.kind) {
+        case (.claude, _):
+            return claudeArgv(
+                model: session.model,
+                planMode: planMode,
+                effort: session.effort,
+                autopilot: chatAutopilot
+            ) ?? []
+        case (.codex, .chat):
+            // SDK backend: caller routes to CodexSubscriptionRelay
+            // instead of tmux. Empty argv signals "skip tmux spawn".
+            if session.codexChatBackend == .sdk { return [] }
+            // CLI backend (uniform with Claude/Gemini): tmux + codex
+            // --sandbox read-only.
+            return codexArgv(
+                model: session.model,
+                planMode: true,
+                effort: session.effort,
+                autopilot: false
+            ) ?? []
+        case (.codex, .code):
+            return codexArgv(
+                model: session.model,
+                planMode: planMode,
+                effort: session.effort,
+                autopilot: chatAutopilot
+            ) ?? []
+        case (.gemini, .chat):
+            // v0.8: Gemini chat returns 501 at the route handler.
+            // Spawn path returns empty to mirror that contract.
+            return []
+        case (.gemini, .code):
+            return geminiArgv(
+                model: session.model,
+                planMode: planMode,
+                effort: session.effort,
+                autopilot: chatAutopilot
+            ) ?? []
+        }
+    }
+
     /// Build argv for re-spawning an existing session with new config
     /// (model/effort/mode/plan swap). Uses `--resume` for Claude and
     /// `codex resume <id>` for Codex to preserve chat history (D12).

@@ -94,6 +94,48 @@ public actor TmuxControlClient {
     public func start() async throws {
         guard pty == nil else { return }
 
+        // v0.8 QA ISSUE-002 fix: the original `tmux -C ... new-session ... -d`
+        // single-command pattern exits the control-mode client as soon as the
+        // new-session command completes — tmux interprets a command-line
+        // subcommand as "run this and exit", regardless of whether it's
+        // control mode. Result: PTY hits EOF immediately, markExited fires,
+        // pty=nil, and every subsequent /sessions or /chat-sessions POST
+        // hangs waiting on the wedged control client.
+        //
+        // The fix: two-phase startup.
+        // Phase A — regular (non-control) `new-session -A -s control -d`
+        //   ensures the session exists. Idempotent: -A attaches if present,
+        //   creates if not. -d detaches so this client exits cleanly without
+        //   blocking. We run this synchronously via ShellRunner.
+        // Phase B — spawn the long-running PTY client as
+        //   `tmux -C attach -t control`. WITHOUT a subcommand (other than
+        //   `attach`), the control client stays alive as long as its PTY
+        //   master is open. The daemon's commands flow through the PTY.
+        // Also kills any pre-existing server on our socket first so we
+        // don't inherit a zombie session from a prior Clawdmeter instance.
+
+        _ = try? await ShellRunner.shared.run(
+            executable: configuration.tmuxBinary,
+            arguments: ["-L", configuration.socketName, "kill-server"],
+            timeout: 3
+        )
+
+        // Phase A: create the session (regular client, exits cleanly).
+        let phaseAResult = try? await ShellRunner.shared.run(
+            executable: configuration.tmuxBinary,
+            arguments: [
+                "-L", configuration.socketName,
+                "new-session", "-A", "-s", "control",
+                "-d",
+                "--", "/bin/bash", "-l",
+            ],
+            timeout: 5
+        )
+        if phaseAResult == nil {
+            tmuxLogger.warning("tmux phase-A new-session call may have failed; continuing to phase B")
+        }
+
+        // Phase B: spawn the long-running control-mode client over PTY.
         let pty = try PseudoTerminal()
         self.pty = pty
 
@@ -102,11 +144,7 @@ public actor TmuxControlClient {
             arguments: [
                 "-C",
                 "-L", configuration.socketName,
-                "new-session", "-A", "-s", "control",
-                // Detached so we don't fight an interactive client; we
-                // drive everything via control-mode commands.
-                "-d",
-                "--", "/bin/bash", "-l",
+                "attach", "-t", "control",
             ]
         )
         self.childPid = pid
@@ -436,6 +474,13 @@ public actor TmuxControlClient {
             lifecycleContinuation?.yield(.windowClosed(windowId: windowId))
         case .exit(let reason):
             markExited(reason: reason)
+        case .body(let line):
+            // v0.8 QA fix: command-response body line. Accumulate while
+            // we're between %begin and %end so the final continuation
+            // gets the response body (e.g. `@1 %1` from newWindow -P -F).
+            if currentCommandNumber != nil {
+                currentCommandBody.append(line)
+            }
         case .unknown(let raw):
             tmuxLogger.debug("Unknown frame: \(raw, privacy: .public)")
             // If we're inside a command response, accumulate as body.
