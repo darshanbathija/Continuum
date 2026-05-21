@@ -99,6 +99,16 @@ public final class AgentControlServer {
     /// Combine sink alive across the session lifetime.
     private var sdkChatIngestors: [UUID: CodexSDKEventIngestor] = [:]
 
+    /// v0.8 QA: same-process accessor so Mac UI's SessionsModel can read
+    /// from the daemon's SessionChatStore (the one CodexSDKEventIngestor
+    /// writes to) instead of creating its own empty parallel store. iOS
+    /// goes through chat-subscribe WS for the same effect; Mac is in the
+    /// same process and can read the registry directly.
+    @MainActor
+    public func chatStore(for session: AgentSession) -> SessionChatStore? {
+        chatStoreRegistry.snapshotStore(for: session)
+    }
+
     public init(
         pairingTokens: PairingTokenStore = .shared,
         repoIndex: RepoIndex,
@@ -1075,6 +1085,36 @@ public final class AgentControlServer {
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
             sendResponse(.internalError, on: connection); return
         }
+        // v0.8 QA: chat-mode CLI sessions (Claude / Codex CLI) also echo the
+        // user prompt into the daemon's SessionChatStore so the bubble shows
+        // up immediately. The CLI's own JSONL drives the assistant response
+        // rendering — but until that lands (and especially if the CLI process
+        // ignores stdin or hasn't written its first turn), the user otherwise
+        // sees a totally blank thread after pressing send.
+        if session.kind == .chat, let store = chatStoreRegistry.snapshotStore(for: session) {
+            let userMsgId = "user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
+            store.appendSDKMessages([
+                ChatMessage(
+                    id: userMsgId,
+                    kind: .userText,
+                    title: "You",
+                    body: req.text,
+                    at: Date()
+                )
+            ], at: Date())
+            // D1 chat naming: tag the customName from the first user prompt
+            // when none is set yet (mirrors sendChatSDKPrompt).
+            if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+                let trimmed = req.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    let cap = 40
+                    let truncated = trimmed.count <= cap
+                        ? trimmed
+                        : String(trimmed[..<trimmed.index(trimmed.startIndex, offsetBy: cap - 1)]) + "…"
+                    registry.rename(id: session.id, name: truncated)
+                }
+            }
+        }
         do {
             let data = Data(bytes)
             if req.asFollowUp || bytes.count > 256 || req.text.contains("\n") {
@@ -1771,7 +1811,17 @@ public final class AgentControlServer {
         let snapshotItems: [ChatItem]
         let snapshotCounter: UInt64
         let snapshotLastEventAt: Date?
-        if let store = registryStore, !store.snapshot.items.isEmpty {
+        // v0.8 QA: for chat-kind sessions, NEVER fall back to chatFileResolver —
+        // its parent-walk fuzzy match surfaces unrelated Codex/Claude JSONLs
+        // (e.g. a fresh chat session shows transcripts from someone's old
+        // debugging session). The registry's sdkOnly store is the single
+        // source of truth; CodexSDKEventIngestor populates it via appendSDKMessages.
+        // Code sessions keep the cold-fallback path so JSONL tail catches up.
+        if session.kind == .chat {
+            snapshotItems = registryStore?.snapshot.items ?? []
+            snapshotCounter = registryStore?.snapshot.updateCounter ?? 0
+            snapshotLastEventAt = registryStore?.snapshot.lastEventAt ?? session.lastEventAt
+        } else if let store = registryStore, !store.snapshot.items.isEmpty {
             snapshotItems = store.snapshot.items
             // Phase 0a / Codex P0: this is the real chat cursor now.
             // Pre-v5, this field was populated from session.lastEventSeq
@@ -2459,6 +2509,24 @@ public final class AgentControlServer {
             }
         }
         let chatCwd = session.effectiveCwd
+        // v0.8 QA: echo the user's prompt into the SessionChatStore so it
+        // shows up as a user bubble in the thread immediately. Without
+        // this, the user sees nothing until the SDK assistant response
+        // streams in (or never, if there's a network hiccup). Marks the
+        // message with an SDK-prefixed id so it doesn't collide with
+        // assistant events that come back through the ingestor.
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            let userMsgId = "user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
+            store.appendSDKMessages([
+                ChatMessage(
+                    id: userMsgId,
+                    kind: .userText,
+                    title: "You",
+                    body: prompt,
+                    at: Date()
+                )
+            ], at: Date())
+        }
         do {
             if CodexSubscriptionRelay.shared.isActive(sessionId: session.id) {
                 // Subsequent prompt — forward to the running sidecar with
@@ -2468,7 +2536,8 @@ public final class AgentControlServer {
                     sessionId: session.id,
                     workingDirectory: chatCwd,
                     prompt: prompt,
-                    threadId: session.codexChatThreadId
+                    threadId: session.codexChatThreadId,
+                    skipGitRepoCheck: true
                 )
             } else {
                 // First prompt — spawn the relay + ingestor. The ingestor
@@ -2488,6 +2557,13 @@ public final class AgentControlServer {
                     ingestor.start()
                     sdkChatIngestors[session.id] = ingestor
                 }
+                // v0.8 QA: chat-cwd (~/Library/.../chat-sessions/<uuid>/) is
+                // not a git repo. The Codex CLI rejects the call without
+                // `--skip-git-repo-check` and the SDK silently hangs with
+                // a stream_error sidecar-side ("Not inside a trusted
+                // directory…"). Pass true unconditionally for chat — the
+                // chat-cwd is sandboxed inside the app's Application
+                // Support dir and never holds user code.
                 _ = try CodexSubscriptionRelay.shared.start(
                     session: session,
                     workingDirectory: chatCwd,
@@ -2495,7 +2571,8 @@ public final class AgentControlServer {
                     threadId: session.codexChatThreadId,
                     model: session.model,
                     sandboxMode: "read-only",
-                    modelReasoningEffort: session.effort?.codexConfigValue
+                    modelReasoningEffort: session.effort?.codexConfigValue,
+                    skipGitRepoCheck: true
                 )
             }
         } catch {

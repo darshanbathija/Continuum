@@ -109,7 +109,14 @@ public final class CodexSDKEventIngestor {
     /// the inner event, so `raw` here is the item payload directly.
     private func handleItem(raw: [String: Any], at timestamp: Date, store: SessionChatStore) {
         guard let item = raw["item"] as? [String: Any] else { return }
-        let itemType = item["item_type"] as? String ?? ""
+        // v0.8 QA: the SDK emits `item.type` (e.g. "agent_message"),
+        // not `item.item_type` — the earlier code missed every SDK item
+        // event and dropped all assistant responses on the floor. Read
+        // `type` first; fall back to `item_type` only as defense for any
+        // future SDK rename.
+        let itemType = (item["type"] as? String)
+            ?? (item["item_type"] as? String)
+            ?? ""
         let itemId = item["id"] as? String
             ?? "codex-sdk-item-\(timestamp.timeIntervalSince1970)"
 

@@ -71,25 +71,15 @@ struct ChatSoloView: View {
     @ViewBuilder
     private var transcript: some View {
         if let store = chatStore {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(store.snapshot.items) { item in
-                            messageRow(item).id(item.id)
-                        }
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 16)
-                }
-                .onChange(of: store.snapshot.updateCounter) { _, _ in
-                    if let last = store.snapshot.items.last {
-                        withAnimation(.easeOut(duration: 0.18)) {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // v0.8 QA: SessionChatStore is an ObservableObject, but reading
+            // it through a computed `var chatStore` doesn't subscribe the
+            // view to its @Published snapshot — changes from the daemon's
+            // CodexSDKEventIngestor were silently dropped on the UI floor.
+            // The TranscriptObservingView wraps the store as @ObservedObject
+            // so SwiftUI actually tracks snapshot updates and re-renders
+            // when assistant messages stream in.
+            TranscriptObservingView(store: store, renderRow: messageRow)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 10) {
                 ProgressView().controlSize(.small)
@@ -212,5 +202,38 @@ struct ChatSoloView: View {
         _ = try? await URLSession.shared.data(for: req)
         // Local registry mirror catches up via the next refresh.
         await model.refresh()
+    }
+}
+
+/// Holds the `SessionChatStore` as `@ObservedObject` so SwiftUI subscribes
+/// to its `@Published snapshot` and re-renders when the daemon's
+/// `CodexSDKEventIngestor` writes new messages. Without this wrapper, the
+/// parent view reads `store.snapshot` through a plain computed property and
+/// SwiftUI never installs a dependency on the store — assistant responses
+/// land in the store but the chat thread stays frozen on the user bubble.
+@available(macOS 14, *)
+private struct TranscriptObservingView<Row: View>: View {
+    @ObservedObject var store: SessionChatStore
+    let renderRow: (ChatItem) -> Row
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(store.snapshot.items) { item in
+                        renderRow(item).id(item.id)
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 16)
+            }
+            .onChange(of: store.snapshot.updateCounter) { _, _ in
+                if let last = store.snapshot.items.last {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+        }
     }
 }

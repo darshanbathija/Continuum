@@ -318,22 +318,30 @@ public final class SessionsModel: ObservableObject {
     /// via `evictExcessChatStores()` (which calls `stop()` to cancel each
     /// evicted store's JSONLTail + parse task).
     public func chatStore(for session: AgentSession) -> SessionChatStore? {
+        // v0.8 QA: for chat-kind sessions, route to the DAEMON's
+        // SessionChatStore (single source of truth). The Mac UI and daemon
+        // are in the same process; CodexSDKEventIngestor writes events into
+        // the daemon's store, and we want the UI to read from that same
+        // instance — not create its own empty parallel store. iOS achieves
+        // the same effect via chat-subscribe WS; Mac just reaches across
+        // the process boundary directly. We cache the result in chatStores
+        // so the LRU/eviction machinery still applies.
+        if session.kind == .chat {
+            if let existing = chatStores[session.id] {
+                touchLRU(session.id)
+                return existing
+            }
+            guard let daemonStore = AppDelegate.runtime?.agentControlServer.chatStore(for: session) else {
+                return nil
+            }
+            chatStores[session.id] = daemonStore
+            chatStoreLRU.append(session.id)
+            evictExcessChatStores()
+            return daemonStore
+        }
         if let existing = chatStores[session.id] {
             touchLRU(session.id)
             return existing
-        }
-        // v0.8 QA ISSUE-003 (second site): chat-kind sessions must NOT
-        // route through SessionChatStore.resolveSessionFileURL — its
-        // parent-walk falls through to ~/.claude/projects/-Users-...
-        // and renders unrelated content. Mirror the DaemonChatStoreRegistry
-        // fix: all .chat sessions get the sdkOnly store, no JSONLTail.
-        if session.kind == .chat {
-            let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
-            store.start()
-            chatStores[session.id] = store
-            chatStoreLRU.append(session.id)
-            evictExcessChatStores()
-            return store
         }
         let url: URL? = forcedChatStoreURLs[session.id]
             ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.effectiveCwd)

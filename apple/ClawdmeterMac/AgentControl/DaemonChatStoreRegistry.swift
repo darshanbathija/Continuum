@@ -208,17 +208,58 @@ public final class DaemonChatStoreRegistry {
     // MARK: - Internals
 
     private func createStore(for session: AgentSession) -> SessionChatStore? {
-        // v0.8 chat sessions: ALL kinds (.chat) use the sdkOnly store —
-        // not just Codex SDK chat. Reason: SessionChatStore.resolveSessionFileURL
-        // walks UP parent dirs looking for a matching ~/.claude/projects/<encoded>
-        // dir, and the chat-cwd's home-dir ancestor (~/.claude/projects/-Users-darshanbathija-1)
-        // can exist with unrelated JSONLs — the resolver would pick the newest
-        // of those, surfacing someone else's debugging session as if it were
-        // this chat's transcript. The sdkOnly init skips JSONLTail entirely
-        // (NEW-E3 from plan); SDK chat populates via CodexSDKEventIngestor,
-        // CLI chat in v0.8 ships with no transcript rendering (acceptable
-        // for v0.8 ship, polished in v0.8.x).
+        // v0.8 chat sessions: route by backend.
+        //
+        // - Codex SDK chat → sdkOnly store, populated by CodexSDKEventIngestor.
+        //   No JSONLTail (the SDK doesn't write JSONL).
+        // - Claude chat (CLI) → JSONLTail at exact encoded chat-cwd path. The
+        //   chat-cwd is `<AppSupport>/chat-sessions/<sessionUUID>/`, unique per
+        //   session, so the encoded `~/.claude/projects/-Users-..-chat-sessions-<UUID>/`
+        //   directory contains only this chat's JSONLs — no fuzzy parent walk
+        //   needed and no risk of surfacing unrelated transcripts.
+        // - Codex CLI chat → newest rollout JSONL via the legacy default
+        //   resolver (good enough for v0.8; the CLI writes to
+        //   `~/.codex/sessions/<date>/rollout-...jsonl` keyed by date/uuid).
         if session.kind == .chat {
+            // Codex SDK: sdkOnly (no JSONL exists).
+            if session.agent == .codex && session.codexChatBackend == .sdk {
+                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+                store.start()
+                return store
+            }
+            // Claude chat (CLI): point JSONLTail at the encoded chat-cwd dir.
+            // The dir-name encoding mirrors Claude's `/` → `-`, `_` → `-`,
+            // ` ` → `-` rule (see SessionChatStore.encodeCwd). Picking the
+            // newest .jsonl in that dir is safe because the dir is unique
+            // per session (chat-cwd contains the session UUID).
+            if session.agent == .claude {
+                if let url = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd) {
+                    let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
+                    store.start()
+                    return store
+                }
+                // No JSONL yet — fall through to sdkOnly. The session will
+                // remain empty until the CLI writes its first turn; the next
+                // snapshotStore() call after that point will see the file.
+                // (For v0.8 the store stays sdkOnly forever; v0.8.x can wire
+                // a directory-watch retry. Acceptable trade — empty thread
+                // beats wrong thread.)
+                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+                store.start()
+                return store
+            }
+            // Codex CLI chat: use the legacy newest-rollout resolver. Safe
+            // because Codex CLI rollouts are per-process; the freshly-spawned
+            // chat session's rollout will be the newest one in `~/.codex/sessions/`.
+            if session.agent == .codex && session.codexChatBackend == .cli {
+                if let url = Self.newestCodexJSONL() {
+                    let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
+                    store.start()
+                    return store
+                }
+            }
+            // Default chat fallback: sdkOnly store. Keeps the rendering empty
+            // but never wrong — better than surfacing unrelated transcripts.
             let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
             store.start()
             return store
@@ -230,6 +271,27 @@ public final class DaemonChatStoreRegistry {
         let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
         store.start()
         return store
+    }
+
+    /// Resolve `~/.claude/projects/<encoded-chat-cwd>/<newest>.jsonl` for a
+    /// chat-mode Claude session. The encoded dir name is deterministic per
+    /// session UUID, so we can target it directly without the parent-walk
+    /// fuzzy-match that ISSUE-003 fixed for unrelated paths.
+    private static func chatCwdClaudeJSONL(chatCwd: String) -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let projects = home.appendingPathComponent(".claude/projects")
+        let encoded = SessionChatStore.encodeCwd((chatCwd as NSString).standardizingPath)
+        let dir = projects.appendingPathComponent(encoded)
+        guard FileManager.default.fileExists(atPath: dir.path) else { return nil }
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return nil }
+        let jsonls = contents.filter { $0.pathExtension == "jsonl" }
+        return jsonls.max { a, b in
+            let ad = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let bd = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return ad < bd
+        }
     }
 
     private func startSweepIfNeeded() {

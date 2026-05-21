@@ -180,7 +180,8 @@ public final class CodexSubscriptionRelay {
         threadId: String? = nil,
         model: String? = nil,
         sandboxMode: String? = nil,
-        modelReasoningEffort: String? = nil
+        modelReasoningEffort: String? = nil,
+        skipGitRepoCheck: Bool = false
     ) throws -> CodexRelaySubscription {
         if let existing = active[session.id] {
             // A relay is already running for this session. Reuse it by
@@ -194,7 +195,8 @@ public final class CodexSubscriptionRelay {
                 threadId: threadId,
                 model: model,
                 sandboxMode: sandboxMode,
-                modelReasoningEffort: modelReasoningEffort
+                modelReasoningEffort: modelReasoningEffort,
+                skipGitRepoCheck: skipGitRepoCheck
             )
             // Hand back the existing async stream — events from the new
             // op flow through the same continuation.
@@ -255,6 +257,14 @@ public final class CodexSubscriptionRelay {
         // becomes a CodexRelayEvent and gets yielded into the stream.
         attachStdoutReader(handle: handle, sessionId: session.id)
 
+        // v0.8 QA: drain stderr too. The Node SDK writes diagnostic
+        // text (auth errors, network failures, deprecation warnings)
+        // to stderr. Without a reader, the pipe fills at ~64KB and
+        // the sidecar blocks on its next stderr write — manifests as
+        // chat hanging silently with no assistant response. Log every
+        // stderr line so SDK failures are visible in Console.
+        attachStderrReader(handle: handle, sessionId: session.id)
+
         // Send the agent header — observer mode.
         try writeLine(to: stdin, ["agent": "observer"])
 
@@ -267,17 +277,21 @@ public final class CodexSubscriptionRelay {
             threadId: threadId,
             model: model,
             sandboxMode: sandboxMode,
-            modelReasoningEffort: modelReasoningEffort
+            modelReasoningEffort: modelReasoningEffort,
+            skipGitRepoCheck: skipGitRepoCheck
         )
 
         // Track the sidecar so subsequent prompts can reuse it.
         active[session.id] = handle
 
-        continuation.onTermination = { @Sendable [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.cleanupIfActive(sessionId: session.id, gracefully: true)
-            }
-        }
+        // v0.8 QA: do NOT tie cleanup to the AsyncStream's continuation
+        // termination. Chat-mode callers (AgentControlServer.sendChatSDKPrompt)
+        // consume events via the Combine subject (CodexSDKEventIngestor) and
+        // discard the AsyncStream's CodexRelaySubscription — that caused the
+        // continuation to terminate immediately, firing cleanupIfActive, which
+        // sent `{op:"shutdown"}` to the sidecar one tick after `{op:"start"}`.
+        // Net effect: sidecar shut down before the SDK could respond. Cleanup
+        // is now strictly explicit (stop / teardownSDKChat / app-quit reaper).
 
         return CodexRelaySubscription(
             sessionId: session.id,
@@ -293,7 +307,8 @@ public final class CodexSubscriptionRelay {
         sessionId: UUID,
         workingDirectory: String,
         prompt: String,
-        threadId: String? = nil
+        threadId: String? = nil,
+        skipGitRepoCheck: Bool = false
     ) throws {
         guard let handle = active[sessionId] else {
             throw RelayError.notSubscribed
@@ -306,7 +321,8 @@ public final class CodexSubscriptionRelay {
             threadId: threadId,
             model: nil,
             sandboxMode: nil,
-            modelReasoningEffort: nil
+            modelReasoningEffort: nil,
+            skipGitRepoCheck: skipGitRepoCheck
         )
     }
 
@@ -364,7 +380,8 @@ public final class CodexSubscriptionRelay {
         threadId: String?,
         model: String?,
         sandboxMode: String?,
-        modelReasoningEffort: String?
+        modelReasoningEffort: String?,
+        skipGitRepoCheck: Bool = false
     ) throws {
         var payload: [String: Any] = [
             "op": op,
@@ -375,6 +392,7 @@ public final class CodexSubscriptionRelay {
         if let model { payload["model"] = model }
         if let sandboxMode { payload["sandboxMode"] = sandboxMode }
         if let modelReasoningEffort { payload["modelReasoningEffort"] = modelReasoningEffort }
+        if skipGitRepoCheck { payload["skipGitRepoCheck"] = true }
         try writeLine(to: handle.stdinPipe, payload)
     }
 
@@ -384,6 +402,8 @@ public final class CodexSubscriptionRelay {
         }
         var withNewline = data
         withNewline.append(0x0a)
+        let preview = String(data: data, encoding: .utf8) ?? "<binary>"
+        relayLogger.info("Codex relay stdin write: \(preview, privacy: .public)")
         try stdin.fileHandleForWriting.write(contentsOf: withNewline)
     }
 
@@ -408,6 +428,8 @@ public final class CodexSubscriptionRelay {
                 let lineBytes = buffer.subdata(in: buffer.startIndex..<newlineIdx)
                 buffer.removeSubrange(buffer.startIndex...newlineIdx)
                 guard !lineBytes.isEmpty else { continue }
+                let linePreview = String(data: lineBytes.prefix(200), encoding: .utf8) ?? "<binary>"
+                relayLogger.info("Codex relay stdout line session=\(sessionId.uuidString, privacy: .public): \(linePreview, privacy: .public)")
                 guard let json = try? JSONSerialization.jsonObject(with: lineBytes) as? [String: Any] else {
                     relayLogger.debug("Codex relay session=\(sessionId.uuidString, privacy: .public): unparseable line, len=\(lineBytes.count)")
                     continue
@@ -421,6 +443,32 @@ public final class CodexSubscriptionRelay {
                     self?.subjects[sessionId]?.send(event)
                 }
             }
+        }
+    }
+
+    /// Drain the sidecar's stderr so its pipe buffer (~64KB) doesn't
+    /// fill and block the Node process on its next write. Lines are
+    /// logged at debug/info so SDK failures (auth errors, network
+    /// timeouts) are visible in Console without leaking the bytes
+    /// back to the chat UI.
+    private func attachStderrReader(handle: ProcessHandle, sessionId: UUID) {
+        var buffer = Data()
+        handle.stderrPipe.fileHandleForReading.readabilityHandler = { [weak handle] fileHandle in
+            guard let handle else { return }
+            let chunk = fileHandle.availableData
+            if chunk.isEmpty {
+                fileHandle.readabilityHandler = nil
+                return
+            }
+            buffer.append(chunk)
+            while let newlineIdx = buffer.firstIndex(of: 0x0a) {
+                let lineBytes = buffer.subdata(in: buffer.startIndex..<newlineIdx)
+                buffer.removeSubrange(buffer.startIndex...newlineIdx)
+                guard !lineBytes.isEmpty else { continue }
+                let line = String(data: lineBytes, encoding: .utf8) ?? "<non-utf8 \(lineBytes.count) bytes>"
+                relayLogger.info("Codex relay stderr session=\(sessionId.uuidString, privacy: .public): \(line, privacy: .public)")
+            }
+            _ = handle
         }
     }
 
