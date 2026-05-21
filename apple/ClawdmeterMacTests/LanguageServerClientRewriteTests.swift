@@ -224,4 +224,51 @@ final class LanguageServerClientRewriteTests: XCTestCase {
         let b = LiveLanguageServer(pid: 2, csrfToken: "X", httpPort: 100)
         XCTAssertNotEqual(LanguageServerProbe.live(a), .live(b))
     }
+
+    // MARK: - newConversation decoder shape compat (Codex P1.1 regression)
+
+    /// Phase 0 captured agentapi's real response as top-level
+    /// `{conversationId, prompt}`. Earlier drafts assumed a nested
+    /// `{response: {conversationId}}` envelope and threw on every real
+    /// success. The decoder must accept both shapes.
+    func test_newConversationDecoder_acceptsTopLevelShape() throws {
+        let json = #"{"conversationId":"abc-123","prompt":"hello"}"#.data(using: .utf8)!
+        struct NewConversationResponse: Decodable {
+            struct Inner: Decodable { let conversationId: String? }
+            let conversationId: String?
+            let response: Inner?
+            let error: String?
+        }
+        let decoded = try JSONDecoder().decode(NewConversationResponse.self, from: json)
+        XCTAssertEqual(decoded.conversationId, "abc-123",
+            "top-level shape must decode — this is what real agentapi returns per Phase 0")
+        XCTAssertNil(decoded.error)
+    }
+
+    func test_newConversationDecoder_acceptsNestedShape() throws {
+        let json = #"{"response":{"conversationId":"def-456"}}"#.data(using: .utf8)!
+        struct NewConversationResponse: Decodable {
+            struct Inner: Decodable { let conversationId: String? }
+            let conversationId: String?
+            let response: Inner?
+            let error: String?
+        }
+        let decoded = try JSONDecoder().decode(NewConversationResponse.self, from: json)
+        XCTAssertNil(decoded.conversationId)
+        XCTAssertEqual(decoded.response?.conversationId, "def-456",
+            "nested-envelope shape must still decode for forward-compat")
+    }
+
+    func test_newConversationDecoder_errorShape() throws {
+        let json = #"{"error":"language_server unreachable"}"#.data(using: .utf8)!
+        struct NewConversationResponse: Decodable {
+            struct Inner: Decodable { let conversationId: String? }
+            let conversationId: String?
+            let response: Inner?
+            let error: String?
+        }
+        let decoded = try JSONDecoder().decode(NewConversationResponse.self, from: json)
+        XCTAssertEqual(decoded.error, "language_server unreachable")
+        XCTAssertNil(decoded.conversationId)
+    }
 }

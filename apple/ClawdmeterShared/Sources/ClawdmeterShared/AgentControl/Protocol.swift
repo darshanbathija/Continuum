@@ -102,12 +102,17 @@ public enum AgentControlWireVersion {
     /// works on older Macs because quota is a separate, read-only path.
     public static let agentapiMinimum: Int = 10
 
-    /// Minimum wire version that exposes `AgentSession.geminiBackend` +
-    /// `antigravityConversationId` fields and the `usage["antigravity"]`
-    /// key (v10). iOS's `supportsAntigravityChat` returns false for
-    /// pre-v10 Macs; the Chat tab disables the Start button for Gemini
-    /// when the paired Mac is below this floor.
-    public static let antigravityChatMinimum: Int = 10
+    /// Minimum wire version at which the daemon's `POST /sessions`
+    /// endpoint dispatches Gemini through `agentapi`. v0.8.1 (wire v10)
+    /// migrated only the Mac UI's spawn path (`SessionsView`); the
+    /// daemon-side endpoint still goes through `AgentSpawner.argv` →
+    /// tmux + legacy gemini CLI. Setting this to `11` keeps iOS's
+    /// `supportsAntigravityChat` gate closed against v10 Macs so iOS
+    /// users don't see a Start button that posts to an endpoint that
+    /// can't honor the contract. v0.8.2 will migrate the daemon path
+    /// and lower this back to `10` (or bump `current` to `11`).
+    /// Codex P1.4: prevents "claim-capability-you-don't-have" failure.
+    public static let antigravityChatMinimum: Int = 11
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-

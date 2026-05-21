@@ -76,6 +76,8 @@ final class WireMixedVersionPairingTests: XCTestCase {
         XCTAssertEqual(AgentControlWireVersion.antigravityMinimum, 7)
         XCTAssertEqual(AgentControlWireVersion.codexSDKMinimum, 8)
         XCTAssertEqual(AgentControlWireVersion.agentapiMinimum, 10)
-        XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 10)
+        // Codex P1.4 deferral: 11 until daemon POST /sessions also
+        // dispatches Gemini through agentapi (v0.8.2).
+        XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 11)
     }
 }

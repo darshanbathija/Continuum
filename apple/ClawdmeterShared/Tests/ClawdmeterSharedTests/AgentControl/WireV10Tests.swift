@@ -3,7 +3,11 @@ import XCTest
 
 /// Exercises the wire v8 → v10 bump (agy-migration v0.8.0):
 ///   - AgentControlWireVersion.current = 10 (skips v9 which chat-tab took)
-///   - agentapiMinimum = 10, antigravityChatMinimum = 10
+///   - agentapiMinimum = 10, antigravityChatMinimum = 11 (Codex P1.4:
+///     iOS gate held closed until v0.8.2 migrates daemon POST /sessions
+///     to also dispatch through agentapi; until then a v10 daemon can
+///     spawn Antigravity sessions through the Mac UI but NOT via the
+///     iOS-facing daemon endpoint)
 ///   - supportsAntigravityChat(_:) gate
 ///   - GeminiBackend enum + AgentSession schema v6 fields
 ///     (geminiBackend, antigravityConversationId) with decoder tolerance
@@ -22,12 +26,18 @@ final class WireV10Tests: XCTestCase {
         XCTAssertEqual(AgentControlWireVersion.agentapiMinimum, 10)
     }
 
-    func test_antigravityChatMinimumIsTen() {
-        XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 10)
+    func test_antigravityChatMinimumDefersToV11() {
+        // Codex P1.4: v0.8.1's daemon POST /sessions still spawns Gemini
+        // via legacy tmux argv. Until the daemon endpoint is also
+        // migrated (v0.8.2), iOS must not claim Antigravity chat support
+        // — even on a v10 Mac.
+        XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 11)
     }
 
-    func test_supportsAntigravityChat_trueAtV10() {
-        XCTAssertTrue(AgentControlWireVersion.supportsAntigravityChat(serverWireVersion: 10))
+    func test_supportsAntigravityChat_falseAtV10() {
+        // v10 Mac UI spawns agentapi; v10 daemon endpoint does not.
+        // iOS gate stays closed until v0.8.2 (when this returns true).
+        XCTAssertFalse(AgentControlWireVersion.supportsAntigravityChat(serverWireVersion: 10))
         XCTAssertTrue(AgentControlWireVersion.supportsAntigravityChat(serverWireVersion: 11))
     }
 

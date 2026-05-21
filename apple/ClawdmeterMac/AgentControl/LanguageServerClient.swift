@@ -221,21 +221,29 @@ public final class LanguageServerClient: NSObject {
             projectId: projectId,
             args: ["new-conversation", "--model=\(modelTier.rawValue)", prompt]
         )
+        // Phase 0 runtime notes captured the actual successful response as a
+        // top-level `{conversationId, prompt}` payload. Earlier drafts of
+        // this decoder assumed a `{response: {conversationId}}` envelope
+        // and threw .malformedResponse on every real success. Accept BOTH
+        // shapes so future agentapi versions that wrap (or unwrap) the
+        // envelope keep working — fall back to nested only when top-level
+        // is missing. The `error` field is checked first regardless.
         struct NewConversationResponse: Decodable {
             struct Inner: Decodable {
-                let conversationId: String
+                let conversationId: String?
             }
+            let conversationId: String?
             let response: Inner?
             let error: String?
         }
         let decoded = try decodeAgentapiResponse(NewConversationResponse.self, from: stdout)
         if let err = decoded.error { throw LanguageServerClientError.rpcError(err) }
-        guard let id = decoded.response?.conversationId else {
-            throw LanguageServerClientError.malformedResponse(
-                "newConversation: response.newConversation.conversationId absent"
-            )
-        }
-        return id
+        if let id = decoded.conversationId { return id }
+        if let id = decoded.response?.conversationId { return id }
+        let preview = String(data: stdout, encoding: .utf8)?.prefix(200) ?? ""
+        throw LanguageServerClientError.malformedResponse(
+            "newConversation: conversationId absent (top-level + response both nil) — stdout=\(preview)"
+        )
     }
 
     /// Send a follow-up message to an existing conversation.

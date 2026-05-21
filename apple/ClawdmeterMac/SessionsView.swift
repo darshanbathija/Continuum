@@ -528,7 +528,15 @@ public final class SessionsModel: ObservableObject {
         // actually reach the spawned CLI. Caller is responsible for the
         // trust-gate UX (AutopilotState.trustRepo) before passing true.
         autopilot: Bool = false,
-        pinnedJSONLURL: URL? = nil
+        pinnedJSONLURL: URL? = nil,
+        // v0.8.1 agy-migration — full first-prompt text for agentapi
+        // spawn. tmux-based spawn ignores this (the CLI's stdin gets the
+        // prompt via the post-spawn /send call), but Antigravity 2's
+        // `agentapi new-conversation` requires the actual first turn at
+        // spawn-time. Callers (EmptyStateCenteredComposer) pass the
+        // composer's rendered body; nil falls back to `goal` for paths
+        // that don't have a composer (resume flows, daemon-side spawns).
+        initialMessage: String? = nil
     ) async throws -> AgentSession {
         // v0.8.0 agy-migration — Gemini sessions fork off here BEFORE the
         // tmux pipeline runs. Antigravity 2's agentapi is HTTP-RPC, not a
@@ -542,7 +550,8 @@ public final class SessionsModel: ObservableObject {
                 mode: mode,
                 model: model,
                 effort: effort,
-                planMode: planMode
+                planMode: planMode,
+                initialMessage: initialMessage
             )
         }
         // Fail fast on missing CLIs rather than spawning tmux + the
@@ -643,7 +652,8 @@ public final class SessionsModel: ObservableObject {
         mode: SessionMode,
         model: String?,
         effort: ReasoningEffort?,
-        planMode: Bool
+        planMode: Bool,
+        initialMessage: String? = nil
     ) async throws -> AgentSession {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let appBundle = URL(fileURLWithPath: "/Applications/Antigravity.app", isDirectory: true)
@@ -686,10 +696,23 @@ public final class SessionsModel: ObservableObject {
                 "Open this repo in Antigravity 2 first, then come back."
             )
         case .ready(_, let projectId):
-            // Build a tiny first prompt so language_server has something
-            // to commit. The real first turn arrives via the composer
-            // immediately after.
-            let firstPrompt = goal ?? "Start a new Gemini session in \(repoPath)."
+            // The first turn of the conversation gets locked in here —
+            // agentapi has no separate "send first user message" call.
+            // Codex P1.2: original draft passed `goal` (truncated to 80
+            // chars) which made the chat thread start with a chopped
+            // version of the user's prompt. Prefer the composer's
+            // initialMessage (full rendered body) when provided.
+            let firstPrompt: String = {
+                if let initial = initialMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !initial.isEmpty {
+                    return initial
+                }
+                if let goalText = goal?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !goalText.isEmpty {
+                    return goalText
+                }
+                return "Start a new Gemini session in \(repoPath)."
+            }()
             let modelTier = AgentapiModelTier.from(modelCatalogId: model)
             let conversationIdString = try await lsClient.newConversation(
                 modelTier: modelTier,
