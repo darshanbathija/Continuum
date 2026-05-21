@@ -9,6 +9,7 @@ public struct IOSRootView: View {
     @State private var tab: Tab = .chat
     @State private var pushedScreen: Screen? = nil
     @State private var newSessionPresented: Bool = false
+    @State private var settingsPresented: Bool = false
 
     public enum Tab: String, CaseIterable { case chat, live, analytics, code }
     /// Routes the modal/pushed screens above the tab bar. `sessionDetail`
@@ -52,6 +53,9 @@ public struct IOSRootView: View {
         .sheet(isPresented: $newSessionPresented) {
             NewSessionSheet(client: agentClient, isPresented: $newSessionPresented)
         }
+        .sheet(isPresented: $settingsPresented) {
+            SettingsView(model: usageModel)
+        }
     }
 
     @ViewBuilder
@@ -61,6 +65,7 @@ public struct IOSRootView: View {
             IOSPairingView(onClose: { pushedScreen = nil })
         case .sessionDetail(let id):
             IOSSessionDetailView(
+                agentClient: agentClient,
                 sessionId: id,
                 data: code,
                 onBack: { pushedScreen = nil }
@@ -68,8 +73,13 @@ public struct IOSRootView: View {
         case nil:
             switch tab {
             case .chat:      IOSChatView()
-            case .live:      IOSLiveView(data: live)
-            case .analytics: IOSAnalyticsView()
+            case .live:
+                IOSLiveView(
+                    data: live,
+                    onRefresh: { await agentClient.refreshAll() },
+                    onOpenSettings: { settingsPresented = true }
+                )
+            case .analytics: IOSAnalyticsView(agentClient: agentClient)
             case .code:
                 IOSCodeView(
                     data: code,
