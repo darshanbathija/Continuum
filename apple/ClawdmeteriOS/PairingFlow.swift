@@ -105,7 +105,11 @@ struct PairingFlow: View {
 /// Repo → Goal → Agent → Model picker → Effort dial → Mode chip → Plan
 /// toggle → Start (sticky bottom). Sends a complete `NewSessionRequest`
 /// with effort + optional A/B pair config.
-private struct NewSessionSheet: View {
+///
+/// Made internal (was private) so the Tahoe Code surface (`IOSCodeView`)
+/// can present it from its `+` buttons. Pairing flows present this via
+/// `PairingCTAButtons.swift`.
+struct NewSessionSheet: View {
     @ObservedObject var client: AgentControlClient
     @Binding var isPresented: Bool
 

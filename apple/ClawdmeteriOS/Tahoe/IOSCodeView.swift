@@ -7,19 +7,30 @@ import ClawdmeterShared
 /// root injects daemon-derived bindings via the AgentControlClient adapter.
 public struct IOSCodeView: View {
     @Environment(\.tahoe) private var t
-    var onOpenDetail: () -> Void
+    /// Push the session detail screen for a specific session id. Carries
+    /// the id so the detail surface can render real session data instead
+    /// of a hardcoded fixture (P1 fix).
+    var onOpenDetail: (UUID) -> Void
+    /// Present the NewSessionSheet. Wired from IOSRootView so the sheet
+    /// has access to the AgentControlClient.
+    var onNewSession: () -> Void
     public var data: TahoeCodeBindings
 
-    public init(data: TahoeCodeBindings = .demo, onOpenDetail: @escaping () -> Void = {}) {
+    public init(
+        data: TahoeCodeBindings = .demo,
+        onOpenDetail: @escaping (UUID) -> Void = { _ in },
+        onNewSession: @escaping () -> Void = {}
+    ) {
         self.data = data
         self.onOpenDetail = onOpenDetail
+        self.onNewSession = onNewSession
     }
 
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
                 IOSLargeTitle(title: "Code") {
-                    IOSRoundIconBtn("plus")
+                    IOSRoundIconBtn("plus", action: onNewSession)
                 }
 
                 // Search
@@ -56,7 +67,7 @@ public struct IOSCodeView: View {
                 } else {
                     VStack(spacing: 14) {
                         ForEach(visible) { repo in
-                            IOSRepoCard(repo: repo, onOpen: onOpenDetail)
+                            IOSRepoCard(repo: repo, onOpen: onOpenDetail, onNewSession: onNewSession)
                         }
                     }
                     .padding(.horizontal, 16).padding(.bottom, 30)
@@ -69,7 +80,8 @@ public struct IOSCodeView: View {
 private struct IOSRepoCard: View {
     @Environment(\.tahoe) private var t
     var repo: TahoeCodeRepo
-    var onOpen: () -> Void
+    var onOpen: (UUID) -> Void
+    var onNewSession: () -> Void
 
     @State private var expanded: Bool = true
 
@@ -105,7 +117,7 @@ private struct IOSRepoCard: View {
                 }
                 .buttonStyle(.plain)
 
-                Button(action: {}) {
+                Button(action: onNewSession) {
                     TahoeIcon("plus", size: 15).foregroundStyle(t.fg2)
                         .frame(width: 38, height: 38)
                         .background {
@@ -127,7 +139,7 @@ private struct IOSRepoCard: View {
                             if i > 0 {
                                 TahoeHair().padding(.leading, 58)
                             }
-                            Button(action: onOpen) {
+                            Button(action: { onOpen(s.id) }) {
                                 HStack(spacing: 12) {
                                     TahoeProviderGlyph(provider: s.agent, size: 32)
                                     VStack(alignment: .leading, spacing: 2) {
@@ -161,7 +173,12 @@ private struct IOSRepoCard: View {
                                 if i > 0 {
                                     TahoeHair().padding(.leading, 58)
                                 }
-                                Button(action: onOpen) {
+                                // Recents don't carry a live AgentSession.id;
+                                // tapping them is a no-op for now (the
+                                // historical sessions surface lands in a
+                                // follow-up). The button stays interactive
+                                // so the row still feels right.
+                                Button(action: {}) {
                                     HStack(spacing: 12) {
                                         ZStack {
                                             TahoeProviderGlyph(provider: r.provider, size: 28)

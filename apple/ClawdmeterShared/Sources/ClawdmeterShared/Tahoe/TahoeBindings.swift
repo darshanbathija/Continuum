@@ -161,11 +161,23 @@ public struct TahoeCodeRecent: Identifiable, Hashable, Sendable {
 public struct TahoeCodeBindings: Sendable {
     public var repos: [TahoeCodeRepo]
     public var openSessionId: UUID?
+    /// `true` when the bindings are the SwiftUI Preview / demo fixture.
+    /// Views check this to decide whether to render the JSX placeholder
+    /// thread / plan / PR data; in production (`isDemo == false`) the
+    /// views render empty-state placeholders for any surface that isn't
+    /// backed by real live data yet.
+    public var isDemo: Bool
 
-    public init(repos: [TahoeCodeRepo] = [], openSessionId: UUID? = nil) {
+    public init(repos: [TahoeCodeRepo] = [], openSessionId: UUID? = nil, isDemo: Bool = false) {
         self.repos = repos
         self.openSessionId = openSessionId
+        self.isDemo = isDemo
     }
+
+    /// Empty production state — distinct from `.demo`. Use this when the
+    /// real session list hasn't returned anything yet (poller hasn't fired,
+    /// daemon not paired, user archived everything).
+    public static let empty = TahoeCodeBindings(repos: [], openSessionId: nil, isDemo: false)
 
     /// Demo fixture — mirrors `TahoeDemo.repos`, with UUIDs minted per
     /// session so the open-id selection works the same as it did before.
@@ -212,7 +224,7 @@ public struct TahoeCodeBindings: Sendable {
                 recents: recentsByRepo[key] ?? []
             )
         }
-        return TahoeCodeBindings(repos: repos, openSessionId: demoSessionId)
+        return TahoeCodeBindings(repos: repos, openSessionId: demoSessionId, isDemo: true)
     }()
 }
 

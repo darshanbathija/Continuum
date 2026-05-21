@@ -47,10 +47,14 @@ extension AppRuntime {
 
     /// Lower the real SessionsModel + AgentSessionRegistry data into the
     /// portable `TahoeCodeBindings` shape that `MacCodeView` consumes.
-    /// Falls back to demo fixture when there's nothing live yet.
+    /// Returns empty production bindings when there's no live data — the
+    /// view layer then renders empty-state placeholders rather than fake
+    /// demo sessions (Codex review p0/v0.11: showing the JSX `defx-frontend`
+    /// fixture as production state could mislead users into approving fake
+    /// plans).
     var tahoeCode: TahoeCodeBindings {
         let repos = sessionsModel.repos
-        guard !repos.isEmpty else { return .demo }
+        guard !repos.isEmpty else { return .empty }
         let liveSessions = agentSessionRegistry.sessions.filter { $0.archivedAt == nil }
         let nowDate = Date()
 

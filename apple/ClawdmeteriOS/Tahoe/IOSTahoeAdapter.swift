@@ -9,9 +9,13 @@ extension AgentControlClient {
     /// Lower the daemon's mirrored session list into `TahoeCodeBindings`
     /// for `IOSCodeView`. Sessions are grouped by repo key with a stable
     /// hash-derived tint so the same project always shows the same color.
+    /// Returns empty production bindings when the daemon hasn't returned
+    /// anything yet (unpaired or just-started) so the view renders the
+    /// "Sessions started on your Mac will appear here once you're paired"
+    /// empty state rather than the JSX fixture.
     var tahoeCode: TahoeCodeBindings {
         let live = sessions.filter { $0.archivedAt == nil }
-        guard !live.isEmpty else { return .demo }
+        guard !live.isEmpty else { return .empty }
         let now = Date()
 
         // Group sessions by repo key. Chat sessions (repoKey == nil) bucket
