@@ -36,6 +36,17 @@ final class AppRuntime: ObservableObject {
     private var usageQueryService: UsageQueryService?
     private var sessionsRefreshTask: Task<Void, Never>?
 
+    /// In-process daemon client for Mac SwiftUI surfaces (D2 / PR #24a).
+    /// Set after `agentControlServer.start()` binds ports — same code path
+    /// as the iOS app's `AgentControlClient`, so Mac Code IDE actions and
+    /// the chat pipeline (PR #25) share the iOS code path.
+    ///
+    /// Nil only when the server failed to bind any port in
+    /// `AgentControlServer.portFallbackRange`. Mac Code IDE actions
+    /// degrade gracefully — buttons disable themselves rather than crash.
+    /// AppDelegate surfaces the bind failure as an alert.
+    var loopbackClient: AgentControlClient?
+
     init() {
         let claudeTokenProvider = KeychainTokenProvider()
         // Mirror Claude Code's local OAuth token into our shared, iCloud-synced
@@ -142,6 +153,16 @@ final class AppRuntime: ObservableObject {
         if sessionsEnabled {
             self.tmuxSupervisor.start()
             self.agentControlServer.start()
+            // PR #24a A1: synchronous loopback bootstrap. `start()` above
+            // is sync and assigns `boundPort`/`boundWsPort` before
+            // returning, so the client always sees populated ports. Nil
+            // return only happens when bind exhausted the port range —
+            // surfaces as `loopbackClient == nil`; Mac IDE actions
+            // disable themselves and AppDelegate raises an alert.
+            self.loopbackClient = MacLoopbackClient.make(from: self.agentControlServer)
+            if self.loopbackClient == nil {
+                runtimeLogger.error("MacLoopbackClient construction failed — Mac IDE actions will be disabled this session")
+            }
             self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
             self.sessionScheduler.start()
             // Phase 10: APNS Live Activity push trigger.

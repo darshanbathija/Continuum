@@ -66,6 +66,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         installObserversIfNeeded()
         applyVisibilityFromPrefs()
+
+        // PR #24a critical-gap fix: surface loopback-port-bind failure
+        // explicitly. If `loopbackClient == nil` the agent control server
+        // exhausted its port range — Mac Code IDE actions (approve plan,
+        // refine, send prompt, stop) won't reach the daemon. Silent
+        // failure is the worst outcome; show the user once at launch.
+        if runtime.agentControlServer.boundPort == nil {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Clawdmeter couldn't start its agent server"
+                alert.informativeText = """
+                Ports 21731–21741 are all in use. Sessions, chat, and \
+                pairing will not work until you free a port or restart \
+                your Mac.
+                """
+                alert.alertStyle = .critical
+                alert.addButton(withTitle: "Continue anyway")
+                alert.runModal()
+            }
+        }
     }
 
     private func installObserversIfNeeded() {
