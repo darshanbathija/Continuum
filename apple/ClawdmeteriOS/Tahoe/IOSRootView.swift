@@ -8,24 +8,32 @@ public struct IOSRootView: View {
     @State private var theme: TahoeThemeStore
     @State private var tab: Tab = .chat
     @State private var pushedScreen: Screen? = nil
+    @State private var newSessionPresented: Bool = false
 
     public enum Tab: String, CaseIterable { case chat, live, analytics, code }
-    public enum Screen { case pairing, sessionDetail }
+    /// Routes the modal/pushed screens above the tab bar. `sessionDetail`
+    /// carries the opened session's UUID so the detail view can look up
+    /// real data instead of rendering a fixture.
+    public enum Screen: Equatable { case pairing, sessionDetail(UUID) }
 
     /// Optional iOS usage model — when provided, the Live tab switches
     /// from demo data to the live per-provider quota.
     @ObservedObject private var usageModel: UsageModel
+    /// Daemon-backed agent client. Drives the Code tab's session list.
+    @ObservedObject private var agentClient: AgentControlClient
 
-    public init(usageModel: UsageModel) {
+    public init(usageModel: UsageModel, agentClient: AgentControlClient) {
         self.usageModel = usageModel
+        self.agentClient = agentClient
         _theme = State(initialValue: TahoeThemeStore.loaded())
     }
 
     public var body: some View {
         let live = usageModel.tahoeLive
+        let code = agentClient.tahoeCode
         return ZStack {
             TahoeWallpaperView()
-            contentView(live: live)
+            contentView(live: live, code: code)
                 .padding(.bottom, 92) // floating tab bar clearance
             if pushedScreen == nil {
                 IOSTabBar(tab: $tab)
@@ -37,21 +45,42 @@ public struct IOSRootView: View {
         .ignoresSafeArea(.container, edges: .bottom)
         .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 244.0/255, green: 246.0/255, blue: 250.0/255))
         .tahoeTheme(theme)
+        // P1 fix: pull live session data on first appearance and whenever
+        // we return to the foreground. Without this, the daemon-mirrored
+        // session list stays empty until the user interacts with the Mac.
+        .task { await agentClient.refreshAll() }
+        .sheet(isPresented: $newSessionPresented) {
+            NewSessionSheet(client: agentClient, isPresented: $newSessionPresented)
+        }
     }
 
     @ViewBuilder
-    private func contentView(live: TahoeLiveBindings) -> some View {
+    private func contentView(live: TahoeLiveBindings, code: TahoeCodeBindings) -> some View {
         switch pushedScreen {
         case .pairing:
             IOSPairingView(onClose: { pushedScreen = nil })
-        case .sessionDetail:
-            IOSSessionDetailView(onBack: { pushedScreen = nil })
+        case .sessionDetail(let id):
+            IOSSessionDetailView(
+                sessionId: id,
+                data: code,
+                onBack: { pushedScreen = nil }
+            )
         case nil:
             switch tab {
             case .chat:      IOSChatView()
             case .live:      IOSLiveView(data: live)
             case .analytics: IOSAnalyticsView()
-            case .code:      IOSCodeView(onOpenDetail: { pushedScreen = .sessionDetail })
+            case .code:
+                IOSCodeView(
+                    data: code,
+                    onOpenDetail: { sessionId in
+                        pushedScreen = .sessionDetail(sessionId)
+                    },
+                    onNewSession: { newSessionPresented = true }
+                )
+                .refreshable {
+                    await agentClient.refreshAll()
+                }
             }
         }
     }

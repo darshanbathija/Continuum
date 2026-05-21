@@ -2,45 +2,21 @@ import SwiftUI
 import AppKit
 import ClawdmeterShared
 
-/// Menu bar label:
+/// Menu bar label renderer:
 ///
 ///   27% 2h 00m 20s  ✦  28% 5d 16h
 ///
-/// Empirically, MenuBarExtra under macOS Tahoe truncates anything past the
-/// first ~1 Text or Image inside its label. The reliable pattern is to render
-/// the ENTIRE label (text + inline burst + text) to a single NSImage via AppKit
-/// and pass that to the label slot. This guarantees the whole composition
-/// makes it into the status item.
-struct MenuBarGaugeView: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        if model.needsReauth {
-            Label("auth", systemImage: "exclamationmark.circle.fill")
-                .foregroundStyle(ClawdmeterTheme.Colors.statusError)
-                .accessibilityLabel("\(model.config.displayName): reconnect required")
-        } else if let usage = model.usage {
-            // Body must be deterministic — see the comment on
-            // `renderLabel(for:assetName:template:)` for the full story. No
-            // `Date()`, no `TimelineView`. The same `usage` value MUST produce
-            // the same `NSImage` reference (cached), so SwiftUI's diff doesn't
-            // think the label changed and doesn't fire a KVO update on the
-            // status item, which on Tahoe loops at 100% CPU.
-            Image(nsImage: Self.renderLabel(
-                for: usage,
-                assetName: model.config.logoAssetName,
-                template: Self.isTemplateAsset(model.config.logoAssetName)
-            ))
-            .accessibilityLabel(accessibilitySummary(for: usage))
-        } else {
-            Image(nsImage: Self.renderEmptyLabel(
-                assetName: model.config.logoAssetName,
-                template: Self.isTemplateAsset(model.config.logoAssetName)
-            ))
-            .accessibilityLabel("\(model.config.displayName): connecting")
-        }
-    }
-
+/// MenuBarExtra under macOS Tahoe truncates anything past the first ~1 Text or
+/// Image inside its label. The reliable pattern is to render the ENTIRE label
+/// (text + inline burst + text) to a single NSImage via AppKit and pass that
+/// to the status item directly. `MenuBarGaugeView` is a static-helper namespace
+/// (kept as a `struct` rather than `enum` only because `AppDelegate` calls the
+/// statics as `MenuBarGaugeView.renderLabel(...)`).
+///
+/// The Tahoe redesign retired the previous SwiftUI View body — every call site
+/// now lives in `AppDelegate.ProviderStatusController.currentImage()`. Keep
+/// this file as a renderer-only helper.
+struct MenuBarGaugeView {
     // MARK: - Composite label renderer
 
     /// Cache key for the rendered menu-bar label. Two renders with the same
@@ -292,9 +268,6 @@ struct MenuBarGaugeView: View {
         }
     }
 
-    private func accessibilitySummary(for usage: UsageData) -> String {
-        "\(model.config.displayName): \(usage.sessionPct) percent session, resets in \(usage.sessionResetMins) minutes. \(usage.weeklyPct) percent weekly, resets in \(usage.weeklyResetMins) minutes."
-    }
 }
 
 private extension Color {

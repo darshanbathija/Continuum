@@ -209,8 +209,11 @@ public final class AgentControlClient: ObservableObject {
     /// v0.8 QA F5: answer a CLI permission prompt (e.g. Codex's "Trust
     /// this directory?"). The daemon dispatches the key sequence
     /// corresponding to `optionId` and clears the published prompt on
-    /// the session's store. iOS UI uses this when the user taps an
-    /// option on `iOSPermissionPromptCard`.
+    /// the session's store. iOS UI calls this from whichever permission-
+    /// prompt surface is active for the current chat (the legacy
+    /// `iOSPermissionPromptCard` was retired in v0.11 along with
+    /// `iOSChatSoloView`; the Tahoe IOSChatView will host the replacement
+    /// inline when permission prompts ship).
     public func respondToPermissionPrompt(sessionId: UUID, promptId: String, optionId: String) async {
         await postBody(
             path: "/sessions/\(sessionId.uuidString)/permission-respond",

@@ -16,6 +16,17 @@ struct MacRootView: View {
     /// `tahoeLive` adapter in `MacTahoeAdapter.swift`. Other surfaces
     /// (Chat / Code / Settings) don't depend on it for v1.
     @ObservedObject private var runtime: AppRuntime
+    /// Observed directly so MacCodeView re-renders when sessions appear,
+    /// change status, or are archived. AppRuntime intentionally does NOT
+    /// forward child publishers (see AppRuntime.swift:72), so we have to
+    /// subscribe per-publisher here.
+    @ObservedObject private var sessionsModel: SessionsModel
+    @ObservedObject private var agentSessionRegistry: AgentSessionRegistry
+    /// Per-provider AppModels — observed so the Usage tab + menu-bar
+    /// popover repaint when polling lands new `UsageData`.
+    @ObservedObject private var claudeModel: AppModel
+    @ObservedObject private var codexModel: AppModel
+    @ObservedObject private var geminiModel: AppModel
 
     // Chat-tab state hoisted to the root so the titlebar can host the
     // Broadcast/Solo toggle inline (mac-chat.jsx:175 nests it inside the
@@ -25,14 +36,29 @@ struct MacRootView: View {
 
     init(runtime: AppRuntime, initialTab: Tab = .chat) {
         self.runtime = runtime
+        self.sessionsModel = runtime.sessionsModel
+        self.agentSessionRegistry = runtime.agentSessionRegistry
+        self.claudeModel = runtime.claudeModel
+        self.codexModel = runtime.codexModel
+        self.geminiModel = runtime.geminiModel
         _theme = State(initialValue: TahoeThemeStore.loaded())
         _tab = State(initialValue: initialTab)
     }
 
     var body: some View {
-        // Force a body re-render whenever any underlying AppModel publishes
-        // by reading from runtime.objectWillChange's snapshot here.
+        // Reading the @ObservedObject child publishers in the body makes
+        // SwiftUI's dependency tracking subscribe to each of them. Without
+        // these touches, `runtime.tahoeLive` / `runtime.tahoeCode` would
+        // still compute correctly but the parent wouldn't re-render when
+        // the underlying @Published fired.
+        _ = claudeModel.usage
+        _ = codexModel.usage
+        _ = geminiModel.usage
+        _ = sessionsModel.repos
+        _ = agentSessionRegistry.sessions
+
         let live = runtime.tahoeLive
+        let code = runtime.tahoeCode
         return ZStack {
             TahoeWallpaperView()
             VStack(spacing: 0) {
@@ -50,7 +76,7 @@ struct MacRootView: View {
                     switch tab {
                     case .chat:     MacChatView(mode: $chatMode, soloProvider: $chatSoloProvider)
                     case .usage:    MacUsageView(data: live)
-                    case .code:     MacCodeView()
+                    case .code:     MacCodeView(data: code)
                     case .settings: MacSettingsView(theme: theme)
                     }
                 }

@@ -3,28 +3,43 @@ import ClawdmeterShared
 
 /// Mac Code IDE — sidebar + thread/composer + review pane. Ports
 /// `mac-sessions.jsx` + `mac-sessions-parts.jsx` + `mac-composer.jsx`.
+/// Accepts a `TahoeCodeBindings` value (defaults to demo); the Mac app
+/// injects real AgentRuntime-derived data via `MacRootView.body`.
+///
+/// Codex review P1 fix: every demo-content surface (thread, plan halo,
+/// review pane tabs) is now gated on `data.isDemo`. In production
+/// (`data.isDemo == false`) the IDE renders empty-state placeholders
+/// rather than the JSX fixture data — so a user can't approve a fake
+/// plan or read a hardcoded diff thinking it's their real session.
 public struct MacCodeView: View {
     @Environment(\.tahoe) private var t
 
     public enum ComposerState: String { case idle, running, plan }
     public enum ReviewTab: String, CaseIterable { case plan, diff, sources, pr, term }
 
-    @State private var openId: String = "s1"
-    @State private var composerState: ComposerState = .plan
+    public var data: TahoeCodeBindings
+
+    @State private var openId: UUID? = nil
+    @State private var composerState: ComposerState = .idle
     @State private var rightTab: ReviewTab = .plan
     @State private var showRight: Bool = true
-    @State private var expanded: Set<String> = ["defx-frontend", "ccwatch"]
+    @State private var expanded: Set<String> = []
+    @State private var didInitComposer: Bool = false
 
-    public init() {}
+    public init(data: TahoeCodeBindings = .demo) { self.data = data }
 
     public var body: some View {
-        let openRepo = TahoeDemo.repos.first { repo in repo.sessions.contains { $0.id == openId } } ?? TahoeDemo.repos[0]
-        let openSession = openRepo.sessions.first(where: { $0.id == openId })
+        let effectiveOpenId = openId ?? data.openSessionId
+        let openRepo = data.repos.first { repo in
+            repo.sessions.contains { $0.id == effectiveOpenId }
+        } ?? data.repos.first
+        let openSession = openRepo?.sessions.first { $0.id == effectiveOpenId }
 
         HStack(spacing: 10) {
             TahoeGlass(radius: 20, tone: .panel) {
                 Sidebar(
-                    openId: $openId,
+                    repos: data.repos,
+                    openId: Binding(get: { effectiveOpenId }, set: { openId = $0 }),
                     expanded: $expanded
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -34,13 +49,15 @@ public struct MacCodeView: View {
             TahoeGlass(radius: 20, tone: .panel) {
                 VStack(spacing: 0) {
                     if let openSession {
-                        ThreadHeader(session: openSession)
+                        ThreadHeader(session: openSession, isDemo: data.isDemo)
                         TahoeHair()
                     }
-                    Thread(state: composerState)
+                    Thread(session: openSession, state: composerState, isDemo: data.isDemo)
                         .frame(maxHeight: .infinity)
                     ComposerBar(
                         state: $composerState,
+                        isDemo: data.isDemo,
+                        hasRealPlan: openSession?.runtimePlanText?.isEmpty == false,
                         onCycle: {
                             composerState = composerState == .idle ? .running
                                           : composerState == .running ? .plan
@@ -53,9 +70,47 @@ public struct MacCodeView: View {
 
             if showRight {
                 TahoeGlass(radius: 20, tone: .panel) {
-                    ReviewPane(tab: $rightTab)
+                    ReviewPane(tab: $rightTab, session: openSession, isDemo: data.isDemo)
                 }
                 .frame(width: 380)
+            }
+        }
+        .onAppear {
+            // Default-expand the first 2 repos so the user sees sessions
+            // immediately — matches JSX `useState(['defx-frontend','ccwatch'])`.
+            if expanded.isEmpty {
+                expanded = Set(data.repos.prefix(2).map { $0.key })
+            }
+            // Demo bindings start in `.plan` so Xcode Previews show the
+            // halo card; production starts in `.idle` so we don't dangle
+            // a halo with no underlying plan text.
+            if !didInitComposer {
+                composerState = data.isDemo ? .plan : .idle
+                didInitComposer = true
+            }
+        }
+        .onChange(of: data.repos.flatMap { $0.sessions.map { $0.id } }) { _, ids in
+            // Watch the FULL session id set, not just repo keys — sessions
+            // can be archived while their repo persists. Keep the open-id
+            // valid: if the previously open session vanished, pick the
+            // first available one in the first repo with sessions.
+            if let oid = openId, !ids.contains(oid) {
+                openId = data.repos.first(where: { !$0.sessions.isEmpty })?.sessions.first?.id
+            }
+            // Auto-expand any repo with live sessions so users see new work
+            // without manual clicking.
+            for repo in data.repos where repo.liveSessionCount > 0 {
+                expanded.insert(repo.key)
+            }
+        }
+        .onChange(of: openSession?.id) { _, _ in
+            // Switching to a session with a real plan auto-cycles the
+            // composer into plan-mode; otherwise it stays idle so the
+            // Refine/Approve actions don't dangle.
+            if openSession?.runtimePlanText?.isEmpty == false {
+                composerState = .plan
+            } else if !data.isDemo {
+                composerState = .idle
             }
         }
     }
@@ -65,7 +120,8 @@ public struct MacCodeView: View {
 
 private struct ThreadHeader: View {
     @Environment(\.tahoe) private var t
-    var session: TahoeDemo.DemoSession
+    var session: TahoeCodeSession
+    var isDemo: Bool
     var body: some View {
         HStack(spacing: 12) {
             TahoeProviderGlyph(provider: session.agent, size: 26)
@@ -78,23 +134,41 @@ private struct ThreadHeader: View {
                     .foregroundStyle(t.fg3)
             }
             Spacer()
-            TahoePill {
-                HStack(spacing: 5) {
-                    TahoeIcon("branch", size: 11)
-                    Text("fix/settlement-dedupe")
-                        .font(TahoeFont.mono(11))
+            // Branch pill renders real `commitBranch` (worktree sessions)
+            // when present; demo bindings keep the JSX placeholder. Local
+            // sessions in production omit it rather than display a
+            // fake branch name.
+            if let branch = session.commitBranch, !branch.isEmpty {
+                TahoePill {
+                    HStack(spacing: 5) {
+                        TahoeIcon("branch", size: 11)
+                        Text(branch).font(TahoeFont.mono(11))
+                    }
+                    .foregroundStyle(t.fg2)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
                 }
-                .foregroundStyle(t.fg2)
-                .padding(.horizontal, 10).padding(.vertical, 5)
+            } else if isDemo {
+                TahoePill {
+                    HStack(spacing: 5) {
+                        TahoeIcon("branch", size: 11)
+                        Text("fix/settlement-dedupe").font(TahoeFont.mono(11))
+                    }
+                    .foregroundStyle(t.fg2)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                }
             }
-            TahoePill {
-                HStack(spacing: 5) {
-                    TahoeIcon("bolt", size: 11)
-                    Text("autopilot · trusted")
-                        .font(TahoeFont.body(11))
+            // Autopilot status pill is a fixture today; hide outside demo
+            // until a real autopilot signal exists for code sessions.
+            if isDemo {
+                TahoePill {
+                    HStack(spacing: 5) {
+                        TahoeIcon("bolt", size: 11)
+                        Text("autopilot · trusted")
+                            .font(TahoeFont.body(11))
+                    }
+                    .foregroundStyle(t.fg2)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
                 }
-                .foregroundStyle(t.fg2)
-                .padding(.horizontal, 10).padding(.vertical, 5)
             }
         }
         .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 10)
@@ -105,7 +179,8 @@ private struct ThreadHeader: View {
 
 private struct Sidebar: View {
     @Environment(\.tahoe) private var t
-    @Binding var openId: String
+    var repos: [TahoeCodeRepo]
+    @Binding var openId: UUID?
     @Binding var expanded: Set<String>
 
     var body: some View {
@@ -147,17 +222,30 @@ private struct Sidebar: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(TahoeDemo.repos) { repo in
-                        RepoSection(
-                            repo: repo,
-                            expanded: expanded.contains(repo.key),
-                            onToggle: {
-                                if expanded.contains(repo.key) { expanded.remove(repo.key) }
-                                else { expanded.insert(repo.key) }
-                            },
-                            openId: openId,
-                            onOpen: { openId = $0 }
-                        )
+                    if repos.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("No repositories yet")
+                                .font(TahoeFont.body(13, weight: .semibold))
+                                .foregroundStyle(t.fg2)
+                            Text("Add a scan root in Settings or start a session via the menu bar.")
+                                .font(TahoeFont.body(11.5))
+                                .foregroundStyle(t.fg3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 14)
+                    } else {
+                        ForEach(repos) { repo in
+                            RepoSection(
+                                repo: repo,
+                                expanded: expanded.contains(repo.key),
+                                onToggle: {
+                                    if expanded.contains(repo.key) { expanded.remove(repo.key) }
+                                    else { expanded.insert(repo.key) }
+                                },
+                                openId: openId,
+                                onOpen: { openId = $0 }
+                            )
+                        }
                     }
                 }
                 .padding(.horizontal, 6).padding(.bottom, 12)
@@ -179,11 +267,11 @@ private struct SidebarIconBtn: View {
 
 private struct RepoSection: View {
     @Environment(\.tahoe) private var t
-    var repo: TahoeDemo.DemoRepo
+    var repo: TahoeCodeRepo
     var expanded: Bool
     var onToggle: () -> Void
-    var openId: String
-    var onOpen: (String) -> Void
+    var openId: UUID?
+    var onOpen: (UUID) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -194,12 +282,12 @@ private struct RepoSection: View {
                     .font(TahoeFont.body(13, weight: .semibold))
                     .foregroundStyle(t.fg)
                     .lineLimit(1)
-                if repo.live > 0 {
+                if repo.liveSessionCount > 0 {
                     HStack(spacing: 3) {
                         Circle().fill(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
                             .frame(width: 6, height: 6)
                             .shadow(color: Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0), radius: 3, x: 0, y: 0)
-                        Text("\(repo.live)")
+                        Text("\(repo.liveSessionCount)")
                             .font(TahoeFont.body(10, weight: .bold))
                             .foregroundStyle(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
                     }
@@ -250,7 +338,7 @@ private struct RepoSection: View {
 
 private struct SessionRow: View {
     @Environment(\.tahoe) private var t
-    var session: TahoeDemo.DemoSession
+    var session: TahoeCodeSession
     var open: Bool
     var onClick: () -> Void
 
@@ -291,7 +379,7 @@ private struct SessionRow: View {
         .padding(.bottom, 2)
     }
 
-    private func statusColor(_ s: TahoeDemo.DemoStatus) -> Color {
+    private func statusColor(_ s: TahoeCodeSession.Status) -> Color {
         switch s {
         case .running:  return Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0)
         case .planning: return t.fg3
@@ -304,7 +392,7 @@ private struct SessionRow: View {
 
 private struct RecentRow: View {
     @Environment(\.tahoe) private var t
-    var recent: TahoeDemo.DemoRecent
+    var recent: TahoeCodeRecent
     var body: some View {
         Button(action: {}) {
             HStack(alignment: .top, spacing: 8) {
@@ -338,25 +426,92 @@ private struct RecentRow: View {
 
 private struct Thread: View {
     @Environment(\.tahoe) private var t
+    var session: TahoeCodeSession?
     var state: MacCodeView.ComposerState
+    var isDemo: Bool
+
+    /// Whether the open session has a real plan from the agent. Drives
+    /// whether the PlanHalo renders at all in production — empty plan +
+    /// `state == .plan` would otherwise dangle a Refine/Approve card with
+    /// no underlying plan content.
+    private var hasRealPlan: Bool {
+        guard let raw = session?.runtimePlanText else { return false }
+        return !raw.isEmpty
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
-                    ThreadMsg(msg: msg)
+                if session == nil {
+                    EmptyThreadState()
+                } else if isDemo {
+                    // Demo bindings keep the JSX fixture so Previews remain
+                    // visually rich.
+                    ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
+                        ThreadMsg(msg: msg, providerOverride: session?.agent)
+                    }
+                } else {
+                    // Production: the live message stream isn't piped to
+                    // the IDE yet. Render a placeholder instead of
+                    // pretending the JSX fixture is real activity.
+                    LiveStreamPlaceholder()
                 }
-                if state == .running { RunningRow() }
-                if state == .plan { PlanHalo() }
+                if state == .running { RunningRow(providerOverride: session?.agent, isDemo: isDemo) }
+                if state == .plan, (isDemo || hasRealPlan) {
+                    PlanHalo(session: session, isDemo: isDemo)
+                }
             }
             .padding(.horizontal, 22).padding(.top, 8).padding(.bottom, 18)
         }
     }
 }
 
+private struct LiveStreamPlaceholder: View {
+    @Environment(\.tahoe) private var t
+    var body: some View {
+        VStack(alignment: .center, spacing: 8) {
+            TahoeIcon("chat", size: 22).foregroundStyle(t.fg4)
+            Text("Live transcript coming soon")
+                .font(TahoeFont.body(13, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text("Session metadata above is live. The streamed message thread will appear here once the daemon bridge ships.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 420)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
+}
+
+private struct EmptyThreadState: View {
+    @Environment(\.tahoe) private var t
+    var body: some View {
+        VStack(alignment: .center, spacing: 8) {
+            TahoeIcon("chat", size: 22).foregroundStyle(t.fg4)
+            Text("No session selected")
+                .font(TahoeFont.body(14, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text("Pick a session from the sidebar, or start a new one in any repo.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 60)
+    }
+}
+
 private struct ThreadMsg: View {
     @Environment(\.tahoe) private var t
     var msg: TahoeDemo.DemoThreadMsg
+    /// Optional real provider so the demo bubble at least matches the
+    /// real session's agent in Previews where mixed-agent threads matter.
+    var providerOverride: TahoeProvider?
     var body: some View {
         switch msg {
         case .user(let text):
@@ -394,7 +549,7 @@ private struct ThreadMsg: View {
             }
         case .assistant(let text):
             HStack(alignment: .top, spacing: 12) {
-                TahoeProviderGlyph(provider: .claude, size: 26)
+                TahoeProviderGlyph(provider: providerOverride ?? .claude, size: 26)
                 Text(text)
                     .font(TahoeFont.body(14))
                     .foregroundStyle(t.fg)
@@ -408,17 +563,25 @@ private struct ThreadMsg: View {
 
 private struct RunningRow: View {
     @Environment(\.tahoe) private var t
+    var providerOverride: TahoeProvider?
+    var isDemo: Bool
     var body: some View {
         HStack(spacing: 12) {
-            TahoeProviderGlyph(provider: .claude, size: 26)
+            TahoeProviderGlyph(provider: providerOverride ?? .claude, size: 26)
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small).tint(t.accent)
-                Text("Editing ")
-                    .font(TahoeFont.body(12.5))
-                    .foregroundStyle(t.fg2)
-                + Text("settlement-store.ts")
-                    .font(TahoeFont.mono(12.5))
-                    .foregroundStyle(t.fg)
+                if isDemo {
+                    Text("Editing ")
+                        .font(TahoeFont.body(12.5))
+                        .foregroundStyle(t.fg2)
+                    + Text("settlement-store.ts")
+                        .font(TahoeFont.mono(12.5))
+                        .foregroundStyle(t.fg)
+                } else {
+                    Text("Working…")
+                        .font(TahoeFont.body(12.5))
+                        .foregroundStyle(t.fg2)
+                }
             }
             Spacer()
         }
@@ -431,6 +594,29 @@ private struct RunningRow: View {
 private struct PlanHalo: View {
     @Environment(\.tahoe) private var t
     @State private var auraGlow: Bool = false
+    var session: TahoeCodeSession?
+    var isDemo: Bool
+
+    /// Parse `session.planText` into discrete plan steps when available.
+    /// In demo mode, falls back to the JSX fixture plan; in production,
+    /// the parent Thread view already guards on `hasRealPlan` so this
+    /// branch shouldn't reach an empty list — but keep the guard as a
+    /// belt-and-braces empty array rather than fixture data.
+    private var planSteps: [String] {
+        if let session,
+           let parsed = parsePlanText(for: session),
+           !parsed.isEmpty {
+            return parsed
+        }
+        return isDemo ? TahoeDemo.plan : []
+    }
+
+    private func parsePlanText(for session: TahoeCodeSession) -> [String]? {
+        guard let raw = session.runtimePlanText, !raw.isEmpty else { return nil }
+        let lines = TahoePlanParser.steps(from: raw, cap: 8)
+        return lines.isEmpty ? nil : lines
+    }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 38, style: .continuous)
@@ -462,7 +648,7 @@ private struct PlanHalo: View {
                                 .font(TahoeFont.body(11.5, weight: .semibold))
                                 .tracking(0.4)
                                 .foregroundStyle(t.fg3)
-                            Text("5 steps · est. 8 tool calls · ~$0.18")
+                            Text("\(planSteps.count) step\(planSteps.count == 1 ? "" : "s")")
                                 .font(TahoeFont.body(14, weight: .bold))
                                 .foregroundStyle(t.fg)
                         }
@@ -471,7 +657,7 @@ private struct PlanHalo: View {
                     .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 6)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(TahoeDemo.plan.enumerated()), id: \.offset) { i, step in
+                        ForEach(Array(planSteps.enumerated()), id: \.offset) { i, step in
                             HStack(alignment: .top, spacing: 12) {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 6, style: .continuous).fill(t.hair2)
@@ -503,19 +689,40 @@ private struct PlanHalo: View {
                             Text("Edit plan")
                         }
                         Spacer()
-                        HStack(spacing: 4) {
-                            TahoeIcon("branch", size: 10)
-                            Text("Will commit to ")
-                            + Text("fix/settlement-dedupe").font(TahoeFont.mono(11)).foregroundColor(t.fg2)
+                        // Only show the "Will commit to <branch>" hint when
+                        // there's a real commit branch (worktree session) or
+                        // we're rendering the demo fixture. Local production
+                        // sessions show no hint rather than the JSX literal.
+                        if let branch = session?.commitBranch, !branch.isEmpty {
+                            HStack(spacing: 4) {
+                                TahoeIcon("branch", size: 10)
+                                Text("Will commit to ")
+                                + Text(branch).font(TahoeFont.mono(11)).foregroundColor(t.fg2)
+                            }
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(t.fg3)
+                        } else if isDemo {
+                            HStack(spacing: 4) {
+                                TahoeIcon("branch", size: 10)
+                                Text("Will commit to ")
+                                + Text("fix/settlement-dedupe").font(TahoeFont.mono(11)).foregroundColor(t.fg2)
+                            }
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(t.fg3)
                         }
-                        .font(TahoeFont.body(11))
-                        .foregroundStyle(t.fg3)
+                        // Approve & run remains visible but is disabled in
+                        // production until the daemon wire for plan-approval
+                        // ships — clicking a no-op accent button on top of
+                        // real plan text would be a credible-but-fake
+                        // approval signal.
                         TahoeAccentButton(size: .m) {
                             HStack(spacing: 8) {
                                 Text("Approve & run")
                                 Text("\u{21E7}\u{23CE}").opacity(0.7).fontWeight(.regular)
                             }
                         }
+                        .opacity(isDemo ? 1.0 : 0.5)
+                        .disabled(!isDemo)
                     }
                     .padding(.horizontal, 14).padding(.vertical, 12)
                 }
@@ -525,11 +732,23 @@ private struct PlanHalo: View {
     }
 }
 
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
 // MARK: - Composer
 
 private struct ComposerBar: View {
     @Environment(\.tahoe) private var t
     @Binding var state: MacCodeView.ComposerState
+    /// Demo bindings keep the JSX literal placeholder text and the
+    /// LiveTicker fixture. Production composer shows a neutral prompt and
+    /// hides the fake cost-ticker until the real one is wired.
+    var isDemo: Bool
+    /// Whether the open session has a real plan from the agent. When false
+    /// in production, the chip label stays "autopilot" rather than "plan"
+    /// since there's nothing to refine.
+    var hasRealPlan: Bool
     var onCycle: () -> Void
     @State private var pulse: Bool = false
 
@@ -557,7 +776,7 @@ private struct ComposerBar: View {
                         TahoeComposerChip(icon: "mic")
                         Spacer()
                         if running {
-                            LiveTicker(onStop: onCycle)
+                            LiveTicker(onStop: onCycle, isDemo: isDemo)
                         } else {
                             SendButton(planMode: planMode, action: onCycle)
                         }
@@ -584,8 +803,16 @@ private struct ComposerBar: View {
     }
 
     private func placeholder(running: Bool, plan: Bool) -> String {
-        if plan { return "Refine the plan above… (e.g. \"skip the migration step, just add the test\")" }
-        if running { return "Editing settlement-store.ts — send a follow-up…" }
+        if plan {
+            return isDemo
+                ? "Refine the plan above… (e.g. \"skip the migration step, just add the test\")"
+                : (hasRealPlan ? "Refine the plan above…" : "Ask anything. Use / for skills, @ for files.")
+        }
+        if running {
+            return isDemo
+                ? "Editing settlement-store.ts — send a follow-up…"
+                : "Working — send a follow-up…"
+        }
         return "Ask anything. Use / for skills, @ for files."
     }
 }
@@ -615,6 +842,9 @@ private struct SendButton: View {
 private struct LiveTicker: View {
     @Environment(\.tahoe) private var t
     var onStop: () -> Void
+    /// Demo bindings keep the JSX `$0.124 / 2.3k tok/s` fixture. Production
+    /// shows a neutral "live" pill until the real cost/tok stream wire ships.
+    var isDemo: Bool
 
     var body: some View {
         Button(action: onStop) {
@@ -628,17 +858,29 @@ private struct LiveTicker: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text("$0.124")
-                            .font(TahoeFont.mono(12.5, weight: .bold))
-                            .foregroundStyle(t.fg)
+                        if isDemo {
+                            Text("$0.124")
+                                .font(TahoeFont.mono(12.5, weight: .bold))
+                                .foregroundStyle(t.fg)
+                        } else {
+                            Text("Stop")
+                                .font(TahoeFont.body(12.5, weight: .bold))
+                                .foregroundStyle(t.fg)
+                        }
                         Text("● live")
                             .font(TahoeFont.body(10.5, weight: .semibold))
                             .foregroundStyle(t.accent)
                     }
-                    Text("2.3k tok/s · 14s elapsed")
-                        .font(TahoeFont.body(10))
-                        .monospacedDigit()
-                        .foregroundStyle(t.fg3)
+                    if isDemo {
+                        Text("2.3k tok/s · 14s elapsed")
+                            .font(TahoeFont.body(10))
+                            .monospacedDigit()
+                            .foregroundStyle(t.fg3)
+                    } else {
+                        Text("session running")
+                            .font(TahoeFont.body(10))
+                            .foregroundStyle(t.fg3)
+                    }
                 }
             }
             .padding(.leading, 4).padding(.trailing, 10)
@@ -661,19 +903,28 @@ private struct LiveTicker: View {
 private struct ReviewPane: View {
     @Environment(\.tahoe) private var t
     @Binding var tab: MacCodeView.ReviewTab
+    var session: TahoeCodeSession?
+    /// Demo bindings expose all five tabs (Plan / Diff / Sources / PR / Term)
+    /// since each has rich JSX fixture content. Production hides everything
+    /// except Plan until the real diff/PR/term wires ship — otherwise the
+    /// pane shows hardcoded fake diffs that a user could approve.
+    var isDemo: Bool
 
-    private let tabs: [(MacCodeView.ReviewTab, String, String)] = [
-        (.plan, "Plan", "doc"),
-        (.diff, "Diff", "diff"),
-        (.sources, "Sources", "search"),
-        (.pr, "PR", "pull"),
-        (.term, "Term", "terminal"),
-    ]
+    private var visibleTabs: [(MacCodeView.ReviewTab, String, String)] {
+        let all: [(MacCodeView.ReviewTab, String, String)] = [
+            (.plan, "Plan", "doc"),
+            (.diff, "Diff", "diff"),
+            (.sources, "Sources", "search"),
+            (.pr, "PR", "pull"),
+            (.term, "Term", "terminal"),
+        ]
+        return isDemo ? all : all.filter { $0.0 == .plan }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
-                ForEach(tabs, id: \.0) { tb in
+                ForEach(visibleTabs, id: \.0) { tb in
                     let active = tab == tb.0
                     Button { tab = tb.0 } label: {
                         HStack(spacing: 5) {
@@ -696,17 +947,25 @@ private struct ReviewPane: View {
                 }
             }
             .padding(10)
+            .onAppear {
+                // If production starts on a tab that's now hidden, snap to
+                // the only available one — Plan.
+                if !isDemo && tab != .plan { tab = .plan }
+            }
+            .onChange(of: isDemo) { _, demo in
+                if !demo && tab != .plan { tab = .plan }
+            }
 
             TahoeHair()
 
             ScrollView {
                 Group {
                     switch tab {
-                    case .plan:    ReviewPlan()
-                    case .diff:    ReviewDiff()
-                    case .sources: ReviewSources()
-                    case .pr:      ReviewPR()
-                    case .term:    ReviewTerm()
+                    case .plan:    ReviewPlan(session: session, isDemo: isDemo)
+                    case .diff:    if isDemo { ReviewDiff() } else { EmptyView() }
+                    case .sources: if isDemo { ReviewSources() } else { EmptyView() }
+                    case .pr:      if isDemo { ReviewPR() } else { EmptyView() }
+                    case .term:    if isDemo { ReviewTerm() } else { EmptyView() }
                     }
                 }
             }
@@ -717,30 +976,60 @@ private struct ReviewPane: View {
 
 private struct ReviewPlan: View {
     @Environment(\.tahoe) private var t
+    var session: TahoeCodeSession?
+    var isDemo: Bool
+
+    private var steps: [String] {
+        if let raw = session?.runtimePlanText, !raw.isEmpty {
+            let parsed = TahoePlanParser.steps(from: raw, cap: 12)
+            if !parsed.isEmpty { return parsed }
+        }
+        // Production with no plan text shows an empty list and a helper
+        // message; demo bindings keep the JSX fixture plan.
+        return isDemo ? TahoeDemo.plan : []
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("PLAN · 5 STEPS")
-                .font(TahoeFont.body(11, weight: .bold))
-                .tracking(0.5)
-                .foregroundStyle(t.fg3)
-                .padding(.bottom, 10)
-            ForEach(Array(TahoeDemo.plan.enumerated()), id: \.offset) { i, step in
-                HStack(alignment: .top, spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(i == 0 ? t.accentAlpha(0.18) : t.hair2)
-                        Text("\(i+1)")
-                            .font(TahoeFont.mono(11, weight: .bold))
-                            .foregroundStyle(i == 0 ? t.accent : t.fg2)
-                    }
-                    .frame(width: 22, height: 22)
-                    Text(step)
-                        .font(TahoeFont.body(12.5))
-                        .foregroundStyle(t.fg)
+            if steps.isEmpty {
+                VStack(alignment: .center, spacing: 8) {
+                    TahoeIcon("doc", size: 22).foregroundStyle(t.fg4)
+                    Text("No plan yet")
+                        .font(TahoeFont.body(13, weight: .semibold))
+                        .foregroundStyle(t.fg2)
+                    Text("Run an agent in plan mode and the steps will appear here for review.")
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg3)
+                        .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 280)
                 }
-                .padding(.vertical, 10)
-                if i < TahoeDemo.plan.count - 1 { TahoeHair() }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 40)
+            } else {
+                Text("PLAN · \(steps.count) STEPS")
+                    .font(TahoeFont.body(11, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(t.fg3)
+                    .padding(.bottom, 10)
+                ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                    HStack(alignment: .top, spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(i == 0 ? t.accentAlpha(0.18) : t.hair2)
+                            Text("\(i+1)")
+                                .font(TahoeFont.mono(11, weight: .bold))
+                                .foregroundStyle(i == 0 ? t.accent : t.fg2)
+                        }
+                        .frame(width: 22, height: 22)
+                        Text(step)
+                            .font(TahoeFont.body(12.5))
+                            .foregroundStyle(t.fg)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 10)
+                    if i < steps.count - 1 { TahoeHair() }
+                }
             }
         }
         .padding(16)

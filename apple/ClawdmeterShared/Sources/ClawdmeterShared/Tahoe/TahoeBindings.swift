@@ -89,6 +89,185 @@ public struct TahoeLiveBindings: Equatable, Sendable {
     public static let demo = TahoeLiveBindings()
 }
 
+// MARK: - Code (Sessions IDE) bindings
+
+/// Portable shape for a repository row in the Code IDE sidebar. Mirrors the
+/// JSX `DEMO_REPOS` row literal so the existing MacCodeView body code keeps
+/// working without restructuring — only the data source changes.
+public struct TahoeCodeRepo: Identifiable, Hashable, Sendable {
+    public var id: String { key }
+    public var key: String
+    public var name: String
+    public var tint: OKLCH
+    public var liveSessionCount: Int
+    public var sessions: [TahoeCodeSession]
+    public var recents: [TahoeCodeRecent]
+
+    public init(key: String, name: String, tint: OKLCH,
+                liveSessionCount: Int = 0,
+                sessions: [TahoeCodeSession] = [],
+                recents: [TahoeCodeRecent] = []) {
+        self.key = key; self.name = name; self.tint = tint
+        self.liveSessionCount = liveSessionCount
+        self.sessions = sessions
+        self.recents = recents
+    }
+}
+
+public struct TahoeCodeSession: Identifiable, Hashable, Sendable {
+    public var id: UUID
+    public var title: String
+    public var agent: TahoeProvider
+    public var model: String
+    public var status: Status
+    public var mode: String       // plan | edit | worktree | local
+    public var subtitle: String
+    /// Optional plan markdown from the agent's last `ExitPlanMode` call. The
+    /// Plan Halo card parses this into discrete bullet-numbered steps. Nil
+    /// when the session is not in plan mode.
+    public var runtimePlanText: String?
+    /// Optional branch name where the agent will commit. Real sessions
+    /// derive this from worktree path; demo sessions render the JSX literal.
+    public var commitBranch: String?
+
+    public enum Status: String, Hashable, Sendable {
+        case running, paused, done, planning, degraded
+    }
+
+    public init(id: UUID, title: String, agent: TahoeProvider, model: String,
+                status: Status, mode: String, subtitle: String,
+                runtimePlanText: String? = nil,
+                commitBranch: String? = nil) {
+        self.id = id; self.title = title; self.agent = agent
+        self.model = model; self.status = status; self.mode = mode; self.subtitle = subtitle
+        self.runtimePlanText = runtimePlanText
+        self.commitBranch = commitBranch
+    }
+}
+
+public struct TahoeCodeRecent: Identifiable, Hashable, Sendable {
+    public var id: String
+    public var title: String
+    public var provider: TahoeProvider
+    public var live: Bool
+    public var ago: String
+
+    public init(id: String, title: String, provider: TahoeProvider, live: Bool, ago: String) {
+        self.id = id; self.title = title; self.provider = provider
+        self.live = live; self.ago = ago
+    }
+}
+
+public struct TahoeCodeBindings: Sendable {
+    public var repos: [TahoeCodeRepo]
+    public var openSessionId: UUID?
+    /// `true` when the bindings are the SwiftUI Preview / demo fixture.
+    /// Views check this to decide whether to render the JSX placeholder
+    /// thread / plan / PR data; in production (`isDemo == false`) the
+    /// views render empty-state placeholders for any surface that isn't
+    /// backed by real live data yet.
+    public var isDemo: Bool
+
+    public init(repos: [TahoeCodeRepo] = [], openSessionId: UUID? = nil, isDemo: Bool = false) {
+        self.repos = repos
+        self.openSessionId = openSessionId
+        self.isDemo = isDemo
+    }
+
+    /// Empty production state — distinct from `.demo`. Use this when the
+    /// real session list hasn't returned anything yet (poller hasn't fired,
+    /// daemon not paired, user archived everything).
+    public static let empty = TahoeCodeBindings(repos: [], openSessionId: nil, isDemo: false)
+
+    /// Demo fixture — mirrors `TahoeDemo.repos`, with UUIDs minted per
+    /// session so the open-id selection works the same as it did before.
+    public static let demo: TahoeCodeBindings = {
+        let demoSessionId = UUID()
+        let sessionsByRepo: [String: [TahoeCodeSession]] = [
+            "defx-frontend": [
+                TahoeCodeSession(id: demoSessionId, title: "Refactor settlement store dedupe",
+                                 agent: .claude, model: "Sonnet 4.5",
+                                 status: .running, mode: "plan", subtitle: "plan \u{00B7} 2m ago"),
+                TahoeCodeSession(id: UUID(), title: "Add USDT pair to order book",
+                                 agent: .codex, model: "gpt-5",
+                                 status: .paused, mode: "edit", subtitle: "paused \u{00B7} 18m"),
+                TahoeCodeSession(id: UUID(), title: "Wire WS reconnect backoff",
+                                 agent: .claude, model: "Opus 4",
+                                 status: .done, mode: "edit", subtitle: "done \u{00B7} 1h"),
+            ],
+            "ccwatch": [
+                TahoeCodeSession(id: UUID(), title: "Tahoe-style redesign pass",
+                                 agent: .claude, model: "Sonnet 4.5",
+                                 status: .planning, mode: "plan", subtitle: "planning \u{00B7} just now"),
+            ],
+            "internal-tools": [],
+        ]
+        let recentsByRepo: [String: [TahoeCodeRecent]] = [
+            "defx-frontend": [
+                TahoeCodeRecent(id: "r1", title: "fix(perp): margin tier rounding", provider: .claude, live: true,  ago: "now"),
+                TahoeCodeRecent(id: "r2", title: "investigate flaky e2e suite",     provider: .codex,  live: false, ago: "12m"),
+            ],
+            "ccwatch": [],
+            "internal-tools": [],
+        ]
+        let tints: [String: OKLCH] = [
+            "defx-frontend":  OKLCH(l: 0.72, c: 0.16, h: 35),
+            "ccwatch":        OKLCH(l: 0.72, c: 0.16, h: 220),
+            "internal-tools": OKLCH(l: 0.72, c: 0.18, h: 310),
+        ]
+        let repos: [TahoeCodeRepo] = ["defx-frontend", "ccwatch", "internal-tools"].map { key in
+            TahoeCodeRepo(
+                key: key, name: key,
+                tint: tints[key] ?? OKLCH(l: 0.72, c: 0.16, h: 220),
+                liveSessionCount: key == "defx-frontend" ? 2 : 0,
+                sessions: sessionsByRepo[key] ?? [],
+                recents: recentsByRepo[key] ?? []
+            )
+        }
+        return TahoeCodeBindings(repos: repos, openSessionId: demoSessionId, isDemo: true)
+    }()
+}
+
+// MARK: - Plan parsing
+
+/// Shared markdown-bullet parser for `AgentSession.planText`. Splits on
+/// newlines, strips list prefixes (`- `, `* `, `• `, `1. `..`99. `), drops
+/// empty lines, caps at `cap` entries. Used by `MacCodeView.PlanHalo`
+/// and `MacCodeView.ReviewPlan`.
+public enum TahoePlanParser {
+    public static func steps(from raw: String, cap: Int) -> [String] {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsed = trimmed
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { line -> String? in
+                var s = String(line).trimmingCharacters(in: .whitespaces)
+                // Bullet markers
+                for prefix in ["- ", "* ", "\u{2022} "] {
+                    if s.hasPrefix(prefix) {
+                        s = String(s.dropFirst(prefix.count))
+                        return s.isEmpty ? nil : s
+                    }
+                }
+                // Numbered list: any 1-3 digit prefix followed by `. ` or `) `.
+                // Strips `1. `, `10. `, `99) ` — was previously cap'd at 9. with
+                // a hardcoded list, dropping double-digit prefixes verbatim.
+                if let dot = s.firstIndex(where: { $0 == "." || $0 == ")" }),
+                   dot != s.startIndex {
+                    let head = s[s.startIndex..<dot]
+                    if head.count <= 3, head.allSatisfy({ $0.isNumber }) {
+                        let after = s.index(after: dot)
+                        if after < s.endIndex, s[after] == " " {
+                            s = String(s[s.index(after: after)..<s.endIndex])
+                            return s.isEmpty ? nil : s
+                        }
+                    }
+                }
+                return s.isEmpty ? nil : s
+            }
+        return Array(parsed.prefix(cap))
+    }
+}
+
 // MARK: - Reset-time formatting
 
 public enum TahoeFmt {

@@ -3,19 +3,34 @@ import ClawdmeterShared
 
 /// iOS Code (Sessions) tab — search + per-repo expandable cards with a
 /// new-session "+" button per repo. Ports `ios-live.jsx::IOSSessions`.
+/// Accepts a `TahoeCodeBindings` value (defaults to demo); ContentView/iOS
+/// root injects daemon-derived bindings via the AgentControlClient adapter.
 public struct IOSCodeView: View {
     @Environment(\.tahoe) private var t
-    var onOpenDetail: () -> Void
+    /// Push the session detail screen for a specific session id. Carries
+    /// the id so the detail surface can render real session data instead
+    /// of a hardcoded fixture (P1 fix).
+    var onOpenDetail: (UUID) -> Void
+    /// Present the NewSessionSheet. Wired from IOSRootView so the sheet
+    /// has access to the AgentControlClient.
+    var onNewSession: () -> Void
+    public var data: TahoeCodeBindings
 
-    public init(onOpenDetail: @escaping () -> Void = {}) {
+    public init(
+        data: TahoeCodeBindings = .demo,
+        onOpenDetail: @escaping (UUID) -> Void = { _ in },
+        onNewSession: @escaping () -> Void = {}
+    ) {
+        self.data = data
         self.onOpenDetail = onOpenDetail
+        self.onNewSession = onNewSession
     }
 
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
                 IOSLargeTitle(title: "Code") {
-                    IOSRoundIconBtn("plus")
+                    IOSRoundIconBtn("plus", action: onNewSession)
                 }
 
                 // Search
@@ -32,12 +47,31 @@ public struct IOSCodeView: View {
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
 
                 // Repo sections
-                VStack(spacing: 14) {
-                    ForEach(TahoeDemo.repos.filter { !$0.sessions.isEmpty || !$0.recents.isEmpty }) { repo in
-                        IOSRepoCard(repo: repo, onOpen: onOpenDetail)
+                let visible = data.repos.filter { !$0.sessions.isEmpty || !$0.recents.isEmpty }
+                if visible.isEmpty {
+                    VStack(spacing: 8) {
+                        TahoeIcon("chat", size: 22).foregroundStyle(t.fg4)
+                        Text("No active sessions")
+                            .font(TahoeFont.body(14, weight: .semibold))
+                            .foregroundStyle(t.fg2)
+                        Text("Sessions started on your Mac will appear here once you're paired.")
+                            .font(TahoeFont.body(12))
+                            .foregroundStyle(t.fg3)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 280)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 60)
+                    .padding(.horizontal, 24)
+                } else {
+                    VStack(spacing: 14) {
+                        ForEach(visible) { repo in
+                            IOSRepoCard(repo: repo, onOpen: onOpenDetail, onNewSession: onNewSession)
+                        }
+                    }
+                    .padding(.horizontal, 16).padding(.bottom, 30)
                 }
-                .padding(.horizontal, 16).padding(.bottom, 30)
             }
         }
     }
@@ -45,8 +79,9 @@ public struct IOSCodeView: View {
 
 private struct IOSRepoCard: View {
     @Environment(\.tahoe) private var t
-    var repo: TahoeDemo.DemoRepo
-    var onOpen: () -> Void
+    var repo: TahoeCodeRepo
+    var onOpen: (UUID) -> Void
+    var onNewSession: () -> Void
 
     @State private var expanded: Bool = true
 
@@ -63,12 +98,12 @@ private struct IOSRepoCard: View {
                             .font(TahoeFont.body(14, weight: .bold))
                             .tracking(-0.1)
                             .foregroundStyle(t.fg)
-                        if repo.live > 0 {
+                        if repo.liveSessionCount > 0 {
                             HStack(spacing: 4) {
                                 Circle().fill(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
                                     .frame(width: 6, height: 6)
                                     .shadow(color: Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0), radius: 3, x: 0, y: 0)
-                                Text("\(repo.live) live")
+                                Text("\(repo.liveSessionCount) live")
                                     .font(TahoeFont.body(11, weight: .bold))
                                     .foregroundStyle(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
                             }
@@ -82,7 +117,7 @@ private struct IOSRepoCard: View {
                 }
                 .buttonStyle(.plain)
 
-                Button(action: {}) {
+                Button(action: onNewSession) {
                     TahoeIcon("plus", size: 15).foregroundStyle(t.fg2)
                         .frame(width: 38, height: 38)
                         .background {
@@ -104,7 +139,7 @@ private struct IOSRepoCard: View {
                             if i > 0 {
                                 TahoeHair().padding(.leading, 58)
                             }
-                            Button(action: onOpen) {
+                            Button(action: { onOpen(s.id) }) {
                                 HStack(spacing: 12) {
                                     TahoeProviderGlyph(provider: s.agent, size: 32)
                                     VStack(alignment: .leading, spacing: 2) {
@@ -138,7 +173,12 @@ private struct IOSRepoCard: View {
                                 if i > 0 {
                                     TahoeHair().padding(.leading, 58)
                                 }
-                                Button(action: onOpen) {
+                                // Recents don't carry a live AgentSession.id;
+                                // tapping them is a no-op for now (the
+                                // historical sessions surface lands in a
+                                // follow-up). The button stays interactive
+                                // so the row still feels right.
+                                Button(action: {}) {
                                     HStack(spacing: 12) {
                                         ZStack {
                                             TahoeProviderGlyph(provider: r.provider, size: 28)
@@ -174,7 +214,7 @@ private struct IOSRepoCard: View {
 
 private struct StatusDot: View {
     @Environment(\.tahoe) private var t
-    var status: TahoeDemo.DemoStatus
+    var status: TahoeCodeSession.Status
 
     var body: some View {
         let c: Color = {
