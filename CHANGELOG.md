@@ -4,6 +4,106 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.9.0 build 68] - 2026-05-21 — Gemini chat via agentapi + Frontier UI (`feat/chat-v0.9`)
+
+The first Clawdmeter release where the Chat tab actually has 3 working
+providers — Claude, Codex, and Gemini (via Antigravity 2's HTTP-RPC
+`agentapi`). Frontier compare also goes live: 2-3 chat panes side-by-side
+sharing one composer, with per-pane "Pick winner" archiving the others.
+
+### Added
+
+- **Gemini chat via Antigravity 2 agentapi.** `POST /chat-sessions
+  {provider: "gemini"}` lifts the v0.8 501 stub. The daemon-side
+  `handlePostGeminiChatSession` picks the first available Antigravity
+  project as a scratch workspace (chat has no `repoKey`), creates a
+  placeholder conversation via `agentapi new-conversation`, persists
+  `geminiBackend=.agentapi` + `antigravityConversationId` +
+  `antigravityProjectId` on the session, and warms the chat store.
+  503 with structured CTA bodies when Antigravity isn't installed,
+  not signed in, not running, or has no projects open.
+- **AntigravityChatIngestor** subscribes to the SQLite WAL DB
+  Antigravity writes per conversation at
+  `~/.gemini/antigravity/conversations/<id>.db`, waits for the file
+  to appear (up to ~30s), backfills history, then tails newSteps and
+  forwards each row as a `ChatMessage` through
+  `SessionChatStore.appendSDKMessages`. Mirrors the
+  `CodexSDKEventIngestor` pattern; chat-subscribe WS clients see
+  identical snapshot shapes across all three providers.
+- **Frontier compare endpoints (live).** All 4 routes that v0.8
+  shipped as 501 stubs are now real handlers:
+    - `POST /chat-sessions/frontier` spawns 2-3 sibling chat sessions
+      sharing a `frontierGroupId`, per-slot results so a partial
+      Frontier (D10) still ships the live slots + the failure
+      reasons. CM5 idempotency via `clientRequestId`.
+    - `POST /chat-sessions/frontier/:groupId/send` fans out the
+      prompt to every child via `forwardFrontierChildSend` (agentapi
+      for Gemini, CodexSubscriptionRelay for Codex SDK, tmux for CLI).
+    - `POST /chat-sessions/frontier/:groupId/retry-slot` tears the
+      failed child and respawns at the same childIndex.
+    - `POST /chat-sessions/frontier/:groupId/pick-winner` archives
+      the non-winning children, returns the winner.
+- **Mac `ChatFrontierView`** — 3-pane HSplitView showing all live
+  children side-by-side with a shared composer + per-pane "Pick
+  winner" button. The per-pane chat surface reuses the existing
+  `ChatSoloView`, so transcript rendering + permission cards inherit
+  unchanged. `MacComposerSender` gains `frontierSend`,
+  `frontierPickWinner`, `frontierRetrySlot`, `createFrontier`.
+- **Wire protocol v10 → v11.** `antigravityChatMinimum = 11` (set in
+  v0.8.1 with the daemon path deferred) is now reachable.
+  `supportsAntigravityChat(serverWireVersion:)` flips true at v11.
+- **Schema additions.** `AgentSession` gains optional
+  `antigravityProjectId: String?` — additive via `decodeIfPresent`,
+  no formal schema bump. Persisted at create-time on Gemini chat
+  sessions; `sendAntigravityMessage` prefers it over the v0.8.1
+  repoKey-based resolver.
+- **`AgentSessionRegistry.setAntigravityChatBinding(id:conversationId:projectId:)`**
+  for the two-phase create (chat-cwd needs to exist before the
+  conversation id is known, session record needs to exist before
+  chat-cwd is stored).
+- **`AgentSessionRegistry.frontierGroupChildren(groupId:)`** returns
+  all children sorted by `frontierChildIndex` — used by the daemon's
+  Frontier handlers + the Mac Frontier view.
+
+### Tests
+
+- **`WireV11Tests.swift`** (8 cases): pins `current=11`, asserts
+  `antigravityChatMinimum=11` is reachable, asserts the gate opens at
+  v11, `AgentSession` round-trip with `antigravityProjectId`,
+  decode-without-projectId tolerance, prior minimums unchanged.
+- **`WireV10Tests`** updated: `currentWireVersionIsTen` →
+  `currentWireVersionIsAtLeastTen` (>=10), `supportsAntigravityChat`
+  test renamed to `gatedAtV11`.
+- **`SessionsV2Tests` + `WireMixedVersionPairingTests`** pin
+  `current >= 11` so future bumps don't keep tripping these.
+- 571/571 swift tests passing (was 490 in v0.8.0).
+
+### Observability — `frontier.send.divergence_ms` runbook note
+
+Mixed-backend Frontier groups (SDK + CLI on the same prompt) see a
+measurement artifact: SDK events arrive ~50ms ahead of CLI events
+through JSONLTail because the SDK has no JSONL write step. Treat
+`frontier.send.divergence_ms` between SDK and CLI children as
+informational, NOT a per-backend latency comparison — the difference
+is observation-layer skew, not actual provider response time.
+
+### Deferred to v0.9.x
+
+- **iOS `iOSChatFrontierView`** (segmented control) — Mac UI ships
+  in v0.9.0; iOS surface follows.
+- **"Royal Frontier" sidebar inbox entry** (Mac + iOS).
+- **Full `ChatProviderProbe`** (P1 actor + in-flight de-dup +
+  thundering-herd coordination). v0.9 ships minimal probe surface
+  (binary on PATH + `CodexSDKManager.isProvisioned` + Antigravity
+  install enum).
+- **`ChatProviderAuthObserver`** (CM3 — CLI stderr observer for
+  `oauth-expired`, `token-expired`, agentapi 401).
+- **iOS NSUserActivity Handoff for chat sessions** (NEW-E6 from
+  v0.8 plan).
+- **`frontier-subscribe` WS channel** — the Mac MVP relies on each
+  child's own `chat-subscribe` stream; a typed `FrontierGroupSnapshot`
+  envelope is the next polish.
+
 ## [0.8.1 build 65] - 2026-05-21 — AGY migration (`feat/agy-migration`)
 
 Google replaced the standalone `gemini` CLI (v0.42, runnable in a tmux
