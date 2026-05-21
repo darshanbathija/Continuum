@@ -113,6 +113,67 @@ public final class DaemonChatStoreRegistry {
     /// a burst of HTTP polls in a row reuses parsed state.
     public func snapshotStore(for session: AgentSession) -> SessionChatStore? {
         startSweepIfNeeded()
+        // v0.8 QA: for chat-mode Codex CLI, the rollout JSONL the store
+        // is tailing may be older than the CLI's current rollout. Codex
+        // CLI writes a NEW rollout per turn under ~/.codex/sessions/, so
+        // a session created at T0 picks up rollout-T0 at first cache,
+        // then when the user sends a prompt at T1 the CLI creates
+        // rollout-T1 and the daemon's store keeps tailing T0 — the new
+        // turn never reaches the snapshot. If we detect a newer rollout
+        // since the entry was opened, swap the store to the new file.
+        // v0.8 QA: chat-mode CLI sessions may need a JSONL swap on each
+        // snapshot read:
+        // - Codex CLI rotates rollouts per turn (~/.codex/sessions/...).
+        // - Claude CLI writes its JSONL on first turn — the file doesn't
+        //   exist at session create, so createStore fell back to sdkOnly;
+        //   we need to upgrade to a real JSONL-backed store once the file
+        //   appears.
+        //
+        // CRITICAL: switch the file IN PLACE on the existing store
+        // (switchTailedFile) — don't construct a fresh store. A fresh
+        // store invalidates the Mac UI's @ObservedObject reference and
+        // the chat thread freezes on the previous turn's snapshot.
+        if let entry = entries[session.id],
+           session.kind == .chat {
+            let desiredURL: URL?
+            if session.agent == .codex, session.codexChatBackend == .cli {
+                // F1: bind to THIS session's rollout by matching
+                // session_meta.cwd against effectiveCwd, gated by
+                // session.createdAt so prior rollouts are excluded.
+                // Falls back to nil (no swap) when no matching rollout
+                // exists yet, instead of grabbing an unrelated one.
+                desiredURL = Self.newestCodexJSONLMatching(
+                    cwd: session.effectiveCwd,
+                    after: session.createdAt
+                )
+            } else if session.agent == .claude {
+                desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
+            } else {
+                desiredURL = nil
+            }
+            if let desired = desiredURL, entry.store.currentFileURL != desired {
+                // F1 follow-up: if the existing entry is an sdkOnly
+                // fallback (e.g. Codex CLI chat created before its first
+                // rollout existed), switchTailedFile is a no-op. Drop
+                // the entry and let createStore rebuild — this is the
+                // one place where @ObservedObject invalidation is
+                // acceptable because the user hasn't started interacting
+                // with the chat yet (no rollout = no turns).
+                if entry.store.isSDKOnly {
+                    entry.store.stop()
+                    entries.removeValue(forKey: session.id)
+                    // Fall through to the "no entry" path which calls
+                    // createStore — which now finds the matching rollout.
+                } else {
+                    entry.store.switchTailedFile(to: desired)
+                    var refreshed = entry
+                    refreshed.lastTouchedAt = Date()
+                    entries[session.id] = refreshed
+                    registryLogger.info("snapshot-cache file-swap session=\(session.id.uuidString, privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
+                    return entry.store
+                }
+            }
+        }
         if var entry = entries[session.id] {
             entry.lastTouchedAt = Date()
             entries[session.id] = entry
@@ -181,11 +242,15 @@ public final class DaemonChatStoreRegistry {
     /// of trying to JSONL-parse a binary database.
     @MainActor
     public static func defaultResolveURL(sessionId: UUID, session: AgentSession) -> URL? {
+        // v0.8.1 agy-migration: Antigravity 2 agentapi sessions live in
+        // a SQLite WAL DB, not a JSONL — return the .db URL so future
+        // SessionChatStore work can attach an AntigravityConversationDB
+        // reader instead of trying to parse binary as JSONL.
         if session.agent == .gemini, session.geminiBackend == .agentapi,
            let conversationId = session.antigravityConversationId {
             return Self.antigravityConversationDBURL(conversationId: conversationId)
         }
-        let cwd = session.worktreePath ?? session.repoKey
+        let cwd = session.effectiveCwd
         if session.agent == .claude {
             return SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
         } else {
@@ -229,9 +294,132 @@ public final class DaemonChatStoreRegistry {
         return newest
     }
 
+    /// v0.8 QA F1: find the newest Codex rollout whose `session_meta.cwd`
+    /// matches `cwd` AND whose mtime is >= `after`. This isolates a
+    /// chat-mode Codex CLI session's rollout from any other Codex
+    /// activity on the machine — without this, `newestCodexJSONL()`
+    /// surfaces ANY codex run's transcript (concurrent chat, another
+    /// worktree, manual `codex` in Terminal). Returns nil when no
+    /// rollout for this session exists yet (e.g. before the user's first
+    /// prompt processes).
+    nonisolated public static func newestCodexJSONLMatching(cwd: String, after: Date) -> URL? {
+        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sessions", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: sessionsDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        // Gather candidates sorted by mtime desc so we can early-exit
+        // on the first cwd match.
+        var candidates: [(URL, Date)] = []
+        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            // Skip rollouts that predate session creation — those are
+            // from prior runs, can't belong to this session.
+            guard date >= after else { continue }
+            candidates.append((url, date))
+        }
+        candidates.sort { $0.1 > $1.1 }
+        let targetCwd = (cwd as NSString).standardizingPath
+        for (url, _) in candidates {
+            if let metaCwd = readSessionMetaCwd(from: url),
+               (metaCwd as NSString).standardizingPath == targetCwd {
+                return url
+            }
+        }
+        return nil
+    }
+
+    /// Peek the first line of a Codex rollout JSONL and return its
+    /// `session_meta.cwd` value, or nil if the file is empty / malformed /
+    /// not yet a session_meta record.
+    nonisolated private static func readSessionMetaCwd(from url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else {
+            return nil
+        }
+        // First line only — session_meta is always the first record.
+        guard let newlineIdx = data.firstIndex(of: 0x0a) else { return nil }
+        let firstLine = data.prefix(newlineIdx)
+        guard let json = try? JSONSerialization.jsonObject(with: firstLine) as? [String: Any] else {
+            return nil
+        }
+        guard (json["type"] as? String) == "session_meta",
+              let payload = json["payload"] as? [String: Any],
+              let cwd = payload["cwd"] as? String else {
+            return nil
+        }
+        return cwd
+    }
+
     // MARK: - Internals
 
     private func createStore(for session: AgentSession) -> SessionChatStore? {
+        // v0.8 chat sessions: route by backend.
+        //
+        // - Codex SDK chat → sdkOnly store, populated by CodexSDKEventIngestor.
+        //   No JSONLTail (the SDK doesn't write JSONL).
+        // - Claude chat (CLI) → JSONLTail at exact encoded chat-cwd path. The
+        //   chat-cwd is `<AppSupport>/chat-sessions/<sessionUUID>/`, unique per
+        //   session, so the encoded `~/.claude/projects/-Users-..-chat-sessions-<UUID>/`
+        //   directory contains only this chat's JSONLs — no fuzzy parent walk
+        //   needed and no risk of surfacing unrelated transcripts.
+        // - Codex CLI chat → newest rollout JSONL via the legacy default
+        //   resolver (good enough for v0.8; the CLI writes to
+        //   `~/.codex/sessions/<date>/rollout-...jsonl` keyed by date/uuid).
+        if session.kind == .chat {
+            // Codex SDK: sdkOnly (no JSONL exists).
+            if session.agent == .codex && session.codexChatBackend == .sdk {
+                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+                store.start()
+                return store
+            }
+            // Claude chat (CLI): point JSONLTail at the encoded chat-cwd dir.
+            // The dir-name encoding mirrors Claude's `/` → `-`, `_` → `-`,
+            // ` ` → `-` rule (see SessionChatStore.encodeCwd). Picking the
+            // newest .jsonl in that dir is safe because the dir is unique
+            // per session (chat-cwd contains the session UUID).
+            if session.agent == .claude {
+                if let url = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd) {
+                    let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
+                    store.start()
+                    return store
+                }
+                // No JSONL yet — fall through to sdkOnly. The session will
+                // remain empty until the CLI writes its first turn; the next
+                // snapshotStore() call after that point will see the file.
+                // (For v0.8 the store stays sdkOnly forever; v0.8.x can wire
+                // a directory-watch retry. Acceptable trade — empty thread
+                // beats wrong thread.)
+                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+                store.start()
+                return store
+            }
+            // Codex CLI chat: bind to the rollout whose session_meta.cwd
+            // matches this session's chat-cwd. Without the cwd gate, any
+            // concurrent codex run on the machine (another chat, another
+            // worktree, manual `codex` in Terminal) would surface its
+            // transcript inside THIS chat's UI. After-gate excludes
+            // pre-existing rollouts. Falls through to sdkOnly when the
+            // user hasn't sent their first prompt yet (no rollout
+            // written) — snapshotStore upgrades the store later via the
+            // file-swap path when the matching rollout appears.
+            if session.agent == .codex && session.codexChatBackend == .cli {
+                if let url = Self.newestCodexJSONLMatching(
+                    cwd: session.effectiveCwd,
+                    after: session.createdAt
+                ) {
+                    let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
+                    store.start()
+                    return store
+                }
+            }
+            // Default chat fallback: sdkOnly store. Keeps the rendering empty
+            // but never wrong — better than surfacing unrelated transcripts.
+            let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+            store.start()
+            return store
+        }
         guard let url = resolveURL(session.id, session) else {
             registryLogger.warning("could not resolve JSONL for session \(session.id.uuidString, privacy: .public)")
             return nil
@@ -239,6 +427,27 @@ public final class DaemonChatStoreRegistry {
         let store = SessionChatStore(sessionId: session.id, sessionFileURL: url)
         store.start()
         return store
+    }
+
+    /// Resolve `~/.claude/projects/<encoded-chat-cwd>/<newest>.jsonl` for a
+    /// chat-mode Claude session. The encoded dir name is deterministic per
+    /// session UUID, so we can target it directly without the parent-walk
+    /// fuzzy-match that ISSUE-003 fixed for unrelated paths.
+    private static func chatCwdClaudeJSONL(chatCwd: String) -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let projects = home.appendingPathComponent(".claude/projects")
+        let encoded = SessionChatStore.encodeCwd((chatCwd as NSString).standardizingPath)
+        let dir = projects.appendingPathComponent(encoded)
+        guard FileManager.default.fileExists(atPath: dir.path) else { return nil }
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return nil }
+        let jsonls = contents.filter { $0.pathExtension == "jsonl" }
+        return jsonls.max { a, b in
+            let ad = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let bd = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return ad < bd
+        }
     }
 
     private func startSweepIfNeeded() {
@@ -263,6 +472,12 @@ public final class DaemonChatStoreRegistry {
         let cutoff = Date().addingTimeInterval(-Self.idleEvictionInterval)
         let evictableIds = entries.compactMap { (id, entry) -> UUID? in
             guard entry.subscriberCount == 0, entry.lastTouchedAt < cutoff else { return nil }
+            // F1 guard: an awaiting permission prompt means a daemon-side
+            // continuation is parked waiting for the user. Evicting would
+            // wipe the @Published prompt state, the UI would disappear,
+            // and the next prompt or send would hang forever on the
+            // un-resumed continuation. Keep the store resident.
+            guard entry.store.pendingPermissionPrompt == nil else { return nil }
             return id
         }
         for id in evictableIds {
@@ -270,6 +485,7 @@ public final class DaemonChatStoreRegistry {
         }
         let evictablePaths = pathEntries.compactMap { (url, entry) -> URL? in
             guard entry.subscriberCount == 0, entry.lastTouchedAt < cutoff else { return nil }
+            guard entry.store.pendingPermissionPrompt == nil else { return nil }
             return url
         }
         for url in evictablePaths {
@@ -294,10 +510,10 @@ public final class DaemonChatStoreRegistry {
             case path(URL)
         }
         var idleSorted: [(Key, Date)] = []
-        for (id, entry) in entries where entry.subscriberCount == 0 {
+        for (id, entry) in entries where entry.subscriberCount == 0 && entry.store.pendingPermissionPrompt == nil {
             idleSorted.append((.session(id), entry.lastTouchedAt))
         }
-        for (url, entry) in pathEntries where entry.subscriberCount == 0 {
+        for (url, entry) in pathEntries where entry.subscriberCount == 0 && entry.store.pendingPermissionPrompt == nil {
             idleSorted.append((.path(url), entry.lastTouchedAt))
         }
         idleSorted.sort { $0.1 < $1.1 }
@@ -320,7 +536,12 @@ public final class DaemonChatStoreRegistry {
         registryLogger.info("evicted path=\(url.path, privacy: .public) pathResident=\(self.pathEntries.count)")
     }
 
-    private func evict(sessionId: UUID) {
+    /// Force-evict a single session entry. v0.8 F3: handleDeleteSession
+    /// calls this so the registry doesn't keep a stale store around after
+    /// the session is gone — without the explicit call, the entry only
+    /// drops on the next 60s sweep, and any path-keyed sibling lingers
+    /// until idle eviction. Idempotent.
+    public func evict(sessionId: UUID) {
         guard let entry = entries[sessionId] else { return }
         entry.store.stop()
         entries.removeValue(forKey: sessionId)

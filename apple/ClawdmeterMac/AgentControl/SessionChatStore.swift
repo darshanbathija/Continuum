@@ -159,6 +159,18 @@ public final class SessionChatStore: ObservableObject {
         Self.flattenMessages(from: snapshot.items)
     }
     @Published public private(set) var isLoading: Bool = true
+
+    /// v0.8 QA: a CLI permission prompt awaiting user input. The Mac UI
+    /// renders this as an AskUserQuestion-style card; on user click the
+    /// daemon dispatches the corresponding keys to the CLI's TUI and
+    /// clears this back to nil. Nil for non-chat sessions, sessions
+    /// where no permission is pending, and Codex SDK chat (the SDK
+    /// doesn't surface permission prompts through tmux).
+    @Published public private(set) var pendingPermissionPrompt: PendingPermissionPrompt?
+
+    public func setPendingPermissionPrompt(_ prompt: PendingPermissionPrompt?) {
+        pendingPermissionPrompt = prompt
+    }
     /// External plan text (from AgentSession.planText). When set, the
     /// next staging snapshot extracts steps from this text and merges
     /// them with steps found in chat messages. The view doesn't have to
@@ -205,7 +217,12 @@ public final class SessionChatStore: ObservableObject {
     }
 
     public let sessionId: UUID
-    private let sessionFileURL: URL
+    /// v0.8 QA: was `private let` — now `private var` so chat-mode Codex CLI
+    /// sessions can swap the tailed file when the CLI rotates its rollout
+    /// per turn. `switchTailedFile(to:)` re-aims the JSONLTail at the new
+    /// URL while keeping the SAME store identity, so the Mac UI's
+    /// @ObservedObject chain stays intact and snapshot updates flow.
+    private var sessionFileURL: URL
     private var tail: JSONLTail?
     /// Background parser actor — owns ChatItemBuilder, ingests typed
     /// `ParsedLine` values, never touches main. The 16ms commit task
@@ -229,13 +246,85 @@ public final class SessionChatStore: ObservableObject {
     /// "stop() doesn't stop all writers" race surfaced in /review.
     private var perLineIngestTasks: [Task<Void, Never>] = []
 
+    /// v0.8 NEW-E3: when true, `start()` skips JSONLTail + reverse-tail
+    /// entirely. Only the commit task runs, which picks up
+    /// `appendSDKMessages()` writes from CodexSDKEventIngestor. Used by
+    /// Codex SDK chat sessions which have no JSONL file on disk —
+    /// transcript lives server-side, the SDK streams events.
+    private let sdkOnly: Bool
+
+    /// v0.8 QA: expose the current JSONL file the store is tailing so
+    /// DaemonChatStoreRegistry can detect rollout rotation in chat-mode
+    /// Codex CLI sessions (Codex CLI writes a fresh rollout per turn).
+    public var currentFileURL: URL { sessionFileURL }
+
+    /// v0.8 QA F1: lets the registry detect an sdkOnly fallback store
+    /// and rebuild it as a JSONL-backed store once a matching rollout
+    /// finally appears on disk (Codex CLI chat created before the
+    /// user's first prompt = no rollout yet at createStore time).
+    public var isSDKOnly: Bool { sdkOnly }
+
+    /// v0.8 QA: re-aim the JSONLTail at a new file in place. Used when
+    /// Codex CLI rotates its rollout per turn — without this, the daemon
+    /// would have to create a NEW SessionChatStore which would
+    /// invalidate the Mac UI's @ObservedObject reference and freeze the
+    /// transcript on the previous turn. By keeping the same store
+    /// identity and just swapping the underlying file, the @Published
+    /// `snapshot` keeps streaming updates and the view re-renders.
+    /// Safe to call when the store is already tailing a different file;
+    /// no-op when called with the URL we're already tailing.
+    public func switchTailedFile(to newURL: URL) {
+        guard !sdkOnly else { return }
+        guard newURL != sessionFileURL else { return }
+        chatLogger.info("Switching tailed file for session \(self.sessionId.uuidString, privacy: .public): \(self.sessionFileURL.lastPathComponent, privacy: .public) → \(newURL.lastPathComponent, privacy: .public)")
+        // Stop the current tail + cancel in-flight ingest tasks, then
+        // re-aim and re-start. start() resets the staging actor (bumps
+        // parseGeneration + Task.detached staging.reset), so the new
+        // snapshot starts empty and gets repopulated from the new file.
+        // For Codex CLI this is correct because each rotated rollout
+        // contains the full conversation history (the CLI passes the
+        // previous threadId on resume), so no entries are lost in the
+        // user-visible chat thread. If we ever wire this for an agent
+        // that doesn't carry forward history per file (e.g. a future
+        // Claude rotation path), revisit whether to preserve staging.
+        tail?.stop()
+        tail = nil
+        ingestTailTask?.cancel()
+        ingestTailTask = nil
+        for task in perLineIngestTasks { task.cancel() }
+        perLineIngestTasks.removeAll()
+        // Update URL and re-start the tail. parseGeneration bumps inside
+        // start(), so any stale per-line ingests that survive the cancel
+        // get dropped by the generation check.
+        sessionFileURL = newURL
+        commitTask?.cancel()
+        commitTask = nil
+        start()
+    }
+
     public init(sessionId: UUID, sessionFileURL: URL) {
         self.sessionId = sessionId
         self.sessionFileURL = sessionFileURL
+        self.sdkOnly = false
+    }
+
+    /// v0.8 Phase 4.5: SDK-only init for Codex SDK chat sessions. No
+    /// JSONL file is tailed; events arrive via `appendSDKMessages` from
+    /// the CodexSDKEventIngestor. The sessionFileURL stays as a sentinel
+    /// (`/dev/null`) so the field is non-nil but unused.
+    public init(sessionId: UUID, sdkOnly: Bool) {
+        precondition(sdkOnly, "Use init(sessionId:sessionFileURL:) for JSONL-backed stores")
+        self.sessionId = sessionId
+        self.sessionFileURL = URL(fileURLWithPath: "/dev/null")
+        self.sdkOnly = true
     }
 
     public func start() {
-        guard tail == nil else { return }
+        // sdkOnly stores have no `tail`, so the original `tail == nil`
+        // guard would let start() be called repeatedly. Use the commit
+        // task as the canonical "already started" signal — it's set in
+        // both modes.
+        guard commitTask == nil else { return }
         parseGeneration &+= 1
         let generation = parseGeneration
         let signpostID = OSSignpostID(log: chatPerfLog, object: self)
@@ -256,48 +345,50 @@ public final class SessionChatStore: ObservableObject {
             await staging.reset()
         }
 
-        // T4 reverse-tail progressive parse: kick off a background task
-        // that reads the last ~256 KB of the JSONL and ingests the newest
-        // ~50 messages into the staging actor FIRST. The commit loop's
-        // first frame then shows the latest messages; the head parse
-        // (JSONLTail from line 0) fills in older history behind them.
-        // StagingParser dedups by id + sorts by timestamp, so the final
-        // items array is in correct chronological order regardless of
-        // arrival.
-        let sessionURL = self.sessionFileURL
-        ingestTailTask = Task.detached(priority: .userInitiated) { [weak self] in
-            await Self.ingestTail(
-                url: sessionURL,
-                into: staging,
-                generation: generation,
-                store: self
-            )
-        }
+        // v0.8 Phase 4.5: SDK-only stores skip JSONLTail + reverse-tail
+        // because no JSONL file exists. The commit task below still runs
+        // and picks up `appendSDKMessages` writes from
+        // CodexSDKEventIngestor through the staging actor.
+        if !sdkOnly {
+            // T4 reverse-tail progressive parse: kick off a background task
+            // that reads the last ~256 KB of the JSONL and ingests the newest
+            // ~50 messages into the staging actor FIRST. The commit loop's
+            // first frame then shows the latest messages; the head parse
+            // (JSONLTail from line 0) fills in older history behind them.
+            // StagingParser dedups by id + sorts by timestamp, so the final
+            // items array is in correct chronological order regardless of
+            // arrival.
+            let sessionURL = self.sessionFileURL
+            ingestTailTask = Task.detached(priority: .userInitiated) { [weak self] in
+                await Self.ingestTail(
+                    url: sessionURL,
+                    into: staging,
+                    generation: generation,
+                    store: self
+                )
+            }
 
-        // JSONLTail runs on its background queue. The handler converts
-        // [String: Any] → typed `ParsedLine` (Sendable) BEFORE crossing
-        // into the actor — codex tension #7b: typed boundary, not raw
-        // dictionaries. The per-line task is tracked on `self` so
-        // `stop()` can cancel it; the closure-level generation check
-        // also drops late ingests from a prior parse generation.
-        let tail = JSONLTail(fileURL: sessionFileURL) { [weak self] json in
-            guard let parsed = ParsedLine.from(json: json) else { return }
-            let task = Task { [weak self] in
-                guard let self else { return }
-                // The MainActor read is necessary because parseGeneration
-                // lives on self (@MainActor). Snapshot it once then drop
-                // the hop.
-                let currentGen = await MainActor.run { self.parseGeneration }
-                guard currentGen == generation else { return }
-                await staging.ingest(parsed)
+            // JSONLTail runs on its background queue. The handler converts
+            // [String: Any] → typed `ParsedLine` (Sendable) BEFORE crossing
+            // into the actor — codex tension #7b: typed boundary, not raw
+            // dictionaries. The per-line task is tracked on `self` so
+            // `stop()` can cancel it; the closure-level generation check
+            // also drops late ingests from a prior parse generation.
+            let tail = JSONLTail(fileURL: sessionFileURL) { [weak self] json in
+                guard let parsed = ParsedLine.from(json: json) else { return }
+                let task = Task { [weak self] in
+                    guard let self else { return }
+                    let currentGen = await MainActor.run { self.parseGeneration }
+                    guard currentGen == generation else { return }
+                    await staging.ingest(parsed)
+                }
+                Task { @MainActor [weak self] in
+                    self?.perLineIngestTasks.append(task)
+                }
             }
-            // Track the task so stop() can cancel any in-flight ingests.
-            Task { @MainActor [weak self] in
-                self?.perLineIngestTasks.append(task)
-            }
+            self.tail = tail
+            tail.start()
         }
-        self.tail = tail
-        tail.start()
 
         // Background commit task: every 16ms, snapshot the staging actor
         // and publish to main. Generation-token guard suppresses any

@@ -519,10 +519,11 @@ the `v0.2.0-mac` GitHub release.
   the session's worktree (rejects `?path=../../../etc/passwd`); cap
   at 50MB so giant agent-written files don't park the daemon.
 
-The post-v2 commits ship to `main` directly without a feature branch —
-the repo is solo-dev / personal-use, so `/ship` and `/document-release`
-abort their PR-flow scaffolding. The build version (`CURRENT_PROJECT_VERSION`
-in `apple/project.yml`) is the source of truth for what's in the DMG.
+All changes ship via feature branch → PR → merge, never directly to `main`.
+Use `/ship` to create the PR and `/land-and-deploy` to merge it. Each branch
+should be scoped to a single logical change so PRs are small and reviewable.
+The build version (`CURRENT_PROJECT_VERSION` in `apple/project.yml`) is the
+source of truth for what's in the DMG.
 
 ## Sessions Mac chat IDE (v0.3.0 build 17, 2026-05-18)
 

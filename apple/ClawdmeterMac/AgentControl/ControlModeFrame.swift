@@ -90,4 +90,11 @@ public enum ControlModeFrame: Equatable, Sendable {
     /// Anything we don't recognize. Surface for logging; do NOT crash on
     /// unknown frames (tmux versions add new ones over time).
     case unknown(raw: String)
+
+    /// v0.8 QA: non-`%`-prefixed line emitted between %begin and %end —
+    /// this is the command-response body that callers like newWindow
+    /// depend on. ControlModeParser now emits these as .body frames;
+    /// TmuxControlClient.handle() accumulates them into currentCommandBody
+    /// while currentCommandNumber is set.
+    case body(line: String)
 }

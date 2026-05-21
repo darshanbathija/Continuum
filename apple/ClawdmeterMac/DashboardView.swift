@@ -58,8 +58,9 @@ struct DashboardView: View {
     // MARK: - Tab strip + content
 
     enum DashboardTab: String, CaseIterable {
+        case chat = "Chat"
         case usage = "Usage"
-        case sessions = "Sessions"
+        case sessions = "Code"
     }
 
     /// 3-col / 2-col / 1-col responsive layout per D10. Breakpoints mirror
@@ -126,6 +127,14 @@ struct DashboardView: View {
     @ViewBuilder
     private var tabContent: some View {
         switch selectedTab {
+        case .chat:
+            if #available(macOS 14, *) {
+                ChatWorkspaceView(model: sessionsModel)
+            } else {
+                Text("Chat tab requires macOS 14+")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         case .usage:
             ScrollView {
                 VStack(spacing: 0) {

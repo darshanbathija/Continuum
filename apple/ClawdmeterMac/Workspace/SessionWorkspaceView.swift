@@ -84,7 +84,7 @@ struct SessionWorkspaceView: View {
             // (instead of as its own HSplitView child) means the user
             // can't accidentally drag-resize it.
             HStack(spacing: 0) {
-                ZStack {
+                ZStack(alignment: .bottom) {
                     if let session = model.openSession {
                         CenterThread(
                             session: session,
@@ -99,6 +99,16 @@ struct SessionWorkspaceView: View {
                     }
                     if showingModeSwitchOverlay {
                         modeSwitchOverlay
+                    }
+                    // v0.8 QA: floating permission-prompt tray (same as
+                    // Chat tab). Overlay so it doesn't disrupt the
+                    // CenterThread's layout when no prompt is pending.
+                    if let session = model.openSession,
+                       let store = model.chatStore(for: session) {
+                        PermissionPromptCard(store: store, sessionId: session.id)
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 16)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -376,7 +386,7 @@ private struct SidebarPane: View {
 
     private var sidebarHeader: some View {
         HStack(spacing: 6) {
-            Text("Sessions")
+            Text("Code")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -1195,7 +1205,10 @@ private struct CenterThread: View {
         // The sheet is only invoked when the user picks `.bypass` from the
         // PermissionModeChip — we're always asking to ENABLE bypass here.
         // Disabling is a safe direct setPermissionMode call (no sheet).
-        let repoTrusted = AutopilotState.shared.isRepoTrusted(session.repoKey)
+        // v0.8: chat sessions have no repoKey and bypass-mode doesn't
+        // apply; `?? ""` evaluates as untrusted, which is the right
+        // default for any chat session that somehow reaches this sheet.
+        let repoTrusted = AutopilotState.shared.isRepoTrusted(session.repoKey ?? "")
         let needsTrustGrant = !repoTrusted
         VStack(alignment: .leading, spacing: 12) {
             Label(
@@ -1207,8 +1220,8 @@ private struct CenterThread: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if needsTrustGrant {
-                Text("Repo: \((session.repoKey as NSString).lastPathComponent)")
+            if needsTrustGrant, let repoKey = session.repoKey {
+                Text("Repo: \((repoKey as NSString).lastPathComponent)")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.primary)
                     .padding(.vertical, 4)
@@ -1225,8 +1238,8 @@ private struct CenterThread: View {
                 Button(autopilotConfirmCTA(willEnable: true, needsTrustGrant: needsTrustGrant)) {
                     showingAutopilotConfirm = false
                     pendingBypassMode = false
-                    if needsTrustGrant {
-                        AutopilotState.shared.trustRepo(session.repoKey)
+                    if needsTrustGrant, let repoKey = session.repoKey {
+                        AutopilotState.shared.trustRepo(repoKey)
                     }
                     Task { await model.setPermissionMode(sessionId: session.id, to: .bypass) }
                 }
@@ -1319,7 +1332,7 @@ private struct CenterThread: View {
                 return (openSessions, sourceEntries, Array(recents.prefix(30)))
             },
             usageStatus: usageStatusInfo,
-            projectSkillsRoot: URL(fileURLWithPath: session.repoKey).appendingPathComponent(".claude/skills", isDirectory: true)
+            projectSkillsRoot: URL(fileURLWithPath: session.effectiveCwd).appendingPathComponent(".claude/skills", isDirectory: true)
         )
         // Read-only synthetic sessions have no live tmux pane to respawn,
         // so we skip the swap-on-change handlers. The model/effort chips
@@ -1502,8 +1515,10 @@ private struct CenterThread: View {
         // E7: enable requires the repo to be on the autopilot trust list.
         // The confirm sheet asks for trust grant explicitly; if the user
         // accepted, record it before the wire-level enforcement kicks in.
-        if grantingTrust {
-            AutopilotState.shared.trustRepo(session.repoKey)
+        if grantingTrust, let repoKey = session.repoKey {
+            // Chat sessions have no repo and can't grant trust; guard
+            // here so we never persist trust for an empty string.
+            AutopilotState.shared.trustRepo(repoKey)
         }
         let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
         // Daemon-side: flip state. We then respawn via SessionConfigChanger so
@@ -2183,7 +2198,7 @@ private struct ReviewPane: View {
                 placeholder(text: "Waiting for agent JSONL…")
             }
         case .diff:
-            GitDiffPane(repoCwd: session.worktreePath ?? session.repoKey)
+            GitDiffPane(repoCwd: session.effectiveCwd)
         case .sources:
             if let chatStore {
                 SourcesPane(session: session, chatStore: chatStore)

@@ -123,6 +123,136 @@ work skipped 0.8.0 to leave that SKU intact).
 - Python sidecar deletion (`tools/clawdmeter-agents/`, `Vendor/uv/`,
   the SDK toggle UI) — v0.8.2 cosmetic sweep alongside the iOS/Watch
   "Gemini" → "Antigravity" label flips.
+## [0.8.0 build 66] - 2026-05-21
+
+### Added
+
+- **New Chat tab on iOS + Mac.** Non-coding chat with Claude or Codex
+  via your existing subscription auth (Anthropic Pro/Max or ChatGPT
+  Plus/Pro) — no API tokens, no per-token billing. Each chat runs
+  in plan-mode in a fresh empty cwd at
+  `~/Library/Application Support/Clawdmeter/chat-sessions/<uuid>/`,
+  so no filesystem mutation, no shell exec, no network beyond the
+  provider. iOS tab order is **Chat / Analytics / Code**; Mac dashboard
+  gains a `Chat` tab next to `Code`.
+
+- **Codex chat backend choice — SDK or CLI, per-session.** New
+  Settings-driven default (`SDK` recommended, matches the existing
+  `Codex SDK observation mode` provisioning toggle). Per-chat
+  override at create time. SDK backend uses
+  `@openai/codex-sdk` through `CodexSubscriptionRelay` —
+  multi-subscriber Combine, typed events, server-side thread state
+  that survives evict (NEW-T13 spike verified `op:resume`
+  reconstructs history). CLI backend runs `codex --sandbox read-only`
+  in a tmux pane — uniform with Claude chat. The backend choice is
+  pinned to the AgentSession at spawn time so resume + future
+  re-opens always use the original backend even if the global
+  default flips later.
+
+- **Wire protocol v8 → v9.** Additive bump with new minimums:
+  `chatMinimum = 9` (gates POST `/chat-sessions`, GET
+  `/chat-providers`, schema v5 fields), `frontierMinimum = 9` (gates
+  forward-compat Frontier endpoints), `codexChatBackendMinimum = 9`
+  (gates the per-request backend override). All prior minimums
+  unchanged. New helpers
+  `supportsChat/supportsFrontier/supportsCodexChatBackend` mirror the
+  `supportsAntigravityPlan` pattern. iOS Chat tab gates on
+  `serverWireVersion >= chatMinimum` and surfaces
+  "Update Clawdmeter on Mac" on older daemons.
+
+- **Schema v4 → v5.** `AgentSession` gains five optional fields —
+  `kind` (`.code` default; `.chat` for the Chat tab), `frontierGroupId`,
+  `frontierChildIndex`, `codexChatBackend`, `codexChatThreadId` —
+  plus `repoKey` flips from `String` to `String?` (chat sessions run
+  in an empty chat-cwd, not a git repo). v3 and v4 `sessions.json`
+  files decode cleanly into v5 via the existing `decodeIfPresent`
+  pattern; round-trip tests cover both directions.
+
+- **New daemon endpoints.** `POST /chat-sessions`, `GET /chat-providers`
+  (per-provider availability + auth state; Codex carries `sdk` and
+  `cli` sub-rows; Gemini hardcoded `available: false, reason: "v0.9"`
+  until Antigravity replacement ships). Frontier endpoints
+  (`POST /chat-sessions/frontier/*`) ship as 501 stubs in v0.8 for
+  forward-compat — full UI lands in v0.9 with the agy + Gemini-chat
+  bundle so the Royal Frontier ships as the original 3-pane design.
+
+### Changed
+
+- **Nav reshuffle on iOS.** The standalone "Live" tab is dissolved
+  into the Analytics tab's header (`LiveGaugesHeader`) — the same
+  3-way provider toggle + gauges, just embedded above the analytics
+  charts. Frees the tab slot for Chat. "Sessions" tab renamed to
+  "Code" on iOS + Mac dashboard + Mac workspace sidebar header.
+  Mac Settings sub-tab "Sessions" stays (it's settings-related).
+
+- **`AgentSession.repoKey` optional.** Chat sessions have no repo.
+  Migrated 9 cwd-resolution sites across `AgentControlServer.swift`
+  to a new `AgentSession.effectiveCwd` helper (precondition-fails
+  loudly if daemon ever creates an invalid session). Handlers that
+  read `repoKey` directly (autopilot trust, Antigravity Plan,
+  WorktreeManager.delete) now gate on `session.kind == .code` and
+  short-circuit chat sessions where the action doesn't apply.
+
+- **DELETE `/sessions/:id` is kind-aware.** Code sessions still go
+  through `WorktreeManager.delete` (which requires a clean git status
+  — chat-cwds aren't git repos and would have thrown). Chat sessions
+  cleanly remove their `chat-sessions/<uuid>/` directory via
+  `ChatCwdManager.remove()`. SDK chat sessions additionally tear down
+  the `CodexSubscriptionRelay` sidecar + `CodexSDKEventIngestor` sink.
+
+### Fixed
+
+- **`AgentSession.with(...)` helper preserves all v5 fields on
+  mutation.** Before this fix, any `updateStatus` / `setPlanText` /
+  similar call on a chat session would have silently converted it
+  back to a code session because the v5 fields fell back to their
+  init defaults. Now the helper passes through `kind`,
+  `frontierGroupId`, `frontierChildIndex`, `codexChatBackend`,
+  `codexChatThreadId` unchanged. New `setCodexChatThreadId(id:threadId:)`
+  registry method lets the SDK ingestor persist the threadId after
+  the first `thread.started` event for resume-after-evict.
+
+### Hardening (post-review)
+
+- **Codex CLI cross-rollout contamination** — `newestCodexJSONL()`
+  was returning the absolute newest rollout under `~/.codex/sessions/`,
+  so any concurrent Codex run (another chat, another worktree, manual
+  `codex` in Terminal) would swap its transcript into the Chat tab.
+  New `newestCodexJSONLMatching(cwd:after:)` peeks each rollout's
+  `session_meta.cwd` and only accepts ones whose cwd matches the
+  session AND whose mtime is ≥ `createdAt`.
+- **Permission continuation leaked on delete.** End-chat while a trust
+  prompt is on screen now wakes the daemon-side continuation via a
+  `cancelledPermissionOptionId` sentinel before the session is torn
+  down, instead of leaving the warmup task parked forever.
+- **Idle eviction now refuses to drop a store with a pending
+  permission prompt** (`pendingPermissionPrompt != nil`), so a chat
+  that trust-prompts and then sits idle 5min keeps the prompt's
+  `@Published` value alive and the next send doesn't hang on a
+  vanished continuation.
+- **`handleDeleteSession` evicts the chat-store registry entry**
+  alongside the registry-record delete, so the store doesn't linger
+  until the next sweep tick.
+- **Codex SDK sidecar termination** — process-side
+  `terminationHandler` now clears the active-sidecar map on natural
+  EOF in addition to the explicit `stop()` path.
+- **Permission-prompt id mismatch** — `/permission-respond` validates
+  `promptId` against the active map and returns 409 on stale resends.
+- **iOS permission card** — same floating bottom tray as the Mac
+  surface (mirror of `AskUserQuestion`), so trust prompts surface on
+  iOS chats instead of falling through to a silent stall.
+
+### Deferred to v0.9
+
+- **Gemini chat.** Gemini CLI is being replaced with Antigravity (agy)
+  in a parallel thread; the Chat tab spawn path lands then.
+- **Frontier compare UI.** Schema fields, endpoints, and WS channel
+  all ship in v0.8 for forward-compat; the 3-pane UI lands in v0.9
+  once Gemini joins to make the matrix complete.
+- **Full ChatProviderProbe / ChatProviderAuthObserver (CM3).** v0.8
+  surfaces minimal probe state (binary on PATH + `CodexSDKManager.isProvisioned`);
+  P1 in-flight actor + CLI-output auth-error observer land in v0.8.x
+  polish.
 
 ## [0.7.18 build 64] - 2026-05-21
 

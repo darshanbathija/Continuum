@@ -47,10 +47,16 @@ public struct ControlModeParser {
             lineBuffer.removeAll(keepingCapacity: true)
             if let frame = ControlModeParser.parseLine(line) {
                 pendingFrames.append(frame)
+            } else if !line.isEmpty {
+                // v0.8 QA: lines without a `%` prefix are command-response
+                // body content (the lines between %begin and %end). Previously
+                // dropped, which silently broke every newWindow / listWindows /
+                // splitWindow that depended on the response body. Now emit as
+                // .body frames; TmuxControlClient's handle() accumulates them
+                // into currentCommandBody between begin/end. Empty lines are
+                // still dropped (tmux pads some responses with blanks).
+                pendingFrames.append(.body(line: line))
             }
-            // Lines that aren't %-prefixed are command-response body lines.
-            // We currently drop them; consumers needing command-response text
-            // should subscribe to `%begin`/`%end` boundaries.
         } else {
             lineBuffer.append(byte)
         }

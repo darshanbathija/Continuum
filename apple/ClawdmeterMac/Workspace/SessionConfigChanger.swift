@@ -79,11 +79,15 @@ public final class SessionConfigChanger {
         )
         do {
             try await tmux.killPane(oldPaneId)
+            // v0.8 schema v5: repoKey is optional. Chat sessions never reach
+            // this swap path (they don't expose a Mode chip), so we can fall
+            // back to effectiveCwd which crashes loudly if the daemon ever
+            // hands us a session without any cwd.
             let cwd: String
             switch newMode ?? session.mode {
-            case .local:    cwd = session.repoKey
-            case .worktree: cwd = session.worktreePath ?? session.repoKey
-            case .cloud:    cwd = session.repoKey  // not supported v1; fall through
+            case .local:    cwd = session.repoKey ?? session.effectiveCwd
+            case .worktree: cwd = session.effectiveCwd
+            case .cloud:    cwd = session.repoKey ?? session.effectiveCwd  // not supported v1; fall through
             }
             let newWindow = try await tmux.newWindow(cwd: cwd, child: newArgv)
             registry.updateRuntime(
@@ -107,7 +111,7 @@ public final class SessionConfigChanger {
             swapLogger.error("Swap failed for session \(sessionId.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
             // D12 resume-fail rescue: try to restore original config in the same window.
             do {
-                let restoreWindow = try await tmux.newWindow(cwd: session.worktreePath ?? session.repoKey, child: originalArgv)
+                let restoreWindow = try await tmux.newWindow(cwd: session.effectiveCwd, child: originalArgv)
                 registry.updateRuntime(
                     id: sessionId,
                     worktreePath: session.worktreePath,

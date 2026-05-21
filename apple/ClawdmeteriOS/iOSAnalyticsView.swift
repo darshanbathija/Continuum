@@ -8,6 +8,9 @@ import ClawdmeterShared
 struct iOSAnalyticsView: View {
     @ObservedObject var model: UsageModel
     @ObservedObject var agentClient: AgentControlClient
+    /// Bound from root `ContentView` so the LiveGaugesHeader's auth cards
+    /// (UnauthenticatedCard, ReauthCard) can pop the Settings sheet.
+    @Binding var showingSettings: Bool
 
     @State private var activeWindow: UsageHistorySnapshot.Window = .past30d
     /// Per-section window for the by-repo list. Independent of `activeWindow`.
@@ -28,6 +31,15 @@ struct iOSAnalyticsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    // v0.8 nav reshuffle: gauges that used to live on a
+                    // standalone "Live" tab now ride at the top of Analytics.
+                    LiveGaugesHeader(
+                        model: model,
+                        agentClient: agentClient,
+                        showingSettings: $showingSettings
+                    )
+                    .padding(.horizontal, 4)
+
                     if let snap = model.analyticsSnapshot {
                         // Segmented window picker — same shape as the
                         // by-repo section below.
@@ -92,6 +104,14 @@ struct iOSAnalyticsView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Analytics")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: { showingSettings = true }) {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Settings")
+                }
+            }
         }
     }
 

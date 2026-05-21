@@ -82,7 +82,11 @@ public enum SessionSidebarGrouper {
         // carries the repo's live sessions + outside JSONLs.
         var byRepo: [String: [AgentSession]] = [:]
         for s in sessions {
-            byRepo[s.repoKey, default: []].append(s)
+            // v0.8 schema v5: chat sessions have nil repoKey and live in
+            // the Chat sidebar, not the Sessions sidebar. Skip them here
+            // so they don't grouped under a synthetic empty-string key.
+            guard let key = s.repoKey else { continue }
+            byRepo[key, default: []].append(s)
         }
         return repos.enumerated().map { (idx, repo) in
             let live = sorted(byRepo[repo.key] ?? [], by: sorting)

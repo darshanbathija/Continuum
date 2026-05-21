@@ -247,12 +247,20 @@ final class SessionsV2Tests: XCTestCase {
         // UsageData.codexSDKModeActive (decodeIfPresent — back-compat).
         // No new endpoints or WS ops in v8; the field rides on the
         // existing /usage envelope.
-        // Bumped 8 → 10 on 2026-05-21 (agy-migration; skips v9 which
-        // chat-tab took). Adds AgentSession.geminiBackend +
-        // antigravityConversationId + usage["gemini"]→"antigravity"
-        // dual-key rename. agentapiMinimum=10 + antigravityChatMinimum=10
-        // gate the Antigravity chat surface on iOS.
+        // Bumped 8 → 9 on 2026-05-21 (v0.8.0 Chat tab): adds
+        // POST /chat-sessions, /chat-sessions/frontier/*, GET /chat-providers,
+        // frontier-subscribe WS op; AgentSession schema v5 fields
+        // (kind, frontierGroupId, frontierChildIndex, codexChatBackend,
+        // codexChatThreadId, optional repoKey); chatMinimum/frontierMinimum/
+        // codexChatBackendMinimum = 9 gates.
+        // Bumped 9 → 10 on 2026-05-21 (v0.8.1 agy-migration): adds
+        // AgentSession.geminiBackend + antigravityConversationId +
+        // usage["gemini"] ↔ usage["antigravity"] dual-key rename.
+        // agentapiMinimum=10 gates the Mac UI's agentapi spawn path;
+        // antigravityChatMinimum=11 keeps iOS gated until v0.8.2
+        // migrates daemon POST /sessions (Codex P1.4 deferral).
         XCTAssertEqual(AgentControlWireVersion.current, 10)
+
         XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
         XCTAssertEqual(AgentControlWireVersion.chatSubscribeMinimum, 5)
         XCTAssertEqual(AgentControlWireVersion.geminiMinimum, 6)

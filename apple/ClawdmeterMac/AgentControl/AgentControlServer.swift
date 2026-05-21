@@ -93,6 +93,56 @@ public final class AgentControlServer {
     /// JSONL tail + done-detector + plan-watcher wired per active session.
     private var sessionWiring: [UUID: SessionEventWiring] = [:]
 
+    /// v0.8 Phase 4.5: per-session Codex SDK chat ingestors. Created on
+    /// the first /send for an SDK chat session; torn down on DELETE or
+    /// SDK chat-session idle evict. Holding a strong reference keeps the
+    /// Combine sink alive across the session lifetime.
+    private var sdkChatIngestors: [UUID: CodexSDKEventIngestor] = [:]
+
+    /// v0.8 QA: per-session warmup task for chat-mode CLI sessions. The
+    /// handler that handles `POST /sessions/:id/send` awaits the task
+    /// before pasting so the first prompt doesn't race the trust-prompt
+    /// / update-prompt dismissal. Cleared once the task completes.
+    private var chatWarmupTasks: [UUID: Task<Void, Never>] = [:]
+
+    /// v0.8 QA: pending permission-prompt continuations awaiting user
+    /// response. Keyed by sessionId — only one prompt at a time per
+    /// session. The continuation is resumed by handlePermissionRespond
+    /// once the user clicks an option in the AskUserQuestion-style card,
+    /// at which point the warmup / poll loop proceeds with the chosen
+    /// dispatch keys.
+    private var pendingPermissionContinuations: [UUID: CheckedContinuation<String, Never>] = [:]
+    /// v0.8 QA F4: matches the currently-pending promptId so
+    /// handlePermissionRespond can reject stale clicks (paired iOS
+    /// surface with a stale prompt, or v0.8.x Claude per-tool flow
+    /// where multiple prompts per session is real). Cleared alongside
+    /// the continuation.
+    private var pendingPermissionPromptIds: [UUID: String] = [:]
+    /// Pending prompt → option-id → tmux key sequence map. Server-side
+    /// because the wire never carries raw key sequences (security).
+    private var permissionOptionDispatch: [UUID: [String: [String]]] = [:]
+    /// v0.8 QA F2: sentinel optionId resumed by handleDeleteSession /
+    /// stop() so any in-flight warmup task wakes up and returns
+    /// cleanly instead of waiting forever for the user.
+    private static let cancelledPermissionOptionId = "__cancelled__"
+
+    // v0.8.x: a per-session pane-scanner task for mid-conversation
+    // permission prompts (e.g. Claude per-tool approvals) will land
+    // here. The startup-time prompt path is wired through
+    // chatWarmupTasks above; the scanner is the next increment.
+    // Declared lazily when the v0.8.x scanner ships — keeping the
+    // var here today would be dead code that misleads readers.
+
+    /// v0.8 QA: same-process accessor so Mac UI's SessionsModel can read
+    /// from the daemon's SessionChatStore (the one CodexSDKEventIngestor
+    /// writes to) instead of creating its own empty parallel store. iOS
+    /// goes through chat-subscribe WS for the same effect; Mac is in the
+    /// same process and can read the registry directly.
+    @MainActor
+    public func chatStore(for session: AgentSession) -> SessionChatStore? {
+        chatStoreRegistry.snapshotStore(for: session)
+    }
+
     public init(
         pairingTokens: PairingTokenStore = .shared,
         repoIndex: RepoIndex,
@@ -115,7 +165,7 @@ public final class AgentControlServer {
         // path is correct for production; tests pass a tmpdir.
         let resolver = chatFileResolver ?? SessionFileResolver(
             resolveClaudeURL: { session in
-                let cwd = session.worktreePath ?? session.repoKey
+                let cwd = session.effectiveCwd
                 return SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
             }
         )
@@ -867,6 +917,9 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions/:id/interrupt") { [weak self] _, conn, params in
             await self?.handleInterrupt(sessionId: params["id"] ?? "", connection: conn)
         }
+        t.register(method: "POST", pattern: "/sessions/:id/permission-respond") { [weak self] req, conn, params in
+            await self?.handlePermissionRespond(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
         t.register(method: "POST", pattern: "/sessions/:id/autopilot") { [weak self] req, conn, params in
             await self?.handleSetAutopilot(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
@@ -910,6 +963,31 @@ public final class AgentControlServer {
         t.register(method: "DELETE", pattern: "/sessions/:id") { [weak self] _, conn, params in
             await self?.handleDeleteSession(sessionId: params["id"] ?? "", connection: conn)
         }
+
+        // --- v0.8 Chat tab (wire v9) ---
+        t.register(method: "POST", pattern: "/chat-sessions") { [weak self] req, conn, _ in
+            await self?.handlePostChatSession(request: req, connection: conn)
+        }
+        t.register(method: "GET", pattern: "/chat-providers") { [weak self] _, conn, _ in
+            await self?.handleGetChatProviders(connection: conn)
+        }
+        // Frontier endpoints: forward-compat stubs in v0.8. The DTOs +
+        // routes ship so v0.9 (Antigravity-via-agy + 3-pane UI) can swap
+        // in real implementations without another wire bump. v0.8 daemon
+        // returns 501 Not Implemented; iOS doesn't surface the UI yet.
+        t.register(method: "POST", pattern: "/chat-sessions/frontier") { [weak self] _, conn, _ in
+            self?.handleFrontierStub(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/send") { [weak self] _, conn, _ in
+            self?.handleFrontierStub(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/retry-slot") { [weak self] _, conn, _ in
+            self?.handleFrontierStub(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/pick-winner") { [weak self] _, conn, _ in
+            self?.handleFrontierStub(connection: conn)
+        }
+
         return t
     }()
 
@@ -1033,7 +1111,8 @@ public final class AgentControlServer {
         // sessions have no tmux pane — sends route through
         // `LanguageServerClient.sendMessage` against the running
         // language_server. Same rate-limit + audit-log path as tmux
-        // sends; the only difference is the transport.
+        // sends; the only difference is the transport. This branch
+        // runs BEFORE the chat-tab SDK dispatch + paneId guard below.
         if session.geminiBackend == .agentapi,
            let conversationId = session.antigravityConversationId {
             guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
@@ -1061,18 +1140,86 @@ public final class AgentControlServer {
             }
             return
         }
-        guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
-            sendResponse(.internalError, on: connection); return
-        }
         guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSend, on: connection); return
         }
+        // v0.8 Phase 4.5: SDK chat sessions route to CodexSubscriptionRelay
+        // instead of tmux. Detect via (kind=.chat, agent=.codex,
+        // backend=.sdk) — those sessions have no tmux pane.
+        if session.kind == .chat
+            && session.agent == .codex
+            && session.codexChatBackend == .sdk {
+            await sendChatSDKPrompt(session: session, prompt: req.text, connection: connection)
+            return
+        }
+        guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+            sendResponse(.internalError, on: connection); return
+        }
+        // v0.8 QA: chat-mode CLI sessions don't need the user-prompt echo
+        // anymore — the rollout JSONL (Codex) / project JSONL (Claude)
+        // contains the user turn directly, so JSONLTail picks it up and
+        // appends to the store within ~1s. Echoing here AND parsing the
+        // JSONL caused the user bubble to render twice on multi-turn
+        // (two different message IDs → seen-IDs dedup missed both).
+        // We DO still rename the session (D1 first-prompt-becomes-title)
+        // and the snapshot's update-counter bumps via the JSONL parse.
+        if session.kind == .chat {
+            if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+                let trimmed = req.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    let cap = 40
+                    let truncated = trimmed.count <= cap
+                        ? trimmed
+                        : String(trimmed[..<trimmed.index(trimmed.startIndex, offsetBy: cap - 1)]) + "…"
+                    registry.rename(id: session.id, name: truncated)
+                }
+            }
+        }
+        // v0.8 QA: for CLI sessions (code or chat), wait for the warmup
+        // task (trust prompt + update prompt dismissal) to finish before
+        // pasting the user's first prompt. Without this barrier, sends
+        // arriving within ~3s of session creation race the dismissal —
+        // bytes land in the wrong screen and either trigger options
+        // (1/2/3) or are dropped.
+        if let warmupTask = chatWarmupTasks[uuid] {
+            await warmupTask.value
+        }
         do {
             let data = Data(bytes)
-            if req.asFollowUp || bytes.count > 256 || req.text.contains("\n") {
+            // v0.8 QA: for chat-mode CLI sessions, clear the input line
+            // before pasting so multi-turn prompts don't concatenate with
+            // leftover text in the input box. C-u is a no-op when the
+            // input is empty, so the first prompt isn't affected.
+            if session.kind == .chat {
+                try await tmux.command(["send-keys", "-t", paneId, "C-u"])
+            }
+            // v0.8 QA: chat-mode CLI sessions must use pasteBytes (not
+            // sendKeys -l -H). tmux's hex-literal sendKeys sends each byte
+            // as a SEPARATE key event, which Codex CLI's TUI input
+            // ignores — bytes drop on the floor and the trailing Enter
+            // submits the placeholder text instead of the user's prompt.
+            // paste-buffer + paste-buffer lands the entire string atomically
+            // and the input widget treats it as a paste.
+            if session.kind == .chat
+                || req.asFollowUp
+                || bytes.count > 256
+                || req.text.contains("\n") {
                 try await tmux.pasteBytes(paneId: paneId, bytes: data)
             } else {
                 try await tmux.sendKeys(paneId: paneId, bytes: data)
+            }
+            // v0.8 QA: chat-mode CLI prompts need a trailing Enter so the
+            // CLI's input box actually submits. The Enter key event must
+            // be sent as a key name ("Enter" / "C-m") rather than a
+            // literal CR byte — TUI apps differentiate between the two
+            // (literal CR is text input, key Enter is a submit event).
+            // Brief delay before Enter lets the CLI's input widget
+            // settle after the paste — without it, Codex CLI's input
+            // sometimes sees the Enter before its render loop has
+            // committed the pasted text, dropping the submit on the floor.
+            if session.kind == .chat {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                try await tmux.command(["send-keys", "-t", paneId, "Enter"])
             }
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
@@ -1102,11 +1249,16 @@ public final class AgentControlServer {
         // lookup fails — Antigravity already accepted the conversation
         // at spawn, so the agentapi RPC can use any valid projectId.
         let projectId: String
-        if let info = await resolver.resolve(forRepoKey: session.repoKey) {
-            projectId = info.id
-        } else {
+        // v0.8.1 + chat-tab merge: AgentSession.repoKey is now String?
+        // (chat sessions have nil). For agentapi sessions, repoKey must
+        // be non-nil — they were spawned via SessionsView's code path,
+        // not the chat-tab createChat() path. Treat nil as "lost project
+        // mapping" and surface notRunning so the caller shows the CTA.
+        guard let repoKey = session.repoKey,
+              let info = await resolver.resolve(forRepoKey: repoKey) else {
             throw LanguageServerClientError.notRunning
         }
+        projectId = info.id
         try await lsClient.sendMessage(
             conversationId: conversationId.uuidString,
             content: content,
@@ -1407,18 +1559,24 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
+        // v0.8: autopilot is a code-session concept (requires a trusted
+        // repo). Chat sessions don't run shell or write files so the
+        // trust model doesn't apply — reject the toggle outright.
+        guard session.kind == .code, let repoKey = session.repoKey else {
+            sendResponse(.badRequest, on: connection); return
+        }
         // E7 wire-level guard: enabling autopilot requires the repo to be on
         // the trust list. A peer with the bearer token can't bypass the UI
         // confirm-sheet by hitting this endpoint directly (review §3 finding
         // 2026-05-18). Disabling autopilot is always allowed (kill switch).
-        if req.enabled, !AutopilotState.shared.isRepoTrusted(session.repoKey) {
+        if req.enabled, !AutopilotState.shared.isRepoTrusted(repoKey) {
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordAutopilotToggle(
                 sessionId: uuid, sourcePeer: peer,
-                enabled: false, repoKey: session.repoKey
+                enabled: false, repoKey: repoKey
             )
-            serverLogger.warning("autopilot enable rejected for untrusted repo \(session.repoKey, privacy: .public)")
-            let body = #"{"error":"repo not trusted for autopilot","repoKey":"\#(session.repoKey)"}"#
+            serverLogger.warning("autopilot enable rejected for untrusted repo \(repoKey, privacy: .public)")
+            let body = #"{"error":"repo not trusted for autopilot","repoKey":"\#(repoKey)"}"#
             sendResponse(.forbidden(body: Data(body.utf8)), on: connection)
             return
         }
@@ -1426,7 +1584,7 @@ public final class AgentControlServer {
         let peer = Self.endpointString(connection.endpoint)
         await AuditLog.shared.recordAutopilotToggle(
             sessionId: uuid, sourcePeer: peer,
-            enabled: req.enabled, repoKey: session.repoKey
+            enabled: req.enabled, repoKey: repoKey
         )
         await respondWithSession(uuid: uuid, connection: connection)
     }
@@ -1466,7 +1624,7 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
-        let cwd = session.worktreePath ?? session.repoKey
+        let cwd = session.effectiveCwd
         guard let gitBin = ShellRunner.locateBinary("git") else {
             sendResponse(.internalError, on: connection); return
         }
@@ -1524,7 +1682,7 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection); return
         }
         let req = (try? JSONDecoder().decode(CreatePRRequest.self, from: request.body)) ?? CreatePRRequest()
-        let cwd = session.worktreePath ?? session.repoKey
+        let cwd = session.effectiveCwd
         guard let ghBin = ShellRunner.locateBinary("gh") else {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
@@ -1558,7 +1716,7 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
-        let cwd = session.worktreePath ?? session.repoKey
+        let cwd = session.effectiveCwd
         guard let gitBin = ShellRunner.locateBinary("git") else {
             sendResponse(.internalError, on: connection); return
         }
@@ -1611,7 +1769,7 @@ public final class AgentControlServer {
               !pathArg.isEmpty else {
             sendResponse(.badRequest, on: connection); return
         }
-        let repoCwd = session.worktreePath ?? session.repoKey
+        let repoCwd = session.effectiveCwd
         // Defense-in-depth: refuse to anchor on an empty or non-absolute
         // repoCwd. If the worktree/repo path is missing the prefix check
         // below degenerates (`hasPrefix("/")` matches every absolute
@@ -1740,7 +1898,7 @@ public final class AgentControlServer {
         do {
             let paneId = try await tmux.splitWindow(
                 windowId: windowId,
-                cwd: session.worktreePath ?? session.repoKey,
+                cwd: session.effectiveCwd,
                 horizontal: false
             )
             let pane = TerminalPaneRef(paneId: paneId, title: req.title ?? "", isPrimary: false)
@@ -1788,7 +1946,17 @@ public final class AgentControlServer {
         let snapshotItems: [ChatItem]
         let snapshotCounter: UInt64
         let snapshotLastEventAt: Date?
-        if let store = registryStore, !store.snapshot.items.isEmpty {
+        // v0.8 QA: for chat-kind sessions, NEVER fall back to chatFileResolver —
+        // its parent-walk fuzzy match surfaces unrelated Codex/Claude JSONLs
+        // (e.g. a fresh chat session shows transcripts from someone's old
+        // debugging session). The registry's sdkOnly store is the single
+        // source of truth; CodexSDKEventIngestor populates it via appendSDKMessages.
+        // Code sessions keep the cold-fallback path so JSONL tail catches up.
+        if session.kind == .chat {
+            snapshotItems = registryStore?.snapshot.items ?? []
+            snapshotCounter = registryStore?.snapshot.updateCounter ?? 0
+            snapshotLastEventAt = registryStore?.snapshot.lastEventAt ?? session.lastEventAt
+        } else if let store = registryStore, !store.snapshot.items.isEmpty {
             snapshotItems = store.snapshot.items
             // Phase 0a / Codex P0: this is the real chat cursor now.
             // Pre-v5, this field was populated from session.lastEventSeq
@@ -1827,6 +1995,11 @@ public final class AgentControlServer {
             // Cold fallback keeps empty — codex todos only land via SDK
             // events, which the store accumulates while live.
             codexTodos: registryStore?.snapshot.codexTodos ?? [],
+            // v0.8 QA: forward any pending CLI permission prompt so iOS
+            // (or HTTP-polling clients) can render the AskUserQuestion-
+            // style card too. Mac UI reads the @Published property
+            // directly on SessionChatStore.
+            pendingPermissionPrompt: registryStore?.pendingPermissionPrompt,
             totalInputTokens: 0,
             totalOutputTokens: 0,
             lastEventAt: snapshotLastEventAt,
@@ -2216,6 +2389,23 @@ public final class AgentControlServer {
                 kind: .sessionCreated,
                 payload: ["repo": req.repoKey, "agent": req.agent.rawValue]
             )
+            // v0.8 QA: same permission-prompt warmup as chat sessions.
+            // Code sessions usually run in trusted git repos and don't
+            // see Codex's "trust this directory" prompt, but they can
+            // still hit the "Update available!" splash on first launch
+            // — those get auto-accepted per user spec. If the trust
+            // prompt does fire (e.g. brand-new worktree), it surfaces
+            // through the same PermissionPromptCard the chat workspace
+            // renders.
+            let warmupSession = session
+            let warmupPane = window.paneId
+            let warmupTask = Task { [weak self] in
+                await self?.warmupCLIPane(session: warmupSession, paneId: warmupPane)
+                await MainActor.run { [weak self] in
+                    self?.chatWarmupTasks[warmupSession.id] = nil
+                }
+            }
+            chatWarmupTasks[session.id] = warmupTask
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             if let body = try? encoder.encode(session) {
@@ -2226,6 +2416,582 @@ public final class AgentControlServer {
         } catch {
             serverLogger.error("Failed to spawn session: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
+        }
+    }
+
+    // MARK: - v0.8 Chat tab (wire v9)
+
+    /// `POST /chat-sessions`: spawn a new chat-kind AgentSession in an
+    /// empty per-session chat-cwd. Forces plan-mode. Branches on
+    /// (agent, codexChatBackend) per RE1. Gemini chat returns 501 in
+    /// v0.8 (deferred to v0.9 alongside Antigravity-via-agy).
+    private func handlePostChatSession(request: HTTPRequest, connection: NWConnection) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(CreateChatSessionRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        // Gemini chat is deferred to v0.9 (gemini CLI being replaced by
+        // Antigravity / agy in a parallel thread). Surface 501 with a
+        // clear reason string so iOS knows to show "Coming with
+        // Antigravity" copy instead of a generic error.
+        if req.provider == .gemini {
+            let body = #"{"error":"not_implemented","reason":"v0.9","provider":"gemini"}"#
+            sendResponse(HTTPResponse(
+                status: 501, reason: "Not Implemented",
+                contentType: "application/json", body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+        // Determine the Codex backend choice for this session. For non-
+        // Codex providers, leave it nil. For Codex, honor the per-request
+        // override if present; otherwise fall back to the global default
+        // (RE1: ship .sdk as the v0.8 default).
+        let codexBackend: CodexChatBackend? = {
+            guard req.provider == .codex else { return nil }
+            return req.codexChatBackend ?? .sdk
+        }()
+        // Create the session record first (assigns a UUID we can use to
+        // name the chat-cwd).
+        let session = registry.createChat(
+            provider: req.provider,
+            model: req.model,
+            chatCwd: "",  // placeholder; we'll patch it post-cwd-creation
+            codexChatBackend: codexBackend,
+            effort: req.effort
+        )
+        let chatCwd: String
+        do {
+            let url = try ChatCwdManager.ensure(for: session.id)
+            chatCwd = url.path
+        } catch {
+            serverLogger.error("chat-cwd create failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            registry.delete(id: session.id)
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        // Patch the worktreePath on the created session so effectiveCwd
+        // resolves to the chat-cwd. The createChat helper stored it as
+        // empty-string; rewrite via the existing update pattern.
+        registry.updateRuntime(
+            id: session.id,
+            worktreePath: chatCwd,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            mode: .local
+        )
+        // Spawn dispatch — Phase 3 dispatch handles the kind branches.
+        // For SDK chat (codex + .sdk) argv is empty and the daemon needs
+        // to route to CodexSubscriptionRelay; Phase 4.5 wires that. For
+        // CLI chat (claude / codex+.cli) we spawn a tmux window now.
+        let updatedSession = registry.session(id: session.id) ?? session
+        let argv = AgentSpawner.argv(for: updatedSession)
+        if argv.isEmpty && updatedSession.agent == .codex && updatedSession.codexChatBackend == .sdk {
+            // SDK chat: pre-create the SDK-only SessionChatStore via the
+            // registry so `chat-subscribe` WS subscribers and
+            // `/chat-snapshot` HTTP polls can find it immediately. The
+            // actual CodexSubscriptionRelay.start() is deferred until the
+            // first /send (we don't have an initial prompt at create
+            // time, and the SDK requires one to begin streaming).
+            _ = chatStoreRegistry.snapshotStore(for: updatedSession)
+        } else if argv.isEmpty {
+            // No binary on PATH for this provider — clean up + surface 503.
+            registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
+            ), on: connection)
+            return
+        } else {
+            // CLI chat path: spawn tmux window in the chat-cwd. v0.8 QA
+            // surfaced a wedged-tmux scenario where tmux.newWindow hung
+            // forever — the handler never returned, AgentSession +
+            // chat-cwd were left orphaned in the registry. Use a
+            // continuation-race timeout that returns even when the
+            // underlying tmux await is unrecoverably stuck (Swift Task
+            // cancellation is cooperative; tmux.command's
+            // withCheckedThrowingContinuation never resumes on a wedged
+            // PTY). The spawn task may leak if tmux stays wedged, but
+            // leaking one wrapping Task is much better than leaking a
+            // registry entry + chat-cwd dir + a confused user.
+            let tmuxRef = self.tmux
+            let spawnResult: (windowId: String, paneId: String)? = await withCheckedContinuation { (cont: CheckedContinuation<(String, String)?, Never>) in
+                let resumedBox = ResumeOnceBox()
+                Task {
+                    do {
+                        try await tmuxRef.start()
+                        let window = try await tmuxRef.newWindow(cwd: chatCwd, child: argv)
+                        if resumedBox.tryClaim() { cont.resume(returning: (window.windowId, window.paneId)) }
+                    } catch {
+                        if resumedBox.tryClaim() { cont.resume(returning: nil) }
+                    }
+                }
+                Task {
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    if resumedBox.tryClaim() { cont.resume(returning: nil) }
+                }
+            }
+            guard let spawn = spawnResult else {
+                serverLogger.error("chat spawn failed or timed out for \(session.id.uuidString, privacy: .public) — tmux unresponsive after 10s")
+                registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                sendResponse(HTTPResponse(
+                    status: 504, reason: "Gateway Timeout",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"tmux_unresponsive","hint":"Quit Clawdmeter and relaunch; if the issue persists, kill any stale tmux processes with: pkill -9 -f tmux"}"#.utf8)
+                ), on: connection)
+                return
+            }
+            registry.updateRuntime(
+                id: session.id,
+                worktreePath: chatCwd,
+                tmuxWindowId: spawn.windowId,
+                tmuxPaneId: spawn.paneId,
+                mode: .local
+            )
+            // v0.8 QA: dismiss Codex CLI's in-pane prompts (update, trust)
+            // and any Claude TUI welcome that swallows the first keystroke.
+            // Runs in the background so chat-session creation returns
+            // immediately — handleSendPrompt awaits the task before pasting
+            // so the user's first send doesn't race the dismissal.
+            let warmupSession = registry.session(id: session.id) ?? session
+            let warmupPane = spawn.paneId
+            let warmupTask = Task { [weak self] in
+                await self?.warmupCLIPane(session: warmupSession, paneId: warmupPane)
+                await MainActor.run { [weak self] in
+                    self?.chatWarmupTasks[warmupSession.id] = nil
+                }
+            }
+            chatWarmupTasks[session.id] = warmupTask
+        }
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["chat": "true", "provider": req.provider.rawValue]
+        )
+        let finalSession = registry.session(id: session.id) ?? session
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(finalSession) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// `GET /chat-providers`: returns the per-provider availability +
+    /// auth + capability-probe state per DG4. v0.8 ships a minimal
+    /// implementation that checks binary-on-PATH; the full P1-actor
+    /// ChatProviderProbe + CM3 ChatProviderAuthObserver land in v0.8.x
+    /// polish phase. Gemini row is hardcoded `available: false, reason:
+    /// "v0.9"` until Antigravity (agy) replacement ships.
+    private func handleGetChatProviders(connection: NWConnection) async {
+        let now = Date()
+        let claudeAvailable = ShellRunner.locateBinary("claude") != nil
+        let codexAvailable = ShellRunner.locateBinary("codex") != nil
+        let codexSDKAvailable = CodexSDKManager.shared.isProvisioned
+        let resp = ChatProvidersResponse(providers: [
+            ChatProviderEntry(
+                provider: .claude,
+                available: claudeAvailable,
+                authenticated: claudeAvailable,  // full auth probe in polish
+                capabilityProbePassed: claudeAvailable,
+                lastProbedAt: now,
+                reason: claudeAvailable ? nil : "claude CLI not on PATH"
+            ),
+            ChatProviderEntry(
+                provider: .codex, codexBackend: .sdk,
+                available: codexSDKAvailable,
+                authenticated: codexSDKAvailable,
+                capabilityProbePassed: codexSDKAvailable,
+                lastProbedAt: now,
+                reason: codexSDKAvailable ? nil : "Toggle SDK mode in Settings → Codex SDK"
+            ),
+            ChatProviderEntry(
+                provider: .codex, codexBackend: .cli,
+                available: codexAvailable,
+                authenticated: codexAvailable,
+                capabilityProbePassed: codexAvailable,
+                lastProbedAt: now,
+                reason: codexAvailable ? nil : "codex CLI not on PATH"
+            ),
+            ChatProviderEntry(
+                provider: .gemini,
+                available: false,
+                authenticated: false,
+                capabilityProbePassed: false,
+                reason: "v0.9"  // Antigravity-via-agy replacement
+            ),
+        ])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(resp) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Frontier endpoints stub. Returns 501 in v0.8 — the routes exist
+    /// for forward-compat (clients can probe), but the full implementation
+    /// (real spawn, FrontierWebSocketChannel, per-slot retry, pick-winner
+    /// fork) lands in v0.9 alongside the Antigravity replacement so the
+    /// 3-pane UI can use the full Claude+Codex+Gemini matrix.
+    private func handleFrontierStub(connection: NWConnection) {
+        let body = #"{"error":"not_implemented","reason":"frontier_ui_lands_in_v0.9"}"#
+        sendResponse(HTTPResponse(
+            status: 501, reason: "Not Implemented",
+            contentType: "application/json", body: Data(body.utf8)
+        ), on: connection)
+    }
+
+    /// v0.8 Phase 4.5: route a prompt for a Codex-SDK chat session to
+    /// CodexSubscriptionRelay instead of tmux. Lazy-starts the relay on
+    /// the first send (we don't have a prompt to seed it with at chat-
+    /// session create time). On subsequent sends, uses `forwardPrompt`
+    /// with the persisted threadId so the SDK reuses the same server-
+    /// side thread (and resume-after-evict works per NEW-T13).
+    ///
+    /// D1 (first-message-becomes-title): if the session has no
+    /// customName yet, derive a 40-char title from the prompt body and
+    /// persist via `registry.rename(...)`. Future renames via /rename
+    /// override this.
+    private func sendChatSDKPrompt(
+        session: AgentSession,
+        prompt: String,
+        connection: NWConnection
+    ) async {
+        // D1 chat naming: tag the customName from the first user prompt
+        // when none is set yet. Trim + truncate to 40 chars (with ellipsis
+        // if longer). Existing rename handler normalizes empties to nil
+        // so the placeholder "New <Provider> chat" still renders pre-send.
+        if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+            let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let truncated: String = {
+                    let cap = 40
+                    if trimmed.count <= cap { return trimmed }
+                    let idx = trimmed.index(trimmed.startIndex, offsetBy: cap - 1)
+                    return String(trimmed[..<idx]) + "…"
+                }()
+                registry.rename(id: session.id, name: truncated)
+            }
+        }
+        let chatCwd = session.effectiveCwd
+        // v0.8 QA: echo the user's prompt into the SessionChatStore so it
+        // shows up as a user bubble in the thread immediately. Without
+        // this, the user sees nothing until the SDK assistant response
+        // streams in (or never, if there's a network hiccup). Marks the
+        // message with an SDK-prefixed id so it doesn't collide with
+        // assistant events that come back through the ingestor.
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            let userMsgId = "user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
+            store.appendSDKMessages([
+                ChatMessage(
+                    id: userMsgId,
+                    kind: .userText,
+                    title: "You",
+                    body: prompt,
+                    at: Date()
+                )
+            ], at: Date())
+        }
+        do {
+            if CodexSubscriptionRelay.shared.isActive(sessionId: session.id) {
+                // Subsequent prompt — forward to the running sidecar with
+                // the resume threadId so the SDK reuses the same server-
+                // side thread.
+                try CodexSubscriptionRelay.shared.forwardPrompt(
+                    sessionId: session.id,
+                    workingDirectory: chatCwd,
+                    prompt: prompt,
+                    threadId: session.codexChatThreadId,
+                    skipGitRepoCheck: true
+                )
+            } else {
+                // First prompt — spawn the relay + ingestor. The ingestor
+                // captures `thread.started` and persists the threadId on
+                // the session record for resume-after-evict (NEW-T13).
+                let registryRef = self.registry
+                if let store = chatStoreRegistry.snapshotStore(for: session) {
+                    let ingestor = CodexSDKEventIngestor(
+                        sessionId: session.id,
+                        store: store,
+                        onThreadStarted: { [weak registryRef] threadId in
+                            Task { @MainActor in
+                                registryRef?.setCodexChatThreadId(id: session.id, threadId: threadId)
+                            }
+                        }
+                    )
+                    ingestor.start()
+                    sdkChatIngestors[session.id] = ingestor
+                }
+                // v0.8 QA: chat-cwd (~/Library/.../chat-sessions/<uuid>/) is
+                // not a git repo. The Codex CLI rejects the call without
+                // `--skip-git-repo-check` and the SDK silently hangs with
+                // a stream_error sidecar-side ("Not inside a trusted
+                // directory…"). Pass true unconditionally for chat — the
+                // chat-cwd is sandboxed inside the app's Application
+                // Support dir and never holds user code.
+                _ = try CodexSubscriptionRelay.shared.start(
+                    session: session,
+                    workingDirectory: chatCwd,
+                    initialPrompt: prompt,
+                    threadId: session.codexChatThreadId,
+                    model: session.model,
+                    sandboxMode: "read-only",
+                    modelReasoningEffort: session.effort?.codexConfigValue,
+                    skipGitRepoCheck: true
+                )
+            }
+        } catch {
+            serverLogger.error("SDK chat send failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        let peer = Self.endpointString(connection.endpoint)
+        await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: peer, text: prompt)
+        let updated = registry.session(id: session.id) ?? session
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(updated) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+        }
+    }
+
+    /// v0.8 QA: prepare a CLI pane (code or chat) for the user's first
+    /// prompt. Same flow either way:
+    /// - **Codex update prompt**: auto-update (per user spec — always
+    ///   take the latest, no question asked).
+    /// - **Codex trust prompt**: surface to the user via the
+    ///   PermissionPromptCard; await their click; never auto-dismiss.
+    /// - **Claude welcome**: just give the TUI time to render.
+    ///
+    /// Renamed from `warmupChatPane` — the flow works for both code and
+    /// chat sessions. Code sessions usually skip the trust prompt (they
+    /// run in trusted git repos) so the cycle is fast.
+    private func warmupCLIPane(session: AgentSession, paneId: String) async {
+        switch session.agent {
+        case .codex:
+            // For code sessions, the embedded terminal IS the input path
+            // already — no backend gate. For chat sessions we restrict
+            // to CLI backend (SDK has no tmux pane).
+            if session.kind == .chat, session.codexChatBackend != .cli {
+                return
+            }
+            // First pane probe lets the CLI render its initial screen.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            // Step 1: auto-update if the update prompt is showing. Per
+            // user spec we always take the latest version — no UI prompt.
+            var captured = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
+            if captured.contains("Update available") {
+                serverLogger.info("chat warmup: auto-updating Codex CLI for \(session.id.uuidString, privacy: .public)")
+                try? await tmux.sendKeys(paneId: paneId, bytes: Data([0x31, 0x0d]))
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                captured = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
+            }
+            // Step 2: surface the trust prompt to the user if shown. Only
+            // surfaces ONCE per warmup — the CLI flickers the trust screen
+            // briefly during MCP init even after dismissal, and the
+            // continuation already resolved so we don't double-prompt.
+            if captured.contains("Do you trust the contents") {
+                serverLogger.info("chat warmup: surfacing Codex trust prompt for \(session.id.uuidString, privacy: .public)")
+                let cwd = session.effectiveCwd
+                let prompt = PendingPermissionPrompt(
+                    id: "codex-trust-\(UUID().uuidString)",
+                    title: "Trust this directory?",
+                    detail: "Codex wants to run in \(cwd). Trusting it allows project-local config, hooks, and exec policies to load. Working with untrusted contents has higher risk of prompt injection.",
+                    header: "Codex CLI",
+                    options: [
+                        PermissionOption(
+                            id: "yes",
+                            label: "Yes, continue",
+                            description: "Trust this directory and allow Codex to run.",
+                            isRecommended: true
+                        ),
+                        PermissionOption(
+                            id: "no",
+                            label: "No, quit",
+                            description: "Quit the Codex CLI for this chat.",
+                            isDestructive: true
+                        ),
+                    ]
+                )
+                let dispatch: [String: [String]] = [
+                    // Down + Up refreshes selection back to option 1
+                    // ("Yes, continue") — the dialog ignores a bare
+                    // Enter until a nav key wakes its input handler.
+                    "yes": ["Down", "Up", "Enter"],
+                    // To select "No, quit" we go Down then Enter.
+                    "no": ["Down", "Enter"],
+                ]
+                let chosen = await surfacePermissionPrompt(
+                    session: session,
+                    prompt: prompt,
+                    dispatch: dispatch
+                )
+                // v0.8 QA F2: handleDeleteSession may wake us with the
+                // cancellation sentinel. Bail without dispatching keys —
+                // the session is being torn down anyway.
+                if chosen == Self.cancelledPermissionOptionId {
+                    return
+                }
+                if chosen == "no" {
+                    return
+                }
+                try? await tmux.command(["send-keys", "-t", paneId] + (dispatch[chosen] ?? ["Down", "Up", "Enter"]))
+                // Give the CLI 3s to finish dismissing + start MCP init.
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+            // Give the CLI another 3s to finish MCP setup + wire up its
+            // input handler before the first user prompt can paste.
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        case .claude:
+            // Claude welcome auto-dismisses on render. Probe to give it
+            // ~1.5s, then drop into the permission-poll loop.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
+        case .gemini:
+            break
+        }
+    }
+
+    /// Surface a permission prompt to the user via the chat store and
+    /// await their response. Returns the option-id they chose. Never
+    /// times out — the prompt persists until the user clicks (the
+    /// continuation map is the source of truth).
+    @MainActor
+    private func surfacePermissionPrompt(
+        session: AgentSession,
+        prompt: PendingPermissionPrompt,
+        dispatch: [String: [String]]
+    ) async -> String {
+        // Register the dispatch map + promptId so handlePermissionRespond
+        // can look up the keys (F2) and reject stale clicks (F4).
+        permissionOptionDispatch[session.id] = dispatch
+        pendingPermissionPromptIds[session.id] = prompt.id
+        // Publish the prompt to the store so the Mac UI re-renders.
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            store.setPendingPermissionPrompt(prompt)
+        }
+        // Await the user's response via the continuation.
+        let optionId: String = await withCheckedContinuation { cont in
+            pendingPermissionContinuations[session.id] = cont
+        }
+        // Clear the published prompt + dispatch map + promptId.
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            store.setPendingPermissionPrompt(nil)
+        }
+        permissionOptionDispatch[session.id] = nil
+        pendingPermissionPromptIds[session.id] = nil
+        return optionId
+    }
+
+    /// POST `/sessions/:id/permission-respond` body `{promptId, optionId}`.
+    /// Validates that both the promptId AND optionId belong to the
+    /// currently-pending prompt (rejects stale clicks where the UI is
+    /// behind the daemon's current prompt — e.g. iOS surface with a
+    /// cached prompt, or future Claude per-tool flow where multiple
+    /// prompts queue per session). Resumes the warmup/poll continuation
+    /// with the chosen optionId on success.
+    private func handlePermissionRespond(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let req = try? JSONDecoder().decode(PermissionRespondRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // Reject stale clicks where the UI's promptId doesn't match the
+        // currently-pending prompt. Done BEFORE removing the continuation
+        // so legitimate clicks against the live prompt still succeed.
+        guard let currentPromptId = pendingPermissionPromptIds[uuid] else {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"no_pending_prompt"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        guard currentPromptId == req.promptId else {
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"stale_prompt","current":"\#(currentPromptId)"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        guard let dispatch = permissionOptionDispatch[uuid],
+              dispatch[req.optionId] != nil else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        guard let cont = pendingPermissionContinuations.removeValue(forKey: uuid) else {
+            // Should not happen given the promptId check above, but be
+            // defensive — promptId map and continuation map can briefly
+            // disagree under concurrent cancellation.
+            sendResponse(HTTPResponse(
+                status: 409, reason: "Conflict",
+                contentType: "application/json",
+                body: Data(#"{"error":"no_pending_prompt"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        serverLogger.info("permission respond session=\(uuid.uuidString, privacy: .public) option=\(req.optionId, privacy: .public)")
+        cont.resume(returning: req.optionId)
+        sendJSON(["ok": true], on: connection)
+    }
+
+    /// v0.8 QA F2: wake any pending permission continuation with the
+    /// cancel sentinel. Used by handleDeleteSession and stop() so
+    /// orphaned warmup tasks don't hang waiting for a user click on a
+    /// session that's been torn down. Idempotent — safe to call when
+    /// nothing is pending.
+    @MainActor
+    private func cancelPendingPermissionPrompt(sessionId: UUID) {
+        guard let cont = pendingPermissionContinuations.removeValue(forKey: sessionId) else {
+            return
+        }
+        pendingPermissionPromptIds[sessionId] = nil
+        permissionOptionDispatch[sessionId] = nil
+        if let session = registry.session(id: sessionId),
+           let store = chatStoreRegistry.snapshotStore(for: session) {
+            store.setPendingPermissionPrompt(nil)
+        }
+        cont.resume(returning: Self.cancelledPermissionOptionId)
+    }
+
+    /// One-shot guard for a CheckedContinuation race. Used by
+    /// handlePostChatSession's tmux-timeout path: two Tasks (spawn +
+    /// 10s sleep) race to resume the continuation; only the first
+    /// claim wins. The other resume call is silently dropped, which
+    /// also prevents Swift's runtime trap on double-resume.
+    /// `final class` + atomic-style flag keeps the Sendable story
+    /// simple — the box is captured by both racing Tasks.
+    fileprivate final class ResumeOnceBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var claimed = false
+        func tryClaim() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard !claimed else { return false }
+            claimed = true
+            return true
+        }
+    }
+
+    /// v0.8 Phase 4.5 cleanup: tear down SDK chat ingestor + relay for a
+    /// session. Called from handleDeleteSession when removing a chat
+    /// session, and idempotent on non-SDK sessions / sessions that never
+    /// started a relay.
+    private func teardownSDKChat(sessionId: UUID) async {
+        if let ingestor = sdkChatIngestors.removeValue(forKey: sessionId) {
+            ingestor.stop()
+        }
+        if CodexSubscriptionRelay.shared.isActive(sessionId: sessionId) {
+            await CodexSubscriptionRelay.shared.stop(sessionId: sessionId)
         }
     }
 
@@ -2356,7 +3122,7 @@ public final class AgentControlServer {
         }
         do {
             try await tmux.killWindow(windowId)
-            let cwd = session.worktreePath ?? session.repoKey
+            let cwd = session.effectiveCwd
             let newWindow = try await tmux.newWindow(cwd: cwd, child: replacementArgv)
             registry.updateRuntime(
                 id: uuid,
@@ -2497,6 +3263,19 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection)
             return
         }
+        // v0.8 QA F2: wake any pending permission continuation BEFORE
+        // teardown so a stuck warmup task can return cleanly instead of
+        // hanging on a session we're about to delete. Idempotent.
+        cancelPendingPermissionPrompt(sessionId: uuid)
+        // v0.8 QA F2: cancel the warmup task (lets it return early via
+        // the cancellation sentinel from the line above), and drop the
+        // entry from the map so handleSendPrompt can't await it later.
+        if let task = chatWarmupTasks.removeValue(forKey: uuid) {
+            task.cancel()
+        }
+        // v0.8 Phase 4.5: tear down any SDK chat infrastructure first
+        // (ingestor sink + relay sidecar). Idempotent on non-SDK sessions.
+        await teardownSDKChat(sessionId: uuid)
         // Kill the tmux window.
         if let windowId = session.tmuxWindowId {
             do {
@@ -2505,12 +3284,20 @@ public final class AgentControlServer {
                 serverLogger.warning("kill-window \(windowId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
         }
-        // Schedule worktree GC if applicable (24h grace per D12; for v1
-        // we synchronously attempt delete and surface skip-reasons).
-        if let worktreePath = session.worktreePath {
+        // v0.8 REV-DELETE: chat sessions clean up via FileManager
+        // (chat-cwd is a plain dir under chat-sessions/, not a git
+        // worktree). Code sessions go through WorktreeManager.delete as
+        // before.
+        if session.kind == .chat {
+            do {
+                try ChatCwdManager.remove(for: uuid)
+            } catch {
+                serverLogger.warning("chat-cwd cleanup failed for \(uuid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        } else if session.kind == .code, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
             do {
                 let result = try await WorktreeManager.shared.delete(
-                    repoRoot: session.repoKey,
+                    repoRoot: repoRoot,
                     worktreePath: worktreePath,
                     registryOwned: true,
                     attachedPanePaths: []
@@ -2524,6 +3311,12 @@ public final class AgentControlServer {
         if let wiring = sessionWiring.removeValue(forKey: uuid) {
             wiring.stop()
         }
+        // v0.8 F3: drop the chat store from the registry now that the
+        // session is gone. Without this the store sticks around until
+        // the 60s sweep tick — small leak, but it also means a stale
+        // store can shadow a freshly-created session if uuids ever
+        // collide across a daemon restart. Idempotent.
+        chatStoreRegistry.evict(sessionId: uuid)
         registry.delete(id: uuid)
         AgentEventStream.recordEvent(sessionId: uuid, kind: .sessionDeleted, payload: [:])
         sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
@@ -2776,6 +3569,12 @@ extension AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
+        // REV-Antigravity-polling (v0.8): chat sessions never have an
+        // Antigravity brain — short-circuit before touching session.repoKey
+        // (which is nil for chat sessions, would crash the URL constructor).
+        guard session.kind == .code else {
+            sendResponse(.notFound, on: connection); return
+        }
         // Only respond for Gemini sessions. Claude/Codex sessions don't
         // have an Antigravity brain — return 404 with a clear shape so
         // iOS can fall back to "Plan tab not applicable for this agent".
@@ -2789,7 +3588,9 @@ extension AgentControlServer {
         let stateURL = antigravityDir.appendingPathComponent("antigravity_state.pbtxt", isDirectory: false)
 
         let index = BrainSummaryIndexer.read(at: indexURL)
-        let cwdURL = URL(fileURLWithPath: session.repoKey)
+        // session.repoKey is non-nil here because the kind-guard above
+        // short-circuits chat sessions; force-unwrap is safe.
+        let cwdURL = URL(fileURLWithPath: session.repoKey!)
         var candidateUUIDs = BrainSummaryIndexer.lookup(cwd: cwdURL, in: index)
         if candidateUUIDs.isEmpty {
             // Fallback: glob all brain dirs and let mtime drive the pick.
