@@ -122,6 +122,8 @@ the next branches.
 | D8 | Mac sidebar filter | **Build full NSMenu** | Toggles: live only / paused / by-provider / sort by last active; UserDefaults-persisted |
 | D9 | Mac ReviewPane tabs | **All 5 wired (Plan + Diff + Sources + PR + Term)** | Diff = `git diff main...HEAD`; Sources = `RepoIndex` semantic; PR = `gh pr view` + `NSWorkspace.open`; Term = live tmux mirror via SwiftTerm |
 | D10 | Release sequencing | **Phased PRs by surface — Code first, Chat second** | See plan below |
+| D11 | OpenCode fork vs. build | **Hybrid — keep Swift harness, add OpenCode as another provider** | Fork was ruled out: kills iOS (Bun can't run there), breaks CLI OAuth handover, breaks the cost meter (no rate-limit headers when OpenCode hits APIs directly). New `OpencodeProcessManager` peers with `CodexSDKManager`/`AntigravitySidecarManager`; new `AgentKind.opencode`; SSE→`AgentSession` event adapter. See `docs/opencode-research-2026-05-22.md` for the full deep-research record |
+| D12 | OpenCode adapter timing | **Standalone PR #27 after Polish** | v1.0 ships without OpenCode; v1.1 adds it. Keeps PR #24/25/26 review surfaces clean |
 
 ## Release plan (post-decisions)
 
@@ -171,7 +173,31 @@ control reaches a real backend.
 - Build verification on all 3 platforms.
 
 After PR #26 lands, the audit table should read **102/102 wired** (or
-explicitly removed) with zero decorative no-ops.
+explicitly removed) with zero decorative no-ops. **This is v1.0.**
+
+### PR #27 — `feat/opencode-provider-adapter` (post-v1.0, v1.1)
+**Scope:** add OpenCode (`sst/opencode`) as a fourth provider alongside
+Claude / Codex / Antigravity. Per D11/D12, the strategic call is to
+keep our Swift harness (it preserves iOS, the cost meter, and CLI OAuth
+handover) and treat OpenCode as one more `AgentKind` users can opt into.
+- New `OpencodeProcessManager` (peer of `CodexSDKManager`,
+  `AntigravitySidecarManager`): spawns `opencode serve` on a free port,
+  manages lifecycle, surfaces auth state in Settings.
+- New `AgentKind.opencode` — plumbs through every place that branches on
+  agent kind (`AgentSession.agent`, `AgentSpawner.argv`,
+  `iOSModelPicker`, NewSessionSheet provider segment, Mac chat mode
+  toggle, Live tab provider segmented).
+- SSE → `AgentSession` event adapter (`OpencodeSSEAdapter`): consumes
+  OpenCode's `/event` stream and emits the same envelope shape our
+  registry expects.
+- Cost tracking: OpenCode bills against the user's Anthropic/OpenAI key
+  directly, so cost lands via OpenCode's own usage events rather than
+  Anthropic rate-limit headers. New `OpencodeUsageMapper`.
+- Auth UX: surface `opencode auth` status in Settings → Providers;
+  link to setup docs when missing.
+- Empty-state copy on first add: "Run `brew install opencode` then sign
+  in with `opencode auth login`."
+- ~1-2 weeks. Builds clean on all platforms.
 
 ## Wiring deltas after Phase A + B
 
