@@ -265,7 +265,15 @@ final class AppRuntime: ObservableObject {
         // sessionsRefreshTask is @MainActor-isolated; cancellation needs
         // to hop. Best-effort.
         let task = sessionsRefreshTask
-        Task { @MainActor in task?.cancel() }
+        Task { @MainActor in
+            task?.cancel()
+            // PR #30: clean shutdown of the OpenCode singleton. The
+            // process manager + SSE adapter aren't owned here, but
+            // their lifecycle tracks the app's so we tear them down
+            // when AppRuntime goes away.
+            OpencodeProcessManager.shared.stop()
+            OpencodeSSEAdapter.shared.stop()
+        }
         runtimeLogger.warning("AppRuntime.deinit")
     }
 }

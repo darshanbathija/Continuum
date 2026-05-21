@@ -4,6 +4,73 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.19.0 build 79] - 2026-05-22 — OpenCode runtime: ProcessManager + SSE adapter (D11/D12, P1)
+
+PR #30 lands the runtime that PR #29's wire foundation was designed
+for: a singleton `opencode serve` process + an SSE event adapter,
+hooked into AgentControlServer so opencode-kind sessions actually
+spawn and stream events end-to-end.
+
+### Added
+
+- **OpencodeProcessManager** (`apple/ClawdmeterMac/AgentControl/OpencodeProcessManager.swift`,
+  ~300 LOC): P1 singleton per the eng-review decision. Responsibilities:
+  - Binary discovery: `/opt/homebrew/bin/opencode`, `/usr/local/bin/opencode`,
+    then `$PATH` walk. Surfaces `State.notInstalled` with install hint
+    when missing.
+  - Free-port allocation via transient `NWListener`.
+  - Spawns `opencode serve --port <p> --hostname 127.0.0.1` with a
+    per-launch `OPENCODE_SERVER_PASSWORD` token.
+  - Healthcheck via `GET /` until 200 lands or 10s deadline.
+  - Auth probe via `opencode auth list` (lenient parser handles
+    blanks, comments, decorative separators, headers).
+  - Restart-on-crash supervisor with exponential backoff
+    (1s → 2s → 4s → 8s → 16s), capped at 5 restarts before giving up
+    (prevents crash loops eating CPU).
+  - Clean shutdown via `stop()`; idempotent.
+  - State exposed as `@Published` for the Settings → Providers UI
+    (lands in PR #31).
+- **OpencodeSSEAdapter** (`apple/ClawdmeterMac/AgentControl/OpencodeSSEAdapter.swift`,
+  ~260 LOC): consumes `GET /event` SSE stream + translates events to
+  the AgentEventStream shape. Bidirectional UUID map (Clawdmeter ↔
+  opencode session ids) + reconnect-with-backoff + Last-Event-ID
+  resume. Event handlers:
+  - `session.created` → registry hook (synthesis surface logged for now)
+  - `message.added` → `.snapshot` event nudge
+  - `session.error` → `.statusChanged` with degraded payload
+  - `usage` → logged; forwarded to OpencodeUsageMapper in PR #31
+  - unknown / empty types → logged + ignored (forward-compat)
+- **AgentControlServer.handleSpawnOpencodeSession**: routes opencode
+  POST /sessions through the manager + SSE adapter instead of the
+  tmux argv path. Mints an opencode session id via the server's
+  `/session` POST, registers the bidirectional mapping, creates the
+  Clawdmeter-side AgentSession, returns the session JSON. Failure
+  surfaces with structured 503 bodies (install hint, spawn detail).
+- **AppRuntime.deinit**: tears down ProcessManager + SSE adapter on
+  app shutdown.
+
+### Tests
+
+- **OpencodeProcessManagerTests** (11 tests): parseAuthList table-
+  driven coverage (single, multiple, blanks, comments, separators,
+  headers, malformed lines, colon-in-value), initial state, stop
+  idempotency, binary discovery, ensureRunning notInstalled branch.
+- **OpencodeSSEAdapterTests** (12 tests): BidirectionalMap round-
+  trip + overwrite + removeAll, dispatchEvent robustness (malformed
+  JSON, empty, unknown types, missing fields), per-event-type
+  handler routing (message.added + session.error registered/unknown
+  paths), register idempotency, stop clears map.
+- **89/89 Mac tests pass** (up from 66 → +23 opencode tests).
+- 604/604 shared tests pass (no regressions).
+- Mac + iOS + Watch all build clean.
+
+### Known gaps (queued for PR #31)
+
+- OpencodeUsageMapper + menu-bar dollar gauge (A2)
+- Settings → Providers panel UI
+- TahoeProvider 4th case + Mac/iOS UI surfaces
+- Mac broadcast pipeline + MacChatTranscriptStore (v1.0 chat finish)
+
 ## [0.18.0 build 78] - 2026-05-22 — OpenCode adapter foundation (D11/D12 — wire v13)
 
 PR #29 lays the wire + enum foundation for the OpenCode adapter (D11/D12).
