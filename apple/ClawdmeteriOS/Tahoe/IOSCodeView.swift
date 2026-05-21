@@ -26,6 +26,8 @@ public struct IOSCodeView: View {
         self.onNewSession = onNewSession
     }
 
+    @State private var searchQuery: String = ""
+
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
@@ -33,21 +35,33 @@ public struct IOSCodeView: View {
                     IOSRoundIconBtn("plus", action: onNewSession)
                 }
 
-                // Search
+                // Search — PR #26 D5. Real TextField that filters
+                // sessions by title + goal across visible repos.
                 TahoeGlass(radius: 14, tone: .chip) {
                     HStack(spacing: 10) {
                         TahoeIcon("search", size: 15).foregroundStyle(t.fg3)
-                        Text("Search").font(TahoeFont.body(14)).foregroundStyle(t.fg3)
-                        Spacer()
-                        TahoeIcon("mic", size: 14).foregroundStyle(t.fg3)
+                        TextField("Search sessions…", text: $searchQuery)
+                            .textFieldStyle(.plain)
+                            .font(TahoeFont.body(14))
+                            .foregroundStyle(t.fg)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        if !searchQuery.isEmpty {
+                            Button {
+                                searchQuery = ""
+                            } label: {
+                                TahoeIcon("x", size: 12).foregroundStyle(t.fg3)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                     .padding(.horizontal, 14)
                     .frame(height: 38)
                 }
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
 
-                // Repo sections
-                let visible = data.repos.filter { !$0.sessions.isEmpty || !$0.recents.isEmpty }
+                // Repo sections — apply the search query if non-empty.
+                let visible = filteredRepos
                 if visible.isEmpty {
                     VStack(spacing: 8) {
                         TahoeIcon("chat", size: 22).foregroundStyle(t.fg4)
@@ -73,6 +87,31 @@ public struct IOSCodeView: View {
                     .padding(.horizontal, 16).padding(.bottom, 30)
                 }
             }
+        }
+    }
+
+    /// PR #26 D5: filter repos + sessions by `searchQuery`. Empty query
+    /// is identical to today's behavior (regression-safe).
+    private var filteredRepos: [TahoeCodeRepo] {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let baseline = data.repos.filter { !$0.sessions.isEmpty || !$0.recents.isEmpty }
+        guard !query.isEmpty else { return baseline }
+        return baseline.compactMap { repo in
+            let matchedSessions = repo.sessions.filter { s in
+                s.title.lowercased().contains(query)
+            }
+            // Also match the repo name itself — typing "ccwatch" should
+            // surface that repo even if no session title matches.
+            let repoMatches = repo.name.lowercased().contains(query)
+            if matchedSessions.isEmpty && !repoMatches { return nil }
+            return TahoeCodeRepo(
+                key: repo.key,
+                name: repo.name,
+                tint: repo.tint,
+                liveSessionCount: repo.liveSessionCount,
+                sessions: repoMatches ? repo.sessions : matchedSessions,
+                recents: repo.recents
+            )
         }
     }
 }
