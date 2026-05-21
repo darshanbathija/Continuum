@@ -2,31 +2,22 @@ import SwiftUI
 import ClawdmeterShared
 
 /// Mac Usage dashboard — three provider columns + analytics row.
-/// Ports `mac-dashboard.jsx`.
+/// Ports `mac-dashboard.jsx`. Accepts a `TahoeLiveBindings` value (defaults
+/// to the demo fixture); the Mac app injects real AppRuntime-derived data
+/// via `MacRootView.body`.
 public struct MacUsageView: View {
     @Environment(\.tahoe) private var t
+    public var data: TahoeLiveBindings
 
-    public init() {}
+    public init(data: TahoeLiveBindings = .demo) { self.data = data }
 
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
                 HStack(spacing: 14) {
-                    ProviderColumn(
-                        provider: .claude, percent: 67, weekly: 42,
-                        resetIn: "2h 18m", weeklyIn: "4d 6h", model: "Sonnet 4.5",
-                        autoReviveOn: true, autoReviveAgo: "4h ago", menuBarDefault: true
-                    )
-                    ProviderColumn(
-                        provider: .codex, percent: 34, weekly: 28,
-                        resetIn: "4h 02m", weeklyIn: "6d 1h", model: "gpt-5",
-                        autoReviveOn: true, autoReviveAgo: "3h ago", menuBarDefault: true
-                    )
-                    ProviderColumn(
-                        provider: .gemini, percent: 89, weekly: 61,
-                        resetIn: "58m", weeklyIn: "5d 2h", model: "antigravity-pro",
-                        autoReviveOn: true, autoReviveAgo: "2h ago", menuBarDefault: true
-                    )
+                    ProviderColumn(provider: .claude, row: data.claude)
+                    ProviderColumn(provider: .codex,  row: data.codex)
+                    ProviderColumn(provider: .gemini, row: data.gemini)
                 }
                 .padding(.horizontal, 6).padding(.bottom, 18)
 
@@ -45,28 +36,10 @@ public struct MacUsageView: View {
 private struct ProviderColumn: View {
     @Environment(\.tahoe) private var t
     var provider: TahoeProvider
-    var percent: Double
-    var weekly: Double
-    var resetIn: String
-    var weeklyIn: String
-    var model: String
-    var autoReviveOn: Bool
-    var autoReviveAgo: String
-    var menuBarDefault: Bool
+    var row: TahoeLiveRow
 
-    @State private var menuBar: Bool
-    @State private var autoRevive: Bool
-
-    init(provider: TahoeProvider, percent: Double, weekly: Double,
-         resetIn: String, weeklyIn: String, model: String,
-         autoReviveOn: Bool, autoReviveAgo: String, menuBarDefault: Bool) {
-        self.provider = provider; self.percent = percent; self.weekly = weekly
-        self.resetIn = resetIn; self.weeklyIn = weeklyIn; self.model = model
-        self.autoReviveOn = autoReviveOn; self.autoReviveAgo = autoReviveAgo
-        self.menuBarDefault = menuBarDefault
-        _menuBar = State(initialValue: menuBarDefault)
-        _autoRevive = State(initialValue: autoReviveOn)
-    }
+    @State private var menuBar: Bool = true
+    @State private var autoRevive: Bool = true
 
     var body: some View {
         TahoeGlass(radius: 20, tone: .panel) {
@@ -78,7 +51,7 @@ private struct ProviderColumn: View {
                             .font(TahoeFont.body(16, weight: .bold))
                             .tracking(-0.2)
                             .foregroundStyle(t.fg)
-                        Text(model)
+                        Text(row.modelName)
                             .font(TahoeFont.body(11.5))
                             .foregroundStyle(t.fg3)
                     }
@@ -87,22 +60,24 @@ private struct ProviderColumn: View {
                 }
 
                 // QuotaBar
-                TahoeQuotaBar(provider: provider, percent: percent, size: 260,
-                              label: "session", sublabel: "resets in \(resetIn)")
+                TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 260,
+                              label: "session", sublabel: "resets in \(row.sessionResetIn)")
                 .padding(.vertical, 28)
 
-                // Weekly row
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("Weekly · all models")
-                            .font(TahoeFont.body(11.5))
-                            .foregroundStyle(t.fg2)
-                        Spacer()
-                        Text("\(Int(weekly))% · \(weeklyIn)")
-                            .font(TahoeFont.mono(11.5))
-                            .foregroundStyle(t.fg3)
+                // Weekly row — hidden when provider has no weekly window.
+                if row.hasWeekly {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Weekly · all models")
+                                .font(TahoeFont.body(11.5))
+                                .foregroundStyle(t.fg2)
+                            Spacer()
+                            Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
+                                .font(TahoeFont.mono(11.5))
+                                .foregroundStyle(t.fg3)
+                        }
+                        TahoePillBar(percent: row.weeklyPercent, provider: provider, height: 6)
                     }
-                    TahoePillBar(percent: weekly, provider: provider, height: 6)
                 }
 
                 Spacer(minLength: 12)
@@ -114,7 +89,7 @@ private struct ProviderColumn: View {
                             Text("Keep 5h timer ticking")
                                 .font(TahoeFont.body(12, weight: .semibold))
                                 .foregroundStyle(t.fg)
-                            Text("Auto-revive · " + (autoRevive ? "last fired \(autoReviveAgo)" : "off"))
+                            Text("Auto-revive · " + (autoRevive ? "last fired \(row.autoReviveAgo)" : "off"))
                                 .font(TahoeFont.body(10.5))
                                 .foregroundStyle(t.fg3)
                         }
@@ -128,6 +103,8 @@ private struct ProviderColumn: View {
             .padding(22)
             .frame(maxWidth: .infinity, minHeight: 380, alignment: .topLeading)
         }
+        .onAppear { autoRevive = row.autoReviveOn }
+        .onChange(of: row.autoReviveOn) { _, v in autoRevive = v }
     }
 }
 

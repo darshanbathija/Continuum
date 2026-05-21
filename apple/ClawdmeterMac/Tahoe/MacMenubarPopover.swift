@@ -5,14 +5,18 @@ import ClawdmeterShared
 /// Ports `mac-dashboard.jsx::MacMenubarPopover`.
 public struct MacMenubarPopover: View {
     @Environment(\.tahoe) private var t
-    @State private var selected: TahoeProvider = .claude
+    @State private var selected: TahoeProvider
+    public var data: TahoeLiveBindings
 
     private let enabled: [TahoeProvider] = [.claude, .codex, .gemini]
 
-    public init() {}
+    public init(data: TahoeLiveBindings = .demo, initialProvider: TahoeProvider = .claude) {
+        self.data = data
+        self._selected = State(initialValue: initialProvider)
+    }
 
     public var body: some View {
-        let row = TahoeDemo.liveData[selected] ?? TahoeDemo.liveData[.claude]!
+        let row = data.row(for: selected)
         TahoeGlass(radius: 18, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
                 // Provider segmented control
@@ -46,8 +50,10 @@ public struct MacMenubarPopover: View {
 
                 // 5h + Weekly meters
                 VStack(spacing: 12) {
-                    TahoeMenuBarMeter(label: "5h session", percent: row.session, hint: "resets in \(row.resetIn)", provider: selected)
-                    TahoeMenuBarMeter(label: "Weekly", percent: row.weekly, hint: "resets in \(row.weeklyIn)", provider: selected)
+                    TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: selected)
+                    if row.hasWeekly {
+                        TahoeMenuBarMeter(label: "Weekly", percent: row.weeklyPercent, hint: "resets in \(row.weeklyResetIn)", provider: selected)
+                    }
                 }
                 .padding(.horizontal, 4)
 

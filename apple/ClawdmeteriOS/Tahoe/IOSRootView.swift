@@ -12,14 +12,20 @@ public struct IOSRootView: View {
     public enum Tab: String, CaseIterable { case chat, live, analytics, code }
     public enum Screen { case pairing, sessionDetail }
 
-    public init() {
+    /// Optional iOS usage model — when provided, the Live tab switches
+    /// from demo data to the live per-provider quota.
+    @ObservedObject private var usageModel: UsageModel
+
+    public init(usageModel: UsageModel) {
+        self.usageModel = usageModel
         _theme = State(initialValue: TahoeThemeStore.loaded())
     }
 
     public var body: some View {
-        ZStack {
+        let live = usageModel.tahoeLive
+        return ZStack {
             TahoeWallpaperView()
-            content
+            contentView(live: live)
                 .padding(.bottom, 92) // floating tab bar clearance
             if pushedScreen == nil {
                 IOSTabBar(tab: $tab)
@@ -34,7 +40,7 @@ public struct IOSRootView: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func contentView(live: TahoeLiveBindings) -> some View {
         switch pushedScreen {
         case .pairing:
             IOSPairingView(onClose: { pushedScreen = nil })
@@ -43,7 +49,7 @@ public struct IOSRootView: View {
         case nil:
             switch tab {
             case .chat:      IOSChatView()
-            case .live:      IOSLiveView()
+            case .live:      IOSLiveView(data: live)
             case .analytics: IOSAnalyticsView()
             case .code:      IOSCodeView(onOpenDetail: { pushedScreen = .sessionDetail })
             }

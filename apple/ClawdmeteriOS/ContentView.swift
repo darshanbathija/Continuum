@@ -24,11 +24,10 @@ struct ContentView: View {
     var body: some View {
         // Tahoe 26 redesign: the four-tab IOSRootView (Chat | Live |
         // Analytics | Code) replaces the previous 3-tab `TabView`. The
-        // existing models, agent client, and notification manager are
-        // kept on this view so the background lifecycle hooks and the
-        // settings sheet still wire up; real-data binding into the new
-        // Tahoe views lands as a follow-up.
-        IOSRootView()
+        // UsageModel is threaded in so the Live tab renders the live
+        // per-provider quota via the `tahoeLive` adapter
+        // (see IOSTahoeAdapter.swift).
+        IOSRootView(usageModel: model)
             .sheet(isPresented: $showingSettings) {
                 SettingsView(model: model)
             }

@@ -9,8 +9,9 @@ public struct IOSLiveView: View {
     @State private var autoRevive: [TahoeProvider: Bool] = [
         .claude: true, .codex: true, .gemini: true
     ]
+    public var data: TahoeLiveBindings
 
-    public init() {}
+    public init(data: TahoeLiveBindings = .demo) { self.data = data }
 
     public var body: some View {
         ScrollView {
@@ -46,49 +47,51 @@ public struct IOSLiveView: View {
                 }
                 .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 8)
 
-                // Hero orb (now a horizontal bar gauge)
-                let data = TahoeDemo.liveData[provider]!
-                TahoeQuotaBar(provider: provider, percent: data.session, size: 320,
-                              label: "session", sublabel: "resets in \(data.resetIn)")
+                // Hero quota bar — JSX `size={264}`, was 320 in v1.
+                let row = data.row(for: provider)
+                TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 264,
+                              label: "session", sublabel: "resets in \(row.sessionResetIn)")
                     .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 14)
 
-                // Weekly card
-                TahoeGlass(radius: 20, tone: .raised) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("WEEKLY · ALL MODELS")
-                                    .font(TahoeFont.body(11, weight: .bold))
-                                    .tracking(0.4)
-                                    .foregroundStyle(t.fg3)
-                                HStack(alignment: .firstTextBaseline, spacing: 2) {
-                                    Text("\(Int(data.weekly))")
-                                        .font(TahoeFont.rounded(26, weight: .heavy))
-                                        .monospacedDigit()
-                                        .tracking(-0.5)
-                                        .foregroundStyle(t.fg)
-                                    Text("%")
-                                        .font(TahoeFont.body(18, weight: .bold))
+                // Weekly card — hidden when provider has no weekly window.
+                if row.hasWeekly {
+                    TahoeGlass(radius: 20, tone: .raised) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("WEEKLY · ALL MODELS")
+                                        .font(TahoeFont.body(11, weight: .bold))
+                                        .tracking(0.4)
                                         .foregroundStyle(t.fg3)
+                                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                                        Text("\(Int(row.weeklyPercent))")
+                                            .font(TahoeFont.rounded(26, weight: .heavy))
+                                            .monospacedDigit()
+                                            .tracking(-0.5)
+                                            .foregroundStyle(t.fg)
+                                        Text("%")
+                                            .font(TahoeFont.body(18, weight: .bold))
+                                            .foregroundStyle(t.fg3)
+                                    }
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text("resets in")
+                                        .font(TahoeFont.body(11, weight: .semibold))
+                                        .foregroundStyle(t.fg3)
+                                    Text(row.weeklyResetIn)
+                                        .font(TahoeFont.mono(14))
+                                        .monospacedDigit()
+                                        .foregroundStyle(t.fg)
                                 }
                             }
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text("resets in")
-                                    .font(TahoeFont.body(11, weight: .semibold))
-                                    .foregroundStyle(t.fg3)
-                                Text(data.weeklyIn)
-                                    .font(TahoeFont.mono(14))
-                                    .monospacedDigit()
-                                    .foregroundStyle(t.fg)
-                            }
+                            .padding(.bottom, 14)
+                            TahoePillBar(percent: row.weeklyPercent, provider: provider, height: 8)
                         }
-                        .padding(.bottom, 14)
-                        TahoePillBar(percent: data.weekly, provider: provider, height: 8)
+                        .padding(18)
                     }
-                    .padding(18)
+                    .padding(.horizontal, 16)
                 }
-                .padding(.horizontal, 16)
 
                 // Auto-revive card
                 TahoeGlass(radius: 20, tone: .raised) {
@@ -100,10 +103,10 @@ public struct IOSLiveView: View {
                         }
                         .frame(width: 30, height: 30)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Keep \(data.window) timer ticking")
+                            Text("Keep 5h timer ticking")
                                 .font(TahoeFont.body(14, weight: .bold))
                                 .foregroundStyle(t.fg)
-                            Text("Auto-revive · " + (autoRevive[provider] ?? false ? "last fired \(data.reviveAgo)" : "off"))
+                            Text("Auto-revive · " + (autoRevive[provider] ?? false ? "last fired \(row.autoReviveAgo)" : "off"))
                                 .font(TahoeFont.body(11.5))
                                 .foregroundStyle(t.fg3)
                         }
@@ -160,7 +163,8 @@ private struct ProviderPill: View {
             }
             .font(TahoeFont.body(12.5, weight: active ? .bold : .semibold))
             .foregroundStyle(active ? t.fg : t.fg2)
-            .frame(maxWidth: .infinity, minHeight: 38)
+            // JSX uses hard `height: 38`; lock both min and max to match.
+            .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38)
             .background {
                 if active {
                     Capsule(style: .continuous)

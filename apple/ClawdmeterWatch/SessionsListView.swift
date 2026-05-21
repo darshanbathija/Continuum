@@ -47,14 +47,14 @@ struct SessionsListView: View {
                 Spacer()
                 if summary.needsAttention {
                     Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(SessionsV2Theme.accent)
+                        .foregroundStyle(TahoeAccent.halo.base.color)
                         .font(.caption2)
                 }
             }
             HStack(spacing: 4) {
                 Text(summary.agent.rawValue.capitalized)
                     .font(.caption2.weight(.medium))
-                    .foregroundStyle(summary.agent == .claude ? SessionsV2Theme.accent : SessionsV2Theme.codexBlue)
+                    .foregroundStyle(summary.agent == .claude ? TahoeAccent.halo.base.color : TahoeProvider.codex.halo.color)
                 if let model = summary.modelDisplay {
                     Text("· \(model)")
                         .font(.caption2)
@@ -81,8 +81,8 @@ struct SessionsListView: View {
         switch raw {
         case "running":  return .green
         case "planning": return .gray
-        case "paused":   return SessionsV2Theme.warn
-        case "done":     return SessionsV2Theme.accent
+        case "paused":   return Color(.sRGB, red: 0xFE/255.0, green: 0xBC/255.0, blue: 0x2E/255.0)
+        case "done":     return TahoeAccent.halo.base.color
         case "degraded": return .red
         default:         return .secondary
         }
@@ -131,7 +131,7 @@ struct WatchSessionDetailView: View {
             HStack(spacing: 6) {
                 Text(summary.agent.rawValue.capitalized)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(summary.agent == .claude ? SessionsV2Theme.accent : SessionsV2Theme.codexBlue)
+                    .foregroundStyle(summary.agent == .claude ? TahoeAccent.halo.base.color : TahoeProvider.codex.halo.color)
                 if let model = summary.modelDisplay {
                     Text(model)
                         .font(.caption2)
@@ -162,7 +162,7 @@ struct WatchSessionDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(SessionsV2Theme.accent)
+                .tint(TahoeAccent.halo.base.color)
                 .accessibilityLabel("Approve plan for \(summary.repoDisplayName)")
                 .accessibilityHint("Tells the agent to start running the proposed plan.")
             }
@@ -183,7 +183,7 @@ struct WatchSessionDetailView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(SessionsV2Theme.codexBlue)
+            .tint(TahoeProvider.codex.halo.color)
             .accessibilityLabel("Send a voice reply")
             .accessibilityHint("Records a short message and sends it to the agent.")
         }

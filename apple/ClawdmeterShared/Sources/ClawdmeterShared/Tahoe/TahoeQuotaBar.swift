@@ -105,6 +105,8 @@ public struct TahoePillBar: View {
                         startPoint: .leading, endPoint: .trailing))
                     .frame(width: geo.size.width * percent / 100)
                     .shadow(color: provider.base.color(opacity: 0.5), radius: 5, x: 0, y: 0)
+                    // Motion polish: smooth fill-in when percent changes.
+                    .animation(.easeInOut(duration: 0.45), value: percent)
             }
         }
         .frame(height: height)

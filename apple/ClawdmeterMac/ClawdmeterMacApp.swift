@@ -33,11 +33,10 @@ struct ClawdmeterMacApp: App {
         Window("Clawdmeter", id: "dashboard") {
             // Tahoe 26 redesign: the new MacRootView owns the four
             // titlebar tabs (Chat / Usage / Code / Settings) and the
-            // global TahoeThemeStore. The original DashboardView is
-            // intentionally retained in the file tree so AppRuntime
-            // wiring isn't disturbed mid-port — pop-out + menu-bar code
-            // paths still reference it.
-            MacRootView()
+            // global TahoeThemeStore. The runtime is threaded in so the
+            // Usage tab + menu-bar popover render live per-provider data
+            // via the `tahoeLive` adapter (see MacTahoeAdapter.swift).
+            MacRootView(runtime: runtime)
                 .background(DashboardOpener())   // bridges AppDelegate → openWindow
                 .onAppear {
                     appDelegate.configure(runtime: runtime)

@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# tahoe-verify — real verifier loop helper for the Tahoe 26 redesign.
+#
+# Captures a screenshot of each Mac tab + each iPhone surface and writes
+# them to apple/tools/.tahoe-verify/screens/<tab>.png. Pair these with the
+# JSX renderings under /tmp/clawd-design/ccwatch-redesign/project/*.html
+# for a side-by-side audit.
+#
+# Subcommands:
+#   build           Build Mac + iOS targets (debug). Bails if either fails.
+#   shoot-mac       Launch the Mac app, tab through Chat/Usage/Code/Settings,
+#                   screenshot each.
+#   shoot-ios       Boot iPhone 17 Pro sim, launch the iOS app, tab through
+#                   Chat/Live/Analytics/Code, screenshot each.
+#   audit <surface> Spawn a Claude Code Explore agent that walks the JSX
+#                   spec for <surface> alongside the Swift port and
+#                   produces a P0/P1/P2 defect list.
+#   all             build → shoot-mac → shoot-ios (audit is interactive).
+#
+# Requires: xcodebuild, xcrun simctl, screencapture, jq (optional).
+
+set -euo pipefail
+
+APPLE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+OUT_DIR="${APPLE_DIR}/tools/.tahoe-verify"
+SCREEN_DIR="${OUT_DIR}/screens"
+DERIVED="${HOME}/Library/Developer/Xcode/DerivedData/Clawdmeter-brzyfsjgykbiofbadhithzpqnhtu/Build/Products/Debug"
+SIM_NAME="${TAHOE_SIM_NAME:-iPhone 17 Pro}"
+
+mkdir -p "${SCREEN_DIR}"
+
+build_mac() {
+  echo "[tahoe-verify] Building ClawdmeterMac…"
+  ( cd "${APPLE_DIR}" && xcodebuild -project Clawdmeter.xcodeproj \
+      -scheme "Clawdmeter (Mac)" -configuration Debug build 2>&1 | tail -8 )
+}
+
+build_ios() {
+  echo "[tahoe-verify] Building ClawdmeteriOS for ${SIM_NAME}…"
+  ( cd "${APPLE_DIR}" && xcodebuild -project Clawdmeter.xcodeproj \
+      -scheme "Clawdmeter (iOS)" -configuration Debug \
+      -destination "platform=iOS Simulator,name=${SIM_NAME}" build 2>&1 | tail -8 )
+}
+
+shoot_mac() {
+  local APP="${DERIVED}/Clawdmeter.app"
+  if [ ! -d "${APP}" ]; then
+    echo "[tahoe-verify] Mac app not built; run 'build' first." >&2
+    exit 1
+  fi
+  echo "[tahoe-verify] Launching ${APP}…"
+  osascript -e 'tell application "Clawdmeter" to quit' 2>/dev/null || true
+  open "${APP}"
+  sleep 3
+
+  # macOS doesn't expose per-tab keyboard switching for our SwiftUI tabs,
+  # so this script just lets the user step through. AppleScript-driven
+  # automation depends on Accessibility permission for the agent.
+  for tab in chat usage code settings; do
+    echo "[tahoe-verify] Screenshot Mac tab=${tab} → ${SCREEN_DIR}/mac-${tab}.png"
+    # Use `screencapture -l` with the front window id if we can.
+    local WID
+    WID=$(osascript -e 'tell application "System Events" to tell process "Clawdmeter" to get id of first window' 2>/dev/null || true)
+    if [ -n "${WID}" ]; then
+      screencapture -l "${WID}" -x "${SCREEN_DIR}/mac-${tab}.png" 2>/dev/null || \
+        screencapture -x "${SCREEN_DIR}/mac-${tab}.png"
+    else
+      screencapture -x "${SCREEN_DIR}/mac-${tab}.png"
+    fi
+    if [ "${tab}" != "settings" ]; then
+      sleep 0.5
+      echo "[tahoe-verify] Click the next tab in Clawdmeter — Enter when ready"
+      read -r _
+    fi
+  done
+  echo "[tahoe-verify] Mac screens saved to ${SCREEN_DIR}/"
+}
+
+shoot_ios() {
+  local SIM_ID
+  SIM_ID=$(xcrun simctl list devices booted 2>/dev/null | grep "${SIM_NAME}" | sed -E 's/.*\(([A-F0-9-]+)\).*/\1/' | head -1)
+  if [ -z "${SIM_ID}" ]; then
+    echo "[tahoe-verify] Booting ${SIM_NAME}…"
+    SIM_ID=$(xcrun simctl list devices available 2>/dev/null | grep "${SIM_NAME}" | sed -E 's/.*\(([A-F0-9-]+)\).*/\1/' | head -1)
+    [ -z "${SIM_ID}" ] && { echo "[tahoe-verify] No '${SIM_NAME}' sim found." >&2; exit 1; }
+    xcrun simctl boot "${SIM_ID}"
+    open -a Simulator
+    sleep 4
+  fi
+  echo "[tahoe-verify] Installing app…"
+  xcrun simctl install "${SIM_ID}" "${DERIVED}-iphonesimulator/Clawdmeter.app" 2>/dev/null || true
+  xcrun simctl launch "${SIM_ID}" com.clawdmeter.ios
+  sleep 3
+  for tab in chat live analytics code; do
+    echo "[tahoe-verify] Screenshot iOS tab=${tab} → ${SCREEN_DIR}/ios-${tab}.png"
+    xcrun simctl io "${SIM_ID}" screenshot "${SCREEN_DIR}/ios-${tab}.png"
+    if [ "${tab}" != "code" ]; then
+      sleep 0.5
+      echo "[tahoe-verify] Tap the next tab in the sim — Enter when ready"
+      read -r _
+    fi
+  done
+  echo "[tahoe-verify] iOS screens saved to ${SCREEN_DIR}/"
+}
+
+audit() {
+  local SURFACE="${1:-}"
+  if [ -z "${SURFACE}" ]; then
+    echo "Usage: tahoe-verify audit <surface>" >&2
+    echo "Surfaces: mac-chat | mac-usage | mac-code | mac-settings | mac-menubar |" >&2
+    echo "          ios-chat | ios-live | ios-code | ios-detail | ios-analytics | ios-pairing" >&2
+    exit 2
+  fi
+  cat <<EOF
+[tahoe-verify] To audit ${SURFACE}, run this prompt against a Claude Code
+Explore agent:
+
+  Walk the JSX spec at:
+    /tmp/clawd-design/ccwatch-redesign/project/${SURFACE/mac-/mac-}.jsx
+  alongside the SwiftUI port at:
+    apple/ClawdmeterMac/Tahoe/${SURFACE/mac-/Mac}View.swift   (Mac)
+  or
+    apple/ClawdmeteriOS/Tahoe/${SURFACE/ios-/IOS}View.swift   (iOS)
+
+  For every JSX element, find the corresponding SwiftUI element and
+  flag any drift on:
+    - size (width/height/padding/spacing)
+    - color (provider tint, accent, hairline tier)
+    - typography (font size, weight, tracking, monospaced)
+    - shape (corner radius, border, shadow)
+    - state (active/hover/disabled treatment)
+    - copy (literal text matches, casing, punctuation)
+
+  Report a defect list as: P0/P1/P2 — <one-line issue> — fix: <patch>.
+  At the end, give a faithfulness % and the single highest-impact fix
+  to apply first.
+EOF
+}
+
+case "${1:-all}" in
+  build)      build_mac && build_ios ;;
+  shoot-mac)  shoot_mac ;;
+  shoot-ios)  shoot_ios ;;
+  audit)      shift; audit "$@" ;;
+  all)        build_mac && build_ios && echo "[tahoe-verify] (Run shoot-mac and shoot-ios separately — they're interactive)" ;;
+  *)          echo "Usage: tahoe-verify [build|shoot-mac|shoot-ios|audit <surface>|all]" >&2; exit 2 ;;
+esac

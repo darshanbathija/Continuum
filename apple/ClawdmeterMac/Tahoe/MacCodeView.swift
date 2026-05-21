@@ -360,17 +360,24 @@ private struct ThreadMsg: View {
     var body: some View {
         switch msg {
         case .user(let text):
-            HStack {
-                Spacer()
-                TahoeGlass(radius: 20, tone: .raised) {
-                    Text(text)
-                        .font(TahoeFont.body(13))
-                        .foregroundStyle(t.fg)
-                        .padding(.horizontal, 16).padding(.vertical, 12)
-                        .fixedSize(horizontal: false, vertical: true)
+            // JSX caps user bubble at maxWidth 78% of the parent column.
+            // Use a GeometryReader so the cap scales with the actual thread
+            // column width instead of the hard 580pt cap from v1.
+            GeometryReader { geo in
+                HStack {
+                    Spacer()
+                    TahoeGlass(radius: 20, tone: .raised) {
+                        Text(text)
+                            .font(TahoeFont.body(13))
+                            .foregroundStyle(t.fg)
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: geo.size.width * 0.78, alignment: .trailing)
                 }
-                .frame(maxWidth: 580, alignment: .trailing)
             }
+            .frame(minHeight: 44)
+            .fixedSize(horizontal: false, vertical: true)
         case .tool(let tool, let target, let detail):
             HStack(alignment: .top, spacing: 10) {
                 Spacer().frame(width: 36)
@@ -423,6 +430,7 @@ private struct RunningRow: View {
 
 private struct PlanHalo: View {
     @Environment(\.tahoe) private var t
+    @State private var auraGlow: Bool = false
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 38, style: .continuous)
@@ -433,6 +441,10 @@ private struct PlanHalo: View {
                 .blur(radius: 8)
                 .padding(-28)
                 .allowsHitTesting(false)
+                // Motion polish: subtle aura breath (4s, ±15% opacity).
+                .opacity(auraGlow ? 1.0 : 0.85)
+                .animation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: auraGlow)
+                .onAppear { auraGlow = true }
 
             TahoeGlass(radius: 20, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -519,6 +531,7 @@ private struct ComposerBar: View {
     @Environment(\.tahoe) private var t
     @Binding var state: MacCodeView.ComposerState
     var onCycle: () -> Void
+    @State private var pulse: Bool = false
 
     var body: some View {
         let running = state == .running
@@ -557,8 +570,15 @@ private struct ComposerBar: View {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(t.accentAlpha(0.45), lineWidth: 1)
                         .shadow(color: t.accentAlpha(0.30), radius: 11, x: 0, y: 0)
+                        // Motion polish: 1.8s pulse on the running-state rim,
+                        // matches JSX `@keyframes pulse{0%,100%{opacity:.7}50%{opacity:1}}`.
+                        .opacity(pulse ? 1.0 : 0.7)
+                        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+                        .onAppear { pulse = true }
+                        .onDisappear { pulse = false }
                 }
             }
+            .animation(.easeInOut(duration: 0.25), value: state)
         }
         .padding(.horizontal, 18).padding(.bottom, 18)
     }

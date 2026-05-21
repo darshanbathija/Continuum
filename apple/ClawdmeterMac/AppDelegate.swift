@@ -56,13 +56,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func configure(runtime: AppRuntime) {
         AppDelegate.runtime = runtime
         if claudeController == nil {
-            claudeController = ProviderStatusController(model: runtime.claudeModel)
+            claudeController = ProviderStatusController(model: runtime.claudeModel, runtime: runtime)
         }
         if codexController == nil {
-            codexController = ProviderStatusController(model: runtime.codexModel)
+            codexController = ProviderStatusController(model: runtime.codexModel, runtime: runtime)
         }
         if geminiController == nil {
-            geminiController = ProviderStatusController(model: runtime.geminiModel)
+            geminiController = ProviderStatusController(model: runtime.geminiModel, runtime: runtime)
         }
         installObserversIfNeeded()
         applyVisibilityFromPrefs()
@@ -241,12 +241,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class ProviderStatusController: NSObject {
     private let model: AppModel
+    private weak var runtime: AppRuntime?
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var cancellables: Set<AnyCancellable> = []
 
-    init(model: AppModel) {
+    init(model: AppModel, runtime: AppRuntime) {
         self.model = model
+        self.runtime = runtime
         super.init()
         // Mirror the model's @Published changes onto the status item button.
         // `objectWillChange` fires before `usage` is updated, so hop one
@@ -288,8 +290,25 @@ final class ProviderStatusController: NSObject {
         // content height ends up being. The collapsed/expanded Advanced section
         // (and any future surface tweaks) no longer need hand-tuned heights.
         pop.contentSize = NSSize(width: 380, height: 600)
-        let host = NSHostingController(rootView: PopoverView(model: model).frame(width: 380))
-        host.sizingOptions = [.preferredContentSize]
+        // Tahoe 26 redesign: swap the legacy `PopoverView` for the new
+        // `MacMenubarPopover` glass card. Each menu-bar item now opens the
+        // same popover (all three providers visible via a segmented control
+        // inside), but the segmented control still defaults to whichever
+        // provider's status item was clicked. Live data via `runtime.tahoeLive`.
+        let popoverData = runtime?.tahoeLive ?? .demo
+        let providerCase: TahoeProvider = {
+            switch model.config.id {
+            case "claude": return .claude
+            case "codex":  return .codex
+            case "gemini": return .gemini
+            default:       return .claude
+            }
+        }()
+        let popoverView = MacMenubarPopover(data: popoverData, initialProvider: providerCase)
+            .tahoeTheme(TahoeThemeStore.loaded())
+            .frame(width: 388)
+        let host = NSHostingController(rootView: popoverView)
+        host.sizingOptions = NSHostingSizingOptions.preferredContentSize
         pop.contentViewController = host
         popover = pop
     }

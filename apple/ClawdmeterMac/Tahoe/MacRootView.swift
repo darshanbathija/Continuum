@@ -6,19 +6,28 @@ import ClawdmeterShared
 /// wallpaper layer, and hosts the four titlebar tabs (Chat / Usage / Code /
 /// Settings) and the menu bar window. Tab routing is purely local — each
 /// tab is its own view file under `Tahoe/`.
-public struct MacRootView: View {
-    public enum Tab: String, CaseIterable, Hashable { case chat, usage, code, settings }
+struct MacRootView: View {
+    enum Tab: String, CaseIterable, Hashable { case chat, usage, code, settings }
 
     @State private var theme: TahoeThemeStore
     @State private var tab: Tab
 
-    public init(initialTab: Tab = .chat) {
+    /// AppRuntime — drives the live Usage / Menu-bar surfaces via the
+    /// `tahoeLive` adapter in `MacTahoeAdapter.swift`. Other surfaces
+    /// (Chat / Code / Settings) don't depend on it for v1.
+    @ObservedObject private var runtime: AppRuntime
+
+    init(runtime: AppRuntime, initialTab: Tab = .chat) {
+        self.runtime = runtime
         _theme = State(initialValue: TahoeThemeStore.loaded())
         _tab = State(initialValue: initialTab)
     }
 
-    public var body: some View {
-        ZStack {
+    var body: some View {
+        // Force a body re-render whenever any underlying AppModel publishes
+        // by reading from runtime.objectWillChange's snapshot here.
+        let live = runtime.tahoeLive
+        return ZStack {
             TahoeWallpaperView()
             VStack(spacing: 0) {
                 MacTitlebar(active: tab, onTab: { tab = $0 }, theme: theme)
@@ -28,7 +37,7 @@ public struct MacRootView: View {
                 Group {
                     switch tab {
                     case .chat:     MacChatView()
-                    case .usage:    MacUsageView()
+                    case .usage:    MacUsageView(data: live)
                     case .code:     MacCodeView()
                     case .settings: MacSettingsView(theme: theme)
                     }
@@ -49,17 +58,17 @@ public struct MacRootView: View {
 /// Floating titlebar — traffic lights chip + tabs chip + ancillary status.
 /// Matches the pattern shared by every Mac artboard in the design
 /// (mac-chat.jsx, mac-dashboard.jsx, mac-sessions.jsx, mac-settings.jsx).
-public struct MacTitlebar: View {
+struct MacTitlebar: View {
     @Environment(\.tahoe) private var t
-    public var active: MacRootView.Tab
-    public var onTab: (MacRootView.Tab) -> Void
-    public var theme: TahoeThemeStore
+    var active: MacRootView.Tab
+    var onTab: (MacRootView.Tab) -> Void
+    var theme: TahoeThemeStore
 
-    public init(active: MacRootView.Tab, onTab: @escaping (MacRootView.Tab) -> Void, theme: TahoeThemeStore) {
+    init(active: MacRootView.Tab, onTab: @escaping (MacRootView.Tab) -> Void, theme: TahoeThemeStore) {
         self.active = active; self.onTab = onTab; self.theme = theme
     }
 
-    public var body: some View {
+    var body: some View {
         HStack(spacing: 10) {
             TahoeGlass(radius: 11, tone: .chip) {
                 TahoeTrafficLights()

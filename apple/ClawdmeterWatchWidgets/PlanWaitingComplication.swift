@@ -60,13 +60,15 @@ struct PlanWaitingView: View {
     let entry: PlanWaitingEntry
 
     var body: some View {
+        // Tahoe 26: Halo cyan accent (was terra-cotta).
+        let accent = TahoeAccent.halo.base.color
         ZStack {
             if entry.count > 0 {
                 Circle()
-                    .strokeBorder(terraCotta, lineWidth: 2)
+                    .strokeBorder(accent, lineWidth: 2)
                 Text("\(entry.count)")
-                    .font(.system(size: 22, weight: .semibold, design: .serif))
-                    .foregroundStyle(terraCotta)
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .foregroundStyle(accent)
             } else {
                 Circle()
                     .strokeBorder(.secondary.opacity(0.4), lineWidth: 1)
@@ -76,9 +78,5 @@ struct PlanWaitingView: View {
             }
         }
         .widgetURL(URL(string: "clawdmeter://approve")!)
-    }
-
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
     }
 }

@@ -174,8 +174,10 @@ private struct ModelPill: View {
                     if reply.starred {
                         ZStack {
                             Circle().fill(t.accent)
+                            // JSX renders a 7-unit star in 24-viewBox at 13px →
+                            // ~4pt. v1 had this at 6pt, visibly oversized.
                             Image(systemName: "star.fill")
-                                .font(.system(size: 6, weight: .bold))
+                                .font(.system(size: 7, weight: .bold))
                                 .foregroundStyle(.white)
                         }
                         .frame(width: 13, height: 13)
