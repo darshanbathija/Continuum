@@ -93,7 +93,15 @@ public actor AntigravityProjectResolver {
         if let projectsDir {
             self.projectsDir = projectsDir
         } else {
+            // homeDirectoryForCurrentUser is macOS-only; on iOS/Watch the
+            // Antigravity install can't exist anyway, so fall back to
+            // NSHomeDirectory() which is available everywhere. Callers on
+            // non-mac targets just see an empty resolver (no projects).
+            #if os(macOS)
             let home = FileManager.default.homeDirectoryForCurrentUser
+            #else
+            let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            #endif
             self.projectsDir = home
                 .appendingPathComponent(".gemini")
                 .appendingPathComponent("config")
