@@ -19,14 +19,15 @@ import ClawdmeterShared
 
 struct IOSDesignView: View {
     @ObservedObject var agentClient: AgentControlClient
+    /// /review I2: optional handoff callback for Design→Code. IOSRootView
+    /// passes a closure that flips its `@State tab` to `.code`. Nil keeps
+    /// the view backward-compatible if a caller doesn't wire it.
+    var onOpenInCode: ((_ repoKey: String?) -> Void)?
 
     var body: some View {
         if let host = agentClient.host, let token = agentClient.designToken {
-            DesignWebView(host: host, port: agentClient.designPort, token: token, onOpenInCode: { _ in
-                // TODO(t8): emit a tab-switch via parent IOSRootView once
-                // we wire the @Binding tab through (or use a shared
-                // notification — Design→Code is the less-common direction
-                // on iOS).
+            DesignWebView(host: host, port: agentClient.designPort, token: token, onOpenInCode: { repoKey in
+                onOpenInCode?(repoKey)
             })
             .ignoresSafeArea()
         } else {

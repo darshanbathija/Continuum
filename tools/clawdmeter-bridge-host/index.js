@@ -270,4 +270,20 @@ async function main() {
 process.on("SIGTERM", () => { server.close(() => process.exit(0)); });
 process.on("SIGINT",  () => { server.close(() => process.exit(0)); });
 
+// /review I1: parent-death tracking. If Clawdmeter is force-killed, the
+// bridge would otherwise survive and hold ports. Poll the parent PID
+// every second; exit when it disappears.
+const PARENT_PID = parseInt(process.env.CLAWDMETER_PARENT_PID || "", 10);
+if (Number.isInteger(PARENT_PID) && PARENT_PID > 0) {
+  const monitor = setInterval(() => {
+    try { process.kill(PARENT_PID, 0); }
+    catch {
+      console.error(`[bridge] parent pid ${PARENT_PID} gone; exiting`);
+      clearInterval(monitor);
+      server.close(() => process.exit(0));
+    }
+  }, 1000);
+  monitor.unref();
+}
+
 main().catch(err => { console.error("[bridge] fatal:", err); process.exit(1); });

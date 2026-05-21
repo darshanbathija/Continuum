@@ -102,7 +102,13 @@ public struct IOSRootView: View {
                     await agentClient.refreshAll()
                 }
             case .design:
-                IOSDesignView(agentClient: agentClient)
+                // /review I2: wire Design→Code handoff so the bundled
+                // clawdmeter-bridge plugin's "Open in Code →" button
+                // actually flips the iOS tab. Repo pre-selection deferred
+                // until iOS Code tab learns a repo-key argument.
+                IOSDesignView(agentClient: agentClient, onOpenInCode: { _ in
+                    tab = .code
+                })
             }
         }
     }

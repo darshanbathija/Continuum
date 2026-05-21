@@ -148,10 +148,18 @@ public final class OpenDesignDaemonManager: ObservableObject {
         }
 
         await update(.starting, "Acquiring singleton lock…")
-        let lockResult = acquireLock()
+        // /review C1: flock(LOCK_SH) blocks until the LOCK_EX holder releases.
+        // Run on a detached task with file paths captured by value so the
+        // syscall executes off MainActor and the UI stays responsive while
+        // we wait for the other Clawdmeter instance.
+        let lockPath = self.lockFile.path
+        let rendezvousPath = self.rendezvousFile.path
+        let lockResult = await Task.detached(priority: .userInitiated) { () -> LockResult in
+            Self.acquireLockOffActor(lockPath: lockPath, rendezvousPath: rendezvousPath)
+        }.value
         switch lockResult {
-        case .acquired:
-            break
+        case .acquired(let handle):
+            self.lockFileHandle = handle
         case .attached(let rendezvous):
             // Another Clawdmeter instance is the daemon owner. Attach.
             await setReady(daemonPort: rendezvous.port, bridgePort: rendezvous.bridgePort, attached: true)
@@ -191,6 +199,13 @@ public final class OpenDesignDaemonManager: ObservableObject {
         // can resolveAppIpcPath() to the daemon's listener. Must match
         // the value passed to the bridge spawn below.
         env["OD_SIDECAR_NAMESPACE"] = "clawdmeter"
+        // /review I1: real parent-death tracking. Open Design's sidecar
+        // server already implements attachParentMonitor() that polls
+        // process.kill(parentPid, 0) and self-terminates when it returns
+        // ESRCH. Setting OD_TOOLS_DEV_PARENT_PID activates that monitor,
+        // so kill -9 of the Clawdmeter parent reaps the daemon within
+        // ~1s instead of orphaning it.
+        env["OD_TOOLS_DEV_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
 
         await update(.loading, "Starting Open Design daemon…")
         let daemon = Process()
@@ -255,6 +270,9 @@ public final class OpenDesignDaemonManager: ObservableObject {
         env["CLAWDMETER_BRIDGE_PORT"] = "27457"
         // v2.1 T8: bridge IPC client must use same namespace as the daemon.
         env["OD_SIDECAR_NAMESPACE"] = "clawdmeter"
+        // /review I1: same parent-death tracking as the daemon — bridge
+        // has its own monitor loop (see tools/clawdmeter-bridge-host/index.js).
+        env["CLAWDMETER_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         let bridge = Process()
         bridge.executableURL = nodeURL
         bridge.arguments = [bridgeEntry.path]
@@ -296,29 +314,33 @@ public final class OpenDesignDaemonManager: ObservableObject {
     }
 
     private enum LockResult {
-        case acquired
+        case acquired(FileHandle)
         case attached(Rendezvous)
         case failed(String)
     }
 
-    private func acquireLock() -> LockResult {
-        // Open or create the lock file
-        if !FileManager.default.fileExists(atPath: lockFile.path) {
-            FileManager.default.createFile(atPath: lockFile.path, contents: nil)
+    /// Sendable lock-acquisition helper. Runs off MainActor so the
+    /// blocking `flock(LOCK_SH)` syscall doesn't freeze the UI when
+    /// another Clawdmeter instance holds the exclusive lock.
+    private nonisolated static func acquireLockOffActor(lockPath: String, rendezvousPath: String) -> LockResult {
+        if !FileManager.default.fileExists(atPath: lockPath) {
+            FileManager.default.createFile(atPath: lockPath, contents: nil)
         }
-        guard let handle = try? FileHandle(forUpdating: lockFile) else {
+        let url = URL(fileURLWithPath: lockPath)
+        guard let handle = try? FileHandle(forUpdating: url) else {
             return .failed("Cannot open lock file")
         }
         // Non-blocking exclusive flock
         if flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) == 0 {
-            self.lockFileHandle = handle
-            return .acquired
+            return .acquired(handle)
         }
-        // Lock is held — try shared lock (will block until writer's rename has
-        // been observable, eliminating partial-read race).
+        // Lock is held — acquire shared lock (BLOCKING until writer's rename
+        // is observable, eliminating partial-read race). Safe to block here
+        // because we're on a detached task, not MainActor.
         if flock(handle.fileDescriptor, LOCK_SH) == 0 {
             defer { _ = flock(handle.fileDescriptor, LOCK_UN); try? handle.close() }
-            if let data = try? Data(contentsOf: rendezvousFile),
+            let rendezvousURL = URL(fileURLWithPath: rendezvousPath)
+            if let data = try? Data(contentsOf: rendezvousURL),
                let r = try? JSONDecoder().decode(Rendezvous.self, from: data) {
                 // Sanity-check the lock holder is alive
                 if kill(pid_t(r.pid), 0) == 0 {
@@ -462,10 +484,15 @@ public final class OpenDesignDaemonManager: ObservableObject {
 
     private func terminateChild(_ p: Process?) {
         guard let p, p.isRunning else { return }
+        let pid = p.processIdentifier
         p.terminate()
         // Give 2s for graceful exit, then SIGKILL.
+        // /review I4: re-check p.isRunning AND verify pid still exists via
+        // kill(pid, 0) before SIGKILL — the process may have exited cleanly
+        // between p.terminate() and the timer firing.
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-            if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+            guard p.isRunning, kill(pid, 0) == 0 else { return }
+            kill(pid, SIGKILL)
         }
     }
 
