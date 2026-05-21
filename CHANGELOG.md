@@ -4,6 +4,125 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.8.1 build 65] - 2026-05-21 — AGY migration (`feat/agy-migration`)
+
+Google replaced the standalone `gemini` CLI (v0.42, runnable in a tmux
+pane) with Antigravity 2's Electron IDE backed by an embedded Go
+`language_server` binary that talks HTTP-RPC via `agentapi`. v0.8.1
+migrates Clawdmeter's Gemini surface to match — no more spawning a
+TUI in tmux for Gemini, no more log-file-scrape discovery, no more
+encryption-blocked conversation files. Built on `feat/agy-migration`;
+v0.8.0 build 64 belongs to the parallel `chat-tab` branch (the agy
+work skipped 0.8.0 to leave that SKU intact).
+
+### Phase 0 + 0.5 verification (docs/agentapi-runtime-notes.md + docs/agentapi-event-catalog.md)
+
+- Confirmed `agentapi` is HTTP-RPC one-shot, NOT a streaming CLI.
+  `language_server agentapi new-conversation --model={flash_lite|flash|pro} <prompt>`
+  returns `{conversationId}` in ~70ms. No `--approval-mode`, no
+  `--thinking-budget` argv.
+- Confirmed 3 mandatory env vars: `ANTIGRAVITY_LS_ADDRESS=http://127.0.0.1:<port>`,
+  `ANTIGRAVITY_CSRF_TOKEN=<uuid>`, `ANTIGRAVITY_PROJECT_ID=<uuid>`.
+- Confirmed conversation storage is SQLite WAL (`<id>.db` + `.db-wal` +
+  `.db-shm`); the legacy v0.7-era encrypted `.pb` files are gone.
+- Confirmed `step_payload` blobs are plain protobuf (hex dump shows
+  visible "list_dir" / "view_file" strings) — decodable without
+  swift-protobuf via a minimal wire-format reader.
+- Confirmed Antigravity.app's running language_server argv is parsable
+  via `ps -p <pid> -o command=` (extracts `--csrf_token=<uuid>`), and
+  its listening ports via `lsof -nP -iTCP -sTCP:LISTEN -p <pid>`. Both
+  are random per app launch — D13 always re-discovers (~50ms/call).
+- Confirmed Antigravity project mapping lives in
+  `~/.gemini/config/projects/<project-uuid>.json` at
+  `projectResources.resources[].gitFolder.folderUri`.
+
+### Added
+
+- **`LanguageServerClient` REWRITE** — pgrep+ps+lsof process-table
+  discovery replaces v0.7's log-file scrape; HTTP-RPC methods
+  `newConversation` / `sendMessage` / `getConversationMetadata` spawn
+  `language_server agentapi <args>` with the 3 env vars set. Three-tier
+  model mapping (`AgentapiModelTier.from`) collapses every ModelCatalog
+  Gemini id onto `flash_lite` / `flash` / `pro`. v0.7 `currentModel()`
+  preserved for back-compat with existing Plan-pane logic.
+- **`AntigravityProjectResolver`** — scans
+  `~/.gemini/config/projects/*.json`, parses `gitFolder.folderUri` +
+  `gitFolder.allowWrite`, canonicalizes via `RepoIdentity.normalize`,
+  caches `[RepoKey: ProjectInfo]`. Backs the project-ID env var for
+  every agentapi call.
+- **`AntigravityInstall.preflight(...)`** — short-circuits through
+  `.absent` / `.installedNotSignedIn` / `.appOnlyNotRunning` /
+  `.noProjectForRepo` / `.ready`. Each non-ready state surfaces a
+  user-facing CTA in the composer.
+- **`AntigravityConversationDB`** — `actor` SQLite WAL reader that
+  observes `<id>.db` for new `steps` rows. Primary path is a
+  `DispatchSource` file-system observer on `<id>.db-wal` (fires inside
+  ~1ms of writer commits); 5s polling Task catches missed FS events.
+  `allSteps()` / `newSteps()` for cursor-advancing reads, `subscribe()`
+  for AsyncStream backpressure.
+- **`ConversationProtoParser.decode(_ data:) -> DecodedStep`** —
+  plain protobuf wire-format reader for `step_payload` blobs. Extracts
+  `stepType` + `stepStatus` + `toolCallId` + `toolName`. Avoids the
+  swift-protobuf dependency.
+- **`AntigravitySource` replaces `GeminiSource`** — 3-tier quota
+  fallback (D9): LS-local `/v1internal:fetchUserInfo` probe →
+  cloudcode-pa `retrieveUserQuota` → empty placeholder. Wire-level
+  `providerID` STAYS `"gemini"` for back-compat; v8/v9 clients keep
+  decoding via the dual-key bridge.
+- **Antigravity-aware spawn dispatch in `SessionsView`** — D4 hard-
+  stop: Gemini sessions ONLY spawn when Antigravity 2 is installed +
+  running + signed in + has a project for the current repo. New
+  `SpawnError.antigravityNotReady(String)` carries the CTA inline.
+  No tmux pane is created; `AgentSession.geminiBackend = .agentapi`
+  + `antigravityConversationId = <returned UUID>` are persisted.
+- **Wire v10** — `AgentControlWireVersion.current = 10` (skips v9
+  which `chat-tab` took). New fields `AgentSession.geminiBackend:
+  GeminiBackend?` + `AgentSession.antigravityConversationId: UUID?`
+  in schema v6 with decoder-tolerant defaults. Dual-key bridge in
+  `Protocol.UsageEnvelope.usageData(for:)` rewrites `gemini ↔
+  antigravity` for cross-wire-version compat.
+
+### Changed
+
+- **`AgentSessionRegistry.create`** accepts optional
+  `geminiBackend` + `antigravityConversationId` — defaulted to nil so
+  every Claude/Codex callsite stays untouched.
+- **`DaemonChatStoreRegistry.defaultResolveURL`** routes agentapi
+  sessions to `~/.gemini/antigravity/conversations/<id>.db` instead
+  of the v0.7 Codex-newest-JSONL fallback.
+
+### Removed
+
+- **`apple/.../Sources/GeminiSource.swift`** — replaced by
+  `AntigravitySource.swift`. `AppRuntime.geminiModel` constructs the
+  new class.
+
+### Tests
+
+- 415 → 539 (+124) tests passing in `ClawdmeterShared`.
+  + WireV10Tests (15)
+  + AntigravityProjectResolverTests (16)
+  + AntigravityInstallTests rewritten (30)
+  + ConversationProtoParserTests (8 new decode cases)
+  + AntigravityConversationDBTests (9, real SQLite fixtures incl.
+    concurrent-writer stress)
+  + AntigravitySourceTests (7)
+- ClawdmeterMacTests:
+  + LanguageServerClientRewriteTests (24)
+  + DaemonChatStoreRegistryRoutingTests (5)
+
+### Deferred to v0.8.2 / v0.9
+
+- Full `AntigravityConversationDB.subscribe()` → `SessionChatStore`
+  ingest. T9 wires the URL resolution; the chat pane for agentapi
+  sessions renders blank until v0.8.2's polymorphic chat store lands.
+- PermissionModeChip "show Antigravity's actual security preset" (D10).
+- LS `/v1internal:fetchUserInfo` response-shape verification + real
+  tier-1 quota wiring (probe is plumbed; closure remains nil by
+  default until Phase 0 ground-truth lands).
+- Python sidecar deletion (`tools/clawdmeter-agents/`, `Vendor/uv/`,
+  the SDK toggle UI) — v0.8.2 cosmetic sweep alongside the iOS/Watch
+  "Gemini" → "Antigravity" label flips.
 ## [0.8.0 build 66] - 2026-05-21
 
 ### Added

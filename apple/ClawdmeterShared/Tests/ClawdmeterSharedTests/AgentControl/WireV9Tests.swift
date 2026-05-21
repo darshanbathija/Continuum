@@ -11,8 +11,12 @@ import XCTest
 /// - New chat DTOs round-trip cleanly through Codable
 final class WireV9Tests: XCTestCase {
 
-    func test_currentWireVersionIsNine() {
-        XCTAssertEqual(AgentControlWireVersion.current, 9)
+    func test_currentWireVersionIsAtLeastNine() {
+        // v0.8.0 chat-tab bumped current to 9. v0.8.1 agy-migration
+        // bumped to 10. This test tracks the v9 contract floor — assert
+        // ≥ 9 so the v9 feature gates (chatMinimum, frontierMinimum,
+        // codexChatBackendMinimum) all sit at or below current.
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 9)
     }
 
     func test_chatMinimumIsNine() {

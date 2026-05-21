@@ -2,8 +2,33 @@
 import Foundation
 import OSLog
 
-/// `AISource` against Google's Cloud Code Assist Public API — the same
-/// backend Antigravity uses for its per-model quota bars.
+/// `AISource` against Antigravity 2's quota surface. v0.8.0 implements
+/// the 3-tier fallback ladder Phase 0/0.5 designed (D9):
+///
+///   1. **LS-local**: `POST http://127.0.0.1:<httpPort>/v1internal:fetchUserInfo`
+///      against the running `language_server`. Same endpoint Antigravity
+///      itself uses, so it reflects the freshest quota state. The exact
+///      response shape was untested in Phase 0 (docs/agentapi-event-catalog.md
+///      notes it as "v0.8.1's AntigravitySource rewrite tests this directly");
+///      v0.8.0 treats it as optimistic-first — any failure falls through
+///      to tier 2 silently.
+///   2. **Cloud public**: `POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota`
+///      with the user's OAuth token. The v0.7 path, preserved here as the
+///      reliable production tier — works regardless of whether Antigravity.app
+///      is running, requires a valid local OAuth credential at
+///      `~/.gemini/oauth_creds.json` (read by `GeminiTokenProvider`).
+///   3. **Empty**: neither tier succeeded — return a stale-but-honest
+///      placeholder via `cachedFallbackOrThrow` so the dashboard renders
+///      the "Open Antigravity 2 to see usage" CTA next to the empty gauge.
+///
+/// Renamed from `GeminiSource` in v0.8.0 (file rename + class rename);
+/// the wire-level `providerID` key STAYS `"gemini"` in v0.8.0 so iOS/Watch
+/// clients on older wire versions keep decoding usage payloads via the
+/// dual-key bridge (`Protocol.UsageEnvelope.usageData(for:)`). v0.8.1
+/// renames `displayName` to "Antigravity" once the iOS/Watch labels also
+/// swap over (T12 cosmetic sweep).
+///
+/// ## Original cloudcode-pa endpoint contract (preserved verbatim from v0.7)
 ///
 /// **Endpoint**: `POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota`
 /// with body `{"project": "<projectId>"}`. The endpoint name + request +
@@ -51,8 +76,12 @@ import OSLog
 /// **TOS posture**: `v1internal:*` is an internal Google API surface; we
 /// accept the same risk class as `CodexSource` against
 /// `chatgpt.com/backend-api/wham/usage`. Document in PR body + CLAUDE.md.
-public final class GeminiSource: AISource, @unchecked Sendable {
+public final class AntigravitySource: AISource, @unchecked Sendable {
 
+    // v0.8.0 keeps the wire-level providerID as "gemini" for back-compat
+    // with v8/v9 clients. Renamed to "antigravity" in v0.8.1 once iOS/Watch
+    // labels also update; the dual-key bridge in Protocol.UsageEnvelope
+    // handles the migration.
     public let providerID = "gemini"
     public let displayName = "Gemini"
 
@@ -60,7 +89,7 @@ public final class GeminiSource: AISource, @unchecked Sendable {
     private let urlSession: URLSession
     private let quotaEndpoint: URL
     private let loadCodeAssistEndpoint: URL
-    private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "GeminiSource")
+    private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "AntigravitySource")
 
     /// Cached after the first successful `loadCodeAssist` so we don't
     /// re-discover the project on every 60s poll. `nil` for personal-OAuth
@@ -83,17 +112,26 @@ public final class GeminiSource: AISource, @unchecked Sendable {
     private let dailyQuotaEndpoint: URL
     private var preferredQuotaHost: URL?  // nil = try daily first
 
+    /// v0.8.0 D9 tier-1 probe — looks up a live Antigravity language_server
+    /// on every poll (~50ms via pgrep+lsof+ps). Nil means we skip the
+    /// LS-local tier entirely and go straight to cloudcode-pa. Tests
+    /// inject a custom closure to verify both branches.
+    public typealias LSQuotaProbe = @Sendable () async -> UsageData?
+    private let lsQuotaProbe: LSQuotaProbe?
+
     public init(
         tokenProvider: TokenProvider,
         urlSession: URLSession? = nil,
         quotaEndpoint: URL = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")!,
         dailyQuotaEndpoint: URL = URL(string: "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")!,
-        loadCodeAssistEndpoint: URL = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")!
+        loadCodeAssistEndpoint: URL = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")!,
+        lsQuotaProbe: LSQuotaProbe? = nil
     ) {
         self.tokenProvider = tokenProvider
         self.quotaEndpoint = quotaEndpoint
         self.dailyQuotaEndpoint = dailyQuotaEndpoint
         self.loadCodeAssistEndpoint = loadCodeAssistEndpoint
+        self.lsQuotaProbe = lsQuotaProbe
         if let urlSession {
             self.urlSession = urlSession
         } else {
@@ -124,6 +162,17 @@ public final class GeminiSource: AISource, @unchecked Sendable {
     }
 
     public func poll() async throws -> UsageData {
+        // v0.8.0 D9 tier-1: try LS-local /v1internal:fetchUserInfo first.
+        // The probe runs ~50ms (pgrep+lsof+ps + HTTPS round-trip on a
+        // loopback port), but caches nothing — D13 always re-discovers.
+        // When Antigravity.app isn't running, this returns nil silently.
+        if let probe = lsQuotaProbe, let usage = await probe() {
+            return usage
+        }
+
+        // Tier 2: v0.7's cloudcode-pa path. Requires the user's OAuth
+        // credential at ~/.gemini/oauth_creds.json — same path Antigravity 2
+        // writes when the user signs in.
         guard let token = tokenProvider.currentAccessToken else {
             throw AISourceError.unauthenticated
         }
@@ -137,7 +186,7 @@ public final class GeminiSource: AISource, @unchecked Sendable {
             return usage
         } catch AISourceError.dataSourceContractViolation(let detail) where detail.contains("needs-project") {
             // Server wants a project ID we don't have yet — discover it.
-            logger.info("Gemini retrieveUserQuota indicated needs-project; calling loadCodeAssist to discover")
+            logger.info("Antigravity retrieveUserQuota indicated needs-project; calling loadCodeAssist to discover")
             let discovered = try await discoverProjectIdViaLoadCodeAssist(token: token)
             self.cachedProjectId = discovered
             return try await callRetrieveUserQuota(token: token, project: discovered)

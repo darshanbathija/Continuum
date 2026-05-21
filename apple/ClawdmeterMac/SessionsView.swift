@@ -522,9 +522,14 @@ public final class SessionsModel: ObservableObject {
     /// via WorktreeManager and spawn the agent there.
     public enum SpawnError: LocalizedError {
         case missingBinary(String)
+        /// v0.8.0 agy-migration — Antigravity 2 isn't installed / running /
+        /// signed in / has-no-project-for-this-repo. Carries the
+        /// user-facing CTA string the composer surfaces inline.
+        case antigravityNotReady(String)
         public var errorDescription: String? {
             switch self {
             case .missingBinary(let m): return m
+            case .antigravityNotReady(let m): return m
             }
         }
     }
@@ -544,8 +549,32 @@ public final class SessionsModel: ObservableObject {
         // actually reach the spawned CLI. Caller is responsible for the
         // trust-gate UX (AutopilotState.trustRepo) before passing true.
         autopilot: Bool = false,
-        pinnedJSONLURL: URL? = nil
+        pinnedJSONLURL: URL? = nil,
+        // v0.8.1 agy-migration — full first-prompt text for agentapi
+        // spawn. tmux-based spawn ignores this (the CLI's stdin gets the
+        // prompt via the post-spawn /send call), but Antigravity 2's
+        // `agentapi new-conversation` requires the actual first turn at
+        // spawn-time. Callers (EmptyStateCenteredComposer) pass the
+        // composer's rendered body; nil falls back to `goal` for paths
+        // that don't have a composer (resume flows, daemon-side spawns).
+        initialMessage: String? = nil
     ) async throws -> AgentSession {
+        // v0.8.0 agy-migration — Gemini sessions fork off here BEFORE the
+        // tmux pipeline runs. Antigravity 2's agentapi is HTTP-RPC, not a
+        // terminal CLI; there's no pane to spawn. Tier-2 v0.42 chat is
+        // gone (D4 hard-stop). Returns the new session or throws
+        // `.antigravityNotReady` with the CTA the composer surfaces.
+        if agent == .gemini, resumeSessionId == nil {
+            return try await spawnAntigravitySession(
+                repoPath: repoPath,
+                goal: goal,
+                mode: mode,
+                model: model,
+                effort: effort,
+                planMode: planMode,
+                initialMessage: initialMessage
+            )
+        }
         // Fail fast on missing CLIs rather than spawning tmux + the
         // worktree only to error in the agent's pane (where the user
         // can't easily see it without opening the terminal view).
@@ -593,8 +622,11 @@ public final class SessionsModel: ObservableObject {
                 resumeSessionId: resumeSessionId
             ) ?? []
         case .gemini:
-            // Gemini doesn't have an interactive CLI today — falls
-            // through to the missing-binary error surface.
+            // v0.8.0 dead branch — the .gemini case is short-circuited
+            // by `spawnAntigravitySession` above. This argv assignment
+            // is unreachable but the compiler requires it for
+            // exhaustiveness; if execution gets here (resumeSessionId
+            // path for Gemini), the missingBinary error below catches.
             argv = []
         }
         guard !argv.isEmpty else {
@@ -620,6 +652,119 @@ public final class SessionsModel: ObservableObject {
         openSessionId = session.id
         await self.refresh()
         return session
+    }
+
+    // MARK: - v0.8.0 Antigravity agentapi spawn (D4 hard-stop)
+
+    /// Spawn a Gemini session via Antigravity 2's HTTP-RPC agentapi.
+    /// No tmux pane is created — the language_server holds the session
+    /// state in `~/.gemini/antigravity/conversations/<id>.db` and T6's
+    /// `AntigravityConversationDB` feeds chat into SessionChatStore.
+    ///
+    /// Errors:
+    ///   - `.absent`:                "Install Antigravity 2 …"
+    ///   - `.installedNotSignedIn`:  "Sign into Antigravity 2 first"
+    ///   - `.appOnlyNotRunning`:     "Open Antigravity 2 to start a Gemini session"
+    ///   - `.noProjectForRepo`:      "Open this repo in Antigravity 2 first"
+    /// All surface as `.antigravityNotReady(message)` in the composer.
+    private func spawnAntigravitySession(
+        repoPath: String,
+        goal: String?,
+        mode: SessionMode,
+        model: String?,
+        effort: ReasoningEffort?,
+        planMode: Bool,
+        initialMessage: String? = nil
+    ) async throws -> AgentSession {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let appBundle = URL(fileURLWithPath: "/Applications/Antigravity.app", isDirectory: true)
+        let lsClient = LanguageServerClient()
+        let projectResolver = AntigravityProjectResolver(
+            projectsDir: home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
+        )
+
+        // Preflight via the install enum (T3). The closures hand off to
+        // LanguageServerClient + AntigravityProjectResolver so the test
+        // surface in AntigravityInstallTests stays injectable.
+        let install = await AntigravityInstall.preflight(
+            forRepoKey: repoPath,
+            isLanguageServerLive: {
+                if case .live = lsClient.discoverLive() { return true }
+                return false
+            },
+            resolveProject: { repoKey in
+                await projectResolver.resolve(forRepoKey: repoKey)?.id
+            },
+            homeDirectory: home,
+            applicationsRoot: appBundle.deletingLastPathComponent()
+        )
+
+        switch install {
+        case .absent:
+            throw SpawnError.antigravityNotReady(
+                "Install Antigravity 2 from antigravity.google to start a Gemini session."
+            )
+        case .installedNotSignedIn:
+            throw SpawnError.antigravityNotReady(
+                "Sign into Antigravity 2 first, then try again."
+            )
+        case .appOnlyNotRunning:
+            throw SpawnError.antigravityNotReady(
+                "Open Antigravity 2 to start a Gemini session."
+            )
+        case .noProjectForRepo:
+            throw SpawnError.antigravityNotReady(
+                "Open this repo in Antigravity 2 first, then come back."
+            )
+        case .ready(_, let projectId):
+            // The first turn of the conversation gets locked in here —
+            // agentapi has no separate "send first user message" call.
+            // Codex P1.2: original draft passed `goal` (truncated to 80
+            // chars) which made the chat thread start with a chopped
+            // version of the user's prompt. Prefer the composer's
+            // initialMessage (full rendered body) when provided.
+            let firstPrompt: String = {
+                if let initial = initialMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !initial.isEmpty {
+                    return initial
+                }
+                if let goalText = goal?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !goalText.isEmpty {
+                    return goalText
+                }
+                return "Start a new Gemini session in \(repoPath)."
+            }()
+            let modelTier = AgentapiModelTier.from(modelCatalogId: model)
+            let conversationIdString = try await lsClient.newConversation(
+                modelTier: modelTier,
+                prompt: firstPrompt,
+                projectId: projectId
+            )
+            guard let conversationId = UUID(uuidString: conversationIdString) else {
+                throw SpawnError.antigravityNotReady(
+                    "Antigravity returned an unrecognized conversation id (\(conversationIdString)). Try reopening the app."
+                )
+            }
+            let session = registry.create(
+                repoKey: repoPath,
+                repoDisplayName: (repoPath as NSString).lastPathComponent,
+                agent: .gemini,
+                model: model,
+                goal: goal,
+                worktreePath: nil,  // no worktree for agentapi sessions in v0.8.0
+                tmuxWindowId: nil,  // no tmux pane
+                tmuxPaneId: nil,
+                planMode: planMode,
+                mode: mode,
+                effort: effort,
+                geminiBackend: .agentapi,
+                antigravityConversationId: conversationId
+            )
+            expandedRepoKeys.insert(repoPath)
+            openSessionId = session.id
+            await self.refresh()
+            return session
+        }
     }
 
     /// Promote the currently-open read-only synthetic session into a live

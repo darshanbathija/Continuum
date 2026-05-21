@@ -148,6 +148,11 @@ struct EmptyStateCenteredComposer: View {
             AutopilotState.shared.trustRepo(repoKey)
         }
         do {
+            // v0.8.1 agy-migration: stage attachments BEFORE spawn so
+            // Antigravity 2's `agentapi new-conversation` receives the
+            // user's actual full prompt (incl. attachment refs), not the
+            // 80-char `goal` slice. Codex P1.2 fix.
+            var stagedPaths: [URL] = []
             let session = try await model.spawnSession(
                 repoPath: repoKey,
                 agent: store.agent,
@@ -156,7 +161,8 @@ struct EmptyStateCenteredComposer: View {
                 mode: store.mode,
                 tmux: runtime.tmuxClient,
                 acceptEdits: store.permissionMode == .acceptEdits,
-                autopilot: bypassPicked
+                autopilot: bypassPicked,
+                initialMessage: prompt.isEmpty ? nil : store.renderPromptBody(attachmentPaths: [])
             )
             // Record the empty-state composer's mode pick on the session
             // so the chip in the bound view reflects it without needing
@@ -166,12 +172,17 @@ struct EmptyStateCenteredComposer: View {
             } else if bypassPicked {
                 PermissionModeStore.shared.setBypass(true, sessionId: session.id)
             }
+            // Codex P1.2: skip the post-spawn /send for agentapi
+            // sessions — `agentapi new-conversation` already consumed the
+            // first prompt via `initialMessage`. Sending it again would
+            // either fail (no tmux pane, P1.3 unfixed) or duplicate the
+            // first user turn into the SQLite conversation DB.
+            let isAgentapiSpawn = session.geminiBackend == .agentapi
             // Wait briefly for the pane to be ready, then post the first prompt.
             try await Task.sleep(nanoseconds: 600_000_000)
-            if store.canSend, let port = runtime.agentControlServer.boundPort {
+            if !isAgentapiSpawn, store.canSend, let port = runtime.agentControlServer.boundPort {
                 let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
                 // Stage attachments under the new session's dir.
-                var stagedPaths: [URL] = []
                 if let dir = AttachmentStaging.stagingDir(for: session) {
                     for att in store.attachments {
                         if let staged = try? AttachmentStaging.stage(source: att.sourceURL, into: dir, attachmentId: att.id) {

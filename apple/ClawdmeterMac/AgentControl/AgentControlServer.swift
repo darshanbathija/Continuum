@@ -1107,6 +1107,39 @@ public final class AgentControlServer {
         guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
             sendResponse(.badRequest, on: connection); return
         }
+        // v0.8.1 agy-migration (Codex P1.3): Antigravity 2 agentapi
+        // sessions have no tmux pane — sends route through
+        // `LanguageServerClient.sendMessage` against the running
+        // language_server. Same rate-limit + audit-log path as tmux
+        // sends; the only difference is the transport. This branch
+        // runs BEFORE the chat-tab SDK dispatch + paneId guard below.
+        if session.geminiBackend == .agentapi,
+           let conversationId = session.antigravityConversationId {
+            guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
+                sendResponse(.tooManyRequestsSend, on: connection); return
+            }
+            do {
+                try await sendAntigravityMessage(
+                    session: session,
+                    conversationId: conversationId,
+                    content: req.text
+                )
+                let peer = Self.endpointString(connection.endpoint)
+                await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
+                sendJSON(["ok": true], on: connection)
+            } catch let LanguageServerClientError.notRunning {
+                serverLogger.warning("send-prompt for agentapi session \(uuid.uuidString, privacy: .public): LS not running")
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"antigravity_not_running","cta":"Open Antigravity 2 to continue this session"}"#.utf8)
+                ), on: connection)
+            } catch {
+                serverLogger.error("send-prompt agentapi failed: \(error.localizedDescription, privacy: .public)")
+                sendResponse(.internalError, on: connection)
+            }
+            return
+        }
         guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSend, on: connection); return
         }
@@ -1195,6 +1228,42 @@ public final class AgentControlServer {
             serverLogger.error("send-prompt failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    /// v0.8.1 agentapi send-message bridge. Resolves the Antigravity
+    /// project for this session's repoKey (cached by 60s TTL inside
+    /// `AntigravityProjectResolver`), then dispatches the user's text
+    /// through `LanguageServerClient.sendMessage`. Throws on LS-not-
+    /// running or RPC error so the caller can surface a proper CTA.
+    private func sendAntigravityMessage(
+        session: AgentSession,
+        conversationId: UUID,
+        content: String
+    ) async throws {
+        let lsClient = LanguageServerClient()
+        let projectsDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".gemini/config/projects", isDirectory: true)
+        let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
+        // Resolve project from session's repoKey. Fall back to the
+        // conversation ID's existing project record if the repoKey-based
+        // lookup fails — Antigravity already accepted the conversation
+        // at spawn, so the agentapi RPC can use any valid projectId.
+        let projectId: String
+        // v0.8.1 + chat-tab merge: AgentSession.repoKey is now String?
+        // (chat sessions have nil). For agentapi sessions, repoKey must
+        // be non-nil — they were spawned via SessionsView's code path,
+        // not the chat-tab createChat() path. Treat nil as "lost project
+        // mapping" and surface notRunning so the caller shows the CTA.
+        guard let repoKey = session.repoKey,
+              let info = await resolver.resolve(forRepoKey: repoKey) else {
+            throw LanguageServerClientError.notRunning
+        }
+        projectId = info.id
+        try await lsClient.sendMessage(
+            conversationId: conversationId.uuidString,
+            content: content,
+            projectId: projectId
+        )
     }
 
     /// `POST /sessions/continue-readonly` — server-side equivalent of the

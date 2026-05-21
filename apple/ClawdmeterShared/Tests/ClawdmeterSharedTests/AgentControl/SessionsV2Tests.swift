@@ -247,18 +247,32 @@ final class SessionsV2Tests: XCTestCase {
         // UsageData.codexSDKModeActive (decodeIfPresent — back-compat).
         // No new endpoints or WS ops in v8; the field rides on the
         // existing /usage envelope.
-        // Bumped 8 → 9 on 2026-05-21 (v0.8 Chat tab): adds
+        // Bumped 8 → 9 on 2026-05-21 (v0.8.0 Chat tab): adds
         // POST /chat-sessions, /chat-sessions/frontier/*, GET /chat-providers,
         // frontier-subscribe WS op; AgentSession schema v5 fields
         // (kind, frontierGroupId, frontierChildIndex, codexChatBackend,
         // codexChatThreadId, optional repoKey); chatMinimum/frontierMinimum/
         // codexChatBackendMinimum = 9 gates.
-        XCTAssertEqual(AgentControlWireVersion.current, 9)
+        // Bumped 9 → 10 on 2026-05-21 (v0.8.1 agy-migration): adds
+        // AgentSession.geminiBackend + antigravityConversationId +
+        // usage["gemini"] ↔ usage["antigravity"] dual-key rename.
+        // agentapiMinimum=10 gates the Mac UI's agentapi spawn path;
+        // antigravityChatMinimum=11 keeps iOS gated until v0.8.2
+        // migrates daemon POST /sessions (Codex P1.4 deferral).
+        XCTAssertEqual(AgentControlWireVersion.current, 10)
+
         XCTAssertEqual(AgentControlWireVersion.composeDraftMinimum, 4)
         XCTAssertEqual(AgentControlWireVersion.chatSubscribeMinimum, 5)
         XCTAssertEqual(AgentControlWireVersion.geminiMinimum, 6)
         XCTAssertEqual(AgentControlWireVersion.antigravityMinimum, 7)
         XCTAssertEqual(AgentControlWireVersion.codexSDKMinimum, 8)
+        XCTAssertEqual(AgentControlWireVersion.agentapiMinimum, 10)
+        // Codex P1.4: v0.8.1's daemon POST /sessions endpoint still
+        // spawns Gemini via the legacy tmux argv path; only the Mac UI's
+        // SessionsView was migrated. iOS gate stays at 11 (deferred to
+        // v0.8.2 when the daemon path is also migrated) so iOS doesn't
+        // claim Antigravity chat support on a v10 Mac.
+        XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 11)
     }
 
     // MARK: - Mid-session change requests

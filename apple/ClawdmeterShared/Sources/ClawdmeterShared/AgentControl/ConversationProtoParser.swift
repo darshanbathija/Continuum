@@ -209,4 +209,222 @@ public enum ConversationProtoParser {
         }
         return totalBytes / 4
     }
+
+    // MARK: - v0.8.0: step_payload blob decode (Phase 0.5 verdict T7=A)
+
+    /// Plain protobuf wire format. Phase 0.5 confirmed step_payload
+    /// blobs in the SQLite WAL conversation DBs are unencrypted —
+    /// hex dumps showed visible ASCII strings ("list_dir", "view_file",
+    /// tool call IDs) right next to the wire-format tags. Decoding via
+    /// the byte-level varint reader below avoids dragging in
+    /// swift-protobuf and the vendored conversation.proto schema, both
+    /// of which would also need to track Antigravity's proto evolution.
+    /// The wire format itself is stable across proto-schema changes;
+    /// only the field meanings shift, and we only care about a few
+    /// fields here (tool name + tool call id, for the chat UI tags).
+
+    /// What a step row represents. Mirrors the SQLite `steps.step_type`
+    /// values Phase 0 captured (8=tool_call_request, 9=tool_call_response,
+    /// 13=assistant_text, etc.) but kept as a raw integer so adding new
+    /// types upstream doesn't require a Swift enum update.
+    public struct DecodedStep: Equatable, Sendable {
+        /// Outer field 1 varint. Matches the `step_type` SQLite column.
+        public let stepType: UInt64?
+        /// Outer field 4 varint. Matches the `status` SQLite column.
+        public let stepStatus: UInt64?
+        /// Tool-call identifier (UTF-8 string at nested field 4 → field 1
+        /// in the Phase 0.5 hex examples). Nil for non-tool steps.
+        public let toolCallId: String?
+        /// Human-readable tool name like `list_dir`, `view_file`,
+        /// `apply_patch`. Same nesting as toolCallId.
+        public let toolName: String?
+        /// True iff the outer wrapper parsed without short-reads or
+        /// malformed varints. False indicates a partial decode — the
+        /// fields above may still be set but cannot be trusted.
+        public let parseClean: Bool
+
+        public init(
+            stepType: UInt64? = nil,
+            stepStatus: UInt64? = nil,
+            toolCallId: String? = nil,
+            toolName: String? = nil,
+            parseClean: Bool = true
+        ) {
+            self.stepType = stepType
+            self.stepStatus = stepStatus
+            self.toolCallId = toolCallId
+            self.toolName = toolName
+            self.parseClean = parseClean
+        }
+    }
+
+    /// Decode a raw `step_payload` blob into the small subset of fields
+    /// the chat UI consumes. Tolerant — returns the partial result on
+    /// malformed input with `parseClean=false`.
+    ///
+    /// Wire layout (Phase 0.5 verdict):
+    /// ```
+    ///   outer: { 1: varint stepType, 4: varint status, 5: bytes inner }
+    ///   inner: { 1: nested metadata (12 bytes timestamps), 4: bytes toolcall }
+    ///   toolcall: { 1: string toolCallId, 2: string toolName }
+    /// ```
+    public static func decode(_ data: Data) -> DecodedStep {
+        var reader = ProtoReader(data: data)
+        var stepType: UInt64?
+        var stepStatus: UInt64?
+        var toolCallId: String?
+        var toolName: String?
+        var clean = true
+
+        while let (fieldNumber, wireType) = reader.readTag() {
+            switch (fieldNumber, wireType) {
+            case (1, .varint):
+                if let v = reader.readVarint() { stepType = v } else { clean = false }
+            case (4, .varint):
+                if let v = reader.readVarint() { stepStatus = v } else { clean = false }
+            case (5, .lengthDelimited):
+                if let inner = reader.readLengthDelimited() {
+                    let (id, name, innerClean) = decodeInnerPayload(inner)
+                    if let id { toolCallId = id }
+                    if let name { toolName = name }
+                    if !innerClean { clean = false }
+                } else {
+                    clean = false
+                }
+            default:
+                if !reader.skipField(wireType: wireType) { clean = false }
+            }
+        }
+
+        if !reader.isClean { clean = false }
+        return DecodedStep(
+            stepType: stepType,
+            stepStatus: stepStatus,
+            toolCallId: toolCallId,
+            toolName: toolName,
+            parseClean: clean
+        )
+    }
+
+    /// Inner payload at outer field 5. Looks for the toolcall submessage
+    /// at inner field 4 → unpacks tool_call_id (field 1) + tool_name
+    /// (field 2). All other fields are skipped — we don't yet need the
+    /// nested timestamps or step-graph metadata.
+    private static func decodeInnerPayload(_ data: Data) -> (id: String?, name: String?, clean: Bool) {
+        var reader = ProtoReader(data: data)
+        var toolCallId: String?
+        var toolName: String?
+        var clean = true
+
+        while let (fieldNumber, wireType) = reader.readTag() {
+            if fieldNumber == 4 && wireType == .lengthDelimited {
+                guard let tc = reader.readLengthDelimited() else { clean = false; continue }
+                var tcReader = ProtoReader(data: tc)
+                while let (tcField, tcWire) = tcReader.readTag() {
+                    switch (tcField, tcWire) {
+                    case (1, .lengthDelimited):
+                        toolCallId = tcReader.readString()
+                        if toolCallId == nil { clean = false }
+                    case (2, .lengthDelimited):
+                        toolName = tcReader.readString()
+                        if toolName == nil { clean = false }
+                    default:
+                        if !tcReader.skipField(wireType: tcWire) { clean = false }
+                    }
+                }
+                if !tcReader.isClean { clean = false }
+            } else if !reader.skipField(wireType: wireType) {
+                clean = false
+            }
+        }
+        if !reader.isClean { clean = false }
+        return (toolCallId, toolName, clean)
+    }
+}
+
+// MARK: - Minimal protobuf wire-format reader
+
+/// Just enough of the protobuf wire format to walk varints, length-delimited
+/// fields, and length-prefixed UTF-8 strings. Not a general decoder —
+/// callers are expected to know the schema shape they're consuming.
+/// Failures are surfaced via nil returns + the `isClean` flag.
+private struct ProtoReader {
+    private let data: Data
+    private var cursor: Int = 0
+    private(set) var isClean: Bool = true
+
+    init(data: Data) { self.data = data }
+
+    enum WireType: Int {
+        case varint = 0
+        case fixed64 = 1
+        case lengthDelimited = 2
+        case fixed32 = 5
+        case unknown = 99
+    }
+
+    var atEnd: Bool { cursor >= data.count }
+
+    mutating func readTag() -> (fieldNumber: Int, wireType: WireType)? {
+        guard !atEnd, let raw = readVarint() else { return nil }
+        let fieldNumber = Int(raw >> 3)
+        let wireRaw = Int(raw & 0x07)
+        let wireType = WireType(rawValue: wireRaw) ?? .unknown
+        return (fieldNumber, wireType)
+    }
+
+    mutating func readVarint() -> UInt64? {
+        var result: UInt64 = 0
+        var shift: UInt64 = 0
+        while cursor < data.count {
+            let byte = data[data.startIndex + cursor]
+            cursor += 1
+            result |= UInt64(byte & 0x7F) << shift
+            if (byte & 0x80) == 0 { return result }
+            shift += 7
+            if shift >= 64 { isClean = false; return nil }
+        }
+        isClean = false
+        return nil
+    }
+
+    mutating func readLengthDelimited() -> Data? {
+        guard let length = readVarint() else { return nil }
+        let intLen = Int(length)
+        guard intLen >= 0, cursor + intLen <= data.count else {
+            isClean = false
+            return nil
+        }
+        let start = data.startIndex + cursor
+        let slice = data.subdata(in: start..<(start + intLen))
+        cursor += intLen
+        return slice
+    }
+
+    mutating func readString() -> String? {
+        guard let bytes = readLengthDelimited() else { return nil }
+        return String(data: bytes, encoding: .utf8)
+    }
+
+    /// Walk past a field whose tag we already consumed. Returns false
+    /// when the field is malformed (i.e. ran off the buffer).
+    mutating func skipField(wireType: ProtoReader.WireType) -> Bool {
+        switch wireType {
+        case .varint:
+            return readVarint() != nil
+        case .fixed64:
+            if cursor + 8 > data.count { isClean = false; return false }
+            cursor += 8
+            return true
+        case .lengthDelimited:
+            return readLengthDelimited() != nil
+        case .fixed32:
+            if cursor + 4 > data.count { isClean = false; return false }
+            cursor += 4
+            return true
+        case .unknown:
+            isClean = false
+            return false
+        }
+    }
 }

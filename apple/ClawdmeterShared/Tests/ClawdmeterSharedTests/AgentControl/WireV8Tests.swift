@@ -9,10 +9,11 @@ import XCTest
 final class WireV8Tests: XCTestCase {
 
     func test_currentWireVersionIsAtLeastEight() {
-        // v8 baseline was current==8. v0.8 bumped to 9 (chat tab).
-        // Track current >= 8 rather than ==8 so we don't have to update
-        // this assertion every bump.
-        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 8)
+        // v8 baseline was current==8. v0.8.0 chat-tab bumped to 9.
+        // v0.8.1 agy-migration bumped to 10 (skipping nothing — landed
+        // on top of chat-tab). Track current >= 8 rather than == so this
+        // assertion survives future bumps without churn.
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 10)
     }
 
     func test_codexSDKMinimumIsEight() {

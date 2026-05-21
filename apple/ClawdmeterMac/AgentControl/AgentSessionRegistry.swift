@@ -64,7 +64,14 @@ public final class AgentSessionRegistry: ObservableObject {
         mode: SessionMode = .local,
         parentSessionId: UUID? = nil,
         effort: ReasoningEffort? = nil,
-        abPairSessionId: UUID? = nil
+        abPairSessionId: UUID? = nil,
+        // v0.8.0 agy-migration — Gemini sessions spawned through
+        // Antigravity 2's agentapi don't have a tmux pane (tmuxWindowId
+        // + tmuxPaneId both nil); they carry the transport tag +
+        // conversation UUID instead so SessionChatStore can attach to
+        // the right SQLite DB.
+        geminiBackend: GeminiBackend? = nil,
+        antigravityConversationId: UUID? = nil
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -87,7 +94,9 @@ public final class AgentSessionRegistry: ObservableObject {
             mode: mode,
             parentSessionId: parentSessionId,
             effort: effort,
-            abPairSessionId: abPairSessionId
+            abPairSessionId: abPairSessionId,
+            geminiBackend: geminiBackend,
+            antigravityConversationId: antigravityConversationId
         )
         sessions.append(session)
         save()
@@ -375,14 +384,20 @@ public final class AgentSessionRegistry: ObservableObject {
             abPairSessionId: Self.resolve(abPairSessionId, fallback: s.abPairSessionId),
             abPairDecidedAt: Self.resolve(abPairDecidedAt, fallback: s.abPairDecidedAt),
             customName: Self.resolve(customName, fallback: s.customName),
-            // v0.8 schema v5: preserve all the chat-tab fields across
-            // mutations so an update to a chat session doesn't silently
-            // convert it back to a code session.
+            // v0.8.0 schema v5 (chat-tab): preserve all chat fields
+            // across mutations so an update to a chat session doesn't
+            // silently convert it back to a code session.
             kind: s.kind,
             frontierGroupId: s.frontierGroupId,
             frontierChildIndex: s.frontierChildIndex,
             codexChatBackend: s.codexChatBackend,
-            codexChatThreadId: Self.resolve(codexChatThreadId, fallback: s.codexChatThreadId)
+            codexChatThreadId: Self.resolve(codexChatThreadId, fallback: s.codexChatThreadId),
+            // v0.8.1 schema v6 (agy-migration): geminiBackend +
+            // antigravityConversationId only get set at create-time
+            // (via `create(...)` overload). Mutations intentionally
+            // preserve them across status/model/effort updates.
+            geminiBackend: s.geminiBackend,
+            antigravityConversationId: s.antigravityConversationId
         )
     }
 

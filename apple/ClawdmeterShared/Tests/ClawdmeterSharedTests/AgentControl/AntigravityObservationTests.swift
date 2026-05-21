@@ -30,10 +30,15 @@ final class AntigravityObservationTests: XCTestCase {
 
         try FileManager.default.createDirectory(at: brain, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: conversations, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: apps.appendingPathComponent("Antigravity.app"), withIntermediateDirectories: true)
+        let appBundle = apps.appendingPathComponent("Antigravity.app")
+        try FileManager.default.createDirectory(at: appBundle, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
-        // Touch agy-node so AntigravityInstall.detect succeeds.
-        try "shim".write(to: binDir.appendingPathComponent("agy-node"), atomically: true, encoding: .utf8)
+        // v0.8.0 agy-migration: AntigravityInstall.detect now requires a
+        // `language_server` binary inside the bundle (replaces the old
+        // agy-node anchor). Plant the canonical Contents/Resources/bin path.
+        let lsBin = appBundle.appendingPathComponent("Contents/Resources/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: lsBin, withIntermediateDirectories: true)
+        try "fake-mach-o".write(to: lsBin.appendingPathComponent("language_server"), atomically: true, encoding: .utf8)
 
         // Plant the state file with M133 → gemini-3.5-flash mapping.
         try """

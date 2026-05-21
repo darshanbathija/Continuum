@@ -65,7 +65,7 @@ final class AppRuntime: ObservableObject {
         let geminiTokenProvider = GeminiTokenProvider()
         self.geminiModel = AppModel(
             config: .gemini,
-            source: GeminiSource(tokenProvider: geminiTokenProvider),
+            source: AntigravitySource(tokenProvider: geminiTokenProvider),
             tokenProvider: geminiTokenProvider
         )
 

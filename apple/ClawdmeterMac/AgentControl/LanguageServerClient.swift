@@ -1,29 +1,38 @@
-// Talks to Antigravity 2's local `language_server` Go binary. The server
-// listens on two random localhost ports (HTTP+gRPC + an HTTPS one with a
-// self-signed cert) and gates every request behind a per-launch CSRF
-// token. Both port + token live in `~/.gemini/antigravity/logs/<TS>/ls-main.log`
-// — which is TRANSIENT (only exists while the Electron app is running).
+// Talks to Antigravity 2's `language_server` Go binary running inside the
+// Electron app. Phase 0 (commit 8a10ec3/f4dd0c0) + Phase 0.5 (commit 6fe759e)
+// proved the real shape, which is materially different from v0.7's
+// log-file-scrape design:
 //
-// What we do here:
+//   1. Antigravity.app launches `language_server` with two random ports
+//      (HTTPS/gRPC + HTTP) and a per-launch CSRF token on argv:
+//        --csrf_token <uuid> --https_server_port 0
+//      Both port numbers are in the LS process's lsof output, NOT in any
+//      log file. The HTTP port is the one agentapi uses.
 //
-//   1. Discover the live server (lsof + PID liveness — eng review 1A fix).
-//      We can't just "pick the newest logs/<TS>/" because that dir
-//      accumulates across launches; the newest entry could be a dead
-//      server. Verify with `kill -0 <pid>` AND `lsof -nP -iTCP:<port> ...`
-//      before trusting the candidate.
+//   2. agentapi is a thin CLI client that talks HTTP to the same LS
+//      process. Invoked as:
+//        `language_server agentapi <command> [args]`
+//      with three env vars (D5/Phase 0):
+//        ANTIGRAVITY_LS_ADDRESS=http://127.0.0.1:<port>
+//        ANTIGRAVITY_CSRF_TOKEN=<uuid>
+//        ANTIGRAVITY_PROJECT_ID=<project-uuid>
+//      Returns JSON on stdout, fires + forgets. Agent work happens
+//      server-side and the actual turn content gets persisted to SQLite
+//      WAL DBs under ~/.gemini/antigravity/conversations/<id>.{db,db-wal}.
 //
-//   2. Trust the self-signed TLS cert ONLY for loopback hosts (eng review
-//      2B fix). language_server presents a cert it generated at launch,
-//      not signed by anyone. URLSession rejects by default. We override
-//      via URLSessionDelegate.didReceive challenge: accept serverTrust
-//      iff host is 127.0.0.1/::1/localhost.
+//   3. The Phase 0 plan called for re-discovering port + CSRF on every
+//      call (D13: ~50ms × N calls/min/session). Implementing that here
+//      via pgrep + ps + lsof rather than caching, per A3 lock.
 //
-//   3. Query the server for `currentModel()` and `protoSchemaHash()`.
-//      Used by ProviderConfig.swift to render the dashboard subtitle
-//      with the live model name (instead of guessing from the state file).
+// v0.7 callers that used `discoverLive()`/`currentModel()` keep working;
+// new agentapi methods are additive.
+//
+// This file is mac-only — Antigravity.app, pgrep, lsof are all macOS-only
+// surfaces.
 
 import Foundation
 import OSLog
+import ClawdmeterShared
 
 /// Result of `discoverLive()`. Either we found a live server, or we
 /// didn't — the latter is a first-class state, NOT an error.
@@ -32,158 +41,346 @@ public enum LanguageServerProbe: Equatable, Sendable {
     case notRunning
 }
 
-/// One live language_server instance. Port + CSRF token together gate
-/// every request.
+/// One live language_server instance. Port + CSRF together gate every
+/// request. `httpsPort` is the gRPC port (still useful for v0.7
+/// `currentModel()` via HTTPS); `httpPort` is the agentapi port.
 public struct LiveLanguageServer: Equatable, Sendable {
-    public let port: Int
-    public let csrfToken: String
     public let pid: Int
-    /// `https://127.0.0.1:<port>`.
-    public var baseURL: URL { URL(string: "https://127.0.0.1:\(port)")! }
+    public let csrfToken: String
+    /// HTTP port for agentapi RPC. ~50ms-per-call discovery means we
+    /// recompute on every call, so a stale value here only persists for
+    /// the lifetime of one single agentapi invocation.
+    public let httpPort: Int
+    /// HTTPS port (gRPC + v0.7 `/v1/current-model`). Optional because
+    /// some discovery paths may only resolve the HTTP port.
+    public let httpsPort: Int?
+
+    public var httpBaseURL: URL { URL(string: "http://127.0.0.1:\(httpPort)")! }
+    public var httpsBaseURL: URL? {
+        guard let p = httpsPort else { return nil }
+        return URL(string: "https://127.0.0.1:\(p)")
+    }
+
+    public init(pid: Int, csrfToken: String, httpPort: Int, httpsPort: Int? = nil) {
+        self.pid = pid
+        self.csrfToken = csrfToken
+        self.httpPort = httpPort
+        self.httpsPort = httpsPort
+    }
 }
 
-/// Client + discovery. Stateless apart from a cached probe — caller is
-/// expected to re-call `discoverLive()` on `NSWorkspace.didActivateApplicationNotification`
-/// for `com.google.antigravity` to pick up server restarts.
+/// HTTP-RPC errors surfaced by the agentapi-side methods. The spawn
+/// dispatch in `SessionsView` turns each into a user-visible state.
+public enum LanguageServerClientError: Error, Equatable, Sendable {
+    /// Antigravity.app isn't running (or PID/port discovery failed).
+    case notRunning
+    /// language_server returned a JSON `{error: "..."}` payload. The
+    /// error string is propagated verbatim so the composer can show
+    /// it inline.
+    case rpcError(String)
+    /// agentapi process exited non-zero without surfacing a parsable
+    /// error. Carries stderr for triage.
+    case agentapiCrashed(stderr: String, exitCode: Int)
+    /// Couldn't locate the `language_server` binary in the install.
+    /// Should never happen if AntigravityInstall.preflight returned
+    /// `.ready` first; if it does, the binary moved (multi-path probe
+    /// in D6 didn't find any of the 4 candidates).
+    case binaryNotFound
+    /// Process invocation itself failed (e.g., not executable, sandbox
+    /// denied). Carries the underlying NSError description.
+    case spawnFailed(String)
+    /// Response wasn't JSON or didn't have the expected shape.
+    case malformedResponse(String)
+}
+
+/// Three model tiers `agentapi --model=` accepts (Phase 0 confirmed).
+/// Maps from ModelCatalog ids → shortcut via best-fit.
+public enum AgentapiModelTier: String, Sendable, CaseIterable {
+    case flashLite = "flash_lite"
+    case flash
+    case pro
+
+    /// Translate a `ModelCatalog` id (e.g. "gemini-3.5-flash-thinking")
+    /// to the shortcut agentapi accepts. agentapi has only 3 tiers;
+    /// any thinking-mode / pro-high / pro-low fold into the closest
+    /// tier. The catalog id stays the canonical Clawdmeter-side
+    /// identifier; this enum exists only to feed argv.
+    public static func from(modelCatalogId id: String?) -> AgentapiModelTier {
+        guard let id = id?.lowercased() else { return .flash }
+        if id.contains("pro") { return .pro }
+        if id.contains("flash_lite") || id.contains("flash-lite") { return .flashLite }
+        return .flash // gemini-3.5-flash, gemini-3-flash, *-thinking variants
+    }
+}
+
+/// Discovery + HTTP-RPC client for the Antigravity 2 `language_server`.
+/// Per D13: always re-discover port+CSRF before each call; ~50ms per
+/// invocation accepted for correctness over caching.
 public final class LanguageServerClient: NSObject {
 
     private let logger = Logger(subsystem: "com.clawdmeter.mac", category: "LanguageServerClient")
-    private let logsRoot: URL
 
-    public init(logsRoot: URL? = nil) {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        self.logsRoot = logsRoot ?? home.appendingPathComponent(".gemini/antigravity/logs", isDirectory: true)
+    /// Path to the `language_server` Mach-O binary. Resolved via
+    /// `AntigravityInstall.locateLanguageServer(in:)` at construction.
+    /// Nil only when Antigravity isn't installed; methods that need it
+    /// throw `.binaryNotFound`.
+    public let languageServerURL: URL?
+
+    /// Override for tests. Production wraps real `pgrep`, `ps`, `lsof`.
+    private let processProbe: ProcessProbe
+
+    public init(
+        languageServerURL: URL? = nil,
+        processProbe: ProcessProbe = .systemProbe
+    ) {
+        if let url = languageServerURL {
+            self.languageServerURL = url
+        } else {
+            #if os(macOS)
+            let appBundle = URL(fileURLWithPath: "/Applications/Antigravity.app", isDirectory: true)
+            self.languageServerURL = AntigravityInstall.locateLanguageServer(in: appBundle)
+            #else
+            self.languageServerURL = nil
+            #endif
+        }
+        self.processProbe = processProbe
         super.init()
     }
 
-    // MARK: - Discovery
+    // MARK: - Discovery (D5 rewrite — pgrep + ps + lsof per Phase 0)
 
-    /// Walks `logsRoot/*/ls-main.log` newest-first, parses port + PID
-    /// from each, returns the first one whose process is alive AND
-    /// holds the port. Returns `.notRunning` when no candidate passes
-    /// both checks.
+    /// Walks the live process table looking for Antigravity.app's
+    /// `language_server`, parses argv for `--csrf_token`, parses lsof
+    /// output for the listening HTTP port.
+    ///
+    /// Returns `.notRunning` when Antigravity isn't running (no
+    /// matching pgrep hit) or any of the parse steps failed.
     public func discoverLive() -> LanguageServerProbe {
-        let candidates = enumerateCandidates()
-        for candidate in candidates {
-            guard let (port, pid, token) = parseLogHeader(at: candidate) else { continue }
-            // kill(pid, 0) returns 0 when the process exists and we have
-            // permission to signal it. ESRCH (3) when no such process.
-            // EPERM (1) means the process exists but we can't signal —
-            // still alive.
-            let killResult = kill(Int32(pid), 0)
-            let processAlive = (killResult == 0) || (errno == EPERM)
-            guard processAlive else { continue }
-            guard portIsListenedOn(port: port, byPID: pid) else { continue }
-            return .live(LiveLanguageServer(port: port, csrfToken: token, pid: pid))
+        guard let pid = processProbe.findAntigravityLSProcessID() else {
+            return .notRunning
         }
-        return .notRunning
-    }
-
-    /// Lists `logsRoot/<TS>/ls-main.log` files, newest mtime first.
-    private func enumerateCandidates() -> [URL] {
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: logsRoot,
-            includingPropertiesForKeys: [.contentModificationDateKey]
-        ) else { return [] }
-        let logs = entries
-            .map { $0.appendingPathComponent("ls-main.log", isDirectory: false) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-        // Sort newest mtime first.
-        return logs.sorted { lhs, rhs in
-            let l = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            let r = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            return l > r
+        guard let argv = processProbe.argvForPID(pid),
+              let csrf = parseCSRFToken(fromArgv: argv) else {
+            logger.debug("discoverLive: pgrep hit PID=\(pid) but argv parse failed")
+            return .notRunning
         }
+        let ports = processProbe.listeningTCPPorts(pid)
+        guard !ports.isEmpty else {
+            logger.debug("discoverLive: PID=\(pid) holds no listening TCP ports")
+            return .notRunning
+        }
+        // Phase 0: language_server listens on TWO consecutive ports —
+        // the lower for HTTPS/gRPC, the higher for HTTP. Pick the
+        // higher as the agentapi HTTP port; expose both for callers
+        // that need gRPC.
+        let sorted = ports.sorted()
+        let httpsPort = sorted.first
+        let httpPort = sorted.last ?? sorted[0]
+        return .live(LiveLanguageServer(
+            pid: pid,
+            csrfToken: csrf,
+            httpPort: httpPort,
+            httpsPort: (sorted.count >= 2) ? httpsPort : nil
+        ))
     }
 
-    /// Extracts port + PID + CSRF token from the log header. Antigravity
-    /// writes a startup line like
-    /// `language_server --csrf_token <uuid> --extension_server_port <N> --pid <PID>`
-    /// (or similar — we tolerate variations by regex-matching the keys
-    /// we care about).
-    func parseLogHeader(at url: URL) -> (port: Int, pid: Int, token: String)? {
-        // Read at most 4KB — the header is in the first few hundred bytes.
-        guard let handle = try? FileHandle(forReadingFrom: url),
-              let data = try? handle.read(upToCount: 4096),
-              let text = String(data: data, encoding: .utf8)
-        else { return nil }
-        try? handle.close()
-
-        guard let port = extractInt(in: text, after: "--extension_server_port") else { return nil }
-        // PID may be in a few forms — "pid=12345" or "--pid 12345" or
-        // we fall back to reading our own parent process via `lsof`
-        // later. Default to the value parsed if present.
-        let pid = extractInt(in: text, after: "--pid")
-            ?? extractInt(in: text, after: "pid=")
-            ?? 0
-        guard let token = extractString(in: text, after: "--csrf_token") else { return nil }
-        return (port, pid, token)
-    }
-
-    private func extractInt(in text: String, after key: String) -> Int? {
-        guard let range = text.range(of: key) else { return nil }
-        let tail = text[range.upperBound...].drop { $0.isWhitespace || $0 == "=" }
-        let digits = tail.prefix { $0.isNumber }
-        return Int(digits)
-    }
-
-    private func extractString(in text: String, after key: String) -> String? {
-        guard let range = text.range(of: key) else { return nil }
-        let tail = text[range.upperBound...].drop { $0.isWhitespace || $0 == "=" }
-        let token = tail.prefix { !$0.isWhitespace }
-        return token.isEmpty ? nil : String(token)
-    }
-
-    /// Returns true iff the given PID currently listens on `port` on
-    /// localhost. Uses `lsof -nP -iTCP:<port> -sTCP:LISTEN -P` and parses
-    /// the PID column. Empty/missing output means no listener.
-    func portIsListenedOn(port: Int, byPID pid: Int) -> Bool {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        task.arguments = ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN"]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = Pipe()
-        do { try task.run() } catch { return false }
-        task.waitUntilExit()
-        let data = pipe.fileHandleForReading.availableData
-        let text = String(data: data, encoding: .utf8) ?? ""
-        // lsof output columns: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
-        for line in text.split(separator: "\n") {
-            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
-            guard parts.count >= 2 else { continue }
-            if let listenerPID = Int(parts[1]) {
-                if pid == 0 { return true } // PID unknown but somebody listens
-                if listenerPID == pid { return true }
+    /// Extracts `--csrf_token <uuid>` (or `--csrf_token=<uuid>`) from
+    /// the argv array of a `language_server` process. Returns nil when
+    /// the flag is missing or empty.
+    func parseCSRFToken(fromArgv argv: [String]) -> String? {
+        var iter = argv.makeIterator()
+        while let arg = iter.next() {
+            if arg == "--csrf_token" {
+                if let value = iter.next(), !value.isEmpty { return value }
+            } else if arg.hasPrefix("--csrf_token=") {
+                let value = String(arg.dropFirst("--csrf_token=".count))
+                if !value.isEmpty { return value }
             }
         }
-        return false
+        return nil
     }
 
-    // MARK: - HTTPS requests against the live server
+    // MARK: - HTTP-RPC methods (agentapi-via-subprocess, per Phase 0)
 
-    /// Wraps a URLSession with our loopback-scoped TLS trust override.
-    /// Cached so we don't tear down the underlying connection pool on
-    /// every request.
+    /// Start a new agentapi conversation under the given project.
+    /// Returns the conversation UUID assigned by the server, ready to
+    /// be persisted on `AgentSession.antigravityConversationId`.
+    ///
+    /// Per Phase 0: `agentapi new-conversation` is one-shot HTTP-RPC —
+    /// completes in ~70ms returning `{conversationId, prompt}`. The
+    /// agent's actual turn happens server-side asynchronously; observe
+    /// via `AntigravityConversationDB` (T6).
+    public func newConversation(
+        modelTier: AgentapiModelTier,
+        prompt: String,
+        projectId: String
+    ) async throws -> String {
+        let live = try await requireLive()
+        let stdout = try await invokeAgentapi(
+            live: live,
+            projectId: projectId,
+            args: ["new-conversation", "--model=\(modelTier.rawValue)", prompt]
+        )
+        // Phase 0 runtime notes captured the actual successful response as a
+        // top-level `{conversationId, prompt}` payload. Earlier drafts of
+        // this decoder assumed a `{response: {conversationId}}` envelope
+        // and threw .malformedResponse on every real success. Accept BOTH
+        // shapes so future agentapi versions that wrap (or unwrap) the
+        // envelope keep working — fall back to nested only when top-level
+        // is missing. The `error` field is checked first regardless.
+        struct NewConversationResponse: Decodable {
+            struct Inner: Decodable {
+                let conversationId: String?
+            }
+            let conversationId: String?
+            let response: Inner?
+            let error: String?
+        }
+        let decoded = try decodeAgentapiResponse(NewConversationResponse.self, from: stdout)
+        if let err = decoded.error { throw LanguageServerClientError.rpcError(err) }
+        if let id = decoded.conversationId { return id }
+        if let id = decoded.response?.conversationId { return id }
+        let preview = String(data: stdout, encoding: .utf8)?.prefix(200) ?? ""
+        throw LanguageServerClientError.malformedResponse(
+            "newConversation: conversationId absent (top-level + response both nil) — stdout=\(preview)"
+        )
+    }
+
+    /// Send a follow-up message to an existing conversation.
+    public func sendMessage(
+        conversationId: String,
+        content: String,
+        projectId: String
+    ) async throws {
+        let live = try await requireLive()
+        let stdout = try await invokeAgentapi(
+            live: live,
+            projectId: projectId,
+            args: ["send-message", conversationId, content]
+        )
+        struct SendResponse: Decodable {
+            let error: String?
+        }
+        let decoded = try decodeAgentapiResponse(SendResponse.self, from: stdout)
+        if let err = decoded.error { throw LanguageServerClientError.rpcError(err) }
+    }
+
+    /// Fetch metadata for a conversation (workspace, project_id, model,
+    /// experiments, etc.). Used by the chat header + Diagnostics.
+    public func getConversationMetadata(
+        conversationId: String,
+        projectId: String
+    ) async throws -> Data {
+        let live = try await requireLive()
+        let stdout = try await invokeAgentapi(
+            live: live,
+            projectId: projectId,
+            args: ["get-conversation-metadata", conversationId]
+        )
+        // Return raw bytes — caller parses what it needs. The full
+        // payload has 90+ Mendel experiment ids that we don't care
+        // about, and the shape may evolve.
+        return stdout
+    }
+
+    // MARK: - Subprocess invoker
+
+    /// Spawn `language_server agentapi <args>` with the 3 required env
+    /// vars + capture stdout. Throws on non-zero exit or unspawnable
+    /// process.
+    func invokeAgentapi(
+        live: LiveLanguageServer,
+        projectId: String,
+        args: [String]
+    ) async throws -> Data {
+        guard let lsURL = languageServerURL else {
+            throw LanguageServerClientError.binaryNotFound
+        }
+        let task = Process()
+        task.executableURL = lsURL
+        task.arguments = ["agentapi"] + args
+
+        var env = ProcessInfo.processInfo.environment
+        env["ANTIGRAVITY_LS_ADDRESS"] = "http://127.0.0.1:\(live.httpPort)"
+        env["ANTIGRAVITY_CSRF_TOKEN"] = live.csrfToken
+        env["ANTIGRAVITY_PROJECT_ID"] = projectId
+        task.environment = env
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        task.standardOutput = outPipe
+        task.standardError = errPipe
+
+        do { try task.run() } catch {
+            throw LanguageServerClientError.spawnFailed(error.localizedDescription)
+        }
+
+        // Run the wait in a detached task so the @MainActor caller
+        // doesn't block on Process.waitUntilExit.
+        await withCheckedContinuation { continuation in
+            Task.detached {
+                task.waitUntilExit()
+                continuation.resume()
+            }
+        }
+
+        let stdout = outPipe.fileHandleForReading.availableData
+        let stderr = errPipe.fileHandleForReading.availableData
+        guard task.terminationStatus == 0 else {
+            let stderrText = String(data: stderr, encoding: .utf8) ?? ""
+            throw LanguageServerClientError.agentapiCrashed(
+                stderr: stderrText,
+                exitCode: Int(task.terminationStatus)
+            )
+        }
+        return stdout
+    }
+
+    /// Try a JSON decode of `T`. On failure, surface the raw stdout
+    /// (first 200 chars) so triage doesn't need to grep through logs.
+    func decodeAgentapiResponse<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            let preview = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
+            throw LanguageServerClientError.malformedResponse(
+                "JSON decode failed: \(error.localizedDescription) — stdout=\(preview)"
+            )
+        }
+    }
+
+    /// Discover the live LS or throw `.notRunning`. Caller treats the
+    /// throw as a hint to surface the "Open Antigravity 2" CTA.
+    func requireLive() async throws -> LiveLanguageServer {
+        switch discoverLive() {
+        case .live(let l): return l
+        case .notRunning: throw LanguageServerClientError.notRunning
+        }
+    }
+
+    // MARK: - v0.7 callers: keep currentModel() working
+
     private lazy var urlSession: URLSession = {
         URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
     }()
 
-    /// Fetches the currently-selected model name. Returns nil when the
-    /// server isn't running or the response shape changed.
+    /// v0.7: fetch currently-selected model via HTTPS `/v1/current-model`.
+    /// Phase 0 didn't reprobe this endpoint shape; if it has changed
+    /// the existing tolerant decoder (bare-string OR `{"model": "..."}`)
+    /// will surface nil and the dashboard subtitle degrades to a
+    /// static label. No regression in v0.8 behavior.
     public func currentModel(probe: LanguageServerProbe? = nil) async -> String? {
         let live: LiveLanguageServer
         switch probe ?? discoverLive() {
         case .live(let l): live = l
         case .notRunning: return nil
         }
-        var request = URLRequest(url: live.baseURL.appendingPathComponent("/v1/current-model"))
+        guard let baseURL = live.httpsBaseURL else { return nil }
+        var request = URLRequest(url: baseURL.appendingPathComponent("/v1/current-model"))
         request.setValue(live.csrfToken, forHTTPHeaderField: "X-CSRF-Token")
         request.timeoutInterval = 5
         do {
             let (data, _) = try await urlSession.data(for: request)
-            // Tolerate the response being either a bare model string OR
-            // {"model": "..."} JSON.
             if let s = String(data: data, encoding: .utf8), !s.isEmpty {
                 if s.hasPrefix("{") {
                     if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -199,7 +396,7 @@ public final class LanguageServerClient: NSObject {
     }
 }
 
-// MARK: - URLSessionDelegate — loopback-scoped TLS trust (eng review 2B fix)
+// MARK: - URLSessionDelegate — loopback-scoped TLS trust (kept from v0.7)
 
 extension LanguageServerClient: URLSessionDelegate {
     public func urlSession(
@@ -207,16 +404,11 @@ extension LanguageServerClient: URLSessionDelegate {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        // Only override server-trust challenges. Other types (basic auth,
-        // client cert, etc.) fall through to default handling.
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let serverTrust = challenge.protectionSpace.serverTrust else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        // Loopback-only trust. Any non-loopback host hits default
-        // validation, which will reject the self-signed cert as it
-        // should — we are NOT a CA.
         let host = challenge.protectionSpace.host
         let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]
         if loopbackHosts.contains(host) {
@@ -224,5 +416,112 @@ extension LanguageServerClient: URLSessionDelegate {
         } else {
             completionHandler(.performDefaultHandling, nil)
         }
+    }
+}
+
+// MARK: - ProcessProbe — pgrep / ps / lsof wrapping for tests
+
+/// Injection seam for the three subprocess probes used by discoverLive.
+/// Tests provide a `ProcessProbe(...)` with stub closures; production
+/// uses `.systemProbe` which shells out to real binaries.
+public struct ProcessProbe: Sendable {
+    public let findAntigravityLSProcessID: @Sendable () -> Int?
+    public let argvForPID: @Sendable (Int) -> [String]?
+    public let listeningTCPPorts: @Sendable (Int) -> [Int]
+
+    public init(
+        findAntigravityLSProcessID: @escaping @Sendable () -> Int?,
+        argvForPID: @escaping @Sendable (Int) -> [String]?,
+        listeningTCPPorts: @escaping @Sendable (Int) -> [Int]
+    ) {
+        self.findAntigravityLSProcessID = findAntigravityLSProcessID
+        self.argvForPID = argvForPID
+        self.listeningTCPPorts = listeningTCPPorts
+    }
+
+    // The wrapping `@Sendable { … }` closures exist purely to satisfy the
+    // field type — ProcessProbeSystem's static funcs are pure subprocess
+    // wrappers with no captured state, so the data-race warning the
+    // compiler emits without the explicit `@Sendable` annotation is a
+    // false positive.
+    public static let systemProbe = ProcessProbe(
+        findAntigravityLSProcessID: { @Sendable in ProcessProbeSystem.findAntigravityLSProcessID() },
+        argvForPID: { @Sendable pid in ProcessProbeSystem.argvForPID(pid) },
+        listeningTCPPorts: { @Sendable pid in ProcessProbeSystem.listeningTCPPorts(pid) }
+    )
+}
+
+/// Real-system implementation of `ProcessProbe`. Shells out to pgrep,
+/// ps, lsof. Mac-only.
+enum ProcessProbeSystem {
+
+    /// `pgrep -f "Antigravity.app/Contents/Resources/bin/language_server"`
+    /// (or any candidate path that AntigravityInstall.locateLanguageServer
+    /// would have matched). Returns the first PID. Antigravity.app
+    /// usually only has one LS at a time.
+    static func findAntigravityLSProcessID() -> Int? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        task.arguments = ["-f", "Antigravity.app/.*language_server"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do { try task.run() } catch { return nil }
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.availableData
+        let text = String(data: data, encoding: .utf8) ?? ""
+        for line in text.split(separator: "\n") {
+            if let pid = Int(line.trimmingCharacters(in: .whitespaces)) {
+                return pid
+            }
+        }
+        return nil
+    }
+
+    /// `ps -p <pid> -o command=` returns the full argv as one
+    /// whitespace-separated line. Naive split is sufficient for the
+    /// `--csrf_token <uuid>` token we extract.
+    static func argvForPID(_ pid: Int) -> [String]? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-p", String(pid), "-o", "command="]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do { try task.run() } catch { return nil }
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.availableData
+        let text = String(data: data, encoding: .utf8) ?? ""
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        return trimmed.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+    }
+
+    /// `lsof -nP -iTCP -sTCP:LISTEN -p <pid>` lists all TCP ports the
+    /// PID is listening on. Output column 9 is `NAME` like
+    /// `127.0.0.1:53824`. Returns the port half.
+    static func listeningTCPPorts(_ pid: Int) -> [Int] {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        task.arguments = ["-nP", "-iTCP", "-sTCP:LISTEN", "-p", String(pid)]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do { try task.run() } catch { return [] }
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.availableData
+        let text = String(data: data, encoding: .utf8) ?? ""
+
+        var ports: Set<Int> = []
+        for line in text.split(separator: "\n") {
+            if line.hasPrefix("COMMAND") { continue }   // header
+            // Parse the last `127.0.0.1:<N>` token in the line.
+            if let colonRange = line.range(of: ":", options: .backwards) {
+                let after = line[colonRange.upperBound...]
+                let digits = after.prefix { $0.isNumber }
+                if let p = Int(digits) { ports.insert(p) }
+            }
+        }
+        return Array(ports)
     }
 }

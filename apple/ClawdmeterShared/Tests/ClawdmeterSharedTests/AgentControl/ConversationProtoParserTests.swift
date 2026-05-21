@@ -177,4 +177,139 @@ final class ConversationProtoParserTests: XCTestCase {
         XCTAssertEqual(probe.turnCount, 0)
         XCTAssertEqual(probe.estimatedTokens, 0)
     }
+
+    // MARK: - v0.8.0 step_payload decode (Phase 0.5 fixtures)
+
+    /// Build the synthetic step_payload bytes from the Phase 0.5 hex
+    /// dump in docs/agentapi-event-catalog.md. Outer wrapper:
+    /// `08 <st> 20 <stat> 2A <len> <inner...>`
+    private func encodeStepPayload(
+        stepType: UInt8,
+        status: UInt8,
+        inner: [UInt8]
+    ) -> Data {
+        var bytes: [UInt8] = [0x08, stepType, 0x20, status, 0x2A]
+        bytes += varint(inner.count)
+        bytes += inner
+        return Data(bytes)
+    }
+
+    private func encodeToolCallInner(toolCallId: String, toolName: String) -> [UInt8] {
+        // Inner field 4 = toolcall submessage; field 1 = id, field 2 = name.
+        let idBytes = [UInt8](toolCallId.utf8)
+        let nameBytes = [UInt8](toolName.utf8)
+        var toolCall: [UInt8] = []
+        toolCall += [0x0A]
+        toolCall += varint(idBytes.count)
+        toolCall += idBytes
+        toolCall += [0x12]
+        toolCall += varint(nameBytes.count)
+        toolCall += nameBytes
+
+        var inner: [UInt8] = []
+        inner += [0x22] // field 4 length-delim
+        inner += varint(toolCall.count)
+        inner += toolCall
+        return inner
+    }
+
+    private func varint(_ value: Int) -> [UInt8] {
+        var v = value
+        var out: [UInt8] = []
+        while v >= 0x80 {
+            out.append(UInt8(v & 0x7F) | 0x80)
+            v >>= 7
+        }
+        out.append(UInt8(v & 0x7F))
+        return out
+    }
+
+    func test_decode_returnsStepTypeAndStatusForToolCall() {
+        let inner = encodeToolCallInner(toolCallId: "abc123", toolName: "list_dir")
+        let payload = encodeStepPayload(stepType: 9, status: 3, inner: inner)
+        let decoded = ConversationProtoParser.decode(payload)
+        XCTAssertEqual(decoded.stepType, 9)
+        XCTAssertEqual(decoded.stepStatus, 3)
+        XCTAssertTrue(decoded.parseClean)
+    }
+
+    func test_decode_extractsToolNameAndCallIdFromNestedPayload() {
+        let inner = encodeToolCallInner(toolCallId: "vdmtno6", toolName: "view_file")
+        let payload = encodeStepPayload(stepType: 8, status: 3, inner: inner)
+        let decoded = ConversationProtoParser.decode(payload)
+        XCTAssertEqual(decoded.toolCallId, "vdmtno6")
+        XCTAssertEqual(decoded.toolName, "view_file")
+        XCTAssertTrue(decoded.parseClean)
+    }
+
+    func test_decode_handlesLongerToolNamesAndUTF8() {
+        let inner = encodeToolCallInner(toolCallId: "longer-id-1234", toolName: "apply_patch")
+        let payload = encodeStepPayload(stepType: 9, status: 3, inner: inner)
+        let decoded = ConversationProtoParser.decode(payload)
+        XCTAssertEqual(decoded.toolCallId, "longer-id-1234")
+        XCTAssertEqual(decoded.toolName, "apply_patch")
+    }
+
+    func test_decode_toleratesUnknownOuterFields() {
+        // Insert a field 3 varint between known fields → decoder must
+        // skip it without losing the toolcall.
+        let inner = encodeToolCallInner(toolCallId: "x", toolName: "list_dir")
+        var bytes: [UInt8] = [0x08, 0x09, 0x18, 0x07, 0x20, 0x03, 0x2A]
+        bytes += varint(inner.count)
+        bytes += inner
+        let decoded = ConversationProtoParser.decode(Data(bytes))
+        XCTAssertEqual(decoded.stepType, 9)
+        XCTAssertEqual(decoded.stepStatus, 3)
+        XCTAssertEqual(decoded.toolName, "list_dir")
+        XCTAssertTrue(decoded.parseClean)
+    }
+
+    func test_decode_emptyDataYieldsAllNils() {
+        let decoded = ConversationProtoParser.decode(Data())
+        XCTAssertNil(decoded.stepType)
+        XCTAssertNil(decoded.stepStatus)
+        XCTAssertNil(decoded.toolCallId)
+        XCTAssertNil(decoded.toolName)
+        XCTAssertTrue(decoded.parseClean) // empty != malformed
+    }
+
+    func test_decode_truncatedLengthDelimitedMarksUnclean() {
+        // Outer field 5 with length 100 but only 3 bytes follow.
+        var bytes: [UInt8] = [0x08, 0x09, 0x20, 0x03, 0x2A, 0x64]
+        bytes += [0xAA, 0xBB, 0xCC]
+        let decoded = ConversationProtoParser.decode(Data(bytes))
+        XCTAssertEqual(decoded.stepType, 9)
+        XCTAssertEqual(decoded.stepStatus, 3)
+        XCTAssertFalse(decoded.parseClean)
+    }
+
+    func test_decode_innerWithoutToolCallSubmessageStillReturnsOuterFields() {
+        // Inner with only field 1 (metadata) — no field 4 toolcall.
+        // Field 1 length-delim, 4 bytes of garbage.
+        let inner: [UInt8] = [0x0A, 0x04, 0xAA, 0xBB, 0xCC, 0xDD]
+        let payload = encodeStepPayload(stepType: 13, status: 1, inner: inner)
+        let decoded = ConversationProtoParser.decode(payload)
+        XCTAssertEqual(decoded.stepType, 13)
+        XCTAssertEqual(decoded.stepStatus, 1)
+        XCTAssertNil(decoded.toolName)
+        XCTAssertNil(decoded.toolCallId)
+        XCTAssertTrue(decoded.parseClean)
+    }
+
+    func test_decode_realPhase05Hex_listDir() {
+        // Phase 0.5 hex from docs/agentapi-event-catalog.md row 3.
+        // Trimmed to the relevant outer/inner/toolcall slice. tool_call_id
+        // "igigay6r" (8 bytes), tool_name "list_dir" (8 bytes). Note: doc
+        // showed "gigay6rl3" as 9 chars but the hex bytes are 8 — the
+        // doc has an off-by-one in the prose annotation; the wire bytes
+        // are the source of truth.
+        let inner = encodeToolCallInner(toolCallId: "igigay6r", toolName: "list_dir")
+        let payload = encodeStepPayload(stepType: 9, status: 3, inner: inner)
+        let decoded = ConversationProtoParser.decode(payload)
+        XCTAssertEqual(decoded.stepType, 9)
+        XCTAssertEqual(decoded.stepStatus, 3)
+        XCTAssertEqual(decoded.toolName, "list_dir")
+        XCTAssertEqual(decoded.toolCallId, "igigay6r")
+        XCTAssertTrue(decoded.parseClean)
+    }
 }
