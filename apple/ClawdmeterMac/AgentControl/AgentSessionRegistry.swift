@@ -64,7 +64,14 @@ public final class AgentSessionRegistry: ObservableObject {
         mode: SessionMode = .local,
         parentSessionId: UUID? = nil,
         effort: ReasoningEffort? = nil,
-        abPairSessionId: UUID? = nil
+        abPairSessionId: UUID? = nil,
+        // v0.8.0 agy-migration — Gemini sessions spawned through
+        // Antigravity 2's agentapi don't have a tmux pane (tmuxWindowId
+        // + tmuxPaneId both nil); they carry the transport tag +
+        // conversation UUID instead so SessionChatStore can attach to
+        // the right SQLite DB.
+        geminiBackend: GeminiBackend? = nil,
+        antigravityConversationId: UUID? = nil
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -87,7 +94,9 @@ public final class AgentSessionRegistry: ObservableObject {
             mode: mode,
             parentSessionId: parentSessionId,
             effort: effort,
-            abPairSessionId: abPairSessionId
+            abPairSessionId: abPairSessionId,
+            geminiBackend: geminiBackend,
+            antigravityConversationId: antigravityConversationId
         )
         sessions.append(session)
         save()
@@ -326,7 +335,12 @@ public final class AgentSessionRegistry: ObservableObject {
             effort: Self.resolve(effort, fallback: s.effort),
             abPairSessionId: Self.resolve(abPairSessionId, fallback: s.abPairSessionId),
             abPairDecidedAt: Self.resolve(abPairDecidedAt, fallback: s.abPairDecidedAt),
-            customName: Self.resolve(customName, fallback: s.customName)
+            customName: Self.resolve(customName, fallback: s.customName),
+            // v0.8.0 — geminiBackend + antigravityConversationId only get
+            // set at create-time (via `create(...)` overload). Mutations
+            // intentionally preserve them across status/model/effort updates.
+            geminiBackend: s.geminiBackend,
+            antigravityConversationId: s.antigravityConversationId
         )
     }
 
