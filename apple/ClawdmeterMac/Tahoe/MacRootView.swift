@@ -96,7 +96,8 @@ struct MacRootView: View {
                                 newSessionPreselectedRepo = repoKey
                                 newSessionPresented = true
                             },
-                            loopbackClient: runtime.loopbackClient
+                            loopbackClient: runtime.loopbackClient,
+                            runtime: runtime
                         )
                     case .settings:
                         MacSettingsView(
