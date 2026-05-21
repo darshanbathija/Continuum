@@ -74,6 +74,17 @@ public final class TahoeThemeStore {
     private static func persist<V>(_ kp: KeyPath<TahoeThemeStore, V>, _ value: Any) {
         UserDefaults.standard.set(value, forKey: key(kp))
     }
+
+    /// Reset every persisted theme property back to its JSX default. Used
+    /// by the Settings header "Reset to defaults" ghost button.
+    public func resetToDefaults() {
+        appearance = .dark
+        surface = .translucent
+        accent = .halo
+        wallpaper = .graphite
+        glassIntensity = 95
+        providerFocus = .claude
+    }
 }
 
 /// A snapshot of derived tokens computed from `TahoeThemeStore`. Views read

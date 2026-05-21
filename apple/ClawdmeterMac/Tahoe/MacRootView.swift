@@ -34,6 +34,13 @@ struct MacRootView: View {
     @State private var chatMode: MacChatView.Mode = .broadcast
     @State private var chatSoloProvider: TahoeProvider = .claude
 
+    /// New-session sheet state — `nil` means closed; an empty string means
+    /// "no repo preselected"; a non-empty value pre-selects the repo on
+    /// open. Hosted at the root so both MacCodeView (per-repo `+` and
+    /// sidebar `folderPlus`) and the future Chat-tab sidebar can present it.
+    @State private var newSessionPreselectedRepo: String? = nil
+    @State private var newSessionPresented: Bool = false
+
     init(runtime: AppRuntime, initialTab: Tab = .chat) {
         self.runtime = runtime
         self.sessionsModel = runtime.sessionsModel
@@ -75,9 +82,28 @@ struct MacRootView: View {
                 Group {
                     switch tab {
                     case .chat:     MacChatView(mode: $chatMode, soloProvider: $chatSoloProvider)
-                    case .usage:    MacUsageView(data: live)
-                    case .code:     MacCodeView(data: code)
-                    case .settings: MacSettingsView(theme: theme)
+                    case .usage:
+                        MacUsageView(
+                            data: live,
+                            claudeModel: claudeModel,
+                            codexModel: codexModel,
+                            geminiModel: geminiModel
+                        )
+                    case .code:
+                        MacCodeView(
+                            data: code,
+                            onNewSession: { repoKey in
+                                newSessionPreselectedRepo = repoKey
+                                newSessionPresented = true
+                            }
+                        )
+                    case .settings:
+                        MacSettingsView(
+                            theme: theme,
+                            claudeModel: claudeModel,
+                            codexModel: codexModel,
+                            geminiModel: geminiModel
+                        )
                     }
                 }
                 .padding([.horizontal, .bottom], 10)
@@ -88,6 +114,9 @@ struct MacRootView: View {
         .frame(minWidth: 1280, minHeight: 820)
         .tahoeTheme(theme)
         .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 0.94, green: 0.97, blue: 0.98))
+        .sheet(isPresented: $newSessionPresented) {
+            NewSessionMacSheet(model: sessionsModel, preselectedRepoKey: newSessionPreselectedRepo)
+        }
     }
 }
 

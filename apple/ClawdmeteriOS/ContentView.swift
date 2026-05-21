@@ -5,11 +5,14 @@ import ClawdmeterShared
 /// Analytics tab's header (`LiveGaugesHeader`); Sessions renamed to Code;
 /// Chat tab added as the first tab (Phase 5 of v0.8). Order: Chat /
 /// Analytics / Code, matching the plan.
+///
+/// v0.12 button-wiring: settings sheet hoisted into `IOSRootView` so the
+/// Live-tab gear button can present it directly. ContentView only owns
+/// the runtime models + notification scheduling now.
 struct ContentView: View {
     @ObservedObject var model: UsageModel
     @StateObject private var agentClient = AgentControlClient()
     @StateObject private var notifManager: iOSNotificationManager
-    @State private var showingSettings: Bool = false
 
     init(model: UsageModel) {
         self.model = model
@@ -28,9 +31,6 @@ struct ContentView: View {
         // per-provider quota via the `tahoeLive` adapter
         // (see IOSTahoeAdapter.swift).
         IOSRootView(usageModel: model, agentClient: agentClient)
-            .sheet(isPresented: $showingSettings) {
-                SettingsView(model: model)
-            }
             .task {
                 await notifManager.requestAuthorizationIfNeeded()
                 notifManager.scheduleBackgroundRefresh()

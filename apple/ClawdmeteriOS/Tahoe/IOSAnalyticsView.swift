@@ -3,36 +3,38 @@ import ClawdmeterShared
 
 /// iOS Analytics tab. Period segmented + total card + mini chart + by-repo.
 /// Ports `ios-other.jsx::IOSAnalytics`.
+///
+/// v0.12 button-wiring pass: the view now consumes the real
+/// `UsageHistorySnapshot` from `AgentControlClient.fetchAnalytics()`
+/// instead of the JSX demo fixture. Period segmented control switches
+/// the displayed window (today / 7d / 30d / all). The "sliders" header
+/// button now triggers a manual refresh (no filter sheet exists yet —
+/// the gesture replaces a silent no-op).
 public struct IOSAnalyticsView: View {
     @Environment(\.tahoe) private var t
-    @State private var window: String = "7d"
+    @ObservedObject var agentClient: AgentControlClient
+    @State private var window: UsageHistorySnapshot.Window = .past7d
+    @State private var snapshot: UsageHistorySnapshot?
+    @State private var refreshing: Bool = false
 
-    public init() {}
-
-    private var data: TahoeDemo.RangeData {
-        switch window {
-        case "1d":  return TahoeDemo.ranges["24h"]!
-        case "7d":  return TahoeDemo.ranges["7d"]!
-        case "30d": return TahoeDemo.ranges["30d"]!
-        case "all": return TahoeDemo.ranges["all"]!
-        default:    return TahoeDemo.ranges["7d"]!
-        }
+    public init(agentClient: AgentControlClient) {
+        self.agentClient = agentClient
     }
 
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
                 IOSLargeTitle(title: "Analytics") {
-                    IOSRoundIconBtn("sliders")
+                    IOSRoundIconBtn("sliders", action: { Task { await refresh() } })
                 }
 
                 // Period segmented
                 TahoeGlass(radius: 12, tone: .chip) {
                     HStack(spacing: 0) {
-                        ForEach([("1d","Today"),("7d","7d"),("30d","30d"),("all","All")], id: \.0) { (k, label) in
-                            let active = k == window
-                            Button { window = k } label: {
-                                Text(label)
+                        ForEach(UsageHistorySnapshot.Window.allCases, id: \.self) { w in
+                            let active = w == window
+                            Button { window = w } label: {
+                                Text(label(for: w))
                                     .font(TahoeFont.body(13, weight: .semibold))
                                     .foregroundStyle(active ? t.fg : t.fg2)
                                     .frame(maxWidth: .infinity, minHeight: 38)
@@ -51,89 +53,208 @@ public struct IOSAnalyticsView: View {
                 }
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 14)
 
-                // Total card
-                TahoeGlass(radius: 22, tone: .raised) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("TOTAL · PAST 7D")
-                            .font(TahoeFont.body(11, weight: .bold))
-                            .tracking(0.4)
-                            .foregroundStyle(t.fg3)
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Text(data.total.all)
-                                .font(TahoeFont.rounded(42, weight: .heavy))
-                                .monospacedDigit()
-                                .tracking(-1)
-                                .foregroundStyle(t.fg)
-                            Text("\(data.total.delta) vs last week")
-                                .font(TahoeFont.body(13, weight: .semibold))
-                                .foregroundStyle(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
-                        }
-                        .padding(.top, 6)
+                if let snapshot {
+                    let totalUSD = totalCost(in: snapshot, window: window)
+                    let claudeUSD = providerCost(snapshot, .claude, window)
+                    let codexUSD = providerCost(snapshot, .codex, window)
+                    let geminiUSD = providerCost(snapshot, .gemini, window)
 
-                        MiniSpendChart()
-                            .padding(.top, 16)
-
-                        HStack(spacing: 8) {
-                            providerStat(.claude, data.total.c)
-                            providerStat(.codex, data.total.x)
-                            providerStat(.gemini, data.total.g)
-                        }
-                        .padding(.top, 16)
-                    }
-                    .padding(18)
-                }
-                .padding(.horizontal, 16)
-
-                // By repo
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Text("BY REPO")
-                            .font(TahoeFont.body(11, weight: .bold))
-                            .tracking(0.5)
-                            .foregroundStyle(t.fg3)
-                        Spacer()
-                        Text("past 7d").font(TahoeFont.body(11)).foregroundStyle(t.fg3)
-                    }
-                    .padding(.horizontal, 6).padding(.top, 14).padding(.bottom, 8)
-
+                    // Total card
                     TahoeGlass(radius: 22, tone: .raised) {
-                        VStack(spacing: 0) {
-                            let maxTotal = data.repos.map { $0.c + $0.x + $0.g }.max() ?? 1
-                            ForEach(Array(data.repos.enumerated()), id: \.offset) { _, r in
-                                let total = r.c + r.x + r.g
-                                let width = total / maxTotal
-                                VStack(alignment: .leading, spacing: 6) {
-                                    HStack {
-                                        HStack(spacing: 6) {
-                                            TahoeIcon("folder", size: 12).foregroundStyle(t.fg3)
-                                            Text(r.name).font(TahoeFont.body(13)).foregroundStyle(t.fg)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("TOTAL · \(window.label.uppercased())")
+                                .font(TahoeFont.body(11, weight: .bold))
+                                .tracking(0.4)
+                                .foregroundStyle(t.fg3)
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text(formatUSD(totalUSD))
+                                    .font(TahoeFont.rounded(42, weight: .heavy))
+                                    .monospacedDigit()
+                                    .tracking(-1)
+                                    .foregroundStyle(t.fg)
+                                Text("\(snapshot.sessionCount) session\(snapshot.sessionCount == 1 ? "" : "s")")
+                                    .font(TahoeFont.body(13, weight: .semibold))
+                                    .foregroundStyle(t.fg3)
+                            }
+                            .padding(.top, 6)
+
+                            MiniSpendChart(byProvider: snapshot.byProvider, window: window)
+                                .padding(.top, 16)
+
+                            HStack(spacing: 8) {
+                                providerStat(.claude, formatUSD(claudeUSD))
+                                providerStat(.codex,  formatUSD(codexUSD))
+                                providerStat(.gemini, formatUSD(geminiUSD))
+                            }
+                            .padding(.top, 16)
+                        }
+                        .padding(18)
+                    }
+                    .padding(.horizontal, 16)
+
+                    // By repo — merge top-8 byRepo lists across providers.
+                    let merged = mergedByRepo(snapshot, window: window)
+                    if !merged.isEmpty {
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack {
+                                Text("BY REPO")
+                                    .font(TahoeFont.body(11, weight: .bold))
+                                    .tracking(0.5)
+                                    .foregroundStyle(t.fg3)
+                                Spacer()
+                                Text(window.label.lowercased()).font(TahoeFont.body(11)).foregroundStyle(t.fg3)
+                            }
+                            .padding(.horizontal, 6).padding(.top, 14).padding(.bottom, 8)
+
+                            TahoeGlass(radius: 22, tone: .raised) {
+                                VStack(spacing: 0) {
+                                    let maxTotal = merged.map { $0.total }.max() ?? 1
+                                    ForEach(Array(merged.enumerated()), id: \.offset) { _, r in
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            HStack {
+                                                HStack(spacing: 6) {
+                                                    TahoeIcon("folder", size: 12).foregroundStyle(t.fg3)
+                                                    Text(r.label).font(TahoeFont.body(13)).foregroundStyle(t.fg)
+                                                        .lineLimit(1)
+                                                }
+                                                Spacer()
+                                                Text(formatUSD(r.total))
+                                                    .font(TahoeFont.mono(12))
+                                                    .monospacedDigit()
+                                                    .foregroundStyle(t.fg2)
+                                            }
+                                            GeometryReader { geo in
+                                                let width = r.total / maxTotal
+                                                HStack(spacing: 0) {
+                                                    Rectangle().fill(grad(.claude)).frame(width: geo.size.width * width * (r.total == 0 ? 0 : (r.claude / r.total)))
+                                                    Rectangle().fill(grad(.codex)).frame(width: geo.size.width * width * (r.total == 0 ? 0 : (r.codex / r.total)))
+                                                    Rectangle().fill(grad(.gemini)).frame(width: geo.size.width * width * (r.total == 0 ? 0 : (r.gemini / r.total)))
+                                                    Spacer()
+                                                }
+                                            }
+                                            .frame(height: 8)
+                                            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                                         }
-                                        Spacer()
-                                        Text(String(format: "$%.2f", total))
-                                            .font(TahoeFont.mono(12))
-                                            .monospacedDigit()
-                                            .foregroundStyle(t.fg2)
+                                        .padding(.horizontal, 4).padding(.vertical, 10)
                                     }
-                                    GeometryReader { geo in
-                                        HStack(spacing: 0) {
-                                            Rectangle().fill(grad(.claude)).frame(width: geo.size.width * width * (r.c / total))
-                                            Rectangle().fill(grad(.codex)).frame(width: geo.size.width * width * (r.x / total))
-                                            Rectangle().fill(grad(.gemini)).frame(width: geo.size.width * width * (r.g / total))
-                                            Spacer()
-                                        }
-                                    }
-                                    .frame(height: 8)
-                                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                                 }
-                                .padding(.horizontal, 4).padding(.vertical, 10)
+                                .padding(14)
                             }
                         }
-                        .padding(14)
+                        .padding(.horizontal, 16).padding(.bottom, 30)
                     }
+                } else {
+                    // Loading / empty state — `fetchAnalytics()` hasn't
+                    // returned yet (or returned nil).
+                    VStack(spacing: 8) {
+                        if refreshing {
+                            ProgressView()
+                            Text("Loading analytics…")
+                                .font(TahoeFont.body(13))
+                                .foregroundStyle(t.fg3)
+                        } else {
+                            TahoeIcon("diff", size: 22).foregroundStyle(t.fg4)
+                            Text("No analytics yet")
+                                .font(TahoeFont.body(14, weight: .semibold))
+                                .foregroundStyle(t.fg2)
+                            Text("Run a session to see spend breakdowns here.")
+                                .font(TahoeFont.body(12))
+                                .foregroundStyle(t.fg3)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 60)
                 }
-                .padding(.horizontal, 16).padding(.bottom, 30)
             }
         }
+        .refreshable { await refresh() }
+        .task { await refresh() }
+    }
+
+    // MARK: - Data plumbing
+
+    private func label(for w: UsageHistorySnapshot.Window) -> String {
+        switch w {
+        case .today: return "Today"
+        case .past7d: return "7d"
+        case .past30d: return "30d"
+        case .allTime: return "All"
+        }
+    }
+
+    @MainActor
+    private func refresh() async {
+        refreshing = true
+        defer { refreshing = false }
+        snapshot = await agentClient.fetchAnalytics()
+    }
+
+    private func providerCost(_ s: UsageHistorySnapshot, _ p: TahoeProvider, _ w: UsageHistorySnapshot.Window) -> Double {
+        let prov = mapProvider(p)
+        let totals = s.totals(for: prov).window(w).totals
+        return doubleFrom(totals.costUSD)
+    }
+
+    private func totalCost(in s: UsageHistorySnapshot, window: UsageHistorySnapshot.Window) -> Double {
+        providerCost(s, .claude, window) + providerCost(s, .codex, window) + providerCost(s, .gemini, window)
+    }
+
+    private func mapProvider(_ p: TahoeProvider) -> UsageRecord.Provider {
+        switch p {
+        case .claude: return .claude
+        case .codex:  return .codex
+        case .gemini: return .gemini
+        }
+    }
+
+    private struct MergedRepoRow {
+        let label: String
+        let claude: Double
+        let codex: Double
+        let gemini: Double
+        var total: Double { claude + codex + gemini }
+    }
+
+    private func mergedByRepo(_ s: UsageHistorySnapshot, window: UsageHistorySnapshot.Window) -> [MergedRepoRow] {
+        var bag: [String: (c: Double, x: Double, g: Double)] = [:]
+        for prov in [UsageRecord.Provider.claude, .codex, .gemini] {
+            let rows = s.totals(for: prov).window(window).byRepo
+            for row in rows {
+                let key = row.repo  // RepoKey is a typealias for String
+                let cost = doubleFrom(row.totals.costUSD)
+                var current = bag[key] ?? (0, 0, 0)
+                switch prov {
+                case .claude: current.c += cost
+                case .codex:  current.x += cost
+                case .gemini: current.g += cost
+                }
+                bag[key] = current
+            }
+        }
+        return bag.map { (key, v) in
+            MergedRepoRow(label: displayName(forRepo: key), claude: v.c, codex: v.x, gemini: v.g)
+        }
+        .filter { $0.total > 0 }
+        .sorted { $0.total > $1.total }
+        .prefix(8)
+        .map { $0 }
+    }
+
+    private func displayName(forRepo key: String) -> String {
+        if key == "__rest__" { return "Other repos" }
+        if key == "(unknown)" { return "(unknown)" }
+        return (key as NSString).lastPathComponent
+    }
+
+    private func doubleFrom(_ d: Decimal) -> Double {
+        NSDecimalNumber(decimal: d).doubleValue
+    }
+
+    private func formatUSD(_ v: Double) -> String {
+        if v < 0.01 { return "$0.00" }
+        if v >= 100 { return String(format: "$%.0f", v) }
+        return String(format: "$%.2f", v)
     }
 
     private func grad(_ p: TahoeProvider) -> LinearGradient {
@@ -166,41 +287,75 @@ public struct IOSAnalyticsView: View {
     }
 }
 
+/// Mini per-day stacked bar chart. Reads `byDay` from each provider's
+/// `ProviderTotals` and renders the trailing 7 days for `past7d`, 30 days
+/// for `past30d`/`allTime`, or just today for `today` (degenerate single
+/// bar).
 private struct MiniSpendChart: View {
     @Environment(\.tahoe) private var t
-    private struct D { let d: String; let c: Double; let x: Double; let g: Double }
-    private let data: [D] = [
-        D(d: "Mon", c: 3.2, x: 1.4, g: 0.4),
-        D(d: "Tue", c: 4.1, x: 2.2, g: 0.5),
-        D(d: "Wed", c: 5.6, x: 1.8, g: 0.6),
-        D(d: "Thu", c: 2.8, x: 0.9, g: 0.3),
-        D(d: "Fri", c: 4.4, x: 2.6, g: 0.7),
-        D(d: "Sat", c: 1.6, x: 0.8, g: 0.2),
-        D(d: "Sun", c: 2.5, x: 2.2, g: 0.5),
-    ]
+    var byProvider: [UsageRecord.Provider: ProviderTotals]
+    var window: UsageHistorySnapshot.Window
+
+    private struct DayBar { let date: Date; let c: Double; let x: Double; let g: Double; var total: Double { c + x + g } }
+
+    private var bars: [DayBar] {
+        let now = Calendar.current.startOfDay(for: Date())
+        let days: Int = {
+            switch window {
+            case .today: return 1
+            case .past7d: return 7
+            case .past30d, .allTime: return 30
+            }
+        }()
+        return (0..<days).reversed().map { offset in
+            let date = Calendar.current.date(byAdding: .day, value: -offset, to: now) ?? now
+            return DayBar(
+                date: date,
+                c: doubleFrom(byProvider[.claude]?.byDay[date]?.costUSD ?? 0),
+                x: doubleFrom(byProvider[.codex]?.byDay[date]?.costUSD ?? 0),
+                g: doubleFrom(byProvider[.gemini]?.byDay[date]?.costUSD ?? 0)
+            )
+        }
+    }
 
     var body: some View {
-        let maxV: Double = 9
-        HStack(alignment: .bottom, spacing: 6) {
-            ForEach(Array(data.enumerated()), id: \.offset) { _, d in
-                let total = d.c + d.x + d.g
-                let h = total / maxV * 70
+        let bars = self.bars
+        let maxV: Double = max(bars.map { $0.total }.max() ?? 0, 0.01)
+        HStack(alignment: .bottom, spacing: bars.count > 14 ? 2 : 6) {
+            ForEach(Array(bars.enumerated()), id: \.offset) { _, d in
+                let h = d.total / maxV * 70
                 VStack(spacing: 4) {
-                    VStack(spacing: 0) {
-                        Rectangle().fill(grad(.gemini)).frame(height: d.g / total * h)
-                        Rectangle().fill(grad(.codex)).frame(height: d.x / total * h)
-                        Rectangle().fill(grad(.claude)).frame(height: d.c / total * h)
+                    if d.total == 0 {
+                        Rectangle().fill(t.hair2).frame(height: 2)
+                    } else {
+                        VStack(spacing: 0) {
+                            Rectangle().fill(grad(.gemini)).frame(height: max(0, d.g / d.total * h))
+                            Rectangle().fill(grad(.codex)).frame(height: max(0, d.x / d.total * h))
+                            Rectangle().fill(grad(.claude)).frame(height: max(0, d.c / d.total * h))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                     }
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    Text(String(d.d.prefix(1)))
-                        .font(TahoeFont.body(9))
-                        .foregroundStyle(t.fg4)
+                    if bars.count <= 14 {
+                        Text(dayLabel(for: d.date))
+                            .font(TahoeFont.body(9))
+                            .foregroundStyle(t.fg4)
+                    }
                 }
                 .frame(maxWidth: .infinity)
             }
         }
         .frame(height: 80)
+    }
+
+    private func dayLabel(for date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "EEE"
+        return String(fmt.string(from: date).prefix(1))
+    }
+
+    private func doubleFrom(_ d: Decimal) -> Double {
+        NSDecimalNumber(decimal: d).doubleValue
     }
 
     private func grad(_ p: TahoeProvider) -> LinearGradient {

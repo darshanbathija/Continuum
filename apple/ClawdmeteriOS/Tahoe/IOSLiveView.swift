@@ -3,15 +3,34 @@ import ClawdmeterShared
 
 /// iOS Live tab — per-provider segmented + hero quota bar + Weekly card +
 /// Auto-revive card + refresh footer. Ports `ios-live.jsx::IOSLive`.
+///
+/// v0.12 button-wiring pass: the gear icon now presents the (existing)
+/// `SettingsView` sheet, the footer refresh button calls
+/// `agentClient.refreshAll()`, and the "Updated Xs ago" footer text reads
+/// from the real `lastSync` snapshot (was hardcoded "14s ago").
 public struct IOSLiveView: View {
     @Environment(\.tahoe) private var t
     @State private var provider: TahoeProvider = .claude
     @State private var autoRevive: [TahoeProvider: Bool] = [
         .claude: true, .codex: true, .gemini: true
     ]
+    @State private var settingsPresented: Bool = false
+    @State private var refreshing: Bool = false
     public var data: TahoeLiveBindings
+    /// Optional callbacks injected by IOSRootView. Nil renders are valid
+    /// for SwiftUI Previews; production always injects.
+    var onRefresh: (() async -> Void)?
+    var onOpenSettings: (() -> Void)?
 
-    public init(data: TahoeLiveBindings = .demo) { self.data = data }
+    public init(
+        data: TahoeLiveBindings = .demo,
+        onRefresh: (() async -> Void)? = nil,
+        onOpenSettings: (() -> Void)? = nil
+    ) {
+        self.data = data
+        self.onRefresh = onRefresh
+        self.onOpenSettings = onOpenSettings
+    }
 
     public var body: some View {
         ScrollView {
@@ -29,7 +48,9 @@ public struct IOSLiveView: View {
                             .foregroundStyle(t.fg)
                     }
                     Spacer()
-                    IOSRoundIconBtn("gear")
+                    IOSRoundIconBtn("gear", action: {
+                        if let onOpenSettings { onOpenSettings() } else { settingsPresented = true }
+                    })
                 }
                 .padding(.horizontal, 20).padding(.top, 4)
 
@@ -120,29 +141,54 @@ public struct IOSLiveView: View {
                 }
                 .padding(.horizontal, 16).padding(.top, 12)
 
-                // Footer
+                // Footer — refresh button now calls `agentClient.refreshAll()`.
                 HStack(spacing: 8) {
                     TahoeIcon("qr", size: 11).foregroundStyle(t.fg4)
-                    Text("Updated 14s ago · synced from Mac")
+                    Text(footerText)
                         .font(TahoeFont.body(11.5))
                         .foregroundStyle(t.fg3)
                     Spacer()
-                    Button(action: {}) {
-                        TahoeIcon("refresh", size: 15).foregroundStyle(t.fg2)
-                            .frame(width: 38, height: 38)
-                            .background {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.06) : Color(.sRGB, white: 15.0/255, opacity: 0.05))
+                    Button(action: { Task { await refresh() } }) {
+                        Group {
+                            if refreshing {
+                                ProgressView().controlSize(.small).tint(t.fg2)
+                            } else {
+                                TahoeIcon("refresh", size: 15).foregroundStyle(t.fg2)
                             }
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(t.hairline, lineWidth: 0.5)
-                            }
+                        }
+                        .frame(width: 38, height: 38)
+                        .background {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.06) : Color(.sRGB, white: 15.0/255, opacity: 0.05))
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(t.hairline, lineWidth: 0.5)
+                        }
                     }
                     .buttonStyle(.plain)
+                    .disabled(refreshing || onRefresh == nil)
                 }
                 .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 30)
             }
         }
+        // Pull-to-refresh — same wire as the footer button.
+        .refreshable {
+            await refresh()
+        }
+    }
+
+    private var footerText: String {
+        if onRefresh == nil { return "Preview · demo data" }
+        if refreshing { return "Refreshing…" }
+        return "Tap to refresh · synced from Mac"
+    }
+
+    @MainActor
+    private func refresh() async {
+        guard let onRefresh, !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
+        await onRefresh()
     }
 }
 

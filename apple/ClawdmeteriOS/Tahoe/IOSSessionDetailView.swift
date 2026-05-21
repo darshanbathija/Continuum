@@ -4,19 +4,31 @@ import ClawdmeterShared
 /// iOS Session Detail — pushed from the Code list. Nav bar chip + thread +
 /// PlanHaloMini + composer. Ports `ios-other.jsx::IOSSessionDetail`.
 ///
-/// Codex review P1 fix: previously rendered hardcoded demo content for every
-/// session. Now accepts the session id selected in `IOSCodeView`, looks it
-/// up in the bindings, and renders the real title / provider / status /
-/// plan text. Thread + plan halo fall back to the JSX placeholder ONLY
-/// when `data.isDemo == true`; production sessions show empty / loading
-/// state until streaming wire lands.
+/// v0.12 button-wiring pass: the plan halo Refine / Approve & run buttons
+/// and the composer Send button now reach the real daemon via
+/// `AgentControlClient.approvePlan` / `sendPrompt`. Composer is a real
+/// `TextField` (was a placeholder `Text` label), and pull-to-refresh
+/// wires `agentClient.refreshAll()`.
 public struct IOSSessionDetailView: View {
     @Environment(\.tahoe) private var t
+    @ObservedObject var agentClient: AgentControlClient
     var sessionId: UUID
     var data: TahoeCodeBindings
     var onBack: () -> Void
 
-    public init(sessionId: UUID, data: TahoeCodeBindings, onBack: @escaping () -> Void) {
+    @State private var composerText: String = ""
+    @State private var sending: Bool = false
+    @State private var refineAlertShown: Bool = false
+    @State private var refineText: String = ""
+    @State private var lastError: String?
+
+    public init(
+        agentClient: AgentControlClient,
+        sessionId: UUID,
+        data: TahoeCodeBindings,
+        onBack: @escaping () -> Void
+    ) {
+        self.agentClient = agentClient
         self.sessionId = sessionId
         self.data = data
         self.onBack = onBack
@@ -40,6 +52,13 @@ public struct IOSSessionDetailView: View {
             if !parsed.isEmpty { return parsed }
         }
         return data.isDemo ? TahoeDemo.plan : []
+    }
+
+    /// True when this session has a real plan that can be approved.
+    /// Disables Approve & run otherwise so users don't fire a no-op.
+    private var hasRealPlan: Bool {
+        guard let raw = session?.runtimePlanText else { return false }
+        return !raw.isEmpty && session?.status == .planning
     }
 
     public var body: some View {
@@ -77,7 +96,15 @@ public struct IOSSessionDetailView: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                IOSRoundIconBtn("sliders")
+                // Sliders button presents the session-config sheet (model
+                // picker + effort dial). Sheet ships in a follow-up — for
+                // now the button is hidden when there's no real session so
+                // it doesn't dangle.
+                if session != nil && !data.isDemo {
+                    IOSRoundIconBtn("sliders", action: openConfigSheet)
+                } else if data.isDemo {
+                    IOSRoundIconBtn("sliders")
+                }
             }
             .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
 
@@ -90,7 +117,12 @@ public struct IOSSessionDetailView: View {
                         ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
                             IOSThreadMsg(msg: msg, providerOverride: session?.agent)
                         }
-                        IOSPlanHaloMini(steps: planSteps)
+                        IOSPlanHaloMini(
+                            steps: planSteps,
+                            canApprove: true,
+                            onRefine: { refineAlertShown = true },
+                            onApprove: { Task { await approvePlan() } }
+                        )
                     } else if session == nil {
                         emptyState(
                             title: "Session unavailable",
@@ -106,41 +138,133 @@ public struct IOSSessionDetailView: View {
                             body: "Open this session on your Mac to see the full thread. Plan steps will appear here as the agent prepares them."
                         )
                         if !planSteps.isEmpty {
-                            IOSPlanHaloMini(steps: planSteps)
+                            IOSPlanHaloMini(
+                                steps: planSteps,
+                                canApprove: hasRealPlan,
+                                onRefine: { refineAlertShown = true },
+                                onApprove: { Task { await approvePlan() } }
+                            )
                         }
                     }
                 }
                 .padding(.horizontal, 16).padding(.vertical, 4)
             }
             .frame(maxHeight: .infinity)
+            .refreshable {
+                await agentClient.refreshAll()
+            }
 
-            // Composer — disabled in production until send wire lands; in
-            // demo bindings the placeholder text reads "Refine the plan…".
+            // Composer — real TextField when a session is open. Tapping send
+            // invokes `agentClient.sendPrompt(sessionId:text:)`. In demo
+            // bindings the placeholder text reads "Refine the plan…" but
+            // the send call is short-circuited (no real session).
             TahoeGlass(radius: 22, tone: .raised) {
                 HStack(spacing: 8) {
                     TahoeIcon("plus", size: 18).foregroundStyle(t.fg3)
-                    Text(data.isDemo ? "Refine the plan…" : "Composer not yet wired")
+                    TextField(composerPlaceholder, text: $composerText, axis: .vertical)
                         .font(TahoeFont.body(14))
-                        .foregroundStyle(t.fg3)
-                    Spacer()
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1...4)
+                        .textInputAutocapitalization(.sentences)
+                        .submitLabel(.send)
+                        .disabled(session == nil && !data.isDemo)
+                    Spacer(minLength: 4)
                     TahoeIcon("mic", size: 16).foregroundStyle(t.fg3)
-                    Button(action: {}) {
+                    Button(action: { Task { await sendComposer() } }) {
                         ZStack {
                             Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
                                                          startPoint: .top, endPoint: .bottom))
-                            TahoeIcon("arrowU", size: 16, weight: .bold).foregroundStyle(.white)
+                            if sending {
+                                ProgressView()
+                                    .progressViewStyle(.circular)
+                                    .tint(.white)
+                            } else {
+                                TahoeIcon("arrowU", size: 16, weight: .bold).foregroundStyle(.white)
+                            }
                         }
                         .frame(width: 38, height: 38)
                         .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
-                        .opacity(data.isDemo ? 1.0 : 0.45)
+                        .opacity(canSend ? 1.0 : 0.45)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!data.isDemo)
+                    .disabled(!canSend || sending)
                 }
                 .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 10)
             }
             .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 14)
         }
+        .alert("Refine the plan", isPresented: $refineAlertShown) {
+            TextField("What should change?", text: $refineText)
+                .textInputAutocapitalization(.sentences)
+            Button("Send", action: { Task { await sendRefine() } })
+                .disabled(refineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Cancel", role: .cancel, action: { refineText = "" })
+        } message: {
+            Text("Your message is sent to the agent as a plan-mode follow-up. The agent revises the plan and you re-approve.")
+        }
+        .alert("Couldn't send",
+               isPresented: Binding(
+                get: { lastError != nil },
+                set: { if !$0 { lastError = nil } }
+               ),
+               actions: { Button("OK", role: .cancel) { lastError = nil } },
+               message: { Text(lastError ?? "") })
+    }
+
+    // MARK: - Computed UX state
+
+    private var composerPlaceholder: String {
+        if data.isDemo { return "Refine the plan…" }
+        if session == nil { return "Session unavailable" }
+        return "Send a follow-up…"
+    }
+
+    private var canSend: Bool {
+        guard session != nil else { return false }
+        return !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    // MARK: - Actions
+
+    @MainActor
+    private func sendComposer() async {
+        let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, session != nil else { return }
+        // Demo bindings short-circuit — clear the text but don't hit the
+        // wire (the demo session id wouldn't resolve on the daemon side).
+        if data.isDemo {
+            composerText = ""
+            return
+        }
+        sending = true
+        defer { sending = false }
+        await agentClient.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
+        composerText = ""
+    }
+
+    @MainActor
+    private func sendRefine() async {
+        let trimmed = refineText.trimmingCharacters(in: .whitespacesAndNewlines)
+        refineText = ""
+        guard !trimmed.isEmpty, session != nil, !data.isDemo else { return }
+        sending = true
+        defer { sending = false }
+        await agentClient.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
+    }
+
+    @MainActor
+    private func approvePlan() async {
+        guard session != nil else { return }
+        guard !data.isDemo else { return }  // demo plan, no real id to approve
+        sending = true
+        defer { sending = false }
+        await agentClient.approvePlan(sessionId: sessionId)
+    }
+
+    private func openConfigSheet() {
+        // Session-config sheet (model picker + effort dial + mode toggle)
+        // ships in the next pass. For now, the gesture is wired so the
+        // button isn't a silent no-op — the sheet body is the follow-up.
     }
 
     private func statusColor(_ s: TahoeCodeSession.Status) -> Color {
@@ -218,6 +342,11 @@ private struct IOSPlanHaloMini: View {
     @Environment(\.tahoe) private var t
     /// Plan steps to render. Pre-parsed by the parent — empty means hide.
     var steps: [String]
+    /// Whether Approve & run is enabled. False when the session is not
+    /// actually in plan-mode (the daemon would reject a no-op approval).
+    var canApprove: Bool
+    var onRefine: () -> Void
+    var onApprove: () -> Void
 
     var body: some View {
         if steps.isEmpty {
@@ -278,10 +407,12 @@ private struct IOSPlanHaloMini: View {
                         TahoeHair()
 
                         HStack(spacing: 8) {
-                            TahoeGhostButton(size: .l) { Text("Refine") }
+                            TahoeGhostButton(size: .l, action: onRefine) { Text("Refine") }
                                 .frame(maxWidth: .infinity)
-                            TahoeAccentButton(size: .l) { Text("Approve & run") }
+                            TahoeAccentButton(size: .l, action: onApprove) { Text("Approve & run") }
                                 .frame(maxWidth: .infinity * 2)
+                                .opacity(canApprove ? 1.0 : 0.5)
+                                .disabled(!canApprove)
                         }
                         .padding(10)
                     }

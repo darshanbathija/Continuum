@@ -17,6 +17,12 @@ struct NewSessionMacSheet: View {
     @ObservedObject var model: SessionsModel
     @Environment(\.dismiss) private var dismiss
 
+    /// Pre-selected repo path (when MacCodeView's per-repo `+` button opens
+    /// the sheet, this is the repo's key so the picker lands on the right
+    /// row without the user needing to choose). Nil opens the sheet with
+    /// "(custom path)" selected, matching the previous behavior.
+    var preselectedRepoKey: String?
+
     @State private var repoPath: String = ""
     @State private var agent: AgentKind = .claude
     @State private var goal: String = ""
@@ -26,6 +32,14 @@ struct NewSessionMacSheet: View {
     @State private var mode: SessionMode = .worktree
     @State private var isSpawning: Bool = false
     @State private var errorMessage: String?
+
+    init(model: SessionsModel, preselectedRepoKey: String? = nil) {
+        self.model = model
+        self.preselectedRepoKey = preselectedRepoKey
+        if let key = preselectedRepoKey {
+            self._repoPath = State(initialValue: key)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
