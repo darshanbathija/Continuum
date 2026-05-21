@@ -3,28 +3,36 @@ import ClawdmeterShared
 
 /// Mac Code IDE — sidebar + thread/composer + review pane. Ports
 /// `mac-sessions.jsx` + `mac-sessions-parts.jsx` + `mac-composer.jsx`.
+/// Accepts a `TahoeCodeBindings` value (defaults to demo); the Mac app
+/// injects real AgentRuntime-derived data via `MacRootView.body`.
 public struct MacCodeView: View {
     @Environment(\.tahoe) private var t
 
     public enum ComposerState: String { case idle, running, plan }
     public enum ReviewTab: String, CaseIterable { case plan, diff, sources, pr, term }
 
-    @State private var openId: String = "s1"
+    public var data: TahoeCodeBindings
+
+    @State private var openId: UUID? = nil
     @State private var composerState: ComposerState = .plan
     @State private var rightTab: ReviewTab = .plan
     @State private var showRight: Bool = true
-    @State private var expanded: Set<String> = ["defx-frontend", "ccwatch"]
+    @State private var expanded: Set<String> = []
 
-    public init() {}
+    public init(data: TahoeCodeBindings = .demo) { self.data = data }
 
     public var body: some View {
-        let openRepo = TahoeDemo.repos.first { repo in repo.sessions.contains { $0.id == openId } } ?? TahoeDemo.repos[0]
-        let openSession = openRepo.sessions.first(where: { $0.id == openId })
+        let effectiveOpenId = openId ?? data.openSessionId
+        let openRepo = data.repos.first { repo in
+            repo.sessions.contains { $0.id == effectiveOpenId }
+        } ?? data.repos.first
+        let openSession = openRepo?.sessions.first { $0.id == effectiveOpenId }
 
         HStack(spacing: 10) {
             TahoeGlass(radius: 20, tone: .panel) {
                 Sidebar(
-                    openId: $openId,
+                    repos: data.repos,
+                    openId: Binding(get: { effectiveOpenId }, set: { openId = $0 }),
                     expanded: $expanded
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -37,7 +45,7 @@ public struct MacCodeView: View {
                         ThreadHeader(session: openSession)
                         TahoeHair()
                     }
-                    Thread(state: composerState)
+                    Thread(session: openSession, state: composerState)
                         .frame(maxHeight: .infinity)
                     ComposerBar(
                         state: $composerState,
@@ -53,10 +61,31 @@ public struct MacCodeView: View {
 
             if showRight {
                 TahoeGlass(radius: 20, tone: .panel) {
-                    ReviewPane(tab: $rightTab)
+                    ReviewPane(tab: $rightTab, session: openSession)
                 }
                 .frame(width: 380)
             }
+        }
+        .onAppear {
+            // Default-expand the first 2 repos so the user sees sessions
+            // immediately — matches JSX `useState(['defx-frontend','ccwatch'])`.
+            if expanded.isEmpty {
+                expanded = Set(data.repos.prefix(2).map { $0.key })
+            }
+        }
+        .onChange(of: data.repos.map { $0.key }) { _, keys in
+            // Keep the open-id valid as repos refresh; if the previously
+            // open session disappeared, pick the first available.
+            let allIds = data.repos.flatMap { $0.sessions.map { $0.id } }
+            if let oid = openId, !allIds.contains(oid) {
+                openId = data.repos.first?.sessions.first?.id
+            }
+            // Auto-expand newly-appearing repos with live sessions so users
+            // see new work without manual clicking.
+            for repo in data.repos where repo.liveSessionCount > 0 {
+                expanded.insert(repo.key)
+            }
+            _ = keys // silence unused
         }
     }
 }
@@ -65,7 +94,7 @@ public struct MacCodeView: View {
 
 private struct ThreadHeader: View {
     @Environment(\.tahoe) private var t
-    var session: TahoeDemo.DemoSession
+    var session: TahoeCodeSession
     var body: some View {
         HStack(spacing: 12) {
             TahoeProviderGlyph(provider: session.agent, size: 26)
@@ -105,7 +134,8 @@ private struct ThreadHeader: View {
 
 private struct Sidebar: View {
     @Environment(\.tahoe) private var t
-    @Binding var openId: String
+    var repos: [TahoeCodeRepo]
+    @Binding var openId: UUID?
     @Binding var expanded: Set<String>
 
     var body: some View {
@@ -147,17 +177,30 @@ private struct Sidebar: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(TahoeDemo.repos) { repo in
-                        RepoSection(
-                            repo: repo,
-                            expanded: expanded.contains(repo.key),
-                            onToggle: {
-                                if expanded.contains(repo.key) { expanded.remove(repo.key) }
-                                else { expanded.insert(repo.key) }
-                            },
-                            openId: openId,
-                            onOpen: { openId = $0 }
-                        )
+                    if repos.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("No repositories yet")
+                                .font(TahoeFont.body(13, weight: .semibold))
+                                .foregroundStyle(t.fg2)
+                            Text("Add a scan root in Settings or start a session via the menu bar.")
+                                .font(TahoeFont.body(11.5))
+                                .foregroundStyle(t.fg3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 14)
+                    } else {
+                        ForEach(repos) { repo in
+                            RepoSection(
+                                repo: repo,
+                                expanded: expanded.contains(repo.key),
+                                onToggle: {
+                                    if expanded.contains(repo.key) { expanded.remove(repo.key) }
+                                    else { expanded.insert(repo.key) }
+                                },
+                                openId: openId,
+                                onOpen: { openId = $0 }
+                            )
+                        }
                     }
                 }
                 .padding(.horizontal, 6).padding(.bottom, 12)
@@ -179,11 +222,11 @@ private struct SidebarIconBtn: View {
 
 private struct RepoSection: View {
     @Environment(\.tahoe) private var t
-    var repo: TahoeDemo.DemoRepo
+    var repo: TahoeCodeRepo
     var expanded: Bool
     var onToggle: () -> Void
-    var openId: String
-    var onOpen: (String) -> Void
+    var openId: UUID?
+    var onOpen: (UUID) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -194,12 +237,12 @@ private struct RepoSection: View {
                     .font(TahoeFont.body(13, weight: .semibold))
                     .foregroundStyle(t.fg)
                     .lineLimit(1)
-                if repo.live > 0 {
+                if repo.liveSessionCount > 0 {
                     HStack(spacing: 3) {
                         Circle().fill(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
                             .frame(width: 6, height: 6)
                             .shadow(color: Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0), radius: 3, x: 0, y: 0)
-                        Text("\(repo.live)")
+                        Text("\(repo.liveSessionCount)")
                             .font(TahoeFont.body(10, weight: .bold))
                             .foregroundStyle(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
                     }
@@ -250,7 +293,7 @@ private struct RepoSection: View {
 
 private struct SessionRow: View {
     @Environment(\.tahoe) private var t
-    var session: TahoeDemo.DemoSession
+    var session: TahoeCodeSession
     var open: Bool
     var onClick: () -> Void
 
@@ -291,7 +334,7 @@ private struct SessionRow: View {
         .padding(.bottom, 2)
     }
 
-    private func statusColor(_ s: TahoeDemo.DemoStatus) -> Color {
+    private func statusColor(_ s: TahoeCodeSession.Status) -> Color {
         switch s {
         case .running:  return Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0)
         case .planning: return t.fg3
@@ -304,7 +347,7 @@ private struct SessionRow: View {
 
 private struct RecentRow: View {
     @Environment(\.tahoe) private var t
-    var recent: TahoeDemo.DemoRecent
+    var recent: TahoeCodeRecent
     var body: some View {
         Button(action: {}) {
             HStack(alignment: .top, spacing: 8) {
@@ -338,19 +381,49 @@ private struct RecentRow: View {
 
 private struct Thread: View {
     @Environment(\.tahoe) private var t
+    var session: TahoeCodeSession?
     var state: MacCodeView.ComposerState
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
-                    ThreadMsg(msg: msg)
+                if session == nil {
+                    EmptyThreadState()
+                } else {
+                    // Until full SessionChatStore streaming is wired in (next
+                    // follow-up), we still render the JSX demo thread as the
+                    // structural placeholder so the IDE looks alive. The
+                    // session metadata (title, agent, status) at the top is
+                    // already real.
+                    ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
+                        ThreadMsg(msg: msg)
+                    }
                 }
                 if state == .running { RunningRow() }
-                if state == .plan { PlanHalo() }
+                if state == .plan { PlanHalo(session: session) }
             }
             .padding(.horizontal, 22).padding(.top, 8).padding(.bottom, 18)
         }
+    }
+}
+
+private struct EmptyThreadState: View {
+    @Environment(\.tahoe) private var t
+    var body: some View {
+        VStack(alignment: .center, spacing: 8) {
+            TahoeIcon("chat", size: 22).foregroundStyle(t.fg4)
+            Text("No session selected")
+                .font(TahoeFont.body(14, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text("Pick a session from the sidebar, or start a new one in any repo.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 60)
     }
 }
 
@@ -431,6 +504,42 @@ private struct RunningRow: View {
 private struct PlanHalo: View {
     @Environment(\.tahoe) private var t
     @State private var auraGlow: Bool = false
+    var session: TahoeCodeSession?
+
+    /// Parse `session.planText` into discrete plan steps when available.
+    /// Falls back to JSX demo plan otherwise.
+    private var planSteps: [String] {
+        guard let session,
+              let planText = parsePlanText(for: session),
+              !planText.isEmpty
+        else { return TahoeDemo.plan }
+        return planText
+    }
+
+    private func parsePlanText(for session: TahoeCodeSession) -> [String]? {
+        // The real AgentSession.planText carries free-form markdown from the
+        // agent's ExitPlanMode tool call. Split on markdown-list bullets so
+        // each bullet becomes a numbered step in the halo card. Falls back
+        // to line-split if no bullets are present.
+        guard let raw = session.runtimePlanText, !raw.isEmpty else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bulletLines = trimmed
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { line -> String? in
+                var s = String(line).trimmingCharacters(in: .whitespaces)
+                for prefix in ["- ", "* ", "• ", "1. ", "2. ", "3. ", "4. ", "5. ", "6. ", "7. ", "8. ", "9. "] {
+                    if s.hasPrefix(prefix) {
+                        s = String(s.dropFirst(prefix.count))
+                        break
+                    }
+                }
+                return s.isEmpty ? nil : s
+            }
+        guard !bulletLines.isEmpty else { return nil }
+        // Keep up to 8 steps so the halo card doesn't overflow.
+        return Array(bulletLines.prefix(8))
+    }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 38, style: .continuous)
@@ -462,7 +571,7 @@ private struct PlanHalo: View {
                                 .font(TahoeFont.body(11.5, weight: .semibold))
                                 .tracking(0.4)
                                 .foregroundStyle(t.fg3)
-                            Text("5 steps · est. 8 tool calls · ~$0.18")
+                            Text("\(planSteps.count) step\(planSteps.count == 1 ? "" : "s")")
                                 .font(TahoeFont.body(14, weight: .bold))
                                 .foregroundStyle(t.fg)
                         }
@@ -471,7 +580,7 @@ private struct PlanHalo: View {
                     .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 6)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(TahoeDemo.plan.enumerated()), id: \.offset) { i, step in
+                        ForEach(Array(planSteps.enumerated()), id: \.offset) { i, step in
                             HStack(alignment: .top, spacing: 12) {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 6, style: .continuous).fill(t.hair2)
@@ -503,13 +612,15 @@ private struct PlanHalo: View {
                             Text("Edit plan")
                         }
                         Spacer()
-                        HStack(spacing: 4) {
-                            TahoeIcon("branch", size: 10)
-                            Text("Will commit to ")
-                            + Text("fix/settlement-dedupe").font(TahoeFont.mono(11)).foregroundColor(t.fg2)
+                        if let branch = (session?.commitBranch ?? "fix/settlement-dedupe").nilIfEmpty {
+                            HStack(spacing: 4) {
+                                TahoeIcon("branch", size: 10)
+                                Text("Will commit to ")
+                                + Text(branch).font(TahoeFont.mono(11)).foregroundColor(t.fg2)
+                            }
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(t.fg3)
                         }
-                        .font(TahoeFont.body(11))
-                        .foregroundStyle(t.fg3)
                         TahoeAccentButton(size: .m) {
                             HStack(spacing: 8) {
                                 Text("Approve & run")
@@ -523,6 +634,10 @@ private struct PlanHalo: View {
         }
         .padding(.top, 6)
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 // MARK: - Composer
@@ -661,6 +776,7 @@ private struct LiveTicker: View {
 private struct ReviewPane: View {
     @Environment(\.tahoe) private var t
     @Binding var tab: MacCodeView.ReviewTab
+    var session: TahoeCodeSession?
 
     private let tabs: [(MacCodeView.ReviewTab, String, String)] = [
         (.plan, "Plan", "doc"),
@@ -702,7 +818,7 @@ private struct ReviewPane: View {
             ScrollView {
                 Group {
                     switch tab {
-                    case .plan:    ReviewPlan()
+                    case .plan:    ReviewPlan(session: session)
                     case .diff:    ReviewDiff()
                     case .sources: ReviewSources()
                     case .pr:      ReviewPR()
@@ -717,14 +833,32 @@ private struct ReviewPane: View {
 
 private struct ReviewPlan: View {
     @Environment(\.tahoe) private var t
+    var session: TahoeCodeSession?
+
+    private var steps: [String] {
+        if let raw = session?.runtimePlanText, !raw.isEmpty {
+            let parsed = raw
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .compactMap { line -> String? in
+                    var s = String(line).trimmingCharacters(in: .whitespaces)
+                    for prefix in ["- ", "* ", "• ", "1. ", "2. ", "3. ", "4. ", "5. ", "6. ", "7. ", "8. ", "9. "] {
+                        if s.hasPrefix(prefix) { s = String(s.dropFirst(prefix.count)); break }
+                    }
+                    return s.isEmpty ? nil : s
+                }
+            if !parsed.isEmpty { return Array(parsed.prefix(12)) }
+        }
+        return TahoeDemo.plan
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("PLAN · 5 STEPS")
+            Text("PLAN · \(steps.count) STEPS")
                 .font(TahoeFont.body(11, weight: .bold))
                 .tracking(0.5)
                 .foregroundStyle(t.fg3)
                 .padding(.bottom, 10)
-            ForEach(Array(TahoeDemo.plan.enumerated()), id: \.offset) { i, step in
+            ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
                 HStack(alignment: .top, spacing: 10) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -740,7 +874,7 @@ private struct ReviewPlan: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 10)
-                if i < TahoeDemo.plan.count - 1 { TahoeHair() }
+                if i < steps.count - 1 { TahoeHair() }
             }
         }
         .padding(16)

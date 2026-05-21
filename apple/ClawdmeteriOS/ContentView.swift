@@ -27,7 +27,7 @@ struct ContentView: View {
         // UsageModel is threaded in so the Live tab renders the live
         // per-provider quota via the `tahoeLive` adapter
         // (see IOSTahoeAdapter.swift).
-        IOSRootView(usageModel: model)
+        IOSRootView(usageModel: model, agentClient: agentClient)
             .sheet(isPresented: $showingSettings) {
                 SettingsView(model: model)
             }

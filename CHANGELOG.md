@@ -4,6 +4,78 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.11.0 build 72] - 2026-05-21 — Tahoe Code real data, native `.glassEffect`, legacy retirement (`feat/tahoe-code-and-legacy-retirement`)
+
+Finishes the v0.10 redesign with three substantial follow-ups: real
+session data plumbed into the Code tab on both platforms, the native
+macOS 26 / iOS 26 / watchOS 26 `.glassEffect()` API in use everywhere,
+and the dead legacy view layer retired.
+
+### Added
+
+- **Mac Code IDE — real data.** `MacCodeView` now reads
+  `runtime.repoIndex` + `runtime.agentSessionRegistry.sessions` through
+  a new `TahoeCodeBindings` value type and a `runtime.tahoeCode`
+  adapter. Sidebar repos are the real repo list with per-repo live
+  session counts; sessions show real status (`planning` / `running` /
+  `paused` / `done` / `degraded`), real model labels, real "X minutes
+  ago" subtitles, and a stable hash-derived tint per repo. The Plan
+  Halo card parses `AgentSession.planText` into bullet-numbered steps,
+  with branch label inferred from `worktreePath`.
+- **iOS Code — real data.** `IOSCodeView` consumes the daemon-backed
+  `AgentControlClient.sessions` via `client.tahoeCode`. Sessions group
+  by repo key with the same tint scheme as Mac. Empty-state copy
+  explains the pairing flow ("Sessions started on your Mac will appear
+  here once you're paired").
+- **Native Liquid Glass.** `TahoeGlass` now uses Apple's
+  `.glassEffect(.regular, in: shape)` API on macOS 26 / iOS 26 /
+  watchOS 26 (gated by `#available`) with a `.regularMaterial`
+  fallback for older OSes. The visual is now the real Tahoe Liquid
+  Glass, not a SwiftUI Material approximation.
+
+### Changed
+
+- **Plan Halo step count is dynamic** — was hardcoded to "5 steps" in
+  the eyebrow text; now reads from the parsed plan length.
+- **Plan Halo commit-branch chip** — was hardcoded
+  `fix/settlement-dedupe`; now reads from
+  `session.commitBranch` (derived from `worktreePath`).
+- **Empty states for both Code surfaces.** No-repo / no-session cases
+  render an explanatory card rather than collapsing the layout.
+- **Auto-expand new live repos.** Repos that gain a live session while
+  the user is on the Code tab auto-expand in the sidebar.
+
+### Removed
+
+The Tahoe redesign's hot legacy callers finally have replacements, so
+the corresponding files retired:
+
+- `apple/ClawdmeteriOS/iOSSessionsView.swift` (1919 LOC) — its inline
+  `PairingFlow` extracted to `apple/ClawdmeteriOS/PairingFlow.swift`
+  so `PairingCTAButtons` still works.
+- `apple/ClawdmeteriOS/iOSChatSoloView.swift` (336 LOC) — the Tahoe
+  `IOSChatView` is the only chat surface; `iOSPermissionPromptCard`
+  was internal to this file and went with it (the new IOSChatView
+  will host its own permission UI when prompt-respond ships).
+- `SessionsView` SwiftUI struct deleted from
+  `apple/ClawdmeterMac/SessionsView.swift` (file kept because it now
+  holds `SessionsModel` + `NewSessionMacSheet`).
+- `MenuBarGaugeView` SwiftUI View body deleted from
+  `apple/ClawdmeterMac/MenuBarGaugeView.swift` (file kept because
+  `AppDelegate.ProviderStatusController` still calls the static label
+  renderers).
+
+Net delete: 2 files, ~2,255 LOC removed. The remaining files are now
+data-layer / renderer-only — no SwiftUI View structs.
+
+### Risks / Out of scope
+
+- Full chat-thread streaming in `MacCodeView.Thread` is still demo
+  data — the structural placeholder JSX thread renders until
+  `SessionChatStore` streaming is wired in.
+- Mac Chat broadcast send still demo data.
+- Watch IA unchanged (still colors-only Tahoe port).
+
 ## [0.10.0 build 71] - 2026-05-21 — Tahoe 26 / iOS 26 liquid-glass redesign (`feat/tahoe-redesign`)
 
 Full visual redesign of the Mac, iOS, and Watch apps to the iOS 26 / macOS 26

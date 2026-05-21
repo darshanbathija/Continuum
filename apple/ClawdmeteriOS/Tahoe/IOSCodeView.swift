@@ -3,11 +3,15 @@ import ClawdmeterShared
 
 /// iOS Code (Sessions) tab — search + per-repo expandable cards with a
 /// new-session "+" button per repo. Ports `ios-live.jsx::IOSSessions`.
+/// Accepts a `TahoeCodeBindings` value (defaults to demo); ContentView/iOS
+/// root injects daemon-derived bindings via the AgentControlClient adapter.
 public struct IOSCodeView: View {
     @Environment(\.tahoe) private var t
     var onOpenDetail: () -> Void
+    public var data: TahoeCodeBindings
 
-    public init(onOpenDetail: @escaping () -> Void = {}) {
+    public init(data: TahoeCodeBindings = .demo, onOpenDetail: @escaping () -> Void = {}) {
+        self.data = data
         self.onOpenDetail = onOpenDetail
     }
 
@@ -32,12 +36,31 @@ public struct IOSCodeView: View {
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
 
                 // Repo sections
-                VStack(spacing: 14) {
-                    ForEach(TahoeDemo.repos.filter { !$0.sessions.isEmpty || !$0.recents.isEmpty }) { repo in
-                        IOSRepoCard(repo: repo, onOpen: onOpenDetail)
+                let visible = data.repos.filter { !$0.sessions.isEmpty || !$0.recents.isEmpty }
+                if visible.isEmpty {
+                    VStack(spacing: 8) {
+                        TahoeIcon("chat", size: 22).foregroundStyle(t.fg4)
+                        Text("No active sessions")
+                            .font(TahoeFont.body(14, weight: .semibold))
+                            .foregroundStyle(t.fg2)
+                        Text("Sessions started on your Mac will appear here once you're paired.")
+                            .font(TahoeFont.body(12))
+                            .foregroundStyle(t.fg3)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 280)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 60)
+                    .padding(.horizontal, 24)
+                } else {
+                    VStack(spacing: 14) {
+                        ForEach(visible) { repo in
+                            IOSRepoCard(repo: repo, onOpen: onOpenDetail)
+                        }
+                    }
+                    .padding(.horizontal, 16).padding(.bottom, 30)
                 }
-                .padding(.horizontal, 16).padding(.bottom, 30)
             }
         }
     }
@@ -45,7 +68,7 @@ public struct IOSCodeView: View {
 
 private struct IOSRepoCard: View {
     @Environment(\.tahoe) private var t
-    var repo: TahoeDemo.DemoRepo
+    var repo: TahoeCodeRepo
     var onOpen: () -> Void
 
     @State private var expanded: Bool = true
@@ -63,12 +86,12 @@ private struct IOSRepoCard: View {
                             .font(TahoeFont.body(14, weight: .bold))
                             .tracking(-0.1)
                             .foregroundStyle(t.fg)
-                        if repo.live > 0 {
+                        if repo.liveSessionCount > 0 {
                             HStack(spacing: 4) {
                                 Circle().fill(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
                                     .frame(width: 6, height: 6)
                                     .shadow(color: Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0), radius: 3, x: 0, y: 0)
-                                Text("\(repo.live) live")
+                                Text("\(repo.liveSessionCount) live")
                                     .font(TahoeFont.body(11, weight: .bold))
                                     .foregroundStyle(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
                             }
@@ -174,7 +197,7 @@ private struct IOSRepoCard: View {
 
 private struct StatusDot: View {
     @Environment(\.tahoe) private var t
-    var status: TahoeDemo.DemoStatus
+    var status: TahoeCodeSession.Status
 
     var body: some View {
         let c: Color = {

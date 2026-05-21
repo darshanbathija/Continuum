@@ -74,10 +74,18 @@ public struct TahoeGlass<Content: View>: View {
                     if isSolid {
                         shape.fill(solidFill)
                     } else {
-                        // Material does the heavy lifting for the actual blur/saturate
-                        // (matches iOS 26 Liquid Glass aesthetic). The tint overlay
-                        // matches `glassTint` in JSX so we keep the same hue depth.
-                        shape.fill(.regularMaterial)
+                        // Tahoe 26 / iOS 26: native Liquid Glass.
+                        // `.glassEffect(_:in:isEnabled:)` ships in the macOS 26 / iOS 26
+                        // SDK and gives us the real refraction + specular pass that the
+                        // JSX `backdrop-filter: blur(...) saturate(...)` simulates.
+                        // Older OSes fall back to `.regularMaterial`, which renders the
+                        // closest in-tree approximation.
+                        if #available(macOS 26.0, iOS 26.0, watchOS 26.0, *) {
+                            shape.fill(.clear)
+                                .glassEffect(.regular, in: shape)
+                        } else {
+                            shape.fill(.regularMaterial)
+                        }
                         shape.fill(glassTint)
                     }
                     if ring {

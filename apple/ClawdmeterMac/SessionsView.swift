@@ -1,21 +1,15 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// Sessions tab. Codex-desktop three-pane workspace: sidebar of repos +
-/// sessions on the left, conversation thread in the center, review pane
-/// (plan / diff / sources / artifacts) on the right.
+/// Sessions/Code data layer. Owns `SessionsModel` (the @MainActor
+/// ObservableObject that bridges `RepoIndex` + `AgentSessionRegistry` +
+/// `TmuxSupervisor` to SwiftUI) and `NewSessionMacSheet` (still hosted by
+/// `SessionWorkspaceView`).
 ///
-/// G0 replaces the prior 2-pane push/pop layout. Pre-G0 we used a state-
-/// driven push/pop with a back button; that worked but didn't surface
-/// review surfaces (diff, plan tracker, sources) — the workspace view
-/// lays them out side-by-side instead.
-struct SessionsView: View {
-    @ObservedObject var model: SessionsModel
-
-    var body: some View {
-        SessionWorkspaceView(model: model)
-    }
-}
+/// The top-level `SessionsView` SwiftUI struct that used to live here was
+/// retired in v0.11 — the Tahoe `MacCodeView` is the only entry point
+/// into the IDE surface now. File name kept as `SessionsView.swift` for
+/// minimal diff noise; effectively a `SessionsModel.swift`.
 
 // MARK: - New session sheet (Mac)
 

@@ -15,17 +15,21 @@ public struct IOSRootView: View {
     /// Optional iOS usage model — when provided, the Live tab switches
     /// from demo data to the live per-provider quota.
     @ObservedObject private var usageModel: UsageModel
+    /// Daemon-backed agent client. Drives the Code tab's session list.
+    @ObservedObject private var agentClient: AgentControlClient
 
-    public init(usageModel: UsageModel) {
+    public init(usageModel: UsageModel, agentClient: AgentControlClient) {
         self.usageModel = usageModel
+        self.agentClient = agentClient
         _theme = State(initialValue: TahoeThemeStore.loaded())
     }
 
     public var body: some View {
         let live = usageModel.tahoeLive
+        let code = agentClient.tahoeCode
         return ZStack {
             TahoeWallpaperView()
-            contentView(live: live)
+            contentView(live: live, code: code)
                 .padding(.bottom, 92) // floating tab bar clearance
             if pushedScreen == nil {
                 IOSTabBar(tab: $tab)
@@ -40,7 +44,7 @@ public struct IOSRootView: View {
     }
 
     @ViewBuilder
-    private func contentView(live: TahoeLiveBindings) -> some View {
+    private func contentView(live: TahoeLiveBindings, code: TahoeCodeBindings) -> some View {
         switch pushedScreen {
         case .pairing:
             IOSPairingView(onClose: { pushedScreen = nil })
@@ -51,7 +55,7 @@ public struct IOSRootView: View {
             case .chat:      IOSChatView()
             case .live:      IOSLiveView(data: live)
             case .analytics: IOSAnalyticsView()
-            case .code:      IOSCodeView(onOpenDetail: { pushedScreen = .sessionDetail })
+            case .code:      IOSCodeView(data: code, onOpenDetail: { pushedScreen = .sessionDetail })
             }
         }
     }

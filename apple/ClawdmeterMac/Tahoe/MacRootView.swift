@@ -33,6 +33,13 @@ struct MacRootView: View {
         // Force a body re-render whenever any underlying AppModel publishes
         // by reading from runtime.objectWillChange's snapshot here.
         let live = runtime.tahoeLive
+        // The Code tab observes both runtime.sessionsModel (repos refresh) AND
+        // runtime.agentSessionRegistry (live sessions) via @ObservedObject in
+        // the adapter call. Reading the derived bindings synchronously here
+        // is safe because @MainActor-isolated.
+        _ = runtime.sessionsModel.repos
+        _ = runtime.agentSessionRegistry.sessions
+        let code = runtime.tahoeCode
         return ZStack {
             TahoeWallpaperView()
             VStack(spacing: 0) {
@@ -50,7 +57,7 @@ struct MacRootView: View {
                     switch tab {
                     case .chat:     MacChatView(mode: $chatMode, soloProvider: $chatSoloProvider)
                     case .usage:    MacUsageView(data: live)
-                    case .code:     MacCodeView()
+                    case .code:     MacCodeView(data: code)
                     case .settings: MacSettingsView(theme: theme)
                     }
                 }
