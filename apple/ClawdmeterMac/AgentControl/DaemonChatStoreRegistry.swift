@@ -172,14 +172,38 @@ public final class DaemonChatStoreRegistry {
     /// existing path-resolution rules. Phase 0b replaces this with a real
     /// `SessionFileResolver` that tracks Codex respawn lineage so
     /// `approve-plan` doesn't break continuity.
+    ///
+    /// v0.8.0 agy-migration: Gemini sessions spawned via Antigravity 2's
+    /// agentapi don't have JSONL files at all — chat state lives in a
+    /// SQLite WAL at ~/.gemini/antigravity/conversations/<id>.db. We
+    /// surface that URL here so future SessionChatStore work (v0.8.1+
+    /// ingest path) can consume `AntigravityConversationDB` (T6) instead
+    /// of trying to JSONL-parse a binary database.
     @MainActor
     public static func defaultResolveURL(sessionId: UUID, session: AgentSession) -> URL? {
+        if session.agent == .gemini, session.geminiBackend == .agentapi,
+           let conversationId = session.antigravityConversationId {
+            return Self.antigravityConversationDBURL(conversationId: conversationId)
+        }
         let cwd = session.worktreePath ?? session.repoKey
         if session.agent == .claude {
             return SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
         } else {
             return Self.newestCodexJSONL()
         }
+    }
+
+    /// Resolves the `<conversation-id>.db` path under
+    /// `~/.gemini/antigravity/conversations/`. Returns the URL even if
+    /// the file doesn't yet exist on disk — Antigravity creates the SQLite
+    /// file on the first WAL write after `agentapi new-conversation`.
+    nonisolated public static func antigravityConversationDBURL(
+        conversationId: UUID,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        homeDirectory
+            .appendingPathComponent(".gemini/antigravity/conversations", isDirectory: true)
+            .appendingPathComponent("\(conversationId.uuidString).db")
     }
 
     /// Same logic as `AgentControlServer.newestCodexJSONL()` — kept here so

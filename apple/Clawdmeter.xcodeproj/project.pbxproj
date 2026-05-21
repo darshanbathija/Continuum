@@ -102,6 +102,7 @@
 		81F407333048D725DF4BB5EB /* AuditLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB8D04D48E1D2426976FC898 /* AuditLog.swift */; };
 		825AC2E6AB66E9E0CB343D17 /* AntigravityTaskComplication.swift in Sources */ = {isa = PBXBuildFile; fileRef = 431A968EFD55C9DDC919219D /* AntigravityTaskComplication.swift */; };
 		8355A4F7DE0095DD542880B4 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 289E3F086FDE9A532EFCEC2C /* SwiftTerm */; };
+		86B9A292813B9712CED436F7 /* DaemonChatStoreRegistryRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5D45DC56F208EECABE85A42 /* DaemonChatStoreRegistryRoutingTests.swift */; };
 		86E539AB47FCFFF1330CFBFB /* iOSAntigravityPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A19E721D40E87BC2B99E71F /* iOSAntigravityPlanView.swift */; };
 		882A3D7032BBBDBD07777059 /* LiveCostCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09B39BC5A520970D7D673F5 /* LiveCostCalculator.swift */; };
 		8ABD7420F16C440E13AA36DF /* ControlModeFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23BA2D80741F5E8B24ACEA51 /* ControlModeFrame.swift */; };
@@ -347,6 +348,7 @@
 		A48C1F28E237626714EF1272 /* AgentControlClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlClient.swift; sourceTree = "<group>"; };
 		A4BDBE8D894DEC31C57C6929 /* PairingTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTokenStore.swift; sourceTree = "<group>"; };
 		A5239318D643E1B51443A7C3 /* AutopilotState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutopilotState.swift; sourceTree = "<group>"; };
+		A5D45DC56F208EECABE85A42 /* DaemonChatStoreRegistryRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonChatStoreRegistryRoutingTests.swift; sourceTree = "<group>"; };
 		A6490142FD2D271DE257FD38 /* CodexStreamWebSocketChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexStreamWebSocketChannel.swift; sourceTree = "<group>"; };
 		A7EDE305AE4E9350183F0920 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A8EC55494D4D0B26A8B3C366 /* iOSSessionActivityStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSSessionActivityStrip.swift; sourceTree = "<group>"; };
@@ -655,6 +657,7 @@
 		6E4F3C864DD3FBCB30E9CE74 /* ClawdmeterMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				A5D45DC56F208EECABE85A42 /* DaemonChatStoreRegistryRoutingTests.swift */,
 				3A4E9C143026DEB7E82C1EDC /* LanguageServerClientRewriteTests.swift */,
 				98E6E75C4550204AE0288EB6 /* PathValidatorMacTests.swift */,
 				96A2F50347CBD669083BB20A /* SidecarAskCoordinatorTests.swift */,
@@ -1107,6 +1110,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				86B9A292813B9712CED436F7 /* DaemonChatStoreRegistryRoutingTests.swift in Sources */,
 				B794445CF6C561F8E1DEC66C /* LanguageServerClientRewriteTests.swift in Sources */,
 				453B70AABD9A8921BA9706FB /* PathValidatorMacTests.swift in Sources */,
 				030F8C597B7C15295B250217 /* SidecarAskCoordinatorTests.swift in Sources */,
