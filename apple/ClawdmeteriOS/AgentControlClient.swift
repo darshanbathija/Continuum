@@ -652,6 +652,90 @@ public final class AgentControlClient: ObservableObject {
         sessions.filter { $0.kind == .chat && $0.archivedAt == nil }
     }
 
+    // MARK: - v0.9.x Frontier compare
+
+    /// `POST /chat-sessions/frontier` — spawn a Frontier group with 2-3
+    /// model slots. Per-slot results (E2 partial); CM5 idempotency via
+    /// `clientRequestId`. Returns nil on transport / decode error.
+    @MainActor
+    public func createFrontier(
+        clientRequestId: UUID = UUID(),
+        slots: [FrontierModelSlot]
+    ) async -> CreateFrontierResponse? {
+        let req = CreateFrontierRequest(clientRequestId: clientRequestId, models: slots)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(path: "/chat-sessions/frontier", method: "POST", body: body) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CreateFrontierResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// `POST /chat-sessions/frontier/:groupId/send` — fan out a prompt
+    /// to every child. Returns true on 2xx, false on transport error.
+    @MainActor
+    public func frontierSend(groupId: UUID, text: String) async -> Bool {
+        let req = SendPromptRequest(text: text, asFollowUp: false)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(path: "/chat-sessions/frontier/\(groupId.uuidString)/send", method: "POST", body: body) else {
+            return false
+        }
+        do {
+            _ = try await sendChecked(request)
+            return true
+        } catch {
+            self.lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// `POST /chat-sessions/frontier/:groupId/pick-winner` — archive
+    /// losers, return the winner.
+    @MainActor
+    public func frontierPickWinner(groupId: UUID, childIndex: Int) async -> AgentSession? {
+        let req = PickFrontierWinnerRequest(childIndex: childIndex)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(path: "/chat-sessions/frontier/\(groupId.uuidString)/pick-winner", method: "POST", body: body) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(AgentSession.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Children of a Frontier group, sorted by childIndex. Filters
+    /// archived children so the active-only Frontier UI sees only the
+    /// live panes.
+    public func frontierChildren(groupId: UUID) -> [AgentSession] {
+        sessions
+            .filter { $0.frontierGroupId == groupId && $0.archivedAt == nil }
+            .sorted { ($0.frontierChildIndex ?? Int.max) < ($1.frontierChildIndex ?? Int.max) }
+    }
+
+    /// All live Frontier group IDs from current sessions. Used by the
+    /// "Royal Frontier" sidebar inbox entry on iOS.
+    public var liveFrontierGroupIds: [UUID] {
+        let ids = sessions.compactMap { (s: AgentSession) -> UUID? in
+            guard s.archivedAt == nil else { return nil }
+            return s.frontierGroupId
+        }
+        return Array(Set(ids))
+    }
+
     @MainActor
     public func approvePlan(sessionId: UUID) async {
         guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/approve-plan", method: "POST") else { return }

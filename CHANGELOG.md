@@ -4,6 +4,76 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.9.1 build 69] - 2026-05-21 — Chat v0.9.x polish (`feat/chat-v0.9.x`)
+
+Closes the v0.9.0 polish list: iOS Frontier UI, Royal Frontier sidebar
+entry, full ChatProviderProbe actor + ChatProviderAuthObserver, iOS
+NSUserActivity Handoff for chat sessions, and the
+`frontier-subscribe` WS channel.
+
+### Added
+
+- **iOS `iOSChatFrontierView`** — segmented control across the top (one
+  tab per child), shared composer fans out to all panes via
+  `POST /chat-sessions/frontier/:groupId/send`. Long-press → pick-winner
+  action sheet archives the other panes. Per-pane chat surface reuses
+  `iOSChatSoloView` so transcripts + permission cards inherit unchanged.
+- **"Royal Frontier" sidebar inbox entry on iOS.** New top-level Section
+  in the Chat tab list when one or more Frontier groups are live; tap
+  navigates to `iOSChatFrontierView`. Hidden when no groups are live so
+  the sidebar stays clean for solo-chat users.
+- **`AgentControlClient` Frontier methods**: `createFrontier`,
+  `frontierSend`, `frontierPickWinner`, `frontierChildren(groupId:)`,
+  `liveFrontierGroupIds`.
+- **`ChatProviderProbe` actor (P1)** replaces the inline binary checks
+  in `handleGetChatProviders`. 60s TTL cache + in-flight Task de-dup
+  (Codex P1 thundering-herd defense — 6+ iOS clients all asking at
+  app-launch now share one underlying probe). Per-provider auth
+  overrides drive the response when an AuthObserver hook flips one.
+- **`ChatProviderAuthObserver` (CM3)** — actor with 4 hooks called
+  from the existing ingest/send paths: `recordClaudeAuthError`,
+  `recordCodexCLIAuthError`, `recordCodexSDKAuthError`,
+  `recordAntigravityAuthError`. Wired into `sendAntigravityMessage`'s
+  401 catch (the rest will be wired through their respective parsers
+  in v0.9.x.1). Each hook flips the matching ChatProviderProbe
+  override to `authenticated=false` with a CTA-grade `reason` string.
+- **iOS NSUserActivity Handoff for chat sessions** (NEW-E6 from v0.8
+  plan). iOS advertises `com.clawdmeter.continue-chat-thread` for any
+  open chat surface; Mac AppDelegate broadcasts
+  `continueChatSessionFromHandoff` Notification on receive, and the
+  Chat workspace observer focuses the matching pane.
+- **`frontier-subscribe` WS channel.** New op routed by
+  `AgentControlServer.routeWSSubscription`. The
+  `FrontierWebSocketChannel` acquires every child's chat store,
+  observes them in parallel via Combine, and emits one typed
+  `FrontierGroupSnapshot` envelope on each debounced 100ms commit
+  window. Mac Frontier UI already gets the same data via per-child
+  `chat-subscribe` streams; this channel exists for iOS / future
+  3-pane Mac variants that want a single update tick.
+
+### Plumbing
+
+- `WSSubscription` envelope: new optional `groupId: String?` field for
+  the `frontier-subscribe` op (additive — non-frontier ops ignore).
+- `AppDelegate` adds `continueChatSessionFromHandoff` notification name
+  alongside the existing `continueCodexThreadFromHandoff`.
+
+### Test coverage
+
+- 571/571 swift tests passing (unchanged from v0.9.0). The new files
+  are server-side infrastructure (probe/observer/WS channel) +
+  client-side UI; integration tests for them land in v0.9.x.1.
+
+### Deferred to v0.9.x.1+
+
+- AuthObserver hooks for Claude JSONL `error.type` + Codex JSONL
+  `payload.error` + Codex SDK stderr `code: "auth"`. The hooks exist;
+  they need to be called from the matching parser/stderr sites.
+- "Royal Frontier" sidebar inbox entry on **Mac** (iOS ships here;
+  Mac UI lands in v0.9.x.1).
+- New-Frontier sheet (currently the only way to start a Frontier is
+  via the daemon endpoint or `MacComposerSender.createFrontier`).
+
 ## [0.9.0 build 68] - 2026-05-21 — Gemini chat via agentapi + Frontier UI (`feat/chat-v0.9`)
 
 The first Clawdmeter release where the Chat tab actually has 3 working

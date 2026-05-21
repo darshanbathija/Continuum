@@ -576,6 +576,26 @@ public final class AgentControlServer {
             )
             wsChannels[ObjectIdentifier(connection)] = chatChannel
             chatChannel.start()
+        case "frontier-subscribe":
+            // v0.9.x — typed aggregator for the 3-pane Frontier UI.
+            // Acquires every child's chat store, observes them in
+            // parallel via Combine, emits one FrontierGroupSnapshot
+            // envelope per debounced 100ms commit window. Same auth
+            // gate as chat-subscribe; same idle-eviction lifecycle.
+            guard let groupIdString = envelope.groupId,
+                  let groupId = UUID(uuidString: groupIdString)
+            else {
+                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+                return
+            }
+            let frontierChannel = FrontierWebSocketChannel(
+                connection: connection,
+                groupId: groupId,
+                registry: chatStoreRegistry,
+                sessionRegistry: registry
+            )
+            wsChannels[ObjectIdentifier(connection)] = frontierChannel
+            frontierChannel.start()
         case "codex-stream-subscribe":
             // v0.7.4: live SDK observation. Each event the Codex SDK
             // observer sidecar emits flows here as a JSON text frame.
@@ -629,9 +649,9 @@ public final class AgentControlServer {
 
     /// Subscription envelope for WS connections.
     private struct WSSubscription: Codable {
-        let op: String           // "terminal" | "events" | "compose-draft"
+        let op: String           // "terminal" | "events" | "compose-draft" | "chat-subscribe" | "frontier-subscribe" | "codex-stream-subscribe"
         let token: String
-        let sessionId: String?   // required for "terminal"
+        let sessionId: String?   // required for "terminal", "chat-subscribe", "codex-stream-subscribe"
         let since: UInt64?       // optional for "events"
         /// G12: target a specific pane (multi-terminal tab strip). When nil,
         /// the server falls back to the session's primary pane.
@@ -639,6 +659,9 @@ public final class AgentControlServer {
         /// X1: compose-draft single-shot payload. Only populated when
         /// `op == "compose-draft"`. The Mac UI consumes via NotificationCenter.
         let draft: ComposeDraft?
+        /// v0.9.x: required for `frontier-subscribe` — the group whose
+        /// aggregate `FrontierGroupSnapshot` envelopes the client wants.
+        let groupId: String?
     }
 
     // MARK: - Accept handling
@@ -1269,11 +1292,24 @@ public final class AgentControlServer {
             }
             projectId = info.id
         }
-        try await lsClient.sendMessage(
-            conversationId: conversationId.uuidString,
-            content: content,
-            projectId: projectId
-        )
+        do {
+            try await lsClient.sendMessage(
+                conversationId: conversationId.uuidString,
+                content: content,
+                projectId: projectId
+            )
+        } catch let LanguageServerClientError.rpcError(message) {
+            // v0.9.x — CM3 hook: 401 / auth-class errors flip the
+            // ChatProviderProbe override so /chat-providers surfaces
+            // the failure to iOS without a fresh re-probe wait.
+            if message.contains("401") || message.lowercased().contains("auth") {
+                await ChatProviderAuthObserver.shared.recordAntigravityAuthError(
+                    sessionId: session.id,
+                    message: message
+                )
+            }
+            throw LanguageServerClientError.rpcError(message)
+        }
     }
 
     /// v0.9 — daemon-side spawn for Gemini chat sessions. Picks the
@@ -2730,43 +2766,12 @@ public final class AgentControlServer {
     /// polish phase. Gemini row is hardcoded `available: false, reason:
     /// "v0.9"` until Antigravity (agy) replacement ships.
     private func handleGetChatProviders(connection: NWConnection) async {
-        let now = Date()
-        let claudeAvailable = ShellRunner.locateBinary("claude") != nil
-        let codexAvailable = ShellRunner.locateBinary("codex") != nil
-        let codexSDKAvailable = CodexSDKManager.shared.isProvisioned
-        let resp = ChatProvidersResponse(providers: [
-            ChatProviderEntry(
-                provider: .claude,
-                available: claudeAvailable,
-                authenticated: claudeAvailable,  // full auth probe in polish
-                capabilityProbePassed: claudeAvailable,
-                lastProbedAt: now,
-                reason: claudeAvailable ? nil : "claude CLI not on PATH"
-            ),
-            ChatProviderEntry(
-                provider: .codex, codexBackend: .sdk,
-                available: codexSDKAvailable,
-                authenticated: codexSDKAvailable,
-                capabilityProbePassed: codexSDKAvailable,
-                lastProbedAt: now,
-                reason: codexSDKAvailable ? nil : "Toggle SDK mode in Settings → Codex SDK"
-            ),
-            ChatProviderEntry(
-                provider: .codex, codexBackend: .cli,
-                available: codexAvailable,
-                authenticated: codexAvailable,
-                capabilityProbePassed: codexAvailable,
-                lastProbedAt: now,
-                reason: codexAvailable ? nil : "codex CLI not on PATH"
-            ),
-            ChatProviderEntry(
-                provider: .gemini,
-                available: false,
-                authenticated: false,
-                capabilityProbePassed: false,
-                reason: "v0.9"  // Antigravity-via-agy replacement
-            ),
-        ])
+        // v0.9.x: delegate to the ChatProviderProbe actor. Cache +
+        // in-flight de-dup live there now; the inline binary checks
+        // are gone. Auth state reflects ChatProviderAuthObserver
+        // overrides (Claude/Codex stderr + JSONL parsers, Antigravity
+        // agentapi 401 catch) when set.
+        let resp = await ChatProviderProbe.shared.currentProviders()
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(resp) {

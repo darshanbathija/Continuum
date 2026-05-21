@@ -92,17 +92,35 @@ struct iOSChatView: View {
 
     @ViewBuilder
     private var chatList: some View {
-        if client.chatSessions.isEmpty {
+        if client.chatSessions.isEmpty && client.liveFrontierGroupIds.isEmpty {
             ContentUnavailableView {
                 Label("No chats yet", systemImage: "bubble.left.and.bubble.right")
             } description: {
-                Text("Tap the compose icon above to start a chat with Claude or Codex.")
+                Text("Tap the compose icon above to start a chat with Claude, Codex, or Gemini.")
             } actions: {
                 Button("New chat") { showingNewChatPicker = true }
                     .buttonStyle(.borderedProminent)
             }
         } else {
             List {
+                // v0.9.x — Royal Frontier inbox entry. Surfaces every
+                // live 2-3 pane group as a single row that navigates
+                // to iOSChatFrontierView. Hidden when no groups are
+                // live so the sidebar stays clean for solo-chat users.
+                if !client.liveFrontierGroupIds.isEmpty {
+                    Section(header: Text("Royal Frontier")) {
+                        ForEach(client.liveFrontierGroupIds, id: \.self) { groupId in
+                            NavigationLink {
+                                iOSChatFrontierView(groupId: groupId, client: client)
+                            } label: {
+                                FrontierGroupRow(
+                                    groupId: groupId,
+                                    childCount: client.frontierChildren(groupId: groupId).count
+                                )
+                            }
+                        }
+                    }
+                }
                 ForEach(groupedSessions, id: \.provider) { group in
                     Section(header: Text(providerLabel(group.provider))) {
                         ForEach(group.sessions) { session in
@@ -148,6 +166,31 @@ struct iOSChatView: View {
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
         }
+    }
+}
+
+/// v0.9.x — one row in the iOS Chat tab's "Royal Frontier" inbox
+/// section. Shows the active child count + a 3-pane glyph.
+@available(iOS 16, *)
+private struct FrontierGroupRow: View {
+    let groupId: UUID
+    let childCount: Int
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "rectangle.split.3x1.fill")
+                .foregroundStyle(.orange)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Royal Frontier")
+                    .font(.system(size: 15, weight: .semibold))
+                Text("\(childCount) panes live")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
     }
 }
 

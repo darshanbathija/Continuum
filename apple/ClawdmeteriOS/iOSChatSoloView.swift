@@ -56,6 +56,23 @@ struct iOSChatSoloView: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
         }
+        // v0.9.x — NSUserActivity Handoff (NEW-E6 from v0.8 plan). iOS
+        // advertises the chat thread so the user can pick it up on the
+        // paired Mac via the Continuity icon. The Mac AppDelegate
+        // observer broadcasts a notification the Mac Chat tab listens
+        // for + focuses the matching session id.
+        .userActivity(
+            "com.clawdmeter.continue-chat-thread",
+            isActive: true
+        ) { activity in
+            activity.title = "Continue \(session.displayLabel)"
+            activity.targetContentIdentifier = session.id.uuidString
+            activity.userInfo = ["sessionId": session.id.uuidString]
+            activity.requiredUserInfoKeys = ["sessionId"]
+            activity.isEligibleForHandoff = true
+            activity.isEligibleForSearch = false
+            activity.isEligibleForPublicIndexing = false
+        }
     }
 
     @ViewBuilder
