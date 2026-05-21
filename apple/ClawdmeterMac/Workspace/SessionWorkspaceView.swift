@@ -84,32 +84,31 @@ struct SessionWorkspaceView: View {
             // (instead of as its own HSplitView child) means the user
             // can't accidentally drag-resize it.
             HStack(spacing: 0) {
-                ZStack {
+                ZStack(alignment: .bottom) {
                     if let session = model.openSession {
-                        VStack(spacing: 0) {
-                            // v0.8 QA: same AskUserQuestion-style card the
-                            // chat workspace uses — surfaces CLI permission
-                            // prompts (Codex trust dialog, future Claude
-                            // tool-permission requests) at the top of the
-                            // center column. Renders only when the store
-                            // has a pending prompt; otherwise zero-height.
-                            if let store = model.chatStore(for: session) {
-                                PermissionPromptCard(store: store, sessionId: session.id)
+                        CenterThread(
+                            session: session,
+                            isReadOnly: model.openSessionIsReadOnly,
+                            model: model,
+                            onModeSwitch: { newMode in
+                                Task { await switchMode(session: session, to: newMode) }
                             }
-                            CenterThread(
-                                session: session,
-                                isReadOnly: model.openSessionIsReadOnly,
-                                model: model,
-                                onModeSwitch: { newMode in
-                                    Task { await switchMode(session: session, to: newMode) }
-                                }
-                            )
-                        }
+                        )
                     } else {
                         centerEmpty
                     }
                     if showingModeSwitchOverlay {
                         modeSwitchOverlay
+                    }
+                    // v0.8 QA: floating permission-prompt tray (same as
+                    // Chat tab). Overlay so it doesn't disrupt the
+                    // CenterThread's layout when no prompt is pending.
+                    if let session = model.openSession,
+                       let store = model.chatStore(for: session) {
+                        PermissionPromptCard(store: store, sessionId: session.id)
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 16)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
                 .frame(maxWidth: .infinity)

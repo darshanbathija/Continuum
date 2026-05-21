@@ -25,13 +25,18 @@ struct ChatSoloView: View {
             header
             Divider()
             transcript
-            if let store = chatStore {
-                PermissionPromptCard(store: store, sessionId: session.id)
-            }
             Divider()
             composer
         }
         .navigationTitle(session.displayLabel)
+        .overlay(alignment: .bottom) {
+            if let store = chatStore {
+                PermissionPromptCard(store: store, sessionId: session.id)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
     }
 
     private var header: some View {
@@ -213,6 +218,12 @@ struct ChatSoloView: View {
 /// "Trust this directory?"); user clicks an option → POST to daemon →
 /// daemon dispatches the corresponding keys to the CLI's TUI → card
 /// disappears. Recommended option gets the prominent button style.
+/// v0.8 QA: PermissionPromptCard matches the AskUserQuestion tray UX —
+/// a floating panel with header chip + bold question + numbered options.
+/// Each option row shows label + description; the recommended option is
+/// pre-focused (Return submits it); number keys 1-9 are keyboard
+/// shortcuts. No close / skip buttons — permission prompts MUST be
+/// answered, never auto-dismissed.
 @available(macOS 14, *)
 struct PermissionPromptCard: View {
     @ObservedObject var store: SessionChatStore
@@ -220,70 +231,128 @@ struct PermissionPromptCard: View {
 
     @State private var isResponding: Bool = false
     @State private var errorMessage: String?
+    @State private var hoveredOptionId: String?
 
     var body: some View {
         if let prompt = store.pendingPermissionPrompt {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 6) {
+            VStack(spacing: 0) {
+                // ── Header row: chip + title ──
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(prompt.header)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.secondary.opacity(0.12), in: Capsule())
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.yellow.opacity(0.18), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.yellow.opacity(0.4), lineWidth: 0.5))
+                    Text(prompt.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
                     Spacer()
                     if isResponding {
                         ProgressView().controlSize(.small)
                     }
                 }
-                Text(prompt.title)
-                    .font(.system(size: 14, weight: .semibold))
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 4)
+
+                // ── Optional body / detail ──
                 if let detail = prompt.detail, !detail.isEmpty {
                     Text(detail)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
                 }
-                HStack(spacing: 8) {
-                    ForEach(prompt.options) { option in
-                        Button(action: { respond(promptId: prompt.id, optionId: option.id) }) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(option.label)
-                                    .font(.system(size: 12, weight: .medium))
-                                if let desc = option.description, !desc.isEmpty {
-                                    Text(desc)
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(buttonTint(for: option))
-                        .disabled(isResponding)
+
+                // ── Option rows ──
+                VStack(spacing: 1) {
+                    ForEach(Array(prompt.options.enumerated()), id: \.element.id) { idx, option in
+                        optionRow(option: option, index: idx + 1, promptId: prompt.id)
                     }
                 }
+                .padding(.bottom, 10)
+
                 if let err = errorMessage {
-                    Text(err).font(.system(size: 11)).foregroundStyle(.red)
+                    Text(err)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
                 }
             }
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1)
+            .frame(maxWidth: 720)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color(white: 0.12))
             )
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.35), radius: 20, x: 0, y: 8)
         }
     }
 
-    private func buttonTint(for option: PermissionOption) -> Color {
-        if option.isDestructive { return .red }
-        if option.isRecommended { return .accentColor }
-        return .gray
+    @ViewBuilder
+    private func optionRow(option: PermissionOption, index: Int, promptId: String) -> some View {
+        let isHovered = hoveredOptionId == option.id
+        let isRecommended = option.isRecommended
+        Button(action: { respond(promptId: promptId, optionId: option.id) }) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(option.label)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(option.isDestructive ? Color.red : Color.primary)
+                        if isRecommended {
+                            Text("recommended")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(.secondary.opacity(0.15), in: Capsule())
+                        }
+                    }
+                    if let desc = option.description, !desc.isEmpty {
+                        Text(desc)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Numbered keyboard hint
+                if index <= 9 {
+                    Text("\(index)")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, height: 18)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+                        )
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(rowBackground(isHovered: isHovered, isRecommended: isRecommended))
+        }
+        .buttonStyle(.plain)
+        .disabled(isResponding)
+        .onHover { hovering in
+            hoveredOptionId = hovering ? option.id : (hoveredOptionId == option.id ? nil : hoveredOptionId)
+        }
+        .keyboardShortcut(KeyEquivalent(Character("\(index)")), modifiers: [])
+    }
+
+    private func rowBackground(isHovered: Bool, isRecommended: Bool) -> Color {
+        if isHovered { return Color.white.opacity(0.06) }
+        if isRecommended { return Color.white.opacity(0.025) }
+        return Color.clear
     }
 
     private func respond(promptId: String, optionId: String) {
