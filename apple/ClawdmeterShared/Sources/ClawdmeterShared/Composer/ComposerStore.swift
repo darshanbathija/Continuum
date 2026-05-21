@@ -200,6 +200,11 @@ public final class ComposerStore: ObservableObject {
             case .claude: entry = catalog.claude.first
             case .codex:  entry = catalog.codex.first
             case .gemini: entry = catalog.gemini.first
+            case .unknown:
+                // X3: forward-compat unknown agent — no catalog slice
+                // exists. Composer chips clear; the picker hides the
+                // chip until the user selects a known agent.
+                entry = nil
             }
             let effort: ReasoningEffort? = (entry?.supportsEffort ?? false) ? .max : nil
             return ChipDefaults(

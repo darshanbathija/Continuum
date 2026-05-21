@@ -149,6 +149,24 @@ final class AppRuntime: ObservableObject {
         // hand back live in-memory snapshots from its first connection.
         self.usageQueryService = UsageQueryService(runtime: self)
 
+        // D4 (v0.17, wire v12): wire the iOS-side auto-revive RPC into
+        // the matching AppModel. The server's handler dispatches on
+        // AgentKind; we fan out to the per-provider model here. Capture
+        // weak so the daemon's long-lived closure doesn't pin AppRuntime
+        // beyond its natural lifetime.
+        self.agentControlServer.setAutoReviveCallback = { [weak self] kind, enabled in
+            guard let self else { return }
+            switch kind {
+            case .claude: self.claudeModel.setAutoReviveEnabled(enabled)
+            case .codex:  self.codexModel.setAutoReviveEnabled(enabled)
+            case .gemini: self.geminiModel.setAutoReviveEnabled(enabled)
+            case .unknown:
+                // X3: forward-compat unknown — never user-toggleable.
+                // The handler returns 400 before reaching here.
+                break
+            }
+        }
+
         let sessionsEnabled = UserDefaults.standard.object(forKey: "clawdmeter.sessions.enabled") as? Bool ?? true
         if sessionsEnabled {
             self.tmuxSupervisor.start()

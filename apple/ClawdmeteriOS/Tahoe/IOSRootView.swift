@@ -62,7 +62,10 @@ public struct IOSRootView: View {
     private func contentView(live: TahoeLiveBindings, code: TahoeCodeBindings) -> some View {
         switch pushedScreen {
         case .pairing:
-            IOSPairingView(onClose: { pushedScreen = nil })
+            IOSPairingView(
+                client: agentClient,
+                onClose: { pushedScreen = nil }
+            )
         case .sessionDetail(let id):
             IOSSessionDetailView(
                 agentClient: agentClient,
@@ -77,7 +80,8 @@ public struct IOSRootView: View {
                 IOSLiveView(
                     data: live,
                     onRefresh: { await agentClient.refreshAll() },
-                    onOpenSettings: { settingsPresented = true }
+                    onOpenSettings: { settingsPresented = true },
+                    agentClient: agentClient
                 )
             case .analytics: IOSAnalyticsView(agentClient: agentClient)
             case .code:

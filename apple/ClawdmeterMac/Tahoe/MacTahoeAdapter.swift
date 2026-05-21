@@ -129,6 +129,11 @@ extension AppRuntime {
         case .claude: return .claude
         case .codex:  return .codex
         case .gemini: return .gemini
+        case .unknown:
+            // X3: visual fallback. Semantic correctness lives on
+            // AgentKind itself — UI degrades to Claude styling for
+            // forward-compat unknowns. PR #28 adds .opencode → .opencode.
+            return .claude
         }
     }
 

@@ -76,6 +76,10 @@ public final class SessionFileResolver: @unchecked Sendable {
             return resolveCodex(session: session)
         case .gemini:
             return resolveGemini(session: session)
+        case .unknown:
+            // X3: forward-compat unknown agent — no transcript file we
+            // know how to locate. UI surfaces render as "Other agent".
+            return nil
         }
     }
 

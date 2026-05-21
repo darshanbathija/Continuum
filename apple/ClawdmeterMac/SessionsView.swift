@@ -84,6 +84,7 @@ struct NewSessionMacSheet: View {
                         case .claude: return "Claude runs in --permission-mode plan: reads + proposes, doesn't write until approved."
                         case .codex:  return "Codex runs in --sandbox read-only: reads + proposes, doesn't write until approved."
                         case .gemini: return "Gemini runs in --approval-mode plan: reads + proposes, doesn't write until approved."
+                        case .unknown: return "Plan mode: reads + proposes, doesn't write until approved."
                         }
                     }())
 
@@ -140,6 +141,10 @@ struct NewSessionMacSheet: View {
         case .claude: modelDefault = defaults.modelId
         case .codex:  modelDefault = ModelCatalog.bundled.codex.first?.id
         case .gemini: modelDefault = ModelCatalog.bundled.gemini.first?.id
+        case .unknown:
+            // X3: unreachable from the picker (allCases excludes .unknown)
+            errorMessage = "Unknown agent kind — relaunch to refresh."
+            return
         }
         do {
             _ = try await model.spawnSession(
@@ -636,6 +641,10 @@ public final class SessionsModel: ObservableObject {
             // exhaustiveness; if execution gets here (resumeSessionId
             // path for Gemini), the missingBinary error below catches.
             argv = []
+        case .unknown:
+            // X3: forward-compat unknown kind — no spawn argv path. The
+            // missingBinary throw below surfaces a clean error.
+            argv = []
         }
         guard !argv.isEmpty else {
             throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
@@ -805,6 +814,9 @@ public final class SessionsModel: ObservableObject {
         case .claude: modelDefault = defaults.modelId
         case .codex:  modelDefault = ModelCatalog.bundled.codex.first?.id
         case .gemini: modelDefault = ModelCatalog.bundled.gemini.first?.id
+        case .unknown:
+            // X3: forward-compat unknown kind — no JSONL parser plumbed.
+            return nil
         }
         // Outside-JSONL continuation is a code-session-only path; chat
         // sessions never reach here (no JSONL outside-source). Skip if

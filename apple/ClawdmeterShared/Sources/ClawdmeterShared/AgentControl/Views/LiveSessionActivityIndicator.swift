@@ -101,6 +101,9 @@ public struct LiveSessionActivityIndicator: View {
             // Google blue — Antigravity / Gemini CLI's brand accent.
             // Used by the Gemini gauge, chat bubble + Live Activity indicator.
             return Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0)
+        case .unknown:
+            // X3: neutral gray for forward-compat unknown kinds.
+            return Color(red: 0x88 / 255.0, green: 0x88 / 255.0, blue: 0x88 / 255.0)
         }
     }
 
@@ -115,6 +118,11 @@ public struct LiveSessionActivityIndicator: View {
             // Reuse Claude's asterisk spinner — Gemini's brand mark is a
             // 4-pointed star which closely resembles the asterisk. Distinct
             // accent color keeps providers visually separable.
+            ClaudeAsteriskSpinner(color: accent, size: 14)
+        case .unknown:
+            // X3: reuse the asterisk spinner for unknown kinds. Pairs
+            // with the neutral gray accent so it reads as "indeterminate
+            // provider" rather than misclassifying.
             ClaudeAsteriskSpinner(color: accent, size: 14)
         }
     }
