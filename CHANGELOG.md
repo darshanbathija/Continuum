@@ -45,6 +45,40 @@ and the dead legacy view layer retired.
 - **Auto-expand new live repos.** Repos that gain a live session while
   the user is on the Code tab auto-expand in the sidebar.
 
+### Production safety (post-codex-review hardening)
+
+The Codex adversarial review caught a class of demo-fallback risks
+where the Code surface would show fixture content as if it were real
+session data. `TahoeCodeBindings` now carries an explicit `isDemo`
+flag; demo-only views are gated on it so production renders
+empty-state placeholders instead of fake plans, diffs, or PR checks.
+
+- **Adapters return `.empty`, not `.demo`.** Mac and iOS adapters now
+  return `TahoeCodeBindings.empty` when there's no live data — only
+  SwiftUI Previews see the demo fixture.
+- **`MacCodeView.Thread` placeholders.** Production renders a "Live
+  transcript coming soon" card; only `isDemo == true` renders the JSX
+  fixture thread.
+- **`ReviewPane` hides unfinished tabs.** In production only the Plan
+  tab is visible (and it shows an empty-state when no
+  `runtimePlanText` exists). Diff / Sources / PR / Term tabs render
+  only in demo bindings until their wires ship.
+- **Plan Halo only when there's a plan.** Composer state starts
+  `.idle` in production and only auto-cycles to `.plan` when the open
+  session has non-empty `runtimePlanText`. Approve & Run is disabled
+  outside demo until the daemon approval wire lands. The "Will commit
+  to `<branch>`" hint only renders for real worktree sessions.
+- **iOS session detail uses real data.** `IOSRootView.Screen` is now
+  `.sessionDetail(UUID)` carrying the opened session's id;
+  `IOSSessionDetailView` looks up the real session and renders its
+  actual title / agent / model / status.
+- **iOS daemon refresh wired.** `IOSRootView` calls
+  `agentClient.refreshAll()` on appear and on pull-to-refresh — the
+  Code tab no longer waits indefinitely for the daemon to push.
+- **iOS plus buttons wired.** Title-row and per-repo `+` buttons
+  present `NewSessionSheet` (made internal — was private — in
+  `PairingFlow.swift`).
+
 ### Removed
 
 The Tahoe redesign's hot legacy callers finally have replacements, so
@@ -70,10 +104,12 @@ data-layer / renderer-only — no SwiftUI View structs.
 
 ### Risks / Out of scope
 
-- Full chat-thread streaming in `MacCodeView.Thread` is still demo
-  data — the structural placeholder JSX thread renders until
-  `SessionChatStore` streaming is wired in.
+- Full chat-thread streaming in `MacCodeView.Thread` not yet wired —
+  production now renders a "Live transcript coming soon" placeholder
+  instead of demo content. Streaming follows in the next release.
 - Mac Chat broadcast send still demo data.
+- ReviewPane Diff / Sources / PR / Term tabs hidden in production
+  until daemon wires ship; only the Plan tab is exposed.
 - Watch IA unchanged (still colors-only Tahoe port).
 
 ## [0.10.0 build 71] - 2026-05-21 — Tahoe 26 / iOS 26 liquid-glass redesign (`feat/tahoe-redesign`)
