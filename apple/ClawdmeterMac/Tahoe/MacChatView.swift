@@ -328,21 +328,30 @@ private struct ChatSidebar: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // PR #32 chunk 4: "Active" section lists real chat
-                    // sessions from the daemon. The demo history is kept
-                    // as a placeholder below for cold-launch but is
-                    // visually grouped so the user knows which is real.
                     if !visibleSessions.isEmpty {
+                        // PR #32 chunk 4: live chat sessions from the
+                        // daemon. When this section has entries we
+                        // hide the legacy demo history entirely —
+                        // mixing real + fake rows confused users in
+                        // QA.
                         ActiveSessionsSection(
                             label: "Active",
                             sessions: visibleSessions,
                             openChatId: $openChatId,
                             openSections: $openSections
                         )
+                    } else {
+                        // Empty-state preview: render the demo history
+                        // sections so the sidebar isn't blank when the
+                        // user hasn't created any chats yet. These rows
+                        // are visually identifiable as demo (the
+                        // "Pinned" / "Today" / "Earlier" labels match
+                        // the JSX mockup). Tapping is a no-op because
+                        // there's no session behind them.
+                        HistorySection(label: "Pinned",  rows: [TahoeDemo.chatHistory[5]],                                openSections: $openSections)
+                        HistorySection(label: "Today",   rows: Array(TahoeDemo.chatHistory.prefix(2)),                    openSections: $openSections)
+                        HistorySection(label: "Earlier", rows: Array(TahoeDemo.chatHistory[2..<5]) + Array(TahoeDemo.chatHistory[6...]), openSections: $openSections)
                     }
-                    HistorySection(label: "Pinned",  rows: [TahoeDemo.chatHistory[5]],                                openSections: $openSections)
-                    HistorySection(label: "Today",   rows: Array(TahoeDemo.chatHistory.prefix(2)),                    openSections: $openSections)
-                    HistorySection(label: "Earlier", rows: Array(TahoeDemo.chatHistory[2..<5]) + Array(TahoeDemo.chatHistory[6...]), openSections: $openSections)
                 }
                 .padding(.horizontal, 8).padding(.vertical, 8)
             }
@@ -744,7 +753,9 @@ private struct AssistantCard: View {
                         .font(TahoeFont.mono(10.5))
                         .foregroundStyle(t.fg4)
                     Spacer()
-                    StarButton(on: reply.starred)
+                    // D7 (audit retro): drop StarButton — never wired,
+                    // never asked for. Pick-winner lives in the
+                    // ChatStream header for broadcast turns.
                 }
                 .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
                 TahoeHair()
@@ -769,9 +780,10 @@ private struct AssistantCard: View {
                     ReplyMeta(icon: nil, value: String(format: "$%.3f", reply.cost), suffix: nil)
                     ReplyMeta(icon: nil, value: String(format: "%.1fs", reply.time), suffix: nil)
                     Spacer()
-                    IconBtn(icon: "refresh")
-                    IconBtn(icon: "doc")
-                    IconBtn(icon: "arrowR")
+                    // D7 (audit retro): drop refresh + arrowR (share)
+                    // icons that were never wired. Keep Copy (doc icon)
+                    // — wired to NSPasteboard with the reply body.
+                    CopyReplyButton(reply: reply)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
             }
@@ -823,36 +835,32 @@ private struct ReplyMeta: View {
     }
 }
 
-private struct IconBtn: View {
+/// PR #34: D7-compliant copy button for the Mac chat reply card.
+/// Mirrors `IOSReplyAction(icon: "doc", action: copy)` on iOS — joins
+/// every block's text into one pasteboard string.
+private struct CopyReplyButton: View {
     @Environment(\.tahoe) private var t
-    var icon: String
+    var reply: TahoeDemo.ChatReply
+
     var body: some View {
-        Button(action: {}) {
-            TahoeIcon(icon, size: 12)
+        Button(action: copy) {
+            TahoeIcon("doc", size: 12)
                 .foregroundStyle(t.fg3)
                 .frame(width: 24, height: 24)
         }
         .buttonStyle(.plain)
+        .help("Copy reply text")
     }
-}
 
-private struct StarButton: View {
-    @Environment(\.tahoe) private var t
-    var on: Bool
-    var body: some View {
-        Button(action: {}) {
-            Image(systemName: on ? "star.fill" : "star")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(on ? t.accent : t.fg4)
-                .frame(width: 26, height: 22)
-                .background {
-                    if on {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(t.accentAlpha(t.dark ? 0.22 : 0.14))
-                    }
-                }
-        }
-        .buttonStyle(.plain)
+    private func copy() {
+        let combined = reply.blocks.map { block -> String in
+            switch block {
+            case .paragraph(let s): return s
+            case .code(_, let body): return body
+            }
+        }.joined(separator: "\n\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(combined, forType: .string)
     }
 }
 
@@ -1078,23 +1086,58 @@ private struct ChatComposer: View {
         let pendingProvider = currentAgentKind
         let pendingMode = mode
         Task { @MainActor in
+            broadcastNote = nil
             if let openId = openChatId {
-                // Existing session — straight send-as-followup.
-                await sendCtl.send(via: .solo(sessionId: openId))
+                // Existing session — straight send-as-followup. If the
+                // open session is part of a frontier group, route via
+                // frontierSend to fan out to all siblings instead.
+                if let groupId = loopbackClient?.sessions
+                    .first(where: { $0.id == openId })?.frontierGroupId {
+                    let trimmed = sendCtl.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let client = loopbackClient, !trimmed.isEmpty else { return }
+                    _ = await client.frontierSend(groupId: groupId, text: trimmed)
+                    sendCtl.text = ""
+                } else {
+                    await sendCtl.send(via: .solo(sessionId: openId))
+                }
                 return
             }
-            // First send: route through .chatCreate. On success the
-            // controller appends the prompt + we capture the new
-            // session id from client.chatSessions.
+            // First send. Two paths:
+            //  - solo: use the controller's .chatCreate which spawns
+            //    one chat session and posts the prompt as turn-1.
+            //  - broadcast: spawn a Frontier group via createFrontier
+            //    with claude/codex/gemini slots, then route the prompt
+            //    via frontierSend. The opencode case is opt-in (a
+            //    follow-up adds an "include opencode" toggle to the
+            //    chip).
             if pendingMode == .broadcast {
-                broadcastNote = "Broadcast fan-out queued — sending solo to Claude."
-            } else {
-                broadcastNote = nil
+                guard let client = loopbackClient else { return }
+                let trimmed = sendCtl.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                let slots: [FrontierModelSlot] = [
+                    FrontierModelSlot(provider: .claude),
+                    FrontierModelSlot(provider: .codex),
+                    FrontierModelSlot(provider: .gemini),
+                ]
+                let response = await client.createFrontier(slots: slots)
+                guard let response else {
+                    broadcastNote = "Couldn't create broadcast group — see Settings → Providers."
+                    return
+                }
+                _ = await client.frontierSend(groupId: response.groupId, text: trimmed)
+                sendCtl.text = ""
+                // Pick whichever child landed first as the openChatId
+                // so the UI focuses on this new group; the data adapter
+                // resolves siblings via the frontierGroupId on the
+                // session record.
+                let firstChild = (loopbackClient?.chatSessions ?? [])
+                    .first(where: { $0.frontierGroupId == response.groupId })
+                openChatId = firstChild?.id
+                return
             }
+            // Solo path.
             let beforeIds = Set((loopbackClient?.chatSessions ?? []).map(\.id))
             await sendCtl.send(via: .chatCreate(provider: pendingProvider, mode: .solo))
-            // Lift the newly-created session id into the parent so
-            // subsequent sends route through the cheap follow-up path.
             let after = loopbackClient?.chatSessions ?? []
             if let newSession = after.first(where: { !beforeIds.contains($0.id) }) {
                 openChatId = newSession.id

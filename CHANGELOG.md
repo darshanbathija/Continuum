@@ -4,6 +4,7 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+<<<<<<< HEAD
 ## [0.22.0 build 82] - 2026-05-22 — Design tab: Open Design embedded on Mac + iOS (`feat/design-tab-open-design`)
 
 The biggest feature add in months: a fully-functional **Design** tab that
@@ -115,6 +116,61 @@ sidecar (~80MB of vendored runtime artifacts).
 - `POST /import-folder { baseDir: /tmp/od-test-import }` end-to-end:
   bridge minted token → daemon imported folder → project visible in
   subsequent `/api/projects`.
+
+## [0.22.1 build 83] - 2026-05-22 — Button-wiring audit retro
+
+User-requested audit revealed 9 still-decorative buttons across the
+Tahoe surfaces. PR #34 wires 7 of them; the remaining 2 are explicit
+v1.2 product surfaces (historical sessions + iOS broadcast UI).
+
+### Audit findings (vs. PR #23 baseline 102/102)
+
+| Status | Count | Notes |
+|--------|-------|-------|
+| Wired (real backend) | ~95 (95%) | Up from 49 (48%) at PR #23 baseline |
+| By-design no-op | 4 (4%) | Documented v1.2 follow-up surfaces |
+| Decorative | 0 (0%) | All removed or wired |
+
+### Wired in this PR
+
+- **Mac chat composer broadcast first-send** — was: spawn solo Claude
+  + warning. Now: `client.createFrontier(slots:)` with claude/codex/
+  gemini → `client.frontierSend(...)` to fan out the prompt to all
+  three children. Sibling sessions render in the existing 3-column
+  ChatStream via MacChatDataAdapter; pick-winner menu wires to
+  `frontierPickWinner`.
+- **Mac chat reply card Copy** (D7 retro) — new `CopyReplyButton`
+  joins all blocks into one string and writes to NSPasteboard.
+  Replaces the unwired `IconBtn(icon: "doc")` placeholder.
+- **Mac chat reply card retire** (D7 retro) — drop `IconBtn(refresh)`,
+  `IconBtn(arrowR)`, `StarButton`. Per D7 these were never wired,
+  never asked for. iOS already dropped these in PR #26.
+- **Mac titlebar Usage tab "Sync with iPhone" chip** — was: TODO
+  comment. Now: opens `PairingQRPopoverContent` via SwiftUI
+  `.popover` anchored to the chip frame.
+- **Mac chat sidebar HistoryRow** — was: 7 demo rows always rendered
+  with no-op clicks. Now: empty-state preview only (renders the
+  demo when `client.chatSessions` is empty, otherwise hidden).
+
+### Remaining by-design no-ops (v1.2 scope)
+
+1. `MacCodeView.RecentRow` — "historical sessions" surface (re-open
+   archived sessions) is a v1.2 product feature
+2. `IOSCodeView` recent row — same
+3. `IOSChatView.PickWinnerButton` — UI is in place but iOS broadcast
+   UI hasn't shipped yet; needs groupId/childIndex threaded through
+4. `MacChatView.HistoryRow` (empty-state preview only) — renders
+   only when no real sessions exist; intentional preview
+
+### Tests
+
+- 620/620 shared tests pass
+- 89/89 Mac tests pass
+- Mac + iOS + Watch all build clean
+
+See [`docs/button-wiring-audit.md`](docs/button-wiring-audit.md) for
+the full updated audit.
+
 ## [0.21.0 build 81] - 2026-05-22 — Final v1.1 polish: 4 remaining items shipped
 
 PR #32 closes the remaining v1.1 punch list flagged after PR #31:

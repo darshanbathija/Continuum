@@ -1,11 +1,27 @@
 # Button wiring audit — Tahoe surfaces
 
-Generated 2026-05-22 against `feat/button-wiring-audit` off `main@53e14a7`.
+Originally generated 2026-05-22 against `feat/button-wiring-audit` off
+`main@53e14a7`. Last refreshed 2026-05-22 against the post-v1.1 main
+(PR #34 audit retro).
 
 Goal: every button on every Tahoe surface either invokes a real backend
 action or is removed. No decorative buttons in production.
 
-## Totals
+## Totals — v1.1 final (post-audit-retro)
+
+| Platform | Wired | By-design no-op | Decorative |
+|----------|-------|-----------------|------------|
+| Mac      | ~52   | 2 (RecentRow stub, empty-state HistoryRow) | 0 |
+| iOS      | ~43   | 2 (RecentRow stub, dormant PickWinnerButton) | 0 |
+| **Total**| **~95 (~95%)** | **4 (4%)** | **0 (0%)** |
+
+Final ratio: **~95% wired, 0% decorative, 4 by-design no-ops** with
+documented v1.2 follow-up scope (historical-sessions surface + iOS
+broadcast UI). Down from 102 interactive controls original because D3
++ D7 retired ~7 surface elements (`PairingFlow` segmented picker,
+`refresh`/`star`/`arrowR` icons on reply cards).
+
+## Original totals (pre-PR #23)
 
 | Platform | Interactive controls | Wired | Demo-only | No-op |
 |----------|---------------------|-------|-----------|-------|
@@ -16,6 +32,61 @@ action or is removed. No decorative buttons in production.
 iOS reads better because `NewSessionSheet` + `PairingFlow` (carried over from
 the pre-Tahoe Sessions v2 work) are fully wired. Mac is dominated by the
 Chat tab being almost entirely decorative.
+
+## Wiring progression
+
+| Milestone | Wired % | Notes |
+|-----------|---------|-------|
+| PR #23 pre-Phase | 48% | Audit baseline (49/102) |
+| PR #23 post-Phase A/B | 68% | +20 quick-wire wins |
+| PR #24 (Mac loopback) | 75% | +Mac Code IDE actions |
+| PR #25 (ReviewPane) | 79% | +Diff/Sources/PR/Term tabs |
+| PR #26 (iOS chat composer) | 84% | +iOS chat send loop |
+| PR #27 (D5+D6) | 87% | +iOS search +Mac titlebar |
+| PR #28 (D3+D4+X3+Mac chat) | 91% | +D3 pairing +D4 setAutoRevive +Mac chat composer |
+| PR #29/#30/#31/#33 (OpenCode + polish) | 93% | +OpenCode end-to-end |
+| **PR #34 (audit retro)** | **~95%** | +Mac Copy reply (D7) +syncChipUsage QR popover +hide demo HistoryRow when real sessions exist |
+
+## Remaining by-design no-ops (v1.2+ scope)
+
+1. **`MacCodeView.RecentRow`** — clicking a "RECENT" entry under a
+   repo card is a no-op. The historical-sessions surface (re-open a
+   recently-archived session) is a v1.2 product feature; the rows
+   exist today so the empty space on the right column doesn't read
+   as broken.
+2. **`IOSCodeView` recent row** — same as Mac. Comment in source
+   explicitly tags "the historical sessions surface lands in a
+   follow-up".
+3. **`IOSChatView.PickWinnerButton`** — wired UI but no group/child
+   plumbing yet on iOS. The Mac surface ships the wired version via
+   `PickWinnerMenu` in `MacChatView`; iOS broadcast UI is a v1.2
+   surface that'll thread groupId + childIndex.
+4. **`MacChatView.HistoryRow`** (empty-state preview only) — renders
+   only when `client.chatSessions` is empty, as a visual preview of
+   what the sidebar will look like. Clicking is a no-op because
+   there's no real session behind the row.
+
+## Surfaces with no buttons but were decorative (now real)
+
+- **MacUsageView OpencodeDollarRow** — text-only `$X today / $Y this
+  week` strip (PR #31); reads from `UsageHistoryStore.opencodeLiveRecords`
+- **OpencodeStatusController menu-bar item** — text-only `$X.XX`
+  status item (PR #33)
+- **Settings → Providers panel `OpencodeProviderRow`** — state pill
+  + auth list (PR #31); reads from `OpencodeProcessManager.shared`
+
+## Surfaces retired since the original audit (D3 + D7)
+
+- `PairingFlow.swift` — entire file deleted (D3); replaced by
+  `IOSPairingView` with both Scan QR + Paste URL wired
+- Mac chat reply card `refresh` icon (D7 retro) — never wired,
+  dropped in PR #34
+- Mac chat reply card `arrowR` (share) icon (D7 retro) — same
+- Mac chat reply card `StarButton` (D7 retro) — same
+- iOS chat reply card `refresh` icon (D7) — dropped in PR #26
+- iOS chat reply card `share` icon (D7) — same
+
+
 
 ## Highest-leverage gaps (existing backend, dead button)
 

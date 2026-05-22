@@ -239,9 +239,11 @@ struct MacTitlebar: View {
         return PairingTokenStore.shared.hasAnyPaired
     }
 
+    @State private var syncChipPopoverPresented: Bool = false
+
     @ViewBuilder
     private var syncChipUsage: some View {
-        Button(action: { /* TODO PR #26b: present QR popover */ }) {
+        Button(action: { syncChipPopoverPresented.toggle() }) {
             TahoeSyncChip(
                 icon: "qr",
                 text: isIPhonePaired ? "iPhone paired" : "Sync with iPhone"
@@ -249,6 +251,27 @@ struct MacTitlebar: View {
         }
         .buttonStyle(.plain)
         .help(isIPhonePaired ? "Manage paired devices" : "Pair an iPhone")
+        // PR #34 (audit retro): the original TODO from PR #26b. The
+        // titlebar chip now opens the same `PairingQRPopoverContent`
+        // the menu-bar item uses. SwiftUI's `.popover` anchors to the
+        // chip's frame; on macOS it renders as a native NSPopover.
+        .popover(isPresented: $syncChipPopoverPresented, arrowEdge: .bottom) {
+            Group {
+                if let runtime {
+                    PairingQRPopoverContent(runtime: runtime)
+                        .tahoeTheme(TahoeThemeStore.loaded())
+                        .padding(16)
+                        .frame(width: 340)
+                } else {
+                    // Preview / unconfigured: tiny placeholder so the
+                    // popover doesn't blow up the SwiftUI graph.
+                    Text("Pairing unavailable — relaunch Clawdmeter.")
+                        .font(TahoeFont.body(12))
+                        .padding(20)
+                        .frame(width: 280)
+                }
+            }
+        }
     }
 
     @ViewBuilder
