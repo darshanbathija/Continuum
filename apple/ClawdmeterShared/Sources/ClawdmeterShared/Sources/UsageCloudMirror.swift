@@ -30,6 +30,11 @@ public final class UsageCloudMirror: @unchecked Sendable {
 
     private let store = NSUbiquitousKeyValueStore.default
     private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "UsageCloudMirror")
+    /// Serializes every read-modify-write against `store`. Without this
+    /// lock, concurrent provider ticks racing on `providerIDsKey` would
+    /// clobber each other and drop registrations — see audit P1-05
+    /// (UsageCloudMirror lost-updates in iCloud KV sync).
+    private let lock = NSLock()
 
     /// Combine subject that fires whenever a snapshot for ANY provider is
     /// updated externally (i.e., another device pushed via iCloud) or by a
@@ -84,17 +89,26 @@ public final class UsageCloudMirror: @unchecked Sendable {
         providerID: String,
         displayName: String
     ) -> Bool {
+        let now = Date().timeIntervalSince1970
         let envelope = UsageStore.Envelope(
-            version: 1,
+            version: 2,
             providerID: providerID,
             displayName: displayName,
             usage: usage,
-            writtenAt: Int(Date().timeIntervalSince1970)
+            writtenAt: Int(now),
+            writtenAtPrecise: now
         )
-        guard let data = try? JSONEncoder().encode(envelope) else {
-            logger.error("UsageCloudMirror.write \(providerID, privacy: .public): encode failed")
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            logger.error("UsageCloudMirror.write \(providerID, privacy: .public) encode failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
+        // Serialize the read-modify-write of `providerIDsKey` so concurrent
+        // provider ticks don't drop each other's registrations.
+        lock.lock()
+        defer { lock.unlock() }
         store.set(data, forKey: Self.key(for: providerID))
         var ids = Set(store.array(forKey: Self.providerIDsKey) as? [String] ?? [])
         ids.insert(providerID)
@@ -107,14 +121,22 @@ public final class UsageCloudMirror: @unchecked Sendable {
     // MARK: - Read
 
     public func readSnapshot(providerID: String) -> UsageStore.Snapshot? {
-        guard let data = store.data(forKey: Self.key(for: providerID)),
-              let env = try? JSONDecoder().decode(UsageStore.Envelope.self, from: data)
-        else { return nil }
+        guard let data = store.data(forKey: Self.key(for: providerID)) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let env: UsageStore.Envelope
+        do {
+            env = try decoder.decode(UsageStore.Envelope.self, from: data)
+        } catch {
+            logger.error("UsageCloudMirror.read \(providerID, privacy: .public) decode failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        let stamp = env.writtenAtPrecise ?? TimeInterval(env.writtenAt)
         return UsageStore.Snapshot(
             providerID: env.providerID,
             displayName: env.displayName,
             usage: env.usage,
-            writtenAt: Date(timeIntervalSince1970: TimeInterval(env.writtenAt))
+            writtenAt: Date(timeIntervalSince1970: stamp)
         )
     }
 
@@ -151,10 +173,17 @@ public final class UsageCloudMirror: @unchecked Sendable {
     /// `(computedAt, sequenceNumber)` and readers compare those.
     @discardableResult
     public func writeAnalyticsSnapshot(_ snapshot: UsageHistorySnapshot) -> Bool {
-        guard let data = try? JSONEncoder().encode(snapshot) else {
-            logger.error("UsageCloudMirror.writeAnalyticsSnapshot: encode failed")
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(snapshot)
+        } catch {
+            logger.error("UsageCloudMirror.writeAnalyticsSnapshot encode failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
+        // Same lock as the per-provider writer — analytics shares the
+        // KVS budget pool with provider snapshots.
+        lock.lock()
+        defer { lock.unlock() }
         let ourKeys = currentKeyByteUsage()
         let withoutAnalytics = ourKeys - (store.data(forKey: Self.analyticsKey)?.count ?? 0)
         let projected = withoutAnalytics + data.count
@@ -170,10 +199,13 @@ public final class UsageCloudMirror: @unchecked Sendable {
     }
 
     public func readAnalyticsSnapshot() -> UsageHistorySnapshot? {
-        guard let data = store.data(forKey: Self.analyticsKey),
-              let snap = try? JSONDecoder().decode(UsageHistorySnapshot.self, from: data)
-        else { return nil }
-        return snap
+        guard let data = store.data(forKey: Self.analyticsKey) else { return nil }
+        do {
+            return try JSONDecoder().decode(UsageHistorySnapshot.self, from: data)
+        } catch {
+            logger.error("UsageCloudMirror.readAnalyticsSnapshot decode failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     /// Sum of byte-length of all keys we own (analytics + live mirrors).

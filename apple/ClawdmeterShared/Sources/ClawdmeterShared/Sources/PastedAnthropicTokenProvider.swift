@@ -177,11 +177,17 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
     @discardableResult
     private func deleteFromKeychain() -> Bool {
         let status = SecItemDelete(baseQuery() as CFDictionary)
+        // ALWAYS clear the in-memory cache, even when the Keychain delete
+        // fails — sign-out must invalidate the local copy regardless. If
+        // we only cleared on errSecSuccess/errSecItemNotFound, a locked
+        // Keychain (errSecInteractionNotAllowed) or auth-failure path
+        // would leave the singleton serving the stale token to every
+        // caller until process restart, defeating sign-out entirely.
+        cached = nil
         if status == errSecSuccess || status == errSecItemNotFound {
-            cached = nil
             return true
         }
-        logger.error("PastedAnthropicTokenProvider delete failed: \(status)")
+        logger.error("PastedAnthropicTokenProvider delete failed: \(status, privacy: .public) (cache cleared anyway)")
         return false
     }
 }

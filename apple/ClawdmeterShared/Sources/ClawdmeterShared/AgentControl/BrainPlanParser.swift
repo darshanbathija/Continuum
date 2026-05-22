@@ -22,6 +22,22 @@
 
 import Foundation
 import Markdown
+import OSLog
+
+private let brainPlanLogger = Logger(subsystem: "com.clawdmeter.shared", category: "BrainPlanParser")
+
+/// Wrap a throwing IO call and log the error on failure. Returns nil on
+/// failure so callers can fall through with the same semantics as `try?`
+/// — they just get a logged trail in Console.app for production triage.
+@inline(__always)
+private func loggedTry<T>(_ context: @autoclosure () -> String, _ body: () throws -> T) -> T? {
+    do { return try body() }
+    catch {
+        let where_ = context()
+        brainPlanLogger.error("\(where_, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        return nil
+    }
+}
 
 // MARK: - PlanState
 
@@ -149,8 +165,12 @@ public enum BrainPlanParser {
         // No task.md AND no plan.md → we're still waiting for the first turn.
         guard taskExists || planExists else { return .awaitingFirstTurn }
 
-        let taskRaw = taskExists ? ((try? String(contentsOf: taskURL, encoding: .utf8)) ?? "") : ""
-        let planRaw = planExists ? ((try? String(contentsOf: planURL, encoding: .utf8)) ?? "") : ""
+        let taskRaw = taskExists
+            ? (loggedTry("read task.md @ \(taskURL.path)") { try String(contentsOf: taskURL, encoding: .utf8) } ?? "")
+            : ""
+        let planRaw = planExists
+            ? (loggedTry("read implementation_plan.md @ \(planURL.path)") { try String(contentsOf: planURL, encoding: .utf8) } ?? "")
+            : ""
 
         let (headline, body) = splitTaskMarkdown(taskRaw)
         let steps = parsePlanChecklist(planRaw)
@@ -303,16 +323,20 @@ public enum BrainPlanParser {
     // MARK: - annotations/
 
     /// Walks `<brain>/annotations/*.pbtxt`, returns one BrainAnnotation
-    /// per file. Files outside the dir or unreadable files are skipped.
+    /// per file. Files outside the dir or unreadable files are skipped
+    /// — but the failure is logged so we can spot recurring permission /
+    /// schema issues in Console.app.
     static func parseAnnotations(brainURL: URL, fileManager: FileManager) -> [BrainAnnotation] {
         let dir = brainURL.appendingPathComponent("annotations", isDirectory: true)
-        guard let entries = try? fileManager.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: nil
-        ) else { return [] }
+        guard fileManager.fileExists(atPath: dir.path) else { return [] }
+        guard let entries = loggedTry("contentsOfDirectory \(dir.path)", {
+            try fileManager.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        }) else { return [] }
         var out: [BrainAnnotation] = []
         for url in entries where url.pathExtension == "pbtxt" {
-            guard let body = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            guard let body = loggedTry("read pbtxt \(url.path)", {
+                try String(contentsOf: url, encoding: .utf8)
+            }) else { continue }
             let base = url.lastPathComponent
             let id = url.deletingPathExtension().lastPathComponent
             out.append(BrainAnnotation(id: id, filename: base, body: body.trimmingCharacters(in: .whitespacesAndNewlines)))
@@ -328,12 +352,16 @@ public enum BrainPlanParser {
     /// task indicator. JSON decode failures are silently swallowed (the
     /// metadata format is forgiving and forward-compat with new keys).
     static func parseMetadataFlags(brainURL: URL, fileManager: FileManager) -> Bool {
-        guard let entries = try? fileManager.contentsOfDirectory(at: brainURL, includingPropertiesForKeys: nil) else {
-            return false
-        }
+        guard let entries = loggedTry("contentsOfDirectory \(brainURL.path)", {
+            try fileManager.contentsOfDirectory(at: brainURL, includingPropertiesForKeys: nil)
+        }) else { return false }
         for url in entries where url.pathExtension == "json" && url.lastPathComponent.hasSuffix(".metadata.json") {
-            guard let data = try? Data(contentsOf: url),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            guard let data = loggedTry("read metadata \(url.path)", { try Data(contentsOf: url) }) else { continue }
+            // JSON shape is forward-compat; treat decode failure as "no flag".
+            guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                brainPlanLogger.debug("metadata.json @ \(url.path, privacy: .public) is not a JSON object — skipping")
+                continue
+            }
             if json["requestFeedback"] as? Bool == true { return true }
         }
         return false
@@ -348,7 +376,11 @@ public enum BrainPlanParser {
         for url in urls {
             guard let attrs = try? fileManager.attributesOfItem(atPath: url.path),
                   let date = attrs[.modificationDate] as? Date else { continue }
-            if latest == nil || date > latest! { latest = date }
+            if let current = latest {
+                if date > current { latest = date }
+            } else {
+                latest = date
+            }
         }
         return latest
     }

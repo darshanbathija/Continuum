@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let cityLogger = Logger(subsystem: "com.clawdmeter.shared", category: "CityNamer")
 
 /// City-namer helper. Sessions v2 Phase 9. Maintains assigned-city state
 /// so the UI shows stable, unique labels across sessions.
@@ -20,9 +23,14 @@ public final class CityNamer: ObservableObject {
         if let support = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first?.appendingPathComponent("Clawdmeter", isDirectory: true) {
-            try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+            do {
+                try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+            } catch {
+                cityLogger.error("createDirectory(\(support.path, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+            }
             self.storeURL = support.appendingPathComponent("city-assignments.json")
         } else {
+            cityLogger.error("applicationSupportDirectory unavailable — city assignments will not persist this run")
             self.storeURL = nil
         }
         load()
@@ -54,8 +62,18 @@ public final class CityNamer: ObservableObject {
 
     private func load() {
         guard let storeURL, FileManager.default.fileExists(atPath: storeURL.path) else { return }
-        guard let data = try? Data(contentsOf: storeURL),
-              let file = try? JSONDecoder().decode(StoreFile.self, from: data) else {
+        let data: Data
+        do {
+            data = try Data(contentsOf: storeURL)
+        } catch {
+            cityLogger.error("read \(storeURL.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let file: StoreFile
+        do {
+            file = try JSONDecoder().decode(StoreFile.self, from: data)
+        } catch {
+            cityLogger.error("decode \(storeURL.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             return
         }
         var loaded: [UUID: String] = [:]
@@ -73,7 +91,17 @@ public final class CityNamer: ObservableObject {
             acc[pair.key.uuidString] = pair.value
         }
         let file = StoreFile(version: 1, assignments: raw)
-        guard let data = try? JSONEncoder().encode(file) else { return }
-        try? data.write(to: storeURL, options: [.atomic])
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(file)
+        } catch {
+            cityLogger.error("encode city-assignments failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        do {
+            try data.write(to: storeURL, options: [.atomic])
+        } catch {
+            cityLogger.error("write \(storeURL.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }

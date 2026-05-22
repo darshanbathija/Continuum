@@ -56,9 +56,23 @@ public struct TahoeLiveRow: Equatable, Sendable {
         self.stale = stale
     }
 
-    /// Demo defaults — match `TahoeDemo.liveData[provider]`.
+    /// Demo defaults — match `TahoeDemo.liveData[provider]`. Falls back to
+    /// `.claude` when the requested provider is missing (e.g. `.opencode`
+    /// isn't in the fixture map); if that fallback is *also* missing
+    /// (would require an outright refactor of `TahoeDemo`), we synthesize
+    /// a neutral placeholder row rather than crashing the view.
     public static func demo(_ provider: TahoeProvider) -> TahoeLiveRow {
-        let d = TahoeDemo.liveData[provider] ?? TahoeDemo.liveData[.claude]!
+        guard let d = TahoeDemo.liveData[provider]
+            ?? TahoeDemo.liveData[.claude] else {
+            return TahoeLiveRow(
+                sessionPercent: 0, weeklyPercent: 0,
+                sessionResetIn: "—", weeklyResetIn: "—",
+                modelName: "—",
+                autoReviveOn: false, autoReviveAgo: "",
+                supportsAutoRevive: false, hasWeekly: false,
+                stale: true
+            )
+        }
         return TahoeLiveRow(
             sessionPercent: d.session, weeklyPercent: d.weekly,
             sessionResetIn: d.resetIn, weeklyResetIn: d.weeklyIn,

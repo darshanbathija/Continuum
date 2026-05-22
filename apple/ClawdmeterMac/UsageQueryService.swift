@@ -88,12 +88,14 @@ private final class UsageQueryServer: NSObject, UsageWriterProtocol {
     @MainActor
     private func encode(model: AppModel) -> Data? {
         guard let usage = model.usage else { return nil }
+        let now = Date().timeIntervalSince1970
         let envelope = UsageStore.Envelope(
-            version: 1,
+            version: 2,
             providerID: model.config.id,
             displayName: model.config.displayName,
             usage: usage,
-            writtenAt: Int(Date().timeIntervalSince1970)
+            writtenAt: Int(now),
+            writtenAtPrecise: now
         )
         return try? JSONEncoder().encode(envelope)
     }
