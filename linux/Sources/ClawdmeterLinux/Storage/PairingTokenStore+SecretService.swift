@@ -94,8 +94,9 @@ public final class LinuxPairingTokenStore: BearerTokenStore, @unchecked Sendable
         do {
             try LinuxConfigPaths.ensureDirectory(LinuxConfigPaths.configHome)
             let url = LinuxConfigPaths.bearerTokenFile
-            let prevMask = umask(0o077)
-            defer { _ = umask(prevMask) }
+            // Audit P1 fix: dropped the global umask dance. See
+            // LinuxSecretServiceTokenProvider.writeFallbackFile — umask
+            // is process-wide and races with concurrent file writers.
             try token.write(to: url, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: url.path)

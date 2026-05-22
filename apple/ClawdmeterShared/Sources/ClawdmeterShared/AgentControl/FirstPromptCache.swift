@@ -96,12 +96,29 @@ public final class FirstPromptCache: @unchecked Sendable {
     }
 
     public nonisolated static func defaultStoreURL() -> URL {
-        let appSupport = FileManager.default.urls(
+        // Sandboxed targets (widget extensions, certain Catalyst configs)
+        // can return an empty array here. Fall back to a sentinel under
+        // `/tmp` so the resolver never crashes; lookups against that
+        // location will miss harmlessly and the in-memory cache continues
+        // to function.
+        let candidate = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!.appendingPathComponent("Clawdmeter", isDirectory: true)
-        try? FileManager.default.createDirectory(
-            at: appSupport, withIntermediateDirectories: true
-        )
+        ).first
+        let appSupport: URL
+        if let base = candidate {
+            appSupport = base.appendingPathComponent("Clawdmeter", isDirectory: true)
+        } else {
+            cacheLogger.error("applicationSupportDirectory unavailable; using /tmp fallback")
+            appSupport = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                .appendingPathComponent("Clawdmeter", isDirectory: true)
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: appSupport, withIntermediateDirectories: true
+            )
+        } catch {
+            cacheLogger.error("createDirectory(\(appSupport.path, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+        }
         return appSupport.appendingPathComponent("first-prompt-cache.json")
     }
 
@@ -178,7 +195,13 @@ public final class FirstPromptCache: @unchecked Sendable {
         lock.lock()
         entries.removeAll()
         lock.unlock()
-        try? FileManager.default.removeItem(at: storeURL)
+        do {
+            try FileManager.default.removeItem(at: storeURL)
+        } catch CocoaError.fileNoSuchFile {
+            // Nothing on disk yet — clear() is idempotent.
+        } catch {
+            cacheLogger.error("removeItem(\(self.storeURL.path, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func load() {

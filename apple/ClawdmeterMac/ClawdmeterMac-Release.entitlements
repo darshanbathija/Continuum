@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Audit P0 fix: release entitlements with the macOS app sandbox ON.
+
+	  The Debug entitlements (sibling file `ClawdmeterMac.entitlements`)
+	  disable the sandbox so dev builds can read Claude Code's Keychain
+	  entry directly. That is NOT acceptable for shipped DMGs — sandbox
+	  is the platform's strongest containment guarantee and turning it
+	  off means any RCE elsewhere (e.g. a compromised bundled Node from
+	  the supply-chain fix) gains full-user blast radius (Documents,
+	  ~/Library, browser cookies, ssh keys) instead of being contained.
+
+	  Trade-off: with sandbox ON, the "read Claude Code's Keychain entry
+	  by group" path won't work unless we either
+	    (a) ship our own OAuth flow + own Keychain entry (already
+	        implemented via PastedAnthropicTokenProvider), OR
+	    (b) request a shared keychain-access-group entitlement with
+	        Claude Code (requires Anthropic-side coordination).
+
+	  The pasted-token flow keeps working in the sandboxed build via
+	  the keychain-access-groups entry below.
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- The Mac daemon listens on Tailscale CGNAT; the entitlement is
+	     required because sandbox blocks all network access otherwise. -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- App group for the widget extension. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.76S62SDSD3.com.clawdmeter</string>
+	</array>
+	<!-- Pasted-token Keychain entry; shared with the iPhone/Watch via
+	     iCloud Keychain (kSecAttrSynchronizable=true). -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.clawdmeter</string>
+	</array>
+	<!-- iCloud KV sync — paid Developer Program only. -->
+	<!--
+	<key>com.apple.developer.icloud-services</key>
+	<array><string>CloudKit</string></array>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array/>
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>$(TeamIdentifierPrefix)com.clawdmeter</string>
+	-->
+</dict>
+</plist>

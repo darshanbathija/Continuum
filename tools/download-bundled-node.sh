@@ -57,8 +57,42 @@ fi
 ARM_TARBALL="node-${VERSION}-darwin-arm64.tar.gz"
 BASE_URL="https://nodejs.org/dist/${VERSION}"
 
+# Pick a shasum frontend. macOS ships `shasum`, Linux usually `sha256sum`.
+if command -v shasum >/dev/null 2>&1; then
+  SHASUM_CHECK=(shasum -a 256 -c -)
+else
+  SHASUM_CHECK=(sha256sum -c -)
+fi
+
+# Fetch the publisher-signed checksum manifest. Verifying every tarball
+# against this manifest closes the supply-chain hole where a MITM (or a
+# compromised mirror) could substitute a trojaned Node into our DMG.
+#
+# Optional: if `gpg` is present and the Node release keys are imported,
+# verify the manifest's GPG signature too. We don't fail when gpg is
+# missing (build hosts vary), but we ALWAYS fail when the SHA mismatches.
+SHASUMS_URL="${BASE_URL}/SHASUMS256.txt"
+echo "→ Fetching SHASUMS256.txt"
+curl -fsSL "$SHASUMS_URL" -o "$TMP_DIR/SHASUMS256.txt"
+if command -v gpg >/dev/null 2>&1 && curl -fsSL "${SHASUMS_URL}.sig" -o "$TMP_DIR/SHASUMS256.txt.sig" 2>/dev/null; then
+  if gpg --verify "$TMP_DIR/SHASUMS256.txt.sig" "$TMP_DIR/SHASUMS256.txt" 2>/dev/null; then
+    echo "→ SHASUMS256.txt GPG signature verified"
+  else
+    echo "⚠  GPG signature could not be verified (release keys may not be imported)."
+    echo "   Import the keys from https://github.com/nodejs/release-keys and re-run for full chain-of-trust."
+  fi
+fi
+
+verify_sha() {
+  local tarball="$1"
+  echo "→ Verifying SHA256 of $tarball"
+  (cd "$TMP_DIR" && grep -F "  $tarball" SHASUMS256.txt | "${SHASUM_CHECK[@]}") \
+    || { echo "✗ SHA256 verification FAILED for $tarball — aborting" >&2; exit 1; }
+}
+
 echo "→ Fetching $ARM_TARBALL"
 curl -fsSL "${BASE_URL}/${ARM_TARBALL}" -o "$TMP_DIR/$ARM_TARBALL"
+verify_sha "$ARM_TARBALL"
 echo "→ Extracting arm64"
 tar -xzf "$TMP_DIR/$ARM_TARBALL" -C "$TMP_DIR"
 ARM_DIR="$TMP_DIR/node-${VERSION}-darwin-arm64"
@@ -73,6 +107,7 @@ if [[ $UNIVERSAL -eq 1 ]]; then
   X64_TARBALL="node-${VERSION}-darwin-x64.tar.gz"
   echo "→ Fetching $X64_TARBALL (--universal mode)"
   curl -fsSL "${BASE_URL}/${X64_TARBALL}" -o "$TMP_DIR/$X64_TARBALL"
+  verify_sha "$X64_TARBALL"
   echo "→ Extracting x64"
   tar -xzf "$TMP_DIR/$X64_TARBALL" -C "$TMP_DIR"
   X64_DIR="$TMP_DIR/node-${VERSION}-darwin-x64"

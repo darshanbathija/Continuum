@@ -4,6 +4,97 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.0 build 115] - 2026-05-23 — Cross-platform audit sweep: ~70 P0/P1/P2 fixes (`darshanbathija/bug-audit-2026-05-23`)
+
+A focused bug-audit + fix pass that closes findings across every platform. Code-only changes, no new features. Pairing and release builds get safer, pre-existing crash paths in the shared library get caught, the polyglot tools/ sidecars get input validation and HTTP timeouts. Some user-visible behavior changes flagged below.
+
+### Behavior changes (read first)
+
+- **Mac shipped builds are now sandboxed.** New `ClawdmeterMac-Release.entitlements` (sandbox on, network-client + network-server, same App Group / Keychain access groups as before) is selected for the Release configuration. Debug keeps the unsandboxed entitlements so devs can still read Claude Code's Keychain entry locally. Shipped DMGs no longer ride out unsandboxed.
+- **iOS App Transport Security is scoped, not disabled.** `NSAllowsArbitraryLoads` is now `false`. Plain HTTP/WS is allowed only to `*.ts.net` (Tailscale MagicDNS), `localhost`, and link-local / loopback via `NSAllowsLocalNetworking`. Bare-IP Tailscale CGNAT (`100.64.0.0/10`) URLs are NOT covered — turn on MagicDNS on the Tailscale dashboard if not already.
+- **Pairing rejects untrusted hosts and bad tokens.** `PairingScannerView` now refuses anything outside loopback, Tailscale CGNAT (`100.64.0.0/10`), or `*.ts.net`. Tokens have to be base64url shape, 16-256 chars; ports have to be 1-65535.
+- **OpenCode sessions return a clean 501 instead of an opaque 500** on `POST /sessions/:id/send`. The real send-branch lands in a follow-up; the 501 lets iOS render "OpenCode is read-only in this build" honestly.
+- **AppImage `LD_LIBRARY_PATH`** no longer ends with a trailing colon — that was a CWD-injection footgun for users launching the AppImage from shared dirs.
+
+### Fixed — Shared library (Apple)
+
+- Force-unwraps that could crash widget extensions and SwiftUI views: empty `applicationSupportDirectory` in `FirstPromptCache`, `TaskGroup.next()!` in `AgentControlClient`, `TahoeDemo.liveData[.claude]!` fallback in `TahoeBindings`, fragile `latest!` comparison in `BrainPlanParser.latestMTime`.
+- `PastedAnthropicTokenProvider.deleteFromKeychain` now clears the in-memory cache on every status path including locked-Keychain failures — sign-out is no longer a no-op when the Keychain returns `errSecInteractionNotAllowed`.
+- `UsageCloudMirror` adds `NSLock` around every read-modify-write of the iCloud KV provider list. Concurrent Claude+Codex+Gemini polls can no longer clobber each other's registrations.
+- `UsageStore` / `UsageCloudMirror` envelopes now use `convertFromSnakeCase` and carry a sub-second `writtenAtPrecise` field so legacy snake_case snapshots still decode and tied-second timestamps stop colliding.
+- `AnalyticsRepoList` keeps cost shares in `Decimal` end-to-end. Per-repo rows actually sum to 100%.
+- `SessionFileResolver.geminiLinks` cache is now populated on first lookup. Previously the reader had no writer; every legacy gemini JSONL lookup missed.
+- `WatchTokenBridge.handleContext` surfaces decode failures instead of silently dropping malformed `usageByProvider` payloads.
+- File / JSON / Keychain `try?` sweep across `FirstPromptCache`, `BrainPlanParser`, `CityNamer`, `AntigravityProjectResolver`: failures now hit OSLog instead of vanishing.
+
+### Fixed — Mac
+
+- Five `process.terminate()` sites in the process managers (`CodexSubscriptionRelay`, `AntigravitySidecarManager`, `CodexSDKManager` x2, `OpencodeProcessManager` x2) now pair with `Task.detached { proc.waitUntilExit() }`. No more accumulated zombie PIDs across long sessions.
+- `OpencodeProcessManager.handleUnexpectedExit` resets state to `.stopped` before calling `ensureRunning()`. Previously the manager left state at `.running` after a crash, so `ensureRunning()` returned early and the server never restarted.
+- `OpenDesignDaemonManager` terminates + reaps the orphaned daemon and clears the cached port when `/health` times out, instead of leaving stale state for the next `ensureRunning()`.
+- `MenuBarGaugeView.scaledImage`: `as!` on `NSImage.copy()` replaced with `as?` + fallback. That was crashing every menu-bar refresh tick when the source was a proxy image.
+- `AppModel.deinit` invalidates `clockTimer` so a replaced model (sign-in switch) doesn't keep firing through `[weak self]` against a zombie instance.
+
+### Fixed — Mac security boundary
+
+- `POST /sessions` now calls `isValidRepoKey` BEFORE either dispatch branch. A paired client can no longer post `/tmp` or a symlink-escaping path and have the Mac spawn an agent rooted there.
+- `POST /design/import-folder` now constrains `baseDir` to paths that pass `isValidRepoKey` plus an explicit `.ssh` / `.gnupg` / `.aws` / `Library/Keychains` deny-list. The bridge marks every call `fromTrustedPicker: true`, so a paired iPhone could have asked Open Design to ingest sensitive folders without this guard.
+- `CodexSubscriptionRelay` logs op/thread-id/byte-length/cwd-basename at `.public` and routes full prompt/stdout/stderr to `.private`. Prompts routinely contain secrets — they no longer end up readable in Console.app / sysdiagnose.
+- `AgentControlServer.start()` starts a 30s autopilot-inactivity sweep that disables sessions idle for >15 min and emits `statusChanged`. The 15-min safety guardrail described in the eng review was previously dead code.
+
+### Fixed — Mac plan approval
+
+- `DaemonChatStoreRegistry.snapshotStore` extends the file-swap check to `.code` sessions (previously only `.chat`). Codex plan-mode approve-plan writes a new rollout JSONL; without the swap, iOS chat-subscribe WS clients saw no execution turns. The fix preserves the chat-specific resolution path (`newestCodexJSONLMatching` scoped to cwd + createdAt). Early `/review` caught a regression where the broadened version downgraded Codex chat sessions to global newest and that's been fixed.
+- `SessionsView.chatStore(for:)` does the same swap-or-rebuild check on the Mac UI's cached store so the chat thread doesn't freeze on the plan after approve.
+
+### Fixed — iOS / Watch
+
+- `UsageModel.deinit` invalidates the daemon refresh timer.
+- `iOSChatTranscriptView` replaces the racy `DispatchQueue.main.asyncAfter(0.15)` re-scroll with a cancellable `Task` + `onDisappear` hook.
+- `PairingScannerView` validates host (loopback / Tailscale CGNAT / `*.ts.net`), ports, and base64url token shape. See "Behavior changes" above.
+- `IOSSessionDetailView.sendComposer` / `sendRefine` clear the composer text only when `sendPrompt` returns `true`. Offline / 4xx / archived-session paths no longer silently lose what the user typed.
+- `AgentControlClientSessionObserver` drops the Codex short-circuit. Every Codex session was being marked "waiting" even mid-generation, which trained users to ignore the Watch complication. Now requires non-empty `planText`.
+- Watch complication refresh cadence is dynamic. 1 min when an approval is pending, 30 min when idle. Approvals clear off the wrist promptly instead of sitting up to 30 min stale.
+- Watch "Voice reply" button is hidden behind a feature flag set to `false`. The watch sent the op over WCSession but iOS only logged it. The button was dead UI that misled users.
+
+### Fixed — Linux
+
+- `HummingbirdPeerFilter.decide` strips the `::ffff:` IPv4-mapped IPv6 prefix before checking 127.* / 100.64-127 / `fd7a:115c:a1e0:`. On dual-stack listeners, IPv4 peers arrive as `::ffff:127.0.0.1` and every legitimate pairing was being rejected.
+- `LinuxConfigPaths` treats empty / non-absolute XDG env vars as unset, per the Freedesktop spec.
+- `LinuxUsageStore.loadIfNeeded` self-heals on a corrupt `usage-store.json`. Log, delete the bad file, reset the cache, mark `loaded = true`. Previously a single decode error left `loaded = false` and the dashboard stuck at "no data" forever.
+- `LinuxUsageStore.writeSnapshot` routes through `UsageData.shouldReplace` so an older reset epoch can't clobber freshly-reset post-quota state. Matches the Apple-side guard.
+- `LinuxSecretServiceTokenProvider.writeFallbackFile` and `PairingTokenStore+SecretService.writeFallbackFile` drop the process-wide `umask()` dance. Permissions are set explicitly via `setAttributes([.posixPermissions: 0o600])` so concurrent file writers (Hummingbird sockets, observer writes) can't race.
+- `AppIndicatorTray.setIcon` funnels through `DispatchQueue.main.async` so future Phase-4 GTK / AppIndicator C calls can't land on `TrayPollLoop`'s background actor thread. GTK is strictly not thread-safe.
+- `LinuxUIWidgetTests` switched from the now-banned `LinuxUI.adapter = StubAdapter()` to `LinuxUI.configure(adapter:)`.
+- AppImage and `.deb` packaging CI jobs gated to tag pushes only since the underlying scripts are still Phase 0 stubs that exit 2.
+
+### Fixed — Tools / sidecars
+
+- **bridge-host**: `sanitizeBaseDir` refuses paths outside `$HOME` and refuses `.ssh` / `.gnupg` / `.aws` / `Library/Keychains` subtrees on both `/sign-import-token` and `/import-folder`. HTTP server gets explicit `setTimeout(30s)`, `headersTimeout 10s`, `keepAliveTimeout 5s`, `maxConnections 16`.
+- **codex-sdk**: `safeWorkingDirectory` constrains cwd to `$HOME` and refuses null bytes / relative paths; `safePrompt` caps prompt at 256 KB; `readline` drops `crlfDelay: Infinity` and enforces a 1 MB per-line cap so a stuck sender can't OOM the sidecar; the dynamic SDK import races a 5s deadline; `ready` payload is now consistent shape from both SDK and skeleton paths.
+- **clawdmeter-agents** (Python): traceback preserved in `sdk_import_failed`. observer.py factors `_emit_exc()` helper, folds the 2s polling sleep into `select()` (kills the busy-spin + slow-shutdown pattern), and explicitly checks for SDK schema-mismatch attributes instead of silently defaulting tokens to 0.
+- **open-design plugin**: every `postMessage` now forwards a per-session `__CLAWDMETER_HANDOFF_NONCE__` so the native receiver can verify the call really came from this renderer context; `projectId` is shape-validated; toolbar selector failures log a one-time warning + emit `plugin-error` to the native side; `MutationObserver` is teardown-aware via `window.__clawdmeterPluginTeardown` to stop accumulating observers across plugin reloads.
+
+### Fixed — CI / release
+
+- `linux.yml` gets a default `permissions: contents: read`. `SwiftyLab/setup-swift` is now SHA-pinned to v1.14.0 (no more `@latest`). `release-upload` widens to `contents: write` only on tag pushes.
+- `tools/download-bundled-node.sh` fetches and verifies `SHASUMS256.txt` (optionally GPG-verifies the signature when release keys are imported). `tools/download-bundled-uv.sh` fetches and verifies the per-artifact `.sha256`. The DMG build can no longer ship a trojaned Node or uv from a network-path compromise.
+- AppImage `AppRun` guards `LD_LIBRARY_PATH` against the trailing-colon CWD-injection footgun.
+- `deb/prerm` switches `pkill -f` → `pkill -x` so it doesn't kill editors that happen to have "clawdmeter" in their command line.
+- Fastlane `Appfile` typo fix: `com.clawdmeter.mac.widget` → `widgets`.
+- Fastlane `Fastfile` `release` lane now picks the DMG by exact `Clawdmeter-#{market}-arm64.dmg` path instead of `Dir[...].sort.last` (lexicographic sort preferred `0.9.2` over `0.22.32`).
+
+### Added
+
+- `docs/BUG-AUDIT-2026-05-23.md` — consolidated audit report (~110 findings across 4 independent audits) that informed this release. Kept in-repo as a forensic record.
+
+### Notes
+
+Three explicitly deferred items (called out in the audit doc):
+- OpenCode `POST /sessions/:id/send` real implementation + SSE-backed snapshot store. Current release returns a clean 501.
+- Linux libsecret Phase 3 C bridge. Current release uses a hardened file fallback (no `umask` race; `setAttributes(0o600)`) but doesn't talk to GNOME Keyring yet.
+- macOS / iOS / watch Xcode CI lane. Linux CI green; Apple targets still need their own workflow.
+
 ## [0.22.32 build 113] - 2026-05-23 — Fix: wire button controls to backend behavior (`darshanbathija/clawdmeter-button-wiring`)
 
 This pass keeps the current UI and wires visible controls to real daemon/client paths, or gates controls that cannot honestly work yet.

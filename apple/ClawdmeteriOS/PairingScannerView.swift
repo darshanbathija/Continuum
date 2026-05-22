@@ -92,11 +92,22 @@ struct PairingScannerView: UIViewControllerRepresentable {
 
     /// Parse `clawdmeter://host:httpPort?token=<base64url>&ws=<wsPort>` into
     /// a `PairingChallenge`. Returns nil for unrecognized URLs.
+    ///
+    /// Audit P1 fix: validate every field. Previously token / designToken
+    /// were accepted verbatim and host could be any string — a malicious
+    /// printed QR ("Open in Code on this airport Wi-Fi!") could pair the
+    /// iPhone with an attacker-chosen host. The defenses:
+    ///   - host must look like loopback, Tailscale CGNAT
+    ///     (100.64.0.0/10), or `*.ts.net`.
+    ///   - ports must fall in 1…65535.
+    ///   - tokens must match `^[A-Za-z0-9_-]{16,256}$` (base64url shape).
     static func parse(urlString: String) -> PairingChallenge? {
         guard let url = URL(string: urlString),
               url.scheme == "clawdmeter",
               let host = url.host,
-              let httpPort = url.port
+              let httpPort = url.port,
+              isAllowedPairingHost(host),
+              isValidPort(httpPort)
         else { return nil }
         var token: String?
         var wsPort: Int?
@@ -106,10 +117,14 @@ struct PairingScannerView: UIViewControllerRepresentable {
            let items = comps.queryItems {
             for item in items {
                 switch item.name {
-                case "token":   token = item.value
-                case "ws":      if let v = item.value, let n = Int(v) { wsPort = n }
-                case "dp":      if let v = item.value, let n = Int(v) { designPort = n }
-                case "dt":      designToken = item.value
+                case "token":
+                    if let v = item.value, isValidPairingToken(v) { token = v }
+                case "ws":
+                    if let v = item.value, let n = Int(v), isValidPort(n) { wsPort = n }
+                case "dp":
+                    if let v = item.value, let n = Int(v), isValidPort(n) { designPort = n }
+                case "dt":
+                    if let v = item.value, isValidPairingToken(v) { designToken = v }
                 default: break
                 }
             }
@@ -117,5 +132,41 @@ struct PairingScannerView: UIViewControllerRepresentable {
         guard let token, let wsPort else { return nil }
         return PairingChallenge(host: host, port: httpPort, wsPort: wsPort, token: token,
                                 designPort: designPort, designToken: designToken)
+    }
+
+    /// Host must be loopback, in Tailscale CGNAT (100.64.0.0/10), or a
+    /// MagicDNS hostname under `*.ts.net`. Anything else (public IP,
+    /// random domain) is rejected — the daemon listens on Tailscale by
+    /// design and there's no legitimate reason to pair with anywhere
+    /// else.
+    static func isAllowedPairingHost(_ host: String) -> Bool {
+        if host == "localhost" || host == "127.0.0.1" || host == "::1" { return true }
+        if host.hasSuffix(".ts.net") || host.hasSuffix(".tailnet.ts.net") { return true }
+        // CGNAT range 100.64.0.0/10 → first octet 100, second 64–127.
+        let parts = host.split(separator: ".")
+        if parts.count == 4,
+           let a = Int(parts[0]), let b = Int(parts[1]),
+           let c = Int(parts[2]), let d = Int(parts[3]),
+           a == 100, b >= 64, b <= 127, c >= 0, c <= 255, d >= 0, d <= 255 {
+            return true
+        }
+        return false
+    }
+
+    static func isValidPort(_ p: Int) -> Bool {
+        p >= 1 && p <= 65535
+    }
+
+    static func isValidPairingToken(_ s: String) -> Bool {
+        // base64url charset; length 16–256 covers SHA-256 hex,
+        // 32-byte random tokens, and a generous future budget.
+        guard s.count >= 16, s.count <= 256 else { return false }
+        for ch in s.unicodeScalars {
+            let v = ch.value
+            let isAlnum = (v >= 0x30 && v <= 0x39) || (v >= 0x41 && v <= 0x5A) || (v >= 0x61 && v <= 0x7A)
+            let isUrlSafe = v == 0x2D || v == 0x5F  // '-' or '_'
+            if !(isAlnum || isUrlSafe) { return false }
+        }
+        return true
     }
 }

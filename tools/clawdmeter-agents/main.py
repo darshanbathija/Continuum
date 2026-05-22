@@ -45,16 +45,19 @@ def main() -> int:
     # AntigravitySidecarManager.probeSidecar reads this directly.
     sdk_import_ok = False
     import_err: str | None = None
+    import_trace: str | None = None
     try:
         import google.antigravity  # type: ignore[import-not-found]  # noqa: F401
         sdk_import_ok = True
     except ImportError as exc:
         import_err = f"{type(exc).__name__}: {exc}"
+        import_trace = traceback.format_exc(limit=2)
     except Exception as exc:  # broader catch — google-antigravity may
         # raise non-ImportError exceptions during top-level init (e.g.
         # network failures during package metadata fetch). Still treat
         # as "not provisioned" rather than crashing.
         import_err = f"{type(exc).__name__}: {exc}"
+        import_trace = traceback.format_exc(limit=2)
 
     emit({
         "type": "ready",
@@ -63,10 +66,14 @@ def main() -> int:
     })
 
     if not sdk_import_ok:
+        # Audit P1 fix: preserve the traceback. Without it, support
+        # tickets can't distinguish "package not installed" from
+        # "permission denied" from "transient network failure".
         emit({
             "type": "error",
             "code": "sdk_import_failed",
             "msg": import_err or "google.antigravity import failed",
+            "trace": import_trace,
         })
         return 1
 

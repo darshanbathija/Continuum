@@ -5,8 +5,12 @@ final class LinuxUIWidgetTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        // Ensure each test starts with the stub adapter.
-        LinuxUI.adapter = StubAdapter()
+        // Audit P1 fix: `LinuxUI.adapter` is now get-only (locked behind
+        // the setter ban that lets the production adapter be installed
+        // exactly once). Use the explicit `configure(adapter:)` entry
+        // the production code uses too — tests can re-install the stub
+        // freely since it's idempotent.
+        LinuxUI.configure(adapter: StubAdapter())
     }
 
     // MARK: - Each primitive constructs without crashing

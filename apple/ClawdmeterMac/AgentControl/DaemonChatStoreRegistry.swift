@@ -87,7 +87,15 @@ public final class DaemonChatStoreRegistry {
     }
 
     deinit {
-        sweepTask?.cancel()
+        // Audit P2 fix: `deinit` is implicitly non-isolated and the
+        // class is `@MainActor`-isolated. Capture the task ref into a
+        // local non-isolated copy so Swift 6 strict-concurrency doesn't
+        // complain about accessing actor-isolated state from a non-
+        // isolated context. `Task.cancel()` is itself thread-safe.
+        let sweep = sweepTask
+        sweep?.cancel()
+        let warmup = warmupTask
+        warmup?.cancel()
     }
 
     // MARK: - Public API
@@ -131,6 +139,10 @@ public final class DaemonChatStoreRegistry {
     /// a burst of HTTP polls in a row reuses parsed state.
     public func snapshotStore(for session: AgentSession) -> SessionChatStore? {
         startSweepIfNeeded()
+        // Merged from PR #69 (audit P1: .code rollover) + this branch
+        // (V2 audit P0 #4: hoist into a helper so `acquire()` runs the
+        // same check). The helper handles BOTH `.chat` and `.code`
+        // sessions now — see `rolloverChatJSONLIfNeeded` below.
         rolloverChatJSONLIfNeeded(session: session)
         if var entry = entries[session.id] {
             entry.lastTouchedAt = Date()
@@ -149,41 +161,54 @@ public final class DaemonChatStoreRegistry {
         return store
     }
 
-    /// v0.23 (Chat V2): audit P0 #4 fix — the per-snapshot file-swap
-    /// logic that v0.8 originally inlined into `snapshotStore(for:)`
-    /// only. Hoisted into a private helper so the long-lived
-    /// `acquire(for:)` path runs the same check; otherwise a WS
-    /// `chat-subscribe` subscriber attached before a Codex plan
-    /// approval keeps tailing the read-only rollout forever and the
-    /// chat freezes on the plan.
+    /// Per-snapshot file-swap logic. Hoisted out of `snapshotStore(for:)`
+    /// so the long-lived `acquire(for:)` path runs the same check.
+    /// Audit fixes folded together here:
     ///
-    /// What it covers:
-    /// - **Codex CLI**: rotates a new rollout under `~/.codex/sessions/`
-    ///   per turn AND after plan-approval (workspace-write respawn).
-    ///   `newestCodexJSONLMatching(cwd:after:)` finds the latest
-    ///   rollout whose `session_meta.cwd` matches our session's cwd
-    ///   and was created after the session.
-    /// - **Claude**: writes its JSONL on the first turn — the file
-    ///   doesn't exist at session create, so `createStore` fell back
-    ///   to sdkOnly. Upgrade to a real JSONL-backed store once the
-    ///   file appears.
+    /// - **V2 audit P0 #4 (chat path)**: a WS `chat-subscribe`
+    ///   subscriber attached before a Codex plan approval kept tailing
+    ///   the read-only rollout forever and the chat froze on the
+    ///   plan. Calling this helper from `acquire(for:)` closes that
+    ///   gap.
+    /// - **PR #69 audit P1 (code path)**: Codex plan-mode
+    ///   approve-plan respawns under a new rollout JSONL. Without
+    ///   running the file-swap for `.code` sessions, the registry
+    ///   kept tailing the stale plan-mode file and iOS chat-subscribe
+    ///   WS clients saw no execution turns.
+    ///
+    /// Resolution rules differ by kind:
+    /// - **`.chat`**: chat-specific selectors. `newestCodexJSONLMatching`
+    ///   is scoped to this session's cwd + createdAt (won't pick up a
+    ///   concurrent Codex run on the same machine). `chatCwdClaudeJSONL`
+    ///   is the chat-mode Claude JSONL.
+    /// - **`.code`**: injected `resolveURL` closure (delegates to
+    ///   `SessionFileResolver` in production for respawn-lineage
+    ///   tracking).
     ///
     /// CRITICAL: switches the file IN PLACE on the existing store
     /// (`switchTailedFile`) so the Mac UI's `@ObservedObject` doesn't
     /// invalidate — the chat thread would otherwise freeze on the
     /// previous turn's snapshot.
     private func rolloverChatJSONLIfNeeded(session: AgentSession) {
-        guard let entry = entries[session.id], session.kind == .chat else { return }
+        guard let entry = entries[session.id] else { return }
         let desiredURL: URL?
-        if session.agent == .codex, session.codexChatBackend == .cli {
-            desiredURL = Self.newestCodexJSONLMatching(
-                cwd: session.effectiveCwd,
-                after: session.createdAt
-            )
-        } else if session.agent == .claude {
-            desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
-        } else {
-            desiredURL = nil
+        switch session.kind {
+        case .chat:
+            if session.agent == .codex, session.codexChatBackend == .cli {
+                desiredURL = Self.newestCodexJSONLMatching(
+                    cwd: session.effectiveCwd,
+                    after: session.createdAt
+                )
+            } else if session.agent == .claude {
+                desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
+            } else {
+                desiredURL = nil
+            }
+        case .code:
+            // Plan-mode rollout swap on approve-plan (PR #69 audit P1).
+            // resolveURL delegates to SessionFileResolver which tracks
+            // Codex respawn lineage via record(sessionId:rolloutURL:).
+            desiredURL = resolveURL(session.id, session)
         }
         guard let desired = desiredURL, entry.store.currentFileURL != desired else { return }
         if entry.store.isSDKOnly {
@@ -200,7 +225,7 @@ public final class DaemonChatStoreRegistry {
         var refreshed = entry
         refreshed.lastTouchedAt = Date()
         entries[session.id] = refreshed
-        registryLogger.info("chat-jsonl rollover session=\(session.id.uuidString, privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
+        registryLogger.info("jsonl-rollover session=\(session.id.uuidString, privacy: .public) kind=\(String(describing: session.kind), privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
     }
 
     /// Decrement the subscriber count for a long-lived subscriber. Idempotent
@@ -663,6 +688,10 @@ public final class DaemonChatStoreRegistry {
                 for url in recents {
                     _ = self.snapshotStore(forJSONLPath: url)
                 }
+                // Audit P2 fix: clear the slot so a later force-rewarm
+                // (e.g. after the user adds a new repo) can run instead
+                // of short-circuiting on the lingering completed task.
+                self.warmupTask = nil
                 registryLogger.info("warmup complete: \(recents.count) JSONLs preloaded")
             }
         }

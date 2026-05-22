@@ -25,6 +25,47 @@
 // constructor. Usage draws against the ChatGPT subscription quota.
 
 import { createInterface } from "node:readline";
+import { realpathSync } from "node:fs";
+import { normalize, resolve as resolvePath } from "node:path";
+import { homedir } from "node:os";
+
+// Audit P1 fix: workingDirectory and prompt come in over stdin from the
+// Mac Swift app. We trust the harness, but defense-in-depth: validate
+// the cwd is under $HOME and cap prompt length so a broken caller (or
+// stuck stream) can't OOM us or feed a path that escapes the user's
+// home onto an SDK call that interprets it as a shell cwd.
+const MAX_PROMPT_BYTES = 256 * 1024;            // 256 KB
+const MAX_LINE_BYTES = 1 * 1024 * 1024;         // 1 MB per stdin line
+
+function safeWorkingDirectory(raw) {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) {
+    throw new Error("workingDirectory must be a non-empty string without null bytes");
+  }
+  if (!raw.startsWith("/")) {
+    throw new Error("workingDirectory must be absolute");
+  }
+  let canonical;
+  try { canonical = realpathSync(raw); }
+  catch { canonical = resolvePath(raw); }
+  const normalized = normalize(canonical);
+  const home = homedir();
+  if (!normalized.startsWith(home + "/") && normalized !== home) {
+    throw new Error(`workingDirectory must be under $HOME (got ${normalized})`);
+  }
+  return normalized;
+}
+
+function safePrompt(raw) {
+  if (raw === undefined || raw === null) return "";
+  if (typeof raw !== "string") {
+    throw new Error("prompt must be a string");
+  }
+  if (Buffer.byteLength(raw, "utf8") > MAX_PROMPT_BYTES) {
+    throw new Error(`prompt exceeds ${MAX_PROMPT_BYTES} byte cap`);
+  }
+  return raw;
+}
 
 const SKELETON_VERSION = "0.7.1-skeleton";
 const SDK_VERSION = "0.7.1-sdk";
@@ -38,19 +79,35 @@ function emit(obj) {
  * Attempt to import the Codex SDK. Returns the module object on
  * success, or null when the dep isn't installed. Caller falls back
  * to skeleton mode on null.
+ *
+ * Audit P2 fix: race the import against a hard 5s deadline so a
+ * corrupted module / slow disk can't pin the probe indefinitely
+ * (which causes the Swift app to spawn another sidecar → pileup).
  */
 async function loadSDK() {
+  const importOnce = async () => {
+    try {
+      return await import("@openai/codex-sdk");
+    } catch (err) {
+      if (err && err.code === "ERR_MODULE_NOT_FOUND") return null;
+      emit({
+        type: "log",
+        level: "warn",
+        msg: `Codex SDK import failed: ${err?.message ?? String(err)}`,
+      });
+      return null;
+    }
+  };
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("SDK import timed out after 5s")), 5_000).unref()
+  );
   try {
-    const sdk = await import("@openai/codex-sdk");
-    return sdk;
+    return await Promise.race([importOnce(), timeout]);
   } catch (err) {
-    if (err && err.code === "ERR_MODULE_NOT_FOUND") return null;
-    // Other import errors (corrupt install, version mismatch) — log
-    // but still treat as not-provisioned so the toggle reverts cleanly.
     emit({
       type: "log",
       level: "warn",
-      msg: `Codex SDK import failed: ${err?.message ?? String(err)}`,
+      msg: `Codex SDK import deadline: ${err?.message ?? String(err)}`,
     });
     return null;
   }
@@ -128,7 +185,7 @@ async function runObserver(SDK, rl) {
  */
 async function streamThread(codex, cmd, subscriptionId, signal) {
   const threadOptions = {
-    workingDirectory: cmd.workingDirectory,
+    workingDirectory: safeWorkingDirectory(cmd.workingDirectory),
     skipGitRepoCheck: cmd.skipGitRepoCheck ?? false,
     model: cmd.model,
     sandboxMode: cmd.sandboxMode,
@@ -153,17 +210,17 @@ async function streamThread(codex, cmd, subscriptionId, signal) {
     ? codex.resumeThread(cmd.threadId, threadOptions)
     : codex.startThread(threadOptions);
 
-  // v0.23 Deep Research: prepend the contract header to the user prompt
-  // because the Codex SDK has no separate system-instruction field. The
-  // header is identical in spirit to Claude's --append-system-prompt
-  // path but injected as the front of the first user turn. The relay
-  // sets `cmd.deepResearchHeader` on the first turn only; subsequent
-  // turns of the same thread don't re-prepend (the SDK retains the
-  // instruction in conversation memory).
-  const promptCore = cmd.prompt ?? "";
+  // PR #69 audit P1: validate prompt shape + cap size before the SDK
+  // sees it (defense-in-depth against runaway callers).
+  // v0.23 (Chat V2 T7) Deep Research: prepend the contract header to
+  // the user prompt because the Codex SDK has no separate
+  // system-instruction field. The header is injected as the front of
+  // the first user turn — the SDK retains it in conversation memory,
+  // so subsequent turns of the same thread don't re-prepend.
+  const safeCore = safePrompt(cmd.prompt);
   const prompt = cmd.deepResearchHeader
-    ? `${cmd.deepResearchHeader}\n\nUSER QUESTION:\n${promptCore}`
-    : promptCore;
+    ? `${cmd.deepResearchHeader}\n\nUSER QUESTION:\n${safeCore}`
+    : safeCore;
   const turn = await thread.runStreamed(prompt, { signal });
   for await (const event of turn.events) {
     emit({
@@ -193,7 +250,7 @@ async function streamThread(codex, cmd, subscriptionId, signal) {
 async function runResume(SDK, cmd) {
   const codex = new SDK.Codex();
   const threadOptions = {
-    workingDirectory: cmd.workingDirectory,
+    workingDirectory: safeWorkingDirectory(cmd.workingDirectory),
     skipGitRepoCheck: cmd.skipGitRepoCheck ?? false,
     model: cmd.model,
     sandboxMode: cmd.sandboxMode,
@@ -212,7 +269,7 @@ async function runResume(SDK, cmd) {
     ? new SDK.Codex().resumeThread(cmd.threadId, threadOptions)
     : codex.resumeThread(cmd.threadId, threadOptions);
 
-  const turn = await thread.run(cmd.prompt ?? "", {});
+  const turn = await thread.run(safePrompt(cmd.prompt), {});
   emit({
     type: "resume_result",
     threadId: thread.id ?? cmd.threadId,
@@ -224,15 +281,38 @@ async function runResume(SDK, cmd) {
 
 async function main() {
   const SDK = await loadSDK();
-  if (SDK) {
-    emit({ type: "ready", version: SDK_VERSION });
-  } else {
-    emit({ type: "ready", version: SKELETON_VERSION });
-  }
+  // Audit P2 fix: emit a single consistent `ready` schema for both
+  // modes so the Mac side always parses the same shape. The old
+  // skeleton emitted a different `type` in some paths and a `result`
+  // payload, which the app misread as a successful probe.
+  emit({
+    type: "ready",
+    version: SDK ? SDK_VERSION : SKELETON_VERSION,
+    sdk_available: !!SDK,
+    skeleton: !SDK,
+  });
 
-  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  // Audit P1 fix: drop `crlfDelay: Infinity` (which allowed unbounded
+  // line accumulation) and enforce a per-line byte cap so a stuck
+  // sender can't OOM the sidecar.
+  const rl = createInterface({ input: process.stdin });
   let firstLine = true;
   let agent = null;
+
+  // Per-line guard: readline doesn't expose a max-line-length option,
+  // so we watch the stdin chunk stream and bail if we go too long.
+  let pendingLineBytes = 0;
+  process.stdin.on("data", (chunk) => {
+    if (chunk.includes(0x0a)) {
+      pendingLineBytes = 0;
+    } else {
+      pendingLineBytes += chunk.length;
+      if (pendingLineBytes > MAX_LINE_BYTES) {
+        emit({ type: "error", msg: `stdin line exceeded ${MAX_LINE_BYTES} bytes — aborting` });
+        process.exit(2);
+      }
+    }
+  });
 
   for await (const raw of rl) {
     const line = raw.trim();

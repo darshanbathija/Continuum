@@ -1158,7 +1158,10 @@ public final class AgentControlClient: ObservableObject {
                             try await Task.sleep(nanoseconds: timeoutSec * 1_000_000_000)
                             throw URLError(.timedOut)
                         }
-                        let first = try await group.next()!
+                        guard let first = try await group.next() else {
+                            group.cancelAll()
+                            throw URLError(.cancelled)
+                        }
                         group.cancelAll()
                         return first
                     }

@@ -8,27 +8,38 @@ import Foundation
 /// Replaces every macOS `~/Library/Application Support/Clawdmeter/...`
 /// and `~/Library/Caches/...` reference for the Linux daemon + UI.
 public enum LinuxConfigPaths {
+
+    /// Audit P2 fix: per the XDG Base Directory spec, "If $XDG_DATA_HOME is
+    /// either not set or empty, a default equal to $HOME/.local/share
+    /// should be used … All paths set in these environment variables
+    /// must be absolute. If an implementation encounters a relative
+    /// path in any of these variables it should consider the path
+    /// invalid and ignore it." Honor that by treating empty / relative
+    /// values as if the var were unset.
+    private static func xdgPath(env name: String, defaultPath: @autoclosure () -> String) -> String {
+        let raw = ProcessInfo.processInfo.environment[name] ?? ""
+        if raw.hasPrefix("/") { return raw }
+        return defaultPath()
+    }
+
     /// `$XDG_DATA_HOME/clawdmeter/` — persistent app data (audit logs,
     /// usage cache, sessions registry, attachments). Default: `~/.local/share/clawdmeter/`.
     public static var dataHome: URL {
-        let base = ProcessInfo.processInfo.environment["XDG_DATA_HOME"]
-            ?? "\(NSHomeDirectory())/.local/share"
+        let base = xdgPath(env: "XDG_DATA_HOME", defaultPath: "\(NSHomeDirectory())/.local/share")
         return URL(fileURLWithPath: base).appendingPathComponent("clawdmeter", isDirectory: true)
     }
 
     /// `$XDG_CONFIG_HOME/clawdmeter/` — user prefs (prefs.json, autopilot
     /// trust list, ignored-extension prompts). Default: `~/.config/clawdmeter/`.
     public static var configHome: URL {
-        let base = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
-            ?? "\(NSHomeDirectory())/.config"
+        let base = xdgPath(env: "XDG_CONFIG_HOME", defaultPath: "\(NSHomeDirectory())/.config")
         return URL(fileURLWithPath: base).appendingPathComponent("clawdmeter", isDirectory: true)
     }
 
     /// `$XDG_CACHE_HOME/clawdmeter/` — analytics cache, thumbnails.
     /// Default: `~/.cache/clawdmeter/`.
     public static var cacheHome: URL {
-        let base = ProcessInfo.processInfo.environment["XDG_CACHE_HOME"]
-            ?? "\(NSHomeDirectory())/.cache"
+        let base = xdgPath(env: "XDG_CACHE_HOME", defaultPath: "\(NSHomeDirectory())/.cache")
         return URL(fileURLWithPath: base).appendingPathComponent("clawdmeter", isDirectory: true)
     }
 
@@ -36,8 +47,9 @@ public enum LinuxConfigPaths {
     /// PNGs, pid files, daemon sockets). Falls back to `/tmp/clawdmeter-<uid>/`
     /// on systems that don't set XDG_RUNTIME_DIR.
     public static var runtimeDir: URL {
-        if let xdg = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"] {
-            return URL(fileURLWithPath: xdg).appendingPathComponent("clawdmeter", isDirectory: true)
+        let raw = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"] ?? ""
+        if raw.hasPrefix("/") {
+            return URL(fileURLWithPath: raw).appendingPathComponent("clawdmeter", isDirectory: true)
         }
         let uid = getuid()
         return URL(fileURLWithPath: "/tmp").appendingPathComponent("clawdmeter-\(uid)", isDirectory: true)

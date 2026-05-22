@@ -90,15 +90,16 @@ public struct AnalyticsRepoList: View {
         let top = Array(sorted.prefix(8))
         let rest = Array(sorted.dropFirst(8))
 
+        // Keep cost shares in Decimal end-to-end and only collapse to
+        // Double at the UI boundary. Going via NSDecimalNumber.doubleValue
+        // mid-flight truncates to 53-bit mantissa and the rows visibly
+        // fail to sum to 100% after enough divisions.
         var out: [Row] = top.map { (key, value) in
-            // Cost-share against window total; falls back to Gemini-only
-            // intensity (0…1 of total gemini reqs) when no cost.
-            let costShare: Double = totalCost > 0
-                ? NSDecimalNumber(decimal: value.total / totalCost).doubleValue
-                : 0
+            let costShareDec: Decimal = totalCost > 0 ? (value.total / totalCost) : 0
             let geminiShare: Double = (totalGeminiReqs > 0 && totalCost == 0)
                 ? Double(value.geminiReqs) / Double(totalGeminiReqs)
                 : 0
+            let costShare = NSDecimalNumber(decimal: costShareDec).doubleValue
             return Row(
                 id: key,
                 repo: key,
@@ -119,8 +120,9 @@ public struct AnalyticsRepoList: View {
             let restGemini = rest.map(\.value.geminiReqs).reduce(0, +)
             let restCost = restClaude + restCodex
             let restTokens = rest.map(\.value.tokens).reduce(0, +)
+            let restShareDec: Decimal = totalCost > 0 ? (restCost / totalCost) : 0
             let restShare: Double = totalCost > 0
-                ? NSDecimalNumber(decimal: restCost / totalCost).doubleValue
+                ? NSDecimalNumber(decimal: restShareDec).doubleValue
                 : (totalGeminiReqs > 0 ? Double(restGemini) / Double(totalGeminiReqs) : 0)
             out.append(Row(
                 id: "__rest__",
