@@ -37,7 +37,9 @@
 #if os(macOS) || os(iOS)
 import Foundation
 import SQLite3
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// One row from the `steps` table. All fields populated; never partial.
 /// `stepPayload` is the raw protobuf blob — decode via

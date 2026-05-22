@@ -4,7 +4,9 @@ import CryptoKit
 #else
 import Crypto
 #endif
+#if canImport(OSLog)
 import OSLog
+#endif
 
 private let clientLogger = Logger(subsystem: "com.clawdmeter.client", category: "AgentControlClient")
 

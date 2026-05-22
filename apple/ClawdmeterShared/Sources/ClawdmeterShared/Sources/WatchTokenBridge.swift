@@ -1,7 +1,9 @@
 #if (os(iOS) || os(watchOS)) && canImport(WatchConnectivity)
 import Foundation
 import WatchConnectivity
+#if canImport(OSLog)
 import OSLog
+#endif
 import Combine
 
 /// Cross-process bridge that delivers the Anthropic OAuth token AND the

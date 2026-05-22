@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// Loads + aggregates Claude and Codex history. One actor per app instance.
 ///

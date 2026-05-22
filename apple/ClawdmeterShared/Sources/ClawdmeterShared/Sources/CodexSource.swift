@@ -1,6 +1,8 @@
 #if os(macOS)
 import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// ChatGPT/Codex usage source.
 ///

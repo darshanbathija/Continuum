@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// Pricing lookup against an embedded LiteLLM snapshot.
 ///

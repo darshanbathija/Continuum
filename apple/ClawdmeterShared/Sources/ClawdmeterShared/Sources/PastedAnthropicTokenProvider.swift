@@ -1,7 +1,9 @@
 #if os(iOS) || os(watchOS) || os(macOS)
 import Foundation
 import Security
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// Anthropic OAuth token stored in Clawdmeter's own Keychain entry.
 ///

@@ -1,7 +1,9 @@
 #if os(iOS) || os(macOS) || os(tvOS) || os(visionOS)
 import Foundation
 import Combine
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// Cross-device usage cache backed by `NSUbiquitousKeyValueStore` (iCloud KV).
 ///

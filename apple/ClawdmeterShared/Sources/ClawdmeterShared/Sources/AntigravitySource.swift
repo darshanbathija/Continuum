@@ -1,6 +1,8 @@
 #if os(macOS)
 import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// `AISource` against Antigravity 2's quota surface. v0.8.0 implements
 /// the 3-tier fallback ladder Phase 0/0.5 designed (D9):

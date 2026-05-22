@@ -1,7 +1,9 @@
 #if os(macOS)
 import Foundation
 import SQLite3
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// v0.22.8 — disk parser for OpenCode usage. OpenCode (sst/opencode)
 /// persists every assistant message in `~/.local/share/opencode/opencode.db`

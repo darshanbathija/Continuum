@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 import Combine
 
 /// Orchestrates a single `AISource` on a polling loop. Owns:
