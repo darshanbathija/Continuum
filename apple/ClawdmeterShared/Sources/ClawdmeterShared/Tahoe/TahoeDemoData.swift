@@ -315,20 +315,35 @@ export default async function Page({ params }: { params: { org: string }}) {
     public struct SpendPoint: Sendable {
         public var c: Double  // claude
         public var x: Double  // codex
-        public var g: Double  // gemini
+        public var g: Double  // gemini (Antigravity)
+        public var o: Double  // opencode — v0.22.8 (defaults to 0 for back-compat with demo fixtures)
+
+        public init(c: Double, x: Double, g: Double, o: Double = 0) {
+            self.c = c; self.x = x; self.g = g; self.o = o
+        }
     }
     public struct SpendRepo: Sendable {
         public var name: String
         public var c: Double
         public var x: Double
         public var g: Double
+        public var o: Double  // opencode — v0.22.8
+
+        public init(name: String, c: Double, x: Double, g: Double, o: Double = 0) {
+            self.name = name; self.c = c; self.x = x; self.g = g; self.o = o
+        }
     }
     public struct Totals: Sendable {
         public var c: String
         public var x: String
         public var g: String
+        public var o: String  // opencode — v0.22.8
         public var all: String
         public var delta: String
+
+        public init(c: String, x: String, g: String, o: String = "$0.00", all: String, delta: String) {
+            self.c = c; self.x = x; self.g = g; self.o = o; self.all = all; self.delta = delta
+        }
     }
     public struct RangeData: Sendable {
         public var label: String
@@ -336,6 +351,11 @@ export default async function Page({ params }: { params: { org: string }}) {
         public var series: [SpendPoint]
         public var total: Totals
         public var repos: [SpendRepo]
+
+        public init(label: String, ticks: [String], series: [SpendPoint], total: Totals, repos: [SpendRepo]) {
+            self.label = label; self.ticks = ticks; self.series = series
+            self.total = total; self.repos = repos
+        }
     }
 
     public static let ranges: [String: RangeData] = [

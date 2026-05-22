@@ -4,6 +4,88 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.8 build 90] - 2026-05-22 — Fix: menu-bar popover container + provider switching + Antigravity demo bleed + real analytics + OpenCode (`fix/menubar-popover-and-ccusage`)
+
+Four-issue follow-up after the user reported:
+1. Menu-bar popover designed vs. actual container size mismatch
+2. Provider segmented control needs multiple clicks / lags
+3. Antigravity data shown is inaccurate
+4. Mac Analytics "Spend over time" + "Spend by repo" data is "completely wrong" — wants the latest ccusage logic + OpenCode dollar spend
+
+### Changed
+
+**`MacMenubarPopover.swift`**
+- Dropped the outer `TahoeGlass(radius: 18, tone: .panel)` wrapper that
+  stacked a second rounded panel inside the NSPopover's native bubble
+  (the doubled border the user flagged). The NSPopover bubble is now
+  the sole container.
+- Extracted `providerTab(_:)` builder with three explicit fixes for the
+  "many clicks needed" gripe: (a) `.contentShape(Capsule())` so the
+  whole pill is hittable (previously hit-tests fell through between the
+  glyph and the label on the first click), (b) selection update wrapped
+  in a `Transaction { disablesAnimations = true }` so the active-capsule
+  swap is instant, (c) `.animation(nil, value: selected)` on the
+  background so the capsule snap is uniform across re-renders.
+- `liveRow(model:provider:)` no longer falls back to `.demo(provider)`
+  when `model.usage` is nil. The previous fallback dishonestly rendered
+  the canned `TahoeDemo.liveData[.gemini]` placeholder — that's where
+  the "89% / 61% / resets in 58m / 5d 2h" Antigravity numbers came
+  from. Now nil-usage emits an honest "Connecting…" row with
+  `hasWeekly` from the real per-provider config, so gemini's weekly
+  meter stays hidden even before the first poll completes.
+
+**`Pricing.swift`** — ccusage parity rewrite of the tier-boundary math
+- Previously, when `inputTokens + cacheReadTokens > 200k`, ALL rates
+  (input, output, cacheCreate, cacheRead) flipped to the above-tier
+  variant. Per upstream ccusage (`rust/crates/ccusage/src/cost.rs::tiered_cost`),
+  each token kind is tiered **independently** against its own count vs.
+  the 200k threshold. The coupled approach overcharged output / cache
+  cost when only input crossed the boundary.
+- The pricing inflection is now a hard-coded 200_000 constant
+  (matching ccusage's `THRESHOLD: u64 = 200_000`). The previous code
+  read `max_input_tokens` from the LiteLLM snapshot, which is per-model
+  context window (128k for gpt-5) and silently flipped the tier at
+  the wrong threshold on non-Claude models.
+
+**`UsageHistoryLoader.swift`** + **new `OpencodeUsageParser.swift`**
+- Added an OpenCode disk parser that reads
+  `~/.local/share/opencode/opencode.db` (honors `OPENCODE_DATA_DIR`
+  env override). SQLite query against the `message` table, JSON
+  decode the per-message `data` blob, dedupe by message id, prefer
+  the embedded `cost` field when > 0 else fall back to
+  `Pricing.cost(...)` with provider-prefix + dot/dash normalization
+  candidates. Mac-only (`#if os(macOS)`) — iOS/Watch don't run
+  OpenCode locally and their sandbox blocks `~/.local/share/`.
+- `UsageHistoryStore.ProviderFilter` adds `.opencode`.
+
+**`MacUsageView.swift` Analytics card** — wire real data
+- `AnalyticsRow` previously rendered `TahoeDemo.ranges[range]` —
+  hardcoded placeholder ($39.32 / 7d / defx-frontend $17.42 etc.)
+  regardless of actual usage. Now drives off
+  `UsageHistoryStore.snapshot` via the new `AnalyticsRangeAdapter`
+  that buckets per range (24h / 7d / 30d / 90d / all-time) and
+  computes per-provider dollar totals + top-4-by-cost repo rollup
+  with an "Other" rest bucket.
+- `SpendChart` + `RepoList` extended to render a 4th OpenCode segment
+  in each bar / row.
+
+### Data shapes
+
+- `TahoeDemo.SpendPoint`, `SpendRepo`, `Totals` gain an `o: Double = 0`
+  field (defaulted for back-compat with existing demo fixtures).
+
+### Notes
+
+- The Pricing tier-boundary fix shifts existing Claude session totals
+  modestly (lower output/cache cost when the request didn't actually
+  cross the boundary on those kinds). Aggregated impact is usually
+  within a few percent.
+- OpenCode SQLite reads use `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX`
+  + 100ms busy timeout so we never collide with the OpenCode server's
+  writer.
+
+Bumps `MARKETING_VERSION` 0.22.7 → 0.22.8, `CURRENT_PROJECT_VERSION` 89 → 90.
+
 ## [0.22.7 build 89] - 2026-05-22 — Fix: flush Tahoe titlebar against the top of the window (`fix/titlebar-top-flush`)
 
 Follow-up to v0.22.6. The native title strip was gone, but the Tahoe

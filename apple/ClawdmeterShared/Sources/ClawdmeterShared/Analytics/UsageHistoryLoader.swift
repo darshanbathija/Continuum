@@ -21,6 +21,11 @@ public actor UsageHistoryLoader {
     private let claudeDir: URL
     private let codexDir: URL
     private let geminiDir: URL
+    /// v0.22.8: OpenCode SQLite database (`~/.local/share/opencode/opencode.db`).
+    /// Optional + Mac-only — iOS doesn't run OpenCode locally and its
+    /// sandbox blocks `~/.local/share/`. Nil ⇒ no opencode column in the
+    /// snapshot (current behavior).
+    private let opencodeDBURL: URL?
     private let cacheURL: URL?
     private let pricing: Pricing
 
@@ -31,6 +36,7 @@ public actor UsageHistoryLoader {
         claudeDir: URL? = nil,
         codexDir: URL? = nil,
         geminiDir: URL? = nil,
+        opencodeDBURL: URL? = nil,
         cacheURL: URL? = nil,
         pricing: Pricing = .shared
     ) {
@@ -42,6 +48,15 @@ public actor UsageHistoryLoader {
         // AntigravityUsageParser walks ~/.gemini/antigravity/conversations/*.pb
         // and resolves UUIDs to repos via BrainSummaryIndexer.
         self.geminiDir = geminiDir ?? home.appendingPathComponent(".gemini/antigravity/conversations", isDirectory: true)
+        // v0.22.8: lookup OPENCODE_DATA_DIR + standard XDG fallback.
+        // OpencodeUsageParser.defaultDatabaseURL() returns nil if the
+        // DB doesn't exist, so the analytics pipeline naturally skips
+        // the opencode pass on machines without OpenCode installed.
+        #if os(macOS)
+        self.opencodeDBURL = opencodeDBURL ?? OpencodeUsageParser.defaultDatabaseURL()
+        #else
+        self.opencodeDBURL = nil
+        #endif
         self.cacheURL = cacheURL ?? Self.defaultCacheURL()
         self.pricing = pricing
     }
@@ -192,6 +207,35 @@ public actor UsageHistoryLoader {
 
         writeCache(nextCache)
 
+        // v0.22.8: parse OpenCode SQLite store. Skipped when the DB is
+        // missing (no OpenCode install) or on non-macOS targets.
+        var opencodeDayByRepo: [Date: [RepoKey: TokenTotals]]? = nil
+        #if os(macOS)
+        if let opencodeDBURL {
+            let records = OpencodeUsageParser.parse(databaseURL: opencodeDBURL)
+            if !records.isEmpty {
+                var bucket: [Date: [RepoKey: TokenTotals]] = [:]
+                var localDedup = Set<String>()
+                var localUnpriced: [String: TokenTotals] = [:]
+                for record in records {
+                    Self.accumulate(
+                        record: record,
+                        into: &bucket,
+                        dedup: &localDedup,
+                        unpriced: &localUnpriced
+                    )
+                }
+                opencodeDayByRepo = bucket
+                // Fold opencode's unpriced model bucket into the shared map.
+                for (model, totals) in localUnpriced {
+                    unpricedModelTokens[model, default: .zero] += totals
+                }
+                // Single SQLite source → one "session" for the metrics counter.
+                sessionCount += 1
+            }
+        }
+        #endif
+
         // Build per-provider windows. byProvider dict slot lands here per
         // 2026-05-19 Gemini-provider refactor; the Gemini parsing pass is
         // wired through `geminiDayByRepo` below once `GeminiUsageParser`
@@ -202,6 +246,9 @@ public actor UsageHistoryLoader {
         byProvider[.codex] = buildProviderTotals(from: codexDayByRepo, now: now)
         if let geminiDayByRepo, !geminiDayByRepo.isEmpty {
             byProvider[.gemini] = buildProviderTotals(from: geminiDayByRepo, now: now)
+        }
+        if let opencodeDayByRepo, !opencodeDayByRepo.isEmpty {
+            byProvider[.opencode] = buildProviderTotals(from: opencodeDayByRepo, now: now)
         }
 
         sequenceCounter += 1

@@ -50,6 +50,9 @@ public final class UsageHistoryStore: ObservableObject {
         case claude
         case codex
         case gemini
+        /// v0.22.8: OpenCode disk-parsed analytics (separate from the
+        /// SSE live-records bucket used for the menu-bar dollar gauge).
+        case opencode
 
         public var label: String {
             switch self {
@@ -57,6 +60,7 @@ public final class UsageHistoryStore: ObservableObject {
             case .claude:     return "Claude"
             case .codex:      return "Codex"
             case .gemini:     return "Gemini"
+            case .opencode:   return "OpenCode"
             }
         }
 
@@ -69,6 +73,7 @@ public final class UsageHistoryStore: ObservableObject {
             case .claude:     return provider == .claude
             case .codex:      return provider == .codex
             case .gemini:     return provider == .gemini
+            case .opencode:   return provider == .opencode
             }
         }
     }

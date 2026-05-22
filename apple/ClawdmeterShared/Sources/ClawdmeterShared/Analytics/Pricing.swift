@@ -77,77 +77,76 @@ public final class Pricing: @unchecked Sendable {
     /// surfacing unpriced-model token counts separately (`unpricedModelTokens`
     /// on `UsageHistorySnapshot`).
     ///
-    /// Tiered models (Claude past 200k input tokens) apply the base rate to
-    /// the first 200k input tokens and the above-boundary rate to the rest,
-    /// per LiteLLM's convention. Cache and output rates also flip past the
-    /// boundary when LiteLLM publishes tiered values for them.
+    /// v0.22.8 — ccusage parity rewrite. The previous implementation
+    /// coupled the tier flip: once `inputTokens + cacheReadTokens > 200k`
+    /// it switched **all** rates (input, output, cacheCreate, cacheRead)
+    /// to the above-tier rate. That overcharged output / cache cost when
+    /// only the input itself crossed the boundary. Upstream ccusage
+    /// (`rust/crates/ccusage/src/cost.rs::tiered_cost`) splits **each
+    /// token kind independently** at the 200k boundary against its OWN
+    /// count. That's what we do now: per-kind `tiered_cost`, summed.
+    ///
+    /// The boundary is also a flat 200_000 constant — ccusage hard-codes
+    /// `THRESHOLD: u64 = 200_000` and does not derive the boundary from
+    /// `max_input_tokens` (which is per-model context window, not the
+    /// pricing inflection). Reading `max_input_tokens` flipped the tier
+    /// at 128k for some non-Claude models, silently undercharging.
     public func cost(for model: String, tokens: TokenTotals) -> Decimal {
         guard let rates = self.rates(for: model) else { return 0 }
 
-        // Tiering split for input tokens. Models without an
-        // `aboveBoundary` rate (most models, including non-Claude) use
-        // the base rate for ALL tokens — the previous implementation
-        // capped `belowInput` at `boundaryTokens` and only charged the
-        // above portion when a tier rate existed, silently dropping
-        // every input token past 200k for un-tiered models. Real bug:
-        // a 915M-token Opus session was reading $0.60 of input cost
-        // instead of $4.5k.
-        let inputTokens = tokens.inputTokens
-        let boundary = rates.boundaryTokens
-        // P1-Shared-1 + Codex structured P2: cache-read tokens occupy the
-        // same context-window budget as fresh input tokens, so they count
-        // toward the tier boundary AND they consume part of the
-        // below-tier allowance before fresh input does.
-        //
-        // For 150k input + 60k cache-read with a 200k boundary:
-        //   total context = 210k → crosses boundary → hasAboveTier = true.
-        //   cache-read fills the first 60k of the below-tier band.
-        //   That leaves an effective below-tier ceiling for input of
-        //     max(0, 200k - 60k) = 140k.
-        //   inputBelow = min(150k, 140k) = 140k.
-        //   inputAbove = 150k - 140k = 10k → billed at above-tier rate.
-        //
-        // The prior P1-Shared-1 patch correctly flipped hasAboveTier on
-        // total context but split the input portion only on the raw
-        // boundary, leaving inputAbove at 0 for this exact case and
-        // silently undercharging the 10k that actually fell past the
-        // effective boundary. Codex's structured pass caught the gap.
-        let contextWindowTokens = inputTokens + tokens.cacheReadTokens
-        let hasAboveTier = rates.aboveBoundary != nil && contextWindowTokens > boundary
-        let aboveRates = rates.aboveBoundary
-
         var total: Decimal = 0
-        if hasAboveTier, let above = aboveRates {
-            let cacheReadBelow = min(tokens.cacheReadTokens, boundary)
-            let effectiveBoundaryForInput = boundary > cacheReadBelow
-                ? boundary - cacheReadBelow
-                : 0
-            let inputBelow = min(inputTokens, effectiveBoundaryForInput)
-            let inputAbove = inputTokens - inputBelow
-            total += rates.inputPerToken * Decimal(inputBelow)
-            total += above.inputPerToken * Decimal(inputAbove)
-        } else {
-            // No tier flip — single rate applies to the full input count.
-            total += rates.inputPerToken * Decimal(inputTokens)
-        }
-
-        // Output, cache-creation, cache-read: when the request crosses the
-        // boundary we charge them at the above-tier rate when LiteLLM gives
-        // us one. This matches ccusage's behavior — once you've crossed into
-        // long-context billing, all the rates flip together.
-        let crossedBoundary = hasAboveTier
-        let outputRate = crossedBoundary ? (aboveRates?.outputPerToken ?? rates.outputPerToken) : rates.outputPerToken
-        let cacheCreateRate = crossedBoundary ? (aboveRates?.cacheCreationPerToken ?? rates.cacheCreationPerToken) : rates.cacheCreationPerToken
-        let cacheReadRate = crossedBoundary ? (aboveRates?.cacheReadPerToken ?? rates.cacheReadPerToken) : rates.cacheReadPerToken
-
-        total += outputRate * Decimal(tokens.outputTokens)
-        total += cacheCreateRate * Decimal(tokens.cacheCreationTokens)
-        total += cacheReadRate * Decimal(tokens.cacheReadTokens)
-        // Reasoning tokens are billed at the output rate on both providers.
-        total += outputRate * Decimal(tokens.reasoningTokens)
-
+        total += Self.tieredCost(
+            count: tokens.inputTokens,
+            base: rates.inputPerToken,
+            above: rates.aboveBoundary?.inputPerToken
+        )
+        total += Self.tieredCost(
+            count: tokens.outputTokens,
+            base: rates.outputPerToken,
+            above: rates.aboveBoundary?.outputPerToken
+        )
+        total += Self.tieredCost(
+            count: tokens.cacheCreationTokens,
+            base: rates.cacheCreationPerToken,
+            above: rates.aboveBoundary?.cacheCreationPerToken
+        )
+        total += Self.tieredCost(
+            count: tokens.cacheReadTokens,
+            base: rates.cacheReadPerToken,
+            above: rates.aboveBoundary?.cacheReadPerToken
+        )
+        // Reasoning tokens (codex / gpt-5 reasoning trace) are billed at
+        // the same rate as output tokens on both providers per ccusage's
+        // mapping. Apply the same per-kind tiered split.
+        total += Self.tieredCost(
+            count: tokens.reasoningTokens,
+            base: rates.outputPerToken,
+            above: rates.aboveBoundary?.outputPerToken
+        )
         return total
     }
+
+    /// Per-kind tiered cost matching ccusage's `tiered_cost`. First
+    /// `BOUNDARY` of THIS kind's tokens billed at `base`, the rest billed
+    /// at `above` when LiteLLM published a tier rate for this kind.
+    /// When `above` is nil (most non-Claude kinds, output / cache for
+    /// some models), the base rate applies to every token.
+    @inlinable static func tieredCost(count: Int, base: Decimal, above: Decimal?) -> Decimal {
+        guard count > 0 else { return 0 }
+        guard let above else {
+            return base * Decimal(count)
+        }
+        if count <= Self.tierBoundary {
+            return base * Decimal(count)
+        }
+        let belowCount = Self.tierBoundary
+        let aboveCount = count - belowCount
+        return base * Decimal(belowCount) + above * Decimal(aboveCount)
+    }
+
+    /// ccusage hard-codes 200_000 as the inflection. Source:
+    /// `rust/crates/ccusage/src/cost.rs:375` (`pub const THRESHOLD: u64 = 200_000;`).
+    public static let tierBoundary: Int = 200_000
 
     /// Returns `true` when `model` resolves to a priced entry; `false` for
     /// unknown models. The aggregator uses this to decide whether to
@@ -244,7 +243,11 @@ public final class Pricing: @unchecked Sendable {
             cacheCreationPerToken: raw.cache_creation_input_token_cost ?? 0,
             cacheReadPerToken: raw.cache_read_input_token_cost ?? 0,
             aboveBoundary: aboveBoundary,
-            boundaryTokens: raw.max_input_tokens ?? 200_000
+            // v0.22.8: pricing inflection is the literal 200k LiteLLM
+            // threshold, NOT the per-model `max_input_tokens` context
+            // window (those drift independently — e.g. gpt-5 context is
+            // 128k but the pricing inflection doesn't apply to it at all).
+            boundaryTokens: Pricing.tierBoundary
         )
     }
 }

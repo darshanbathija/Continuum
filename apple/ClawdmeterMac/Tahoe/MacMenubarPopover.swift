@@ -95,12 +95,16 @@ public struct MacMenubarPopover: View {
     /// duplicated here (rather than calling the adapter) to avoid
     /// re-reading SessionsModel / agentSessionRegistry which the
     /// popover doesn't care about.
+    ///
+    /// v0.22.8: when `model.usage` is nil (poller hasn't completed,
+    /// or the user isn't authed for this provider yet) we used to fall
+    /// back to `.demo(provider)` — which dishonestly shows the canned
+    /// `TahoeDemo.liveData` numbers (89% / 61% for Antigravity, etc.).
+    /// That made unauthed Antigravity look like it had real data. The
+    /// honest fallback is an empty row with `hasWeekly` driven by the
+    /// real per-provider config, so gemini's weekly meter stays hidden
+    /// even before the first poll.
     private func liveRow(model: AppModel, provider: TahoeProvider) -> TahoeLiveRow {
-        guard let usage = model.usage else {
-            return .demo(provider)  // no data yet — show demo placeholder
-        }
-        let sessionResetIn = TahoeFmt.resetIn(minutes: usage.sessionResetMins)
-        let weeklyResetIn  = TahoeFmt.resetIn(minutes: usage.weeklyResetMins)
         let modelName: String = {
             switch provider {
             case .claude: return "Sonnet 4.5"
@@ -109,6 +113,22 @@ public struct MacMenubarPopover: View {
             case .opencode: return "via opencode"
             }
         }()
+        guard let usage = model.usage else {
+            // Honest "Connecting…" state — zero gauges, hints empty,
+            // `hasWeekly` from the real config (false for gemini).
+            return TahoeLiveRow(
+                sessionPercent: 0,
+                weeklyPercent: 0,
+                sessionResetIn: "—",
+                weeklyResetIn: "—",
+                modelName: modelName,
+                autoReviveOn: model.autoReviver.isEnabled,
+                autoReviveAgo: "—",
+                hasWeekly: model.config.hasWeeklyWindow
+            )
+        }
+        let sessionResetIn = TahoeFmt.resetIn(minutes: usage.sessionResetMins)
+        let weeklyResetIn  = TahoeFmt.resetIn(minutes: usage.weeklyResetMins)
         return TahoeLiveRow(
             sessionPercent: Double(usage.sessionPct),
             weeklyPercent:  Double(usage.weeklyPct),
@@ -124,71 +144,100 @@ public struct MacMenubarPopover: View {
     public var body: some View {
         let activeData = liveData
         let row = activeData.row(for: selected)
-        TahoeGlass(radius: 18, tone: .panel) {
-            VStack(alignment: .leading, spacing: 0) {
-                // Provider segmented control
-                HStack(spacing: 3) {
-                    ForEach(enabled) { p in
-                        let active = p == selected
-                        Button { selected = p } label: {
-                            HStack(spacing: 6) {
-                                TahoeProviderGlyph(provider: p, size: 18)
-                                Text(p.displayName)
-                            }
-                            .font(TahoeFont.body(12, weight: active ? .bold : .semibold))
-                            .foregroundStyle(active ? t.fg : t.fg3)
-                            .frame(maxWidth: .infinity, minHeight: 30)
-                            .background {
-                                if active {
-                                    Capsule(style: .continuous)
-                                        .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.10) : .white)
-                                        .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(3)
-                .background {
-                    Capsule(style: .continuous).fill(t.glassTintHi)
-                }
-                .padding(.bottom, 12)
-
-                // 5h + Weekly meters
-                VStack(spacing: 12) {
-                    TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: selected)
-                    if row.hasWeekly {
-                        TahoeMenuBarMeter(label: "Weekly", percent: row.weeklyPercent, hint: "resets in \(row.weeklyResetIn)", provider: selected)
-                    }
-                }
-                .padding(.horizontal, 4)
-
-                // JSX `<Hair style={{ margin: '12px 0 10px' }} />` (mac-dashboard.jsx:646)
-                // — asymmetric: 12pt above, 10pt below.
-                TahoeHair().padding(.top, 12).padding(.bottom, 10)
-
-                HStack(spacing: 6) {
-                    TahoeGhostButton(size: .s, action: onOpenDashboard) {
-                        HStack(spacing: 4) {
-                            TahoeIcon("grid", size: 10)
-                            Text("Open dashboard")
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    TahoeGhostButton(size: .s, action: onSyncIPhone) {
-                        HStack(spacing: 4) {
-                            TahoeIcon("qr", size: 10)
-                            Text("Sync iPhone")
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
+        // v0.22.8: drop the outer `TahoeGlass(radius: 18, tone: .panel)`
+        // wrapper. NSPopover already draws its own translucent bubble
+        // around the contentViewController, so stacking a second glass
+        // panel inside produced the doubled-border look the user
+        // flagged (designed vs. actual container mismatch). Now the
+        // NSPopover bubble IS the container.
+        VStack(alignment: .leading, spacing: 0) {
+            // Provider segmented control
+            HStack(spacing: 3) {
+                ForEach(enabled) { p in
+                    providerTab(p)
                 }
             }
-            .padding(14)
-            .frame(width: 360)
+            .padding(3)
+            .background {
+                Capsule(style: .continuous).fill(t.glassTintHi)
+            }
+            .padding(.bottom, 12)
+
+            // 5h + Weekly meters
+            VStack(spacing: 12) {
+                TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: selected)
+                if row.hasWeekly {
+                    TahoeMenuBarMeter(label: "Weekly", percent: row.weeklyPercent, hint: "resets in \(row.weeklyResetIn)", provider: selected)
+                }
+            }
+            .padding(.horizontal, 4)
+
+            // JSX `<Hair style={{ margin: '12px 0 10px' }} />` (mac-dashboard.jsx:646)
+            // — asymmetric: 12pt above, 10pt below.
+            TahoeHair().padding(.top, 12).padding(.bottom, 10)
+
+            HStack(spacing: 6) {
+                TahoeGhostButton(size: .s, action: onOpenDashboard) {
+                    HStack(spacing: 4) {
+                        TahoeIcon("grid", size: 10)
+                        Text("Open dashboard")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+
+                TahoeGhostButton(size: .s, action: onSyncIPhone) {
+                    HStack(spacing: 4) {
+                        TahoeIcon("qr", size: 10)
+                        Text("Sync iPhone")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
+        .padding(14)
+        .frame(width: 360)
+    }
+
+    /// v0.22.8: extracted into its own builder so the per-button state
+    /// (the `active` capsule + shadow) doesn't drag the entire HStack
+    /// re-render path. Adds three explicit fixes for the "needs many
+    /// clicks" gripe:
+    ///   1. `.contentShape(Capsule())` makes the entire capsule
+    ///      hittable — the previous HStack had hit-test fall-through
+    ///      between the glyph and label on first click.
+    ///   2. Selection update wrapped in a `Transaction { disablesAnimations
+    ///      = true }` so the active-capsule swap is instant. The default
+    ///      SwiftUI animation made the segmented switch feel laggy even
+    ///      when SwiftUI had already received the click.
+    ///   3. `.animation(nil, value: selected)` on the background so the
+    ///      capsule snap is uniform across re-renders.
+    @ViewBuilder
+    private func providerTab(_ p: TahoeProvider) -> some View {
+        let active = p == selected
+        Button {
+            guard p != selected else { return }
+            var tx = Transaction()
+            tx.disablesAnimations = true
+            withTransaction(tx) { selected = p }
+        } label: {
+            HStack(spacing: 6) {
+                TahoeProviderGlyph(provider: p, size: 18)
+                Text(p.displayName)
+            }
+            .font(TahoeFont.body(12, weight: active ? .bold : .semibold))
+            .foregroundStyle(active ? t.fg : t.fg3)
+            .frame(maxWidth: .infinity, minHeight: 30)
+            .contentShape(Capsule(style: .continuous))
+            .background {
+                if active {
+                    Capsule(style: .continuous)
+                        .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.10) : .white)
+                        .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
+                }
+            }
+            .animation(nil, value: selected)
+        }
+        .buttonStyle(.plain)
     }
 }
 

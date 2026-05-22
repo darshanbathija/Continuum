@@ -57,7 +57,7 @@ public struct MacUsageView: View {
 
                 TahoeHair()
 
-                AnalyticsRow()
+                AnalyticsRow(usageHistoryStore: usageHistoryStore)
                     .padding(.top, 14)
             }
             .padding(.vertical, 6)
@@ -212,8 +212,20 @@ private struct MenuBarCheckbox: View {
 private struct AnalyticsRow: View {
     @Environment(\.tahoe) private var t
     @State private var range: String = "7d"
+    /// v0.22.8: real analytics — drive the chart + repo list from
+    /// `UsageHistoryStore.snapshot` via `AnalyticsRangeAdapter` instead
+    /// of the canned `TahoeDemo.ranges` dictionary. Optional so Preview
+    /// callsites that don't wire a store fall back to demo data.
+    var usageHistoryStore: UsageHistoryStore?
 
-    private var data: TahoeDemo.RangeData { TahoeDemo.ranges[range] ?? TahoeDemo.ranges["7d"]! }
+    private var data: TahoeDemo.RangeData {
+        // Build from the live snapshot when available, otherwise fall
+        // back to the canned demo so Previews still render.
+        if let snapshot = usageHistoryStore?.snapshot {
+            return AnalyticsRangeAdapter.rangeData(snapshot: snapshot, range: range)
+        }
+        return TahoeDemo.ranges[range] ?? TahoeDemo.ranges["7d"]!
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -357,7 +369,9 @@ private struct SpendChart: View {
     private let chartHeight: CGFloat = 170
 
     var body: some View {
-        let maxTotal = (series.map { $0.c + $0.x + $0.g }.max() ?? 1) * 1.08
+        // v0.22.8: include opencode in the maxTotal so the y-axis
+        // covers all four providers' stacked bar height.
+        let maxTotal = (series.map { $0.c + $0.x + $0.g + $0.o }.max() ?? 1) * 1.08
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
                 // Y axis labels
@@ -415,14 +429,18 @@ private struct SpendChart: View {
     }
 
     private func stackedBar(d: TahoeDemo.SpendPoint, max: Double, w: CGFloat) -> some View {
-        let total = d.c + d.x + d.g
-        let h = total / max * chartHeight
+        // v0.22.8: stack opencode on top alongside the other three.
+        let total = d.c + d.x + d.g + d.o
+        let h = total > 0 ? total / max * chartHeight : 0
         return VStack(spacing: 0) {
             Spacer()
             VStack(spacing: 0) {
-                Rectangle().fill(grad(.gemini)).frame(height: d.g / total * h)
-                Rectangle().fill(grad(.codex)).frame(height: d.x / total * h)
-                Rectangle().fill(grad(.claude)).frame(height: d.c / total * h)
+                if total > 0 {
+                    Rectangle().fill(grad(.opencode)).frame(height: d.o / total * h)
+                    Rectangle().fill(grad(.gemini)).frame(height: d.g / total * h)
+                    Rectangle().fill(grad(.codex)).frame(height: d.x / total * h)
+                    Rectangle().fill(grad(.claude)).frame(height: d.c / total * h)
+                }
             }
             .frame(width: w)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
@@ -439,11 +457,13 @@ private struct RepoList: View {
     @Environment(\.tahoe) private var t
     var repos: [TahoeDemo.SpendRepo]
     var body: some View {
-        let maxTotal = repos.map { $0.c + $0.x + $0.g }.max() ?? 1
+        // v0.22.8: include opencode in the maxTotal so the relative
+        // bar widths normalize across all four providers.
+        let maxTotal = repos.map { $0.c + $0.x + $0.g + $0.o }.max() ?? 1
         VStack(spacing: 12) {
             ForEach(Array(repos.enumerated()), id: \.offset) { _, r in
-                let total = r.c + r.x + r.g
-                let width = total / maxTotal
+                let total = r.c + r.x + r.g + r.o
+                let width = maxTotal > 0 ? total / maxTotal : 0
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
                         HStack(spacing: 6) {
@@ -458,9 +478,12 @@ private struct RepoList: View {
                     }
                     GeometryReader { geo in
                         HStack(spacing: 0) {
-                            Rectangle().fill(grad(.claude)).frame(width: geo.size.width * width * (r.c / total))
-                            Rectangle().fill(grad(.codex)).frame(width: geo.size.width * width * (r.x / total))
-                            Rectangle().fill(grad(.gemini)).frame(width: geo.size.width * width * (r.g / total))
+                            if total > 0 {
+                                Rectangle().fill(grad(.claude)).frame(width: geo.size.width * width * (r.c / total))
+                                Rectangle().fill(grad(.codex)).frame(width: geo.size.width * width * (r.x / total))
+                                Rectangle().fill(grad(.gemini)).frame(width: geo.size.width * width * (r.g / total))
+                                Rectangle().fill(grad(.opencode)).frame(width: geo.size.width * width * (r.o / total))
+                            }
                             Spacer()
                         }
                     }
