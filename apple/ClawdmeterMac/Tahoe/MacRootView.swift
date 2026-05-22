@@ -99,7 +99,8 @@ struct MacRootView: View {
                         MacChatView(
                             mode: $chatMode,
                             soloProvider: $chatSoloProvider,
-                            loopbackClient: runtime.loopbackClient
+                            loopbackClient: runtime.loopbackClient,
+                            runtime: runtime
                         )
                     case .usage:
                         MacUsageView(

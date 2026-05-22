@@ -24,36 +24,99 @@ public struct MacChatView: View {
     /// Loopback client. Optional so Previews + the legacy MacRootView
     /// caller can render without one; the runtime always injects.
     private let loopbackClient: AgentControlClient?
+    /// PR #32 chunk 4: runtime is used by `MacChatDataAdapter` to
+    /// resolve real chat sessions + their `SessionChatStore` for the
+    /// transcript pivot. Nil keeps Previews + cold launch on TahoeDemo.
+    private weak var runtime: AppRuntime?
 
     /// Tracks the open chat session id. nil = "no session — first send
     /// creates one". Stored locally; the future MacChatTranscriptStore
     /// hoists this into a shared model.
     @State private var openChatId: UUID?
 
-    public init(
+    /// Internal because `AppRuntime` is internal to the Mac target.
+    /// MacChatView is only constructed from MacRootView in this target,
+    /// so dropping the public access on the init is safe + correct.
+    init(
         mode: Binding<Mode>,
         soloProvider: Binding<TahoeProvider>,
-        loopbackClient: AgentControlClient? = nil
+        loopbackClient: AgentControlClient? = nil,
+        runtime: AppRuntime? = nil
     ) {
         self._mode = mode
         self._soloProvider = soloProvider
         self.loopbackClient = loopbackClient
+        self.runtime = runtime
+    }
+
+    /// PR #32 chunk 4: real chat sessions (kind == .chat) the user has
+    /// open. Drives the sidebar list. Falls back to demo history when
+    /// the loopback client is unavailable (Preview path).
+    private var realChatSessions: [AgentSession] {
+        loopbackClient?.chatSessions ?? []
+    }
+
+    /// Compute the thread to render. Three cases:
+    ///   - no openChatId          → TahoeDemo.chatThread (empty-state preview)
+    ///   - openChatId, solo mode  → soloThread from chatStore
+    ///   - openChatId, broadcast  → broadcastThread aggregating frontier siblings
+    private var activeThread: TahoeDemo.ChatThread {
+        guard let runtime,
+              let openId = openChatId,
+              let session = runtime.agentSessionRegistry.session(id: openId)
+        else {
+            return TahoeDemo.chatThread
+        }
+        // Broadcast: the open session is one of N frontier siblings;
+        // aggregate all of them into one comparison thread.
+        if let groupId = session.frontierGroupId {
+            let siblings = runtime.agentSessionRegistry.sessions
+                .filter { $0.frontierGroupId == groupId }
+            var perProvider: [TahoeProvider: (messages: [ChatMessage], modelName: String?)] = [:]
+            for sib in siblings {
+                let provider = MacChatDataAdapter.tahoeProvider(for: sib.agent)
+                let messages = runtime.agentControlServer.chatStore(for: sib)?.snapshot.messages ?? []
+                perProvider[provider] = (messages, sib.model)
+            }
+            return MacChatDataAdapter.broadcastThread(
+                title: session.displayLabel,
+                perProvider: perProvider
+            )
+        }
+        // Solo: a single session's transcript.
+        let messages = runtime.agentControlServer.chatStore(for: session)?.snapshot.messages ?? []
+        return MacChatDataAdapter.soloThread(
+            title: session.displayLabel,
+            messages: messages,
+            provider: MacChatDataAdapter.tahoeProvider(for: session.agent),
+            modelName: session.model
+        )
     }
 
     public var body: some View {
-        HStack(spacing: 10) {
+        let thread = activeThread
+        return HStack(spacing: 10) {
             TahoeGlass(radius: 20, tone: .panel) {
-                ChatSidebar()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ChatSidebar(
+                    realSessions: realChatSessions,
+                    openChatId: $openChatId
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(width: 248)
 
             VStack(spacing: 10) {
-                ChatColumnHeaders(mode: mode, soloProvider: soloProvider, thread: TahoeDemo.chatThread)
+                ChatColumnHeaders(mode: mode, soloProvider: soloProvider, thread: thread)
 
                 TahoeGlass(radius: 20, tone: .panel) {
-                    ChatStream(thread: TahoeDemo.chatThread, mode: mode, soloProvider: soloProvider)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ChatStream(
+                        thread: thread,
+                        mode: mode,
+                        soloProvider: soloProvider,
+                        loopbackClient: loopbackClient,
+                        openSession: openChatId.flatMap { runtime?.agentSessionRegistry.session(id: $0) }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(maxHeight: .infinity)
 
@@ -201,7 +264,34 @@ private struct CompareIconView: View {
 
 private struct ChatSidebar: View {
     @Environment(\.tahoe) private var t
-    @State private var openSections: Set<String> = ["Pinned", "Today", "Earlier"]
+    @State private var openSections: Set<String> = ["Active", "Pinned", "Today", "Earlier"]
+    /// PR #32 chunk 4: real chat sessions from the loopback client. Empty
+    /// list falls back to the demo history below so the sidebar always
+    /// shows something for Previews + cold-launch.
+    var realSessions: [AgentSession] = []
+    @Binding var openChatId: UUID?
+
+    init(realSessions: [AgentSession] = [], openChatId: Binding<UUID?> = .constant(nil)) {
+        self.realSessions = realSessions
+        self._openChatId = openChatId
+    }
+
+    /// Visible-session de-dupe: broadcast frontier groups appear once
+    /// (one entry per group) even though they have N child sessions
+    /// internally. The first child whose `frontierChildIndex == 0`
+    /// becomes the group's representative; lone solo sessions show as-is.
+    private var visibleSessions: [AgentSession] {
+        var seenGroups = Set<UUID>()
+        var result: [AgentSession] = []
+        for session in realSessions {
+            if let groupId = session.frontierGroupId {
+                if seenGroups.contains(groupId) { continue }
+                seenGroups.insert(groupId)
+            }
+            result.append(session)
+        }
+        return result
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -238,11 +328,92 @@ private struct ChatSidebar: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    // PR #32 chunk 4: "Active" section lists real chat
+                    // sessions from the daemon. The demo history is kept
+                    // as a placeholder below for cold-launch but is
+                    // visually grouped so the user knows which is real.
+                    if !visibleSessions.isEmpty {
+                        ActiveSessionsSection(
+                            label: "Active",
+                            sessions: visibleSessions,
+                            openChatId: $openChatId,
+                            openSections: $openSections
+                        )
+                    }
                     HistorySection(label: "Pinned",  rows: [TahoeDemo.chatHistory[5]],                                openSections: $openSections)
                     HistorySection(label: "Today",   rows: Array(TahoeDemo.chatHistory.prefix(2)),                    openSections: $openSections)
                     HistorySection(label: "Earlier", rows: Array(TahoeDemo.chatHistory[2..<5]) + Array(TahoeDemo.chatHistory[6...]), openSections: $openSections)
                 }
                 .padding(.horizontal, 8).padding(.vertical, 8)
+            }
+        }
+    }
+}
+
+/// PR #32 chunk 4: real-session sidebar section. Renders the live
+/// chat sessions (from `client.chatSessions`) as tappable rows that
+/// set `openChatId`. Mirrors HistorySection's collapse/expand chrome.
+private struct ActiveSessionsSection: View {
+    @Environment(\.tahoe) private var t
+    var label: String
+    var sessions: [AgentSession]
+    @Binding var openChatId: UUID?
+    @Binding var openSections: Set<String>
+
+    var body: some View {
+        let open = openSections.contains(label)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                if open { openSections.remove(label) } else { openSections.insert(label) }
+            } label: {
+                HStack(spacing: 6) {
+                    TahoeIcon(open ? "chevD" : "chevR", size: 9).foregroundStyle(t.fg4)
+                    Text(label.uppercased())
+                        .font(TahoeFont.body(10, weight: .bold))
+                        .tracking(0.6)
+                        .foregroundStyle(t.fg4)
+                    Spacer()
+                    Text("\(sessions.count)")
+                        .font(TahoeFont.mono(10, weight: .semibold))
+                        .foregroundStyle(t.fg4)
+                }
+                .padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 4)
+            }
+            .buttonStyle(.plain)
+
+            if open {
+                ForEach(sessions, id: \.id) { session in
+                    Button {
+                        openChatId = session.id
+                    } label: {
+                        HStack(spacing: 8) {
+                            let provider = MacChatDataAdapter.tahoeProvider(for: session.agent)
+                            Circle()
+                                .fill(LinearGradient(colors: [provider.glow.color, provider.base.color],
+                                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .frame(width: 8, height: 8)
+                            Text(session.displayLabel)
+                                .font(TahoeFont.body(11.5, weight: openChatId == session.id ? .bold : .medium))
+                                .foregroundStyle(openChatId == session.id ? t.fg : t.fg2)
+                                .lineLimit(1)
+                            Spacer()
+                            if session.frontierGroupId != nil {
+                                Text("3×")
+                                    .font(TahoeFont.mono(9, weight: .bold))
+                                    .foregroundStyle(t.accent)
+                            }
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 6)
+                        .background {
+                            if openChatId == session.id {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(t.accent.opacity(0.10))
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, 6)
             }
         }
     }
@@ -420,9 +591,21 @@ private struct ChatStream: View {
     var thread: TahoeDemo.ChatThread
     var mode: MacChatView.Mode
     var soloProvider: TahoeProvider
+    /// PR #32 chunk 4: loopback client + open session — needed for the
+    /// frontier pick-winner button on broadcast turns. Optional so the
+    /// existing previews (no real backend) keep rendering.
+    var loopbackClient: AgentControlClient? = nil
+    var openSession: AgentSession? = nil
 
     var providers: [TahoeProvider] {
         mode == .solo ? [soloProvider] : [.claude, .codex, .gemini]
+    }
+
+    /// Frontier group id for the currently-open session, when in
+    /// broadcast mode. nil → pick-winner button is hidden (solo session
+    /// or no session open).
+    private var openFrontierGroupId: UUID? {
+        openSession?.frontierGroupId
     }
 
     var body: some View {
@@ -438,6 +621,20 @@ private struct ChatStream: View {
                          (mode == .broadcast ? "broadcasting to 3 models" : "solo — \(soloProvider.displayName)"))
                         .font(TahoeFont.mono(11, weight: .semibold))
                         .foregroundStyle(t.fg4)
+                    Spacer()
+                    if let groupId = openFrontierGroupId, mode == .broadcast {
+                        // PR #32 chunk 4: pick-winner button — visible
+                        // only when an open broadcast session has a
+                        // frontier group. Tap fans out a request to
+                        // frontierPickWinner(groupId:childIndex:),
+                        // archiving the losers + leaving the winner as
+                        // the surviving solo session.
+                        PickWinnerMenu(
+                            groupId: groupId,
+                            providers: providers,
+                            loopbackClient: loopbackClient
+                        )
+                    }
                 }
                 ForEach(Array(thread.turns.enumerated()), id: \.offset) { idx, turn in
                     Turn(turn: turn, providers: providers, index: idx)
@@ -656,6 +853,63 @@ private struct StarButton: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Pick winner (PR #32 chunk 4)
+
+/// Per-provider winner picker for broadcast frontier groups. Each
+/// item in the menu calls `client.frontierPickWinner(groupId:childIndex:)`
+/// — the daemon archives the losers + leaves the winner as the
+/// surviving solo session that subsequent prompts route to.
+private struct PickWinnerMenu: View {
+    @Environment(\.tahoe) private var t
+    var groupId: UUID
+    var providers: [TahoeProvider]
+    var loopbackClient: AgentControlClient?
+
+    @State private var isPicking: Bool = false
+
+    var body: some View {
+        Menu {
+            ForEach(Array(providers.enumerated()), id: \.offset) { index, provider in
+                Button {
+                    pickWinner(index: index)
+                } label: {
+                    Label("Keep \(provider.displayName)", systemImage: "checkmark.seal")
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if isPicking {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    TahoeIcon("checkmark.seal", size: 11).foregroundStyle(t.accent)
+                }
+                Text("Pick winner")
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                TahoeIcon("chevD", size: 8).foregroundStyle(t.accent.opacity(0.7))
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background {
+                Capsule().fill(t.accent.opacity(0.12))
+            }
+            .overlay {
+                Capsule().stroke(t.accent.opacity(0.35), lineWidth: 0.5)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isPicking || loopbackClient == nil)
+    }
+
+    private func pickWinner(index: Int) {
+        guard let client = loopbackClient else { return }
+        isPicking = true
+        Task { @MainActor in
+            _ = await client.frontierPickWinner(groupId: groupId, childIndex: index)
+            isPicking = false
+        }
     }
 }
 

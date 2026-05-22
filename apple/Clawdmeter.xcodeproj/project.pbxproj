@@ -151,6 +151,7 @@
 		B6476D12C0F54133B30C941B /* AgentSpawnerChatArgvTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE1F1B18737CE3024BDD5620 /* AgentSpawnerChatArgvTests.swift */; };
 		B794445CF6C561F8E1DEC66C /* LanguageServerClientRewriteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A4E9C143026DEB7E82C1EDC /* LanguageServerClientRewriteTests.swift */; };
 		B7F6A1B2546014D520DE724C /* iOSSessionActivityStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8EC55494D4D0B26A8B3C366 /* iOSSessionActivityStrip.swift */; };
+		B86808A96FFAB197F66D4646 /* MacChatDataAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6CC0E1B0B16AA036769D333 /* MacChatDataAdapter.swift */; };
 		B91953253B345054E392D6FC /* CodexLogo.png in Resources */ = {isa = PBXBuildFile; fileRef = 6C40566A9CD019426F02502C /* CodexLogo.png */; };
 		BF953F6EFA5428F1648B071A /* IOSLiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C5DB1E465D5AE0EA5AB19D /* IOSLiveView.swift */; };
 		C0B6077013D39D05387FD7E4 /* iOSPlanTrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08ACE23C4B4D169F54F10A1 /* iOSPlanTrackerView.swift */; };
@@ -455,6 +456,7 @@
 		E37960317F2D69E2E52475CD /* WatchPlanBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPlanBridge.swift; sourceTree = "<group>"; };
 		E61568742C912B7FE2DA7205 /* DesignPortForwarderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignPortForwarderTests.swift; sourceTree = "<group>"; };
 		E64A02721C151458566CC7E3 /* ClawdmeterMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClawdmeterMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E6CC0E1B0B16AA036769D333 /* MacChatDataAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatDataAdapter.swift; sourceTree = "<group>"; };
 		E81AA8A300E81E7510331C1B /* WatchUsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchUsageModel.swift; sourceTree = "<group>"; };
 		E8B01DA7617C0DFEA3F78CF4 /* ChatProviderAuthObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatProviderAuthObserver.swift; sourceTree = "<group>"; };
 		EAB65AC597AEAFE555E05819 /* PairingCTAButtons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingCTAButtons.swift; sourceTree = "<group>"; };
@@ -820,6 +822,7 @@
 		B3BC3033BDE03E01DB3AEEB6 /* Tahoe */ = {
 			isa = PBXGroup;
 			children = (
+				E6CC0E1B0B16AA036769D333 /* MacChatDataAdapter.swift */,
 				4CA323593D9118FB46CCC5E5 /* MacChatView.swift */,
 				467BAF6E9E5D52A492CEF344 /* MacCodeView.swift */,
 				7362FF39C8EADA00222188BE /* MacDesignView.swift */,
@@ -1323,6 +1326,7 @@
 				C3DE5EEADFA558E6C6DE0434 /* LiveActivitySetupView.swift in Sources */,
 				882A3D7032BBBDBD07777059 /* LiveCostCalculator.swift in Sources */,
 				0BB33AAC47F2E78EC1950812 /* MacAPNSPusher.swift in Sources */,
+				B86808A96FFAB197F66D4646 /* MacChatDataAdapter.swift in Sources */,
 				7BA5CB74F2B365B516C32366 /* MacChatView.swift in Sources */,
 				ED74E95DB9CD21EDB7AD21F6 /* MacCodeView.swift in Sources */,
 				A2CA9959AFA87857A2BD8831 /* MacComposerSender.swift in Sources */,
@@ -1533,7 +1537,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 80;
+				CURRENT_PROJECT_VERSION = 82;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -1552,7 +1556,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.20.0;
+				MARKETING_VERSION = 0.22.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -1789,7 +1793,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 80;
+				CURRENT_PROJECT_VERSION = 82;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1802,7 +1806,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.20.0;
+				MARKETING_VERSION = 0.22.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

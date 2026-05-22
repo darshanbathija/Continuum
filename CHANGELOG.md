@@ -4,7 +4,7 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-## [0.21.0 build 81] - 2026-05-22 — Design tab: Open Design embedded on Mac + iOS (`feat/design-tab-open-design`)
+## [0.22.0 build 82] - 2026-05-22 — Design tab: Open Design embedded on Mac + iOS (`feat/design-tab-open-design`)
 
 The biggest feature add in months: a fully-functional **Design** tab that
 embeds [Open Design](https://github.com/darshanbathija/open-design) v0.7.0
@@ -115,6 +115,70 @@ sidecar (~80MB of vendored runtime artifacts).
 - `POST /import-folder { baseDir: /tmp/od-test-import }` end-to-end:
   bridge minted token → daemon imported folder → project visible in
   subsequent `/api/projects`.
+## [0.21.0 build 81] - 2026-05-22 — Final v1.1 polish: 4 remaining items shipped
+
+PR #32 closes the remaining v1.1 punch list flagged after PR #31:
+repo plumbing on opencode usage, menu-bar dollar variant, and the
+Mac chat broadcast multi-pane pivot from TahoeDemo to real data.
+
+### Repo plumbing on opencode usage events
+
+- OpencodeSSEAdapter.register(clawdmeterID:opencodeID:repo:) now
+  accepts the repo path; stashed in `repoBySessionID` for the
+  `handleUsage` event handler to look up. UsageRecord rows now tag
+  with the real cwd instead of "(unknown)".
+- AgentControlServer.handleSpawnOpencodeSession passes `req.repoKey`
+  on the register call.
+
+### Menu-bar status item dollar variant (A2)
+
+- New `OpencodeStatusController` in AppDelegate — text-only status
+  item ("$X.XX") instead of a quota gauge. Subscribes to
+  `UsageHistoryStore.$opencodeLiveRecords` so the dollar amount
+  updates in real-time as the SSE adapter ingests usage events.
+- Default visibility: OFF (opt-in; opencode is not the default
+  provider for new users). Pref key `clawdmeter.opencode.menuBarShown`.
+- Click → opens dashboard (reuses the existing showDashboardNotification
+  plumbing). Tooltip: "OpenCode usage today — click to open the
+  dashboard".
+
+### Mac chat broadcast multi-pane fan-out
+
+- New `MacChatDataAdapter` (~170 LOC): builds `TahoeDemo.ChatThread`-
+  shaped values from real `[ChatMessage]` streams. Two paths:
+  - **Solo**: 1 session id → thread with that provider's replies
+  - **Broadcast**: per-provider message dict → thread with all 3
+    providers' replies on each turn, zipped by user-prompt index
+- MacChatView pivots from `TahoeDemo.chatThread` to live data:
+  - Sidebar shows real `client.chatSessions` in a new "Active"
+    section (above the legacy demo history sections); broadcast
+    groups appear once with a "3×" marker
+  - Tapping a session sets `openChatId`, which triggers
+    `MacChatDataAdapter` to fold the chat store's messages into the
+    thread shape the existing UI renders
+  - For broadcast sessions, all sibling child sessions get
+    aggregated into one merged ChatThread
+- New `PickWinnerMenu` in ChatStream: visible only on broadcast
+  sessions with a frontier group; menu items wire to
+  `client.frontierPickWinner(groupId:childIndex:)`. The daemon
+  archives losers + leaves the winner as the surviving solo session
+- `TahoeDemo.ChatReply`, `ChatTurn`, `Attached`, `ChatThread` gain
+  public initializers so MacChatDataAdapter can construct them
+  cross-target
+
+### Tests
+
+- 620/620 shared tests pass (no regressions — adapters are
+  Mac-target only)
+- 89/89 Mac tests pass
+- Mac + iOS + Watch all build clean
+
+### Known gaps (truly final)
+
+- Tahoe-art for OpenCode brand mark (`tahoe-opencode-mark`) — design
+  asset task, falls back to `OpencodeLogo` via AgentKindUI
+- Tokenizer-accurate estimateSend (char/4 heuristic ships today)
+- iPad-specific layouts for ReviewPane (was always v1.2+)
 
 ## [0.20.0 build 80] - 2026-05-22 — OpenCode polish + v1.0 chat finish (PR #31)
 

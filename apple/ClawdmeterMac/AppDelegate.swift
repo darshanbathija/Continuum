@@ -29,6 +29,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var claudeController: ProviderStatusController?
     private var codexController: ProviderStatusController?
     private var geminiController: ProviderStatusController?
+    /// PR #32 (A2): OpenCode menu-bar item renders `$X.XX` (today's
+    /// cost) instead of a quota gauge — OpenCode doesn't have a
+    /// rolling 5h window. Reads UsageHistoryStore.opencodeTodayCostUSD.
+    private var opencodeController: OpencodeStatusController?
 
     private var prefsObserver: NSObjectProtocol?
     private var windowCloseObserver: NSObjectProtocol?
@@ -111,6 +115,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if geminiController == nil {
             geminiController = ProviderStatusController(model: runtime.geminiModel, runtime: runtime)
+        }
+        if opencodeController == nil {
+            opencodeController = OpencodeStatusController(runtime: runtime)
         }
         installObserversIfNeeded()
         applyVisibilityFromPrefs()
@@ -298,9 +305,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let claudeShown = defaults.object(forKey: ProviderStatusController.prefKey("claude")) as? Bool ?? true
         let codexShown = defaults.object(forKey: ProviderStatusController.prefKey("codex")) as? Bool ?? true
         let geminiShown = defaults.object(forKey: ProviderStatusController.prefKey("gemini")) as? Bool ?? true
+        // PR #32: OpenCode menu-bar item default OFF — opencode is opt-
+        // in and many users won't have it installed. The Settings →
+        // Providers panel shows the install state; toggling on the
+        // menu-bar item is a separate explicit step (matches how iOS
+        // Live tab toggle behaves).
+        let opencodeShown = defaults.object(forKey: ProviderStatusController.prefKey("opencode")) as? Bool ?? false
         claudeController?.setVisible(claudeShown)
         codexController?.setVisible(codexShown)
         geminiController?.setVisible(geminiShown)
+        opencodeController?.setVisible(opencodeShown)
     }
 }
 
@@ -461,5 +475,82 @@ final class ProviderStatusController: NSObject {
             // interaction doesn't immediately dismiss it.
             popover.contentViewController?.view.window?.becomeKey()
         }
+    }
+}
+
+// MARK: - OpenCode menu-bar controller (PR #32, A2)
+
+/// Per-A2 menu-bar variant for OpenCode: renders today's dollar cost
+/// (`$X.XX`) as the status item text instead of a quota gauge.
+/// OpenCode doesn't have a rolling 5h window — it's pay-as-you-go
+/// through whichever underlying provider the user authenticated with.
+/// Reads `UsageHistoryStore.opencodeTodayCostUSD`; refreshes on every
+/// `opencodeLiveRecords` mutation.
+///
+/// Lifecycle mirrors `ProviderStatusController` but skips the AppModel
+/// + popover surface — clicking the dollar item opens the dashboard's
+/// Usage tab (where the full OpencodeDollarRow lives).
+@MainActor
+final class OpencodeStatusController: NSObject {
+    private weak var runtime: AppRuntime?
+    private var statusItem: NSStatusItem?
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(runtime: AppRuntime) {
+        self.runtime = runtime
+        super.init()
+        // Re-render the dollar amount whenever the usage store's
+        // opencode bag mutates. Single observer covers both the
+        // initial ingest + every subsequent SSE usage event.
+        runtime.usageHistoryStore.$opencodeLiveRecords
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refresh() }
+            .store(in: &cancellables)
+    }
+
+    func setVisible(_ visible: Bool) {
+        if visible {
+            ensureStatusItem()
+            statusItem?.isVisible = true
+        } else {
+            statusItem?.isVisible = false
+        }
+    }
+
+    private func ensureStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.target = self
+        item.button?.action = #selector(handleClick(_:))
+        item.button?.image = nil  // text-only; A2 dollar variant
+        item.button?.title = formattedToday()
+        item.button?.toolTip = "OpenCode usage today — click to open the dashboard"
+        statusItem = item
+    }
+
+    private func refresh() {
+        statusItem?.button?.title = formattedToday()
+    }
+
+    private func formattedToday() -> String {
+        guard let runtime else { return "$—.——" }
+        let value = runtime.usageHistoryStore.opencodeTodayCostUSD
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+        return formatter.string(from: value as NSDecimalNumber) ?? "$0.00"
+    }
+
+    @objc private func handleClick(_ sender: Any?) {
+        // Reuse the existing "show dashboard" plumbing — opens the
+        // SwiftUI window and switches activation policy. The user
+        // lands on whichever tab was last selected; we don't force
+        // .usage because that'd surprise users who left it on another
+        // tab.
+        NotificationCenter.default.post(name: AppDelegate.showDashboardNotification, object: nil)
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
