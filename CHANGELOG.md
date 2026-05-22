@@ -4,6 +4,18 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.12 build 94] - 2026-05-22 — Fix: "+ New chat" button actually clears the open chat (`fix/new-chat-button`)
+
+User reported that clicking "+ New chat" still rendered the previous chat's transcript in the middle pane.
+
+Root cause: the `TahoeAccentButton(size: .m) { … }` invocation in `ChatSidebar.body` passed a label-only closure with no `action:` argument. `TahoeAccentButton.init` defaults `action` to `{}` (no-op), so the tap did literally nothing — `openChatId` was never cleared and the activeThread computation kept rendering whatever was previously open.
+
+### Changed
+
+- **`MacChatView.ChatSidebar`** — `TahoeAccentButton(size: .m, action: { openChatId = nil }) { … }`. Combined with the v0.22.11 empty-thread fix (nil openChatId → `ChatThread(title: "", turns: [])`), clicking "+ New chat" now reliably gives the user a clean composer + blank stream pane.
+
+Bumps `MARKETING_VERSION` 0.22.11 → 0.22.12, `CURRENT_PROJECT_VERSION` 93 → 94.
+
 ## [0.22.11 build 93] - 2026-05-22 — Fix: clean default chat state + auto-archive idle chats + Code IDE JSONL renders inline (`fix/chat-default-and-jsonl-render`)
 
 User reported:

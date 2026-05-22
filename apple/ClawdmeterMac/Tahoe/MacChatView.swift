@@ -303,8 +303,15 @@ private struct ChatSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // New chat button
-            TahoeAccentButton(size: .m) {
+            // v0.22.12: the "+ New chat" button had no `action:` (the
+            // closure passed was the LABEL builder, not the tap
+            // action). Clicking it appeared to do nothing because
+            // `openChatId` never cleared — the user kept seeing
+            // whatever transcript was already loaded. Now the tap
+            // explicitly clears `openChatId`, which (combined with the
+            // v0.22.11 empty-thread fix) renders a clean composer + a
+            // blank stream pane.
+            TahoeAccentButton(size: .m, action: { openChatId = nil }) {
                 HStack(spacing: 4) {
                     TahoeIcon("plus", size: 12, weight: .bold)
                     Text("New chat")
