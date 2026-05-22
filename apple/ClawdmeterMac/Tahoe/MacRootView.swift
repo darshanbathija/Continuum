@@ -281,11 +281,14 @@ struct MacTitlebar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            TahoeGlass(radius: 11, tone: .chip) {
-                TahoeTrafficLights()
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-            }
+            // v0.22.6: window is now `.hiddenTitleBar`, so the macOS
+            // traffic lights overlay the top-left at the system level.
+            // Reserve ~76pt of leading space so the tab chip doesn't
+            // collide with the real (close/min/zoom) controls. We
+            // dropped the decorative TahoeTrafficLights chip — it was
+            // a non-functional Tahoe-themed clone that visually stacked
+            // on top of the real lights.
+            Color.clear.frame(width: 76, height: 1)
 
             TahoeGlass(radius: 11, tone: .chip) {
                 HStack(spacing: 10) {

@@ -50,6 +50,19 @@ struct ClawdmeterMacApp: App {
         // (sidebar 248 + 3×~340 columns + gaps) at first open.
         .defaultSize(width: 1320, height: 920)
         .windowResizability(.contentMinSize)
+        // v0.22.6 fix: hide the native macOS titlebar so the Tahoe
+        // titlebar (MacRootView's MacTitlebar chip with the tabs +
+        // status chips) IS the top of the window instead of stacking
+        // beneath it. The macOS traffic-light controls remain
+        // functional — they overlay the top-left corner — and
+        // `MacTitlebar` reserves left padding so they don't collide
+        // with the tab text.
+        .windowStyle(.hiddenTitleBar)
+        // Allow the window content to fill the corners (otherwise
+        // SwiftUI still draws the titlebar background). Combined with
+        // `.hiddenTitleBar` above, the Tahoe wallpaper + glass
+        // titlebar paint the entire window chrome.
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
 
         // G14: pop-out window for a single session. Accepts a UUID via the
         // `openWindow(value:)` environment action. The window's title and

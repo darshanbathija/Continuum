@@ -4,7 +4,47 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-<<<<<<< HEAD
+## [0.22.6 build 88] - 2026-05-22 — Fix: hide native macOS titlebar so the Tahoe chip is the top (`fix/native-titlebar-hide`)
+
+Cosmetic-but-glaring fix to the dashboard window. The Tahoe titlebar
+(tab chip + status chips) had been stacking *underneath* the native
+macOS title bar, giving the window two visible top bars: an empty
+"Clawdmeter" title strip on top, and the real interactive titlebar
+below it. The design always intended the Tahoe chip to BE the top of
+the window.
+
+### Changed
+
+- **`ClawdmeterMacApp.swift`** — added `.windowStyle(.hiddenTitleBar)`
+  and `.windowToolbarStyle(.unifiedCompact(showsTitle: false))` to the
+  main `Window("Clawdmeter", id: "dashboard")` scene so SwiftUI hides
+  the native title strip. The macOS traffic-light controls (close,
+  minimize, zoom) remain functional — AppKit overlays them at the
+  top-left of the window content.
+- **`MacRootView.MacTitlebar.body`** — dropped the decorative
+  `TahoeGlass { TahoeTrafficLights() }` chip that was a non-functional
+  Tahoe-themed clone of the real lights. Replaced with a 76pt invisible
+  spacer (`Color.clear.frame(width: 76, height: 1)`) so the tab chip
+  starts past the real traffic-light cluster instead of colliding with
+  it.
+
+### Why
+
+The previous build's `Window` scene didn't apply any `windowStyle`
+modifier, so AppKit defaulted to the standard titled window — which
+draws its own title strip above whatever SwiftUI puts in `.body`. The
+Tahoe titlebar was sitting in the content area beneath it.
+`.hiddenTitleBar` is the standard SwiftUI escape hatch for this:
+content extends to the top of the window and the system traffic lights
+overlay at their canonical position.
+
+### Result
+
+- One titlebar instead of two.
+- Real traffic lights (functional, non-collisional with tab chip).
+- Tab chip starts at x≈86pt (10pt leading padding + 76pt spacer), past
+  the standard 72pt traffic-light cluster width.
+
 ## [0.22.0 build 82] - 2026-05-22 — Design tab: Open Design embedded on Mac + iOS (`feat/design-tab-open-design`)
 
 The biggest feature add in months: a fully-functional **Design** tab that
