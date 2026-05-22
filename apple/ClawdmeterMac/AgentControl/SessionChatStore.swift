@@ -89,6 +89,13 @@ public final class SessionChatStore: ObservableObject {
         /// View code uses this for `.onChange` triggers instead of
         /// `items.last?.id`, which would change object identity per render.
         public let updateCounter: UInt64
+        /// v0.23 (Chat V2): explicit per-turn lifecycle. Updated by the
+        /// daemon's ingestors (JSONLTail for Claude `result`,
+        /// CodexSDKEventIngestor for `turn.completed`, AntigravityChatIngestor
+        /// for `chunk_done`). Drives the V2 status strip's stopwatch
+        /// clamp + Stop↔Send transition. Defaults to `.idle` on
+        /// legacy snapshots.
+        public let currentTurnState: TurnState
 
         public init(
             items: [ChatItem],
@@ -107,7 +114,8 @@ public final class SessionChatStore: ObservableObject {
             lastCacheReadTokens: Int = 0,
             modelHint: String? = nil,
             lastEventAt: Date? = nil,
-            updateCounter: UInt64
+            updateCounter: UInt64,
+            currentTurnState: TurnState = .idle
         ) {
             self.items = items
             self.messages = messages
@@ -126,6 +134,7 @@ public final class SessionChatStore: ObservableObject {
             self.modelHint = modelHint
             self.lastEventAt = lastEventAt
             self.updateCounter = updateCounter
+            self.currentTurnState = currentTurnState
         }
 
         public static let empty = ChatSnapshot(items: [], updateCounter: 0)
