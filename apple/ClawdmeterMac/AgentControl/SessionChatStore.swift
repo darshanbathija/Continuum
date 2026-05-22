@@ -198,6 +198,23 @@ public final class SessionChatStore: ObservableObject {
         Task { [staging] in await staging.setCodexTodos(todos) }
     }
 
+    /// v0.23 (Chat V2): transition the session's per-turn lifecycle.
+    /// Called from each provider's ingestor:
+    ///   - JSONLTail (Claude) → `.streaming` on first assistant content,
+    ///     `.completed` on the JSONL `result` line, `.interrupted` on the
+    ///     SessionInterruptDispatcher's tmux ESC dispatch.
+    ///   - CodexSDKEventIngestor → `.streaming` on first SDK event of a
+    ///     turn, `.completed` on `turn.completed`, `.interrupted` on
+    ///     AbortController.abort().
+    ///   - AntigravityChatIngestor → `.streaming` on first agentapi chunk,
+    ///     `.completed` on `chunk_done` / terminal frame, `.interrupted`
+    ///     on the `/cancel` endpoint.
+    /// The transition is idempotent: re-setting the same state is a
+    /// no-op and does NOT bump the snapshot counter.
+    public func setCurrentTurnState(_ state: TurnState) {
+        Task { [staging] in await staging.setCurrentTurnState(state) }
+    }
+
     /// v0.7.4: ingest Codex SDK stream events into the same staging pipeline
     /// JSONL tail uses, so SDK observation flows into the existing iOS
     /// `chat-subscribe` WS feed without a separate channel.
@@ -1019,6 +1036,18 @@ actor StagingParser {
     /// `setCodexTodos(_:)`, surfaced in ChatSnapshot for the CodexPlanPane
     /// (Mac), iOSCodexPlanView (iOS), and CodexTaskComplication (Watch).
     private var codexTodos: [CodexTodoItem] = []
+    /// v0.23 (Chat V2): explicit per-turn lifecycle. Each provider's
+    /// ingestor (JSONLTail for Claude, CodexSDKEventIngestor for Codex
+    /// SDK, AntigravityChatIngestor for Gemini) transitions this
+    /// via `setCurrentTurnState(_:)` on natural turn boundaries:
+    ///   - `.streaming` on first content of a new turn
+    ///   - `.completed` on the provider's terminal event
+    ///   - `.interrupted` on cancel
+    ///   - `.idle` on next user prompt
+    /// Surfaced in `ChatSnapshot.currentTurnState` so the V2 status
+    /// strip can drive the stopwatch + Stop↔Send transitions
+    /// deterministically.
+    private var currentTurnState: TurnState = .idle
     /// Accumulated tokens for the session metadata strip — split into
     /// the four billable categories so the cost estimator can apply
     /// the right rate per category. Pulled from `message.usage` on
@@ -1165,6 +1194,15 @@ actor StagingParser {
         updateCounter &+= 1
     }
 
+    /// v0.23 (Chat V2): per-turn lifecycle transition. Idempotent on
+    /// no-op transitions so ingestors can call freely without bumping
+    /// the snapshot counter on every line.
+    func setCurrentTurnState(_ state: TurnState) {
+        guard currentTurnState != state else { return }
+        currentTurnState = state
+        updateCounter &+= 1
+    }
+
     /// Hardening: clear all accumulated state without re-instantiating
     /// the actor. Called by `SessionChatStore.start()` when re-entering
     /// after a prior `stop()` so untracked in-flight ingests can't bleed
@@ -1190,6 +1228,7 @@ actor StagingParser {
         lastUsageAt = nil
         modelHint = nil
         lastEventAt = nil
+        currentTurnState = .idle
         cachedSnapshot = .empty
         cachedCounter = 0
         updateCounter = 0
@@ -1271,7 +1310,8 @@ actor StagingParser {
             lastCacheReadTokens: lastCacheReadTokens,
             modelHint: modelHint,
             lastEventAt: lastEventAt,
-            updateCounter: updateCounter
+            updateCounter: updateCounter,
+            currentTurnState: currentTurnState
         )
         cachedCounter = updateCounter
         lastSnapshotRebuildNS = nowNS
