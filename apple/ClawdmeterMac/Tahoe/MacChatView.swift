@@ -1200,8 +1200,38 @@ private struct ChatComposer: View {
                 let slots: [FrontierModelSlot] = resolved.map { FrontierModelSlot(provider: $0) }
                 let response = await client.createFrontier(slots: slots)
                 guard let response else {
-                    broadcastNote = "Couldn't create broadcast group — see Settings → Providers."
+                    // v0.22.22: surface the actual transport error from
+                    // the loopback client instead of a generic
+                    // "see Settings → Providers" line. Common real
+                    // causes: 401 (token expired), 5xx from the
+                    // server, network not bound yet on cold launch.
+                    let detail = (client.lastError?.isEmpty == false) ? client.lastError! : "Unknown transport error"
+                    broadcastNote = "Couldn't create broadcast group — \(detail)"
                     return
+                }
+                // v0.22.22: detect the partial-failure case where the
+                // server returned 201 but every slot has a `reason`
+                // (e.g. all three CLIs failed to spawn). Without this
+                // we'd silently `frontierSend` to a group with zero
+                // live children and openChatId would stay nil — the
+                // user sees an empty chat and no explanation.
+                let liveSlots = response.slots.filter { $0.sessionId != nil }
+                if liveSlots.isEmpty {
+                    let reasons = response.slots
+                        .compactMap { $0.reason }
+                        .joined(separator: ", ")
+                    broadcastNote = "All providers failed to spawn — \(reasons.isEmpty ? "no reason returned" : reasons)"
+                    return
+                }
+                // If some but not all spawned, leave a note but
+                // continue with the live children so the user gets
+                // partial signal instead of nothing.
+                if liveSlots.count < response.slots.count {
+                    let failed = response.slots
+                        .filter { $0.sessionId == nil }
+                        .compactMap { $0.reason }
+                        .joined(separator: ", ")
+                    broadcastNote = "Partial broadcast — \(liveSlots.count)/\(response.slots.count) live (\(failed))"
                 }
                 _ = await client.frontierSend(groupId: response.groupId, text: trimmed)
                 sendCtl.text = ""
