@@ -838,6 +838,39 @@ public final class AgentControlClient: ObservableObject {
         sessions.filter { $0.kind == .chat && $0.archivedAt == nil }
     }
 
+    /// v0.23 (Chat V2 wire v14): `GET /chat-sessions/search?q=<query>`
+    /// — full-history substring scan across the daemon's known chat
+    /// JSONLs. Bounded by a 200ms hard timeout + 50-result cap server-
+    /// side; the client just passes through. Used by the V2 sidebar's
+    /// search-as-you-type to find chats the local in-memory cache
+    /// doesn't hold (iOS LRU-2 / Mac cap 20).
+    ///
+    /// Returns nil only on transport / decode error. An empty-query or
+    /// no-match scenario returns an empty matches array (`truncated:
+    /// false`). Callers SHOULD debounce input by 200ms to avoid
+    /// keypress-storm-ing the daemon — the loop already self-throttles
+    /// via the deadline but a debounce on the typing side keeps the
+    /// daemon's load proportional to user intent.
+    @MainActor
+    public func searchChatHistory(query: String, limit: Int = 50) async -> ChatSessionSearchResponse? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return ChatSessionSearchResponse(matches: [], truncated: false)
+        }
+        let escaped = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
+        let path = "/chat-sessions/search?q=\(escaped)&limit=\(limit)"
+        guard let request = makeRequest(path: path, method: "GET") else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(ChatSessionSearchResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     // MARK: - v0.9.x Frontier compare
 
     /// `POST /chat-sessions/frontier` — spawn a Frontier group with 2-3
