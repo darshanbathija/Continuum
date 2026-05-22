@@ -491,6 +491,18 @@ final class ProviderStatusController: NSObject {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            // v0.22.10: kick a forcePoll on every provider before
+            // showing the popover so the gauges reflect the latest
+            // state — particularly important after a long idle when
+            // the cached UsageData may be tens of minutes stale. The
+            // forcePoll is fire-and-forget; the @ObservedObject
+            // MenuBarLiveSource catches the resulting `usage` mutation
+            // and the popover re-renders.
+            if let runtime {
+                runtime.claudeModel.forcePoll()
+                runtime.codexModel.forcePoll()
+                runtime.geminiModel.forcePoll()
+            }
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             // Keep the popover keyed to the active window so menu bar
             // interaction doesn't immediately dismiss it.

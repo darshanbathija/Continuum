@@ -4,6 +4,29 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.10 build 92] - 2026-05-22 — Fix: Codex 5h reading matches Codex Desktop (window-aware bucket pick) + popover force-polls on open (`fix/codex-5h-usage`)
+
+User reported the menu-bar popover's "Codex 5h session" reading was wildly off — Codex Desktop showed 93% / 12:38, Clawdmeter showed 15% / "resets in —".
+
+Two compounding problems:
+
+### Changed
+
+**`CodexSource.parseLiveUsagePayload` — bucket-pick rewrite**
+- Previously: pick the bucket with the highest `primary.used_percent`, then inherit that same bucket's `secondary` as the weekly. That couples session + weekly to the same bucket — wrong when `/wham/usage` returns multiple `(primary, secondary)` pairs (e.g. `codex`, `codex-pro`, `codex-fast`). A user constrained on `codex-pro` (93% on its 5h) but loose on the `codex` bucket (15% on its 5h) would always show 15% because Clawdmeter picked the bucket whose primary was highest among the wrong axis.
+- Now: walk every bucket and classify each `(primary, secondary)` pair by `window_minutes`. 5h-class = `window_minutes ≤ 600`; weekly-class = `window_minutes ≥ 1440`. Pick the highest `used_percent` independently for each class. Session and weekly can now come from different limit_ids.
+- `BucketView` gained a `windowMinutes: Int?` field decoded from `window_minutes` / `windowMinutes`.
+
+**`ProviderStatusController.togglePopover` — force-poll on open**
+- Every status-item click now fires `runtime.claudeModel.forcePoll()` + `codexModel.forcePoll()` + `geminiModel.forcePoll()` before showing the popover, so the gauges always reflect the latest backend reading. Previously the popover rendered whatever cached `model.usage` was in memory — after a long idle, that could be tens of minutes stale even though MenuBarLiveSource correctly propagates updates once a new poll lands.
+
+### Notes
+
+- The window-aware pick falls back to the previous "highest primary" behavior when buckets don't expose `window_minutes` (preserves test fixtures that mocked the older shape).
+- The JSONL fallback parser (`parseLatestUsage`) is unchanged — JSONL has exactly one `(primary, secondary)` pair per line so the multi-bucket logic doesn't apply there.
+
+Bumps `MARKETING_VERSION` 0.22.9 → 0.22.10, `CURRENT_PROJECT_VERSION` 91 → 92.
+
 ## [0.22.9 build 91] - 2026-05-22 — Fix: keyboard shortcuts + Settings consolidation + composer wiring + multi-select model picker + eager Design daemon (`fix/v0228-followups`)
 
 Nine-issue follow-up after the user reported:

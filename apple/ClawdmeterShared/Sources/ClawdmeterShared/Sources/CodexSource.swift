@@ -164,9 +164,24 @@ public final class CodexSource: AISource {
     /// Parse the live `/wham/usage` payload into UsageData. The endpoint
     /// returns BOTH a legacy single-bucket `rate_limits` AND a richer
     /// `rate_limits_by_limit_id` map (per the Codex CLI's binary type
-    /// `GetAccountRateLimitsResponse`). We prefer the multi-bucket map
-    /// and pick the WORST (highest used_percent) primary bucket — that's
-    /// what Codex Desktop displays.
+    /// `GetAccountRateLimitsResponse`).
+    ///
+    /// v0.22.10 rewrite: previously we picked the bucket with the
+    /// highest `primary.used_percent` and inherited its `secondary` as
+    /// the weekly. That's wrong when buckets are independent — Codex
+    /// returns one bucket per `limit_id` (e.g. `codex`, `codex-pro`,
+    /// `codex-fast`), each with its own (primary, secondary) pair.
+    /// Pairing the worst primary with that bucket's secondary
+    /// dropped the actual user-facing 5h reading whenever the
+    /// constrained tier wasn't the same bucket whose weekly the user
+    /// was watching.
+    ///
+    /// Now we walk every bucket and track the highest used_percent
+    /// **per window-minutes class** independently. A 300-minute bucket
+    /// from any limit_id can become the session; a 10080-minute bucket
+    /// from any limit_id can become the weekly. This matches Codex
+    /// Desktop's behavior of showing the worst-case 5h + worst-case
+    /// weekly side-by-side regardless of bucket grouping.
     private func parseLiveUsagePayload(_ data: Data) -> UsageData? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -192,44 +207,78 @@ public final class CodexSource: AISource {
             }
         }
 
-        // Pick the bucket with the highest primary.used_percent — that's
-        // the user's most-constrained limit and matches Codex Desktop's
-        // "show me the worst one" behavior.
-        var best: (primary: BucketView, secondary: BucketView?, reached: String?)? = nil
+        // Walk every (primary, secondary) pair across every bucket and
+        // pick window-by-window winners. 5h class ≈ 300 minutes;
+        // weekly class ≈ 10080 minutes. We don't hard-equality on
+        // window_minutes — accept anything ≤ 600 as a session bucket,
+        // anything ≥ 1440 as a weekly bucket. That stays robust if
+        // Codex starts returning a daily (1440) bucket later.
+        var sessionWinner: BucketView?
+        var weeklyWinner: BucketView?
+        var reachedAny: String?
         for raw in buckets {
-            guard let primary = BucketView(rawBucket: raw["primary"]) else { continue }
-            let secondary = BucketView(rawBucket: raw["secondary"])
-            let reached = raw["rate_limit_reached_type"] as? String
-            if let current = best {
-                if primary.usedPercent > current.primary.usedPercent {
-                    best = (primary, secondary, reached)
+            if let reached = raw["rate_limit_reached_type"] as? String, !reached.isEmpty {
+                reachedAny = reached
+            }
+            if let primary = BucketView(rawBucket: raw["primary"]) {
+                if Self.isSessionWindow(primary.windowMinutes) {
+                    if sessionWinner == nil || primary.usedPercent > sessionWinner!.usedPercent {
+                        sessionWinner = primary
+                    }
+                } else if Self.isWeeklyWindow(primary.windowMinutes) {
+                    if weeklyWinner == nil || primary.usedPercent > weeklyWinner!.usedPercent {
+                        weeklyWinner = primary
+                    }
                 }
-            } else {
-                best = (primary, secondary, reached)
+            }
+            if let secondary = BucketView(rawBucket: raw["secondary"]) {
+                if Self.isSessionWindow(secondary.windowMinutes) {
+                    if sessionWinner == nil || secondary.usedPercent > sessionWinner!.usedPercent {
+                        sessionWinner = secondary
+                    }
+                } else if Self.isWeeklyWindow(secondary.windowMinutes) {
+                    if weeklyWinner == nil || secondary.usedPercent > weeklyWinner!.usedPercent {
+                        weeklyWinner = secondary
+                    }
+                }
             }
         }
-        guard let pick = best else { return nil }
+
+        // If no session bucket was identifiable but at least one bucket
+        // had a primary, fall back to the highest-primary across all
+        // (preserves prior behavior for endpoints that don't expose
+        // `window_minutes` — e.g. mocked test fixtures).
+        if sessionWinner == nil {
+            for raw in buckets {
+                if let primary = BucketView(rawBucket: raw["primary"]) {
+                    if sessionWinner == nil || primary.usedPercent > sessionWinner!.usedPercent {
+                        sessionWinner = primary
+                    }
+                }
+            }
+        }
+        guard let session = sessionWinner else { return nil }
 
         let now = Date()
         let nowEpoch = Int(now.timeIntervalSince1970)
-        let sessionMins = max(0, (pick.primary.resetsAt - nowEpoch + 59) / 60)
+        let sessionMins = max(0, (session.resetsAt - nowEpoch + 59) / 60)
 
         let weeklyPct: Int
         let weeklyEpoch: Int
         let weeklyMins: Int
-        if let sec = pick.secondary {
-            weeklyPct = Int(sec.usedPercent.rounded())
-            weeklyEpoch = sec.resetsAt
-            weeklyMins = max(0, (sec.resetsAt - nowEpoch + 59) / 60)
+        if let weekly = weeklyWinner {
+            weeklyPct = Int(weekly.usedPercent.rounded())
+            weeklyEpoch = weekly.resetsAt
+            weeklyMins = max(0, (weekly.resetsAt - nowEpoch + 59) / 60)
         } else {
             weeklyPct = 0
             weeklyEpoch = nowEpoch + 7 * 24 * 3600
             weeklyMins = 7 * 24 * 60
         }
 
-        let resetIsPast = pick.primary.resetsAt <= nowEpoch
+        let resetIsPast = session.resetsAt <= nowEpoch
         let status: UsageData.Status
-        if pick.reached != nil {
+        if reachedAny != nil {
             status = .limited
         } else if resetIsPast {
             status = .notStarted
@@ -237,10 +286,13 @@ public final class CodexSource: AISource {
             status = .allowed
         }
 
+        let weeklyWindowM = weeklyWinner?.windowMinutes ?? 0
+        let weeklyPresent = weeklyWinner != nil
+        logger.info("Codex parsed: session=\(Int(session.usedPercent.rounded()))% (window=\(session.windowMinutes ?? 0)m) weekly=\(weeklyPct)% (window=\(weeklyWindowM)m, present=\(weeklyPresent))")
         return UsageData(
-            sessionPct: Int(pick.primary.usedPercent.rounded()),
+            sessionPct: Int(session.usedPercent.rounded()),
             sessionResetMins: sessionMins,
-            sessionEpoch: pick.primary.resetsAt,
+            sessionEpoch: session.resetsAt,
             weeklyPct: weeklyPct,
             weeklyResetMins: weeklyMins,
             weeklyEpoch: weeklyEpoch,
@@ -250,12 +302,30 @@ public final class CodexSource: AISource {
         )
     }
 
+    /// 300 minutes = 5h session; some test fixtures use 60 or 240, so
+    /// accept anything ≤ 600 as session-class (10h cap).
+    private static func isSessionWindow(_ windowMinutes: Int?) -> Bool {
+        guard let m = windowMinutes else { return false }
+        return m > 0 && m <= 600
+    }
+
+    /// 1440 = daily (counted as "weekly-class" for the gauge); 10080 = weekly.
+    private static func isWeeklyWindow(_ windowMinutes: Int?) -> Bool {
+        guard let m = windowMinutes else { return false }
+        return m >= 1440
+    }
+
+
     /// Tolerant decoder for a `{used_percent, window_minutes?, resets_at}`
     /// bucket — handles both camelCase (`usedPercent`/`resetsAt`) and
     /// snake_case (`used_percent`/`resets_at`) keys.
     private struct BucketView {
         let usedPercent: Double
         let resetsAt: Int
+        /// v0.22.10: surfaces `window_minutes` so the parser can match
+        /// buckets to the 5h-class vs weekly-class regardless of which
+        /// limit_id Codex grouped them under.
+        let windowMinutes: Int?
 
         init?(rawBucket: Any?) {
             guard let dict = rawBucket as? [String: Any] else { return nil }
@@ -268,6 +338,8 @@ public final class CodexSource: AISource {
             guard resets > 0 else { return nil }
             self.usedPercent = pct
             self.resetsAt = resets
+            self.windowMinutes = (dict["window_minutes"] as? Int)
+                ?? (dict["windowMinutes"] as? Int)
         }
     }
 
