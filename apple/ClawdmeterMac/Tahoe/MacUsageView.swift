@@ -291,7 +291,12 @@ private struct RangeSelector: View {
     @Environment(\.tahoe) private var t
     @Binding var value: String
     private let items: [(String, String)] = [
-        ("24h","24h"),("7d","7d"),("30d","30d"),("90d","90d"),("all","All time"),
+        // v0.22.17: "24h" replaced with "Today" to match ccusage's
+        // daily-bucket model. The previous "past 24h" view split today's
+        // total across 6 equally-weighted four-hour buckets — pure
+        // smoke-and-mirrors, since UsageHistoryLoader stores data at
+        // day-resolution. "Today" tells the truth: a single day's spend.
+        ("today","Today"),("7d","7d"),("30d","30d"),("90d","90d"),("all","All time"),
     ]
 
     var body: some View {
@@ -447,8 +452,14 @@ private struct SpendChart: View {
         }
     }
 
+    /// v0.22.17: switched from `[glow, base]` to `[halo, glow]` to
+    /// match the popover pill bar's brightening fix (v0.22.16) —
+    /// Codex's intentionally-desaturated brand palette was rendering
+    /// the stacked-bar Codex slice as a near-black sliver against
+    /// the dark chart bg. Halo is each provider's bright accent
+    /// (Codex's OpenAI cool blue, etc.) so all four show now.
     private func grad(_ p: TahoeProvider) -> LinearGradient {
-        LinearGradient(colors: [p.glow.color, p.base.color], startPoint: .top, endPoint: .bottom)
+        LinearGradient(colors: [p.halo.color, p.glow.color], startPoint: .top, endPoint: .bottom)
     }
 }
 
@@ -495,8 +506,14 @@ private struct RepoList: View {
         .padding(.top, 14)
     }
 
+    /// v0.22.17: switched from `[glow, base]` to `[halo, glow]` to
+    /// match the popover pill bar's brightening fix (v0.22.16) —
+    /// Codex's intentionally-desaturated brand palette was rendering
+    /// the stacked-bar Codex slice as a near-black sliver against
+    /// the dark chart bg. Halo is each provider's bright accent
+    /// (Codex's OpenAI cool blue, etc.) so all four show now.
     private func grad(_ p: TahoeProvider) -> LinearGradient {
-        LinearGradient(colors: [p.glow.color, p.base.color], startPoint: .top, endPoint: .bottom)
+        LinearGradient(colors: [p.halo.color, p.glow.color], startPoint: .top, endPoint: .bottom)
     }
 }
 

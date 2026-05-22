@@ -40,6 +40,7 @@ struct MacRootView: View {
     /// sidebar `folderPlus`) and the future Chat-tab sidebar can present it.
     @State private var newSessionPreselectedRepo: String? = nil
     @State private var newSessionPresented: Bool = false
+    @State private var focusedCodeRepoKey: String? = nil
 
     // v0.14.0 (plan v2.1 D6 + D7): handoff toast + reduce-motion guard.
     @State private var handoffToast: String? = nil
@@ -137,15 +138,20 @@ struct MacRootView: View {
                             loopbackClient: runtime.loopbackClient,
                             runtime: runtime
                         )
-                    case .design:
-                        MacDesignView(
-                            daemon: runtime.openDesignDaemon,
-                            onOpenInCode: { _ in
-                                // Bridge plugin "Open in Code →" → flip tab.
-                                // Per-repo pre-select integration pending T8 wiring.
-                                tab = .code
-                            }
-                        )
+	                    case .design:
+	                        MacDesignView(
+	                            daemon: runtime.openDesignDaemon,
+	                            onOpenInCode: { repoKey in
+	                                focusedCodeRepoKey = repoKey
+	                                tab = .code
+	                                if let repoKey, !repoKey.isEmpty {
+	                                    handoffToast = "Opened in Code: \(URL(fileURLWithPath: repoKey).lastPathComponent)"
+	                                } else {
+	                                    handoffToast = "Opened Code"
+	                                }
+	                                scheduleToastDismiss()
+	                            }
+	                        )
                     case .settings:
                         MacSettingsView(
                             theme: theme,
@@ -303,7 +309,7 @@ struct MacTitlebar: View {
 
     @ViewBuilder
     private var syncChipCode: some View {
-        TahoeSyncChip(text: isIPhonePaired ? "iPhone paired" : "No iPhone paired")
+        syncChipUsage
     }
 
     var body: some View {
