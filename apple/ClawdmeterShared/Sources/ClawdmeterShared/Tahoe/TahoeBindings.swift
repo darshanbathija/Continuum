@@ -22,6 +22,14 @@ public struct TahoeLiveRow: Equatable, Sendable {
     public var autoReviveOn: Bool
     public var autoReviveAgo: String       // "4h ago" / "" if never fired
     public var hasWeekly: Bool
+    /// v0.22.18: true when this row's numbers came from a fallback /
+    /// cached source rather than a live API poll. Today the only path
+    /// that sets this is CodexSource's JSONL fallback (when the wham
+    /// endpoint is unreachable and we read the most recent
+    /// rate_limits block from the user's local .codex rollouts).
+    /// Drives a "Stale" pill in TahoeMenuBarMeter so the user knows
+    /// they're looking at potentially-old data.
+    public var stale: Bool
 
     public init(
         sessionPercent: Double,
@@ -31,7 +39,8 @@ public struct TahoeLiveRow: Equatable, Sendable {
         modelName: String = "",
         autoReviveOn: Bool = false,
         autoReviveAgo: String = "",
-        hasWeekly: Bool = true
+        hasWeekly: Bool = true,
+        stale: Bool = false
     ) {
         self.sessionPercent = sessionPercent
         self.weeklyPercent = weeklyPercent
@@ -41,6 +50,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         self.autoReviveOn = autoReviveOn
         self.autoReviveAgo = autoReviveAgo
         self.hasWeekly = hasWeekly
+        self.stale = stale
     }
 
     /// Demo defaults — match `TahoeDemo.liveData[provider]`.
