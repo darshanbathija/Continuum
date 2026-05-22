@@ -247,23 +247,31 @@ public final class OpencodeProcessManager {
 
     // MARK: - Binary discovery
 
-    /// Discover the opencode binary. Mirrors AntigravitySidecarManager's
-    /// PATH search pattern + the plan's stated install locations.
-    /// Exposed `internal` so tests can override by injecting a known path.
+    /// Discover the opencode binary.
+    ///
+    /// Precedence (v0.23.0 O4 — PATH first, bundle as fallback):
+    ///   1. `/opt/homebrew/bin/opencode`
+    ///   2. `/usr/local/bin/opencode`
+    ///   3. Explicit `$PATH` walk (mise / asdf / custom installs)
+    ///   4. Bundled binary at `Bundle.main.url(forResource:opencode,
+    ///      subdirectory:Vendor/opencode)` — the v0.23.0 zero-setup
+    ///      install path shipped inside the .app
+    ///
+    /// Rationale: brew-managed users keep their managed version (no
+    /// silent downgrade). The bundle exists for first-launch users who
+    /// don't have opencode installed yet. Each candidate is gated by
+    /// `isExecutableFile` (A1) so a corrupt bundle falls through to
+    /// PATH instead of failing on spawn.
     internal func locateBinary() -> String? {
-        let candidates = [
+        let fixedCandidates = [
             "/opt/homebrew/bin/opencode",
             "/usr/local/bin/opencode",
         ]
-        for path in candidates {
+        for path in fixedCandidates {
             if FileManager.default.isExecutableFile(atPath: path) {
                 return path
             }
         }
-        // Fallback: walk $PATH explicitly. The Mac app inherits a sparse
-        // launchd PATH that often omits Homebrew; the explicit list
-        // above catches the 99% case but $PATH covers anyone who's
-        // installed opencode via mise / asdf / etc.
         let pathEnv = ProcessInfo.processInfo.environment["PATH"] ?? ""
         for dir in pathEnv.split(separator: ":") {
             let candidate = String(dir) + "/opencode"
@@ -271,7 +279,64 @@ public final class OpencodeProcessManager {
                 return candidate
             }
         }
+        if let bundled = Bundle.main.url(
+            forResource: "opencode",
+            withExtension: nil,
+            subdirectory: "Vendor/opencode"
+        ), FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled.path
+        }
+        // Dev-iteration fallback: when running from Xcode debug Bundle.main
+        // points at DerivedData. Walk up to find the source tree path.
+        let here = URL(fileURLWithPath: #file)
+        var dir = here.deletingLastPathComponent()
+        for _ in 0..<6 {
+            let candidate = dir.appendingPathComponent("ClawdmeterMac/Resources/Vendor/opencode/opencode")
+            if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                return candidate.path
+            }
+            dir = dir.deletingLastPathComponent()
+        }
         return nil
+    }
+
+    /// Re-run binary discovery + auth-status probe, restart `opencode
+    /// serve` if anything changed. Called from OpencodeProviderRow after
+    /// Activate AND from OpencodeSetupSheet after every auth flow.
+    ///
+    /// Restart triggers (A3 + O5):
+    ///   - binary path changed (brew upgrade / first bundle discovery)
+    ///   - auth provider set changed (opencode reads creds at startup,
+    ///     so serve started pre-auth won't see post-auth creds)
+    public func reprobe() async {
+        let priorBinary = binaryPath
+        let priorAuthKeys = Set(authStatus?.keys.map { $0 } ?? [])
+
+        binaryPath = locateBinary()
+        let nextBinary = binaryPath
+
+        await refreshAuthStatus()
+        let nextAuthKeys = Set(authStatus?.keys.map { $0 } ?? [])
+
+        let binaryChanged = (priorBinary != nextBinary) && (priorBinary != nil || nextBinary != nil)
+        let authChanged = priorAuthKeys != nextAuthKeys
+        let isRunning: Bool
+        if case .running = state { isRunning = true } else { isRunning = false }
+
+        if isRunning && (binaryChanged || authChanged) {
+            let reason: String
+            if binaryChanged {
+                reason = "binary changed (\(priorBinary ?? "—") → \(nextBinary ?? "—"))"
+            } else {
+                reason = "auth changed"
+            }
+            logger.info("reprobe: restarting opencode serve — \(reason, privacy: .public)")
+            stop()
+            _ = await ensureRunning()
+        } else if !isRunning && nextBinary != nil && !nextAuthKeys.isEmpty {
+            logger.info("reprobe: cold-starting opencode serve")
+            _ = await ensureRunning()
+        }
     }
 
     // MARK: - Port allocation
