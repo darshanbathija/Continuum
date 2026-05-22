@@ -1,6 +1,8 @@
 #if os(iOS) || os(macOS) || os(tvOS) || os(visionOS)
 import Foundation
+#if canImport(Combine)
 import Combine
+#endif
 #if canImport(OSLog)
 import OSLog
 #endif

@@ -2,7 +2,9 @@ import Foundation
 #if canImport(OSLog)
 import OSLog
 #endif
+#if canImport(Combine)
 import Combine
+#endif
 
 /// Orchestrates a single `AISource` on a polling loop. Owns:
 /// - Cadence (foreground 60s vs background per platform)

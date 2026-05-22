@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Combine)
 import Combine
+#endif
 
 /// Composer state model. Sits behind every Mac composer surface
 /// (`BoundComposerView` for in-session, `EmptyStateComposerView` for the
