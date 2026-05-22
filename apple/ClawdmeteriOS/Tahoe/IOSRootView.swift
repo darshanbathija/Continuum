@@ -10,6 +10,7 @@ public struct IOSRootView: View {
     @State private var pushedScreen: Screen? = nil
     @State private var newSessionPresented: Bool = false
     @State private var settingsPresented: Bool = false
+    @State private var focusedCodeRepoKey: String?
 
     public enum Tab: String, CaseIterable { case chat, live, analytics, code, design }
     /// Routes the modal/pushed screens above the tab bar. `sessionDetail`
@@ -71,7 +72,9 @@ public struct IOSRootView: View {
             NewSessionSheet(client: agentClient, isPresented: $newSessionPresented)
         }
         .sheet(isPresented: $settingsPresented) {
-            SettingsView(model: usageModel)
+            // v0.22.29: pass agentClient so SettingsView can surface
+            // Pair-with-Mac (Scan QR + Paste URL + Forget pairing).
+            SettingsView(model: usageModel, agentClient: agentClient)
         }
     }
 
@@ -118,7 +121,8 @@ public struct IOSRootView: View {
                         pushedScreen = .sessionDetail(sessionId)
                     },
                     onNewSession: { newSessionPresented = true },
-                    agentClient: agentClient
+                    agentClient: agentClient,
+                    focusedRepoKey: focusedCodeRepoKey
                 )
                 .refreshable {
                     await agentClient.refreshAll()
@@ -128,7 +132,8 @@ public struct IOSRootView: View {
                 // clawdmeter-bridge plugin's "Open in Code →" button
                 // actually flips the iOS tab. Repo pre-selection deferred
                 // until iOS Code tab learns a repo-key argument.
-                IOSDesignView(agentClient: agentClient, onOpenInCode: { _ in
+                IOSDesignView(agentClient: agentClient, onOpenInCode: { repoKey in
+                    focusedCodeRepoKey = repoKey
                     tab = .code
                 })
             }

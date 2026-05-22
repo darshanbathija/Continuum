@@ -6,10 +6,17 @@ import ClawdmeterShared
 /// button. No theme picker yet — the iPhone honors the system theme.
 struct SettingsView: View {
     @ObservedObject var model: UsageModel
+    /// v0.22.29: surface the pairing status + re-pair affordance here
+    /// so paired users can ALSO reach Scan QR / Paste URL without
+    /// having to clear pairing first. The unpaired banner inside
+    /// IOSRootView covers first-launch, but once paired there was no
+    /// way back to the pairing UI.
+    @ObservedObject var agentClient: AgentControlClient
     @Environment(\.dismiss) private var dismiss
 
     @State private var tokenDraft: String = ""
     @State private var showingClearConfirm: Bool = false
+    @State private var showingClearPairingConfirm: Bool = false
     @State private var saveError: String?
     /// Mirrors ContentView's `clawdmeter.appearance` AppStorage. Writes
     /// from this Picker propagate through the @AppStorage observer to
@@ -27,6 +34,47 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // v0.22.29: pair-with-Mac section ALWAYS visible so
+                // paired users can re-pair without clearing first.
+                // PairingCTAButtons reaches IOSPairingView which has
+                // both Scan QR + Paste URL surfaces.
+                Section {
+                    if agentClient.isConfigured {
+                        HStack(spacing: 10) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Paired with Mac")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("\(agentClient.host ?? "—"):\(agentClient.httpPort)")
+                                    .font(.footnote.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } else {
+                        HStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text("Not paired with a Mac")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
+                    PairingCTAButtons(client: agentClient, compact: true)
+                    if agentClient.isConfigured {
+                        Button(role: .destructive) {
+                            showingClearPairingConfirm = true
+                        } label: {
+                            Label("Forget Mac pairing", systemImage: "trash")
+                        }
+                    }
+                } header: {
+                    Text("Pair with Mac")
+                } footer: {
+                    Text(agentClient.isConfigured
+                        ? "Scan a new QR or paste a new URL to re-pair with a different Mac. Forget pairing erases the stored host + token from this iPhone (Mac is untouched)."
+                        : "Open Clawdmeter on your Mac → Sync with iPhone. Both devices must be on the same Tailnet.")
+                }
+
                 Section {
                     Picker(selection: appearanceBinding) {
                         ForEach(AppearanceMode.allCases) { mode in
@@ -158,6 +206,14 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) { }
             } message: {
                 Text("Your token will be removed from this device.")
+            }
+            .alert("Forget Mac pairing?", isPresented: $showingClearPairingConfirm) {
+                Button("Forget pairing", role: .destructive) {
+                    agentClient.clearPairing()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Erases the stored host, port and token from this iPhone. The Mac is untouched — you can re-pair anytime via Scan QR or Paste URL.")
             }
         }
         // SwiftUI sheets capture `preferredColorScheme` at presentation
