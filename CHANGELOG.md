@@ -4,6 +4,22 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.4 build 119] - 2026-05-23 — Native API-key sheet for OpenCode (`feat/opencode-native-auth`)
+
+Replaces the embedded `opencode auth login` terminal pane with a native SwiftUI sheet for the common API-key paste-and-go flow. The terminal sheet (`OpencodeSetupSheet`) stays available for OAuth providers that need a browser handoff (Anthropic Pro, GitHub Copilot, ChatGPT OAuth) and for sign-out / diagnostic.
+
+### Added
+
+- **`OpencodeAuthFile`** (actor, `apple/ClawdmeterMac/AgentControl/`) — read/write opencode's credentials at `~/.local/share/opencode/auth.json` (or `$XDG_DATA_HOME/opencode/auth.json`). Schema mirrors upstream `packages/opencode/src/auth/index.ts` — `{ providerID: { type: "api", key: "<key>", metadata?: {} } }`. File mode forced to 0600; directory to 0700. Writes go through a sibling tempfile + atomic `moveItem` so an interrupted write never leaves a half-formed credentials file. Provider-ID normalization matches upstream's trailing-slash strip.
+- **`OpencodeAPIKeySheet`** (`apple/ClawdmeterMac/Tahoe/`) — SwiftUI sheet with a curated provider picker (OpenRouter, Anthropic API, OpenAI API, Moonshot, Google AI Studio, Mistral, Groq, xAI, DeepSeek, plus "Custom…" for arbitrary provider IDs). `SecureField` for the key with a show/hide toggle. Direct-link button to the upstream provider's API-key dashboard. On save: writes the credentials file → triggers `OpencodeProcessManager.shared.reprobe()` → dismisses.
+- **`OpencodeAuthFileTests.swift`** — 15 tests covering schema, normalization, file mode 0600, atomic write, directory 0700, idempotent remove, malformed-JSON tolerance. Each test gets an isolated temp `XDG_DATA_HOME` so the real credentials file is never touched.
+
+### Changed
+
+- **`OpencodeProviderRow`** (in `MacSettingsView.swift`) — primary CTA is now **Add API key** (opens the native sheet); secondary **Sign in with browser** falls back to the terminal-based `OpencodeSetupSheet` for OAuth flows. Manage menu adds an **Add API key…** item alongside the existing browser-OAuth / Diagnostic / Sign out entries. CQ3 ASCII state diagram in the row's header comment updated to reflect the dual-path action surface.
+
+Bumps `MARKETING_VERSION` 0.23.3 → 0.23.4, `CURRENT_PROJECT_VERSION` 118 → 119.
+
 ## [0.23.3 build 118] - 2026-05-23 — OpenCode mirror + tests (P1-05 + T10) (`feat/opencode-mirror-and-tests`)
 
 Two follow-throughs from the v0.23.2 ship:
