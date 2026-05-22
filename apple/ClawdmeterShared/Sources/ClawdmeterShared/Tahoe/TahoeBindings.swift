@@ -166,6 +166,12 @@ public struct TahoeCodeRecent: Identifiable, Hashable, Sendable {
     /// where there's no backing session. UI surfaces gate the
     /// unarchive action on this being non-nil.
     public var sessionId: UUID?
+    /// v0.22.9: absolute filesystem path of the JSONL transcript when
+    /// this row was sourced from disk (not a live `AgentSession`).
+    /// Lets the UI fall back to "Reveal in Finder" (and, in a future
+    /// release, render a read-only transcript preview) instead of
+    /// disabling the row entirely.
+    public var jsonlPath: String?
 
     public init(
         id: String,
@@ -173,11 +179,13 @@ public struct TahoeCodeRecent: Identifiable, Hashable, Sendable {
         provider: TahoeProvider,
         live: Bool,
         ago: String,
-        sessionId: UUID? = nil
+        sessionId: UUID? = nil,
+        jsonlPath: String? = nil
     ) {
         self.id = id; self.title = title; self.provider = provider
         self.live = live; self.ago = ago
         self.sessionId = sessionId
+        self.jsonlPath = jsonlPath
     }
 }
 

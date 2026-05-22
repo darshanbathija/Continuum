@@ -140,7 +140,8 @@ struct MacRootView: View {
                             theme: theme,
                             claudeModel: claudeModel,
                             codexModel: codexModel,
-                            geminiModel: geminiModel
+                            geminiModel: geminiModel,
+                            runtime: runtime
                         )
                     }
                 }
@@ -160,16 +161,25 @@ struct MacRootView: View {
                 scheduleToastDismiss()
             }
         }
-        // v0.14.0 (D8): Cmd-1..Cmd-5 keyboard shortcuts for tabs.
-        .background(
-            Group {
-                Button("") { tab = .chat }     .keyboardShortcut("1", modifiers: .command).opacity(0)
-                Button("") { tab = .usage }    .keyboardShortcut("2", modifiers: .command).opacity(0)
-                Button("") { tab = .code }     .keyboardShortcut("3", modifiers: .command).opacity(0)
-                Button("") { tab = .design }   .keyboardShortcut("4", modifiers: .command).opacity(0)
-                Button("") { tab = .settings } .keyboardShortcut("5", modifiers: .command).opacity(0)
+        // v0.22.9: Cmd+1..Cmd+5 (+ Cmd+,) keyboard shortcuts now live
+        // in the View / app menu via `.commands` on the Window scene
+        // in ClawdmeterMacApp. The previous hidden-button hack was
+        // unreliable because the buttons had to be in the first
+        // responder chain — when the chat composer or any TextField
+        // had focus, the shortcuts silently dropped. Menu-bar commands
+        // are always-active and properly surface in the View menu so
+        // users can discover them.
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterSwitchTab)) { note in
+            guard let name = note.userInfo?["tab"] as? String else { return }
+            switch name {
+            case "chat":     tab = .chat
+            case "usage":    tab = .usage
+            case "code":     tab = .code
+            case "design":   tab = .design
+            case "settings": tab = .settings
+            default:         break
             }
-        )
+        }
         // v0.14.0 (D7): handoff toast overlay — top-anchored Tahoe chip
         // that autodismisses after 2s. Visible across all tabs.
         .overlay(alignment: .top) {
@@ -318,7 +328,12 @@ struct MacTitlebar: View {
     private var secondaryRight: some View {
         switch active {
         case .chat:
-            ChatModeToggle(mode: $chatMode, soloProvider: $chatSoloProvider)
+            // v0.22.9: removed `ChatModeToggle` (the titlebar "MODE
+            // [Broadcast] [Solo]" segmented control). Mode is now driven
+            // by a multi-select model picker in the chat composer
+            // (`BroadcastChip`) — one source of truth, no duplicated
+            // toggle. Selecting 1 provider = solo, >1 = broadcast.
+            EmptyView()
         case .usage:
             HStack(spacing: 8) {
                 // PR #26 D6: removed the hardcoded "Updated 14s ago"

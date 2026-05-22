@@ -17,6 +17,11 @@ public struct MacSettingsView: View {
     @ObservedObject var claudeModel: AppModel
     @ObservedObject var codexModel: AppModel
     @ObservedObject var geminiModel: AppModel
+    /// v0.22.9: runtime threaded in so the consolidated settings page
+    /// can embed PairingSettingsView (needs AppRuntime for the daemon
+    /// + pairing token shape). Optional so Previews don't have to
+    /// stand up a full runtime.
+    var runtime: AppRuntime?
 
     /// Source of truth for the auto-revive toggle. Reads the real state
     /// off whichever provider supports it (Claude is the canonical one
@@ -24,16 +29,23 @@ public struct MacSettingsView: View {
     @State private var notifyAt90: Bool = true
     @State private var mirrorToiPhone: Bool = true
 
-    public init(
+    // v0.22.9: dropped to `internal` because the `runtime` parameter
+    // exposes `AppRuntime`, which lives in the Mac target (not the
+    // shared library) and is itself `internal`. The Settings page is
+    // only constructed from `MacRootView` inside the same target, so
+    // the access change has no external impact.
+    init(
         theme: TahoeThemeStore,
         claudeModel: AppModel,
         codexModel: AppModel,
-        geminiModel: AppModel
+        geminiModel: AppModel,
+        runtime: AppRuntime? = nil
     ) {
         self.theme = theme
         self.claudeModel = claudeModel
         self.codexModel = codexModel
         self.geminiModel = geminiModel
+        self.runtime = runtime
     }
 
     /// Composite auto-revive state. True when any provider that supports
@@ -131,6 +143,44 @@ public struct MacSettingsView: View {
                 SettingsCard(title: "Providers",
                              sub: "External agent runtimes Clawdmeter can drive. Listed providers must be installed and signed in to spawn sessions.") {
                     OpencodeProviderRow()
+                }
+
+                // v0.22.9: consolidated sub-settings. Previously each of
+                // these was a separate tab in a `Settings { TabView { … } }`
+                // scene that opened on Cmd+, in a broken-looking light/dark
+                // modal. They now live inline as cards in the dashboard's
+                // Settings tab so everything is one comprehensive page.
+
+                SettingsCard(title: "Codex SDK",
+                             sub: "Observation mode toggle + diagnostics for the Codex provider.") {
+                    CodexSDKSettingsView()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                SettingsCard(title: "Antigravity SDK",
+                             sub: "Antigravity 2 native runtime — bundled IPC bridge + plan-mode hand-off.") {
+                    AntigravitySDKSettingsView()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                SettingsCard(title: "Live Activities",
+                             sub: "Real-time iPhone Lock Screen + Dynamic Island state for each running session.") {
+                    LiveActivitySetupView()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let runtime {
+                    SettingsCard(title: "Pairing",
+                                 sub: "Pair an iPhone over Tailscale so the iPhone app + widgets see live quota + sessions.") {
+                        PairingSettingsView(runtime: runtime)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                SettingsCard(title: "Diagnostics",
+                             sub: "Diagnose data sources, copy debug bundles, force refresh, and explore the on-disk cache.") {
+                    DiagnosticsSettingsView()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .frame(maxWidth: 920)
@@ -423,7 +473,10 @@ private struct OpencodeProviderRow: View {
                 }
                 Spacer()
                 Button {
-                    if let url = URL(string: "https://opencode.ai/docs/auth") {
+                    // v0.22.9: the /docs/auth path 404s on current
+                    // opencode.ai. Land on the docs root — it carries
+                    // both install + auth instructions.
+                    if let url = URL(string: "https://opencode.ai/docs/") {
                         NSWorkspace.shared.open(url)
                     }
                 } label: {

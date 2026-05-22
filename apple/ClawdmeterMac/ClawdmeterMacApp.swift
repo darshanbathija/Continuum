@@ -7,10 +7,32 @@ import ClawdmeterShared
 /// are unreliable for starting app-owned work. Both AppModels are owned by an
 /// app-level `AppRuntime` (`@StateObject`), which starts them in its init and
 /// forwards their `objectWillChange` so MenuBarExtra scenes invalidate reliably.
+// MARK: - v0.22.9: In-app tab navigation notifications
+
+extension Notification.Name {
+    /// Posted from menu items (Cmd+1..Cmd+5) or the Settings menu (Cmd+,)
+    /// to switch the dashboard window's active tab. MacRootView observes
+    /// this and updates its `@State tab`. Carries `userInfo["tab"]` ==
+    /// "chat"|"usage"|"code"|"design"|"settings".
+    static let clawdmeterSwitchTab = Notification.Name("clawdmeter.switchTab")
+}
+
 @main
 struct ClawdmeterMacApp: App {
     @StateObject private var runtime = AppRuntime()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    /// Shared helper for the `View` command menu — posts a `switchTab`
+    /// notification that MacRootView listens for. `static` so the menu
+    /// item closures don't capture self (avoids strong-ref churn at
+    /// each keyboard-shortcut firing).
+    fileprivate static func postSwitchTab(_ name: String) {
+        NotificationCenter.default.post(
+            name: .clawdmeterSwitchTab,
+            object: nil,
+            userInfo: ["tab": name]
+        )
+    }
 
     init() {
         // Hand the AppDelegate a reference to the runtime so its
@@ -50,6 +72,38 @@ struct ClawdmeterMacApp: App {
         // (sidebar 248 + 3×~340 columns + gaps) at first open.
         .defaultSize(width: 1320, height: 920)
         .windowResizability(.contentMinSize)
+        // v0.22.9: app + view-level command groups. Cmd+, swaps the
+        // dashboard's active tab to Settings (instead of opening the
+        // separate Settings window scene we deleted). Cmd+1..Cmd+5
+        // jump between the dashboard tabs. The previous hidden
+        // `Button.keyboardShortcut(...)` hack inside MacRootView's
+        // .background was unreliable (the button had to be in the
+        // first-responder chain). Hosting the shortcuts in the menu
+        // bar via CommandGroup/CommandMenu makes them always-active.
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    NotificationCenter.default.post(
+                        name: .clawdmeterSwitchTab,
+                        object: nil,
+                        userInfo: ["tab": "settings"]
+                    )
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+            CommandMenu("View") {
+                Button("Chat") { Self.postSwitchTab("chat") }
+                    .keyboardShortcut("1", modifiers: .command)
+                Button("Usage") { Self.postSwitchTab("usage") }
+                    .keyboardShortcut("2", modifiers: .command)
+                Button("Code") { Self.postSwitchTab("code") }
+                    .keyboardShortcut("3", modifiers: .command)
+                Button("Design") { Self.postSwitchTab("design") }
+                    .keyboardShortcut("4", modifiers: .command)
+                Button("Settings") { Self.postSwitchTab("settings") }
+                    .keyboardShortcut("5", modifiers: .command)
+            }
+        }
         // v0.22.6 fix: hide the native macOS titlebar so the Tahoe
         // titlebar (MacRootView's MacTitlebar chip with the tabs +
         // status chips) IS the top of the window instead of stacking
@@ -85,39 +139,13 @@ struct ClawdmeterMacApp: App {
         }
         .defaultSize(width: 720, height: 720)
 
-        Settings {
-            TabView {
-                PreferencesView(
-                    claudeModel: runtime.claudeModel,
-                    codexModel: runtime.codexModel
-                )
-                .tabItem { Label("General", systemImage: "gearshape") }
-
-                ProvidersSettingsView(
-                    claudeModel: runtime.claudeModel,
-                    codexModel: runtime.codexModel,
-                    geminiModel: runtime.geminiModel
-                )
-                .tabItem { Label("Providers", systemImage: "person.crop.rectangle.stack") }
-
-                PairingSettingsView(runtime: runtime)
-                    .tabItem { Label("Sessions", systemImage: "rectangle.connected.to.line.below") }
-
-                // v0.7.2: Codex SDK observation mode toggle + diagnostics.
-                CodexSDKSettingsView()
-                    .tabItem { Label("Codex SDK", systemImage: "swift") }
-
-                // v0.7.7: Antigravity SDK toggle UI (D3 completion).
-                AntigravitySDKSettingsView()
-                    .tabItem { Label("Antigravity", systemImage: "sparkles") }
-
-                DiagnosticsSettingsView()
-                    .tabItem { Label("Diagnostics", systemImage: "stethoscope") }
-
-                LiveActivitySetupView()
-                    .tabItem { Label("Live Activities", systemImage: "bell.badge.waveform") }
-            }
-        }
+        // v0.22.9: dropped the legacy `Settings { TabView { ... } }`
+        // scene that opened a separate (broken-looking, light/dark-
+        // inconsistent) modal window on Cmd+,. All settings now live
+        // inside the dashboard's Settings tab — see MacSettingsView.
+        // Cmd+, is wired below via `.commands { CommandGroup(replacing:
+        // .appSettings) }` so it switches the dashboard tab instead of
+        // opening a new window.
     }
 }
 

@@ -102,7 +102,12 @@ extension AppRuntime {
                         provider: mapAgent(r.provider),
                         live: nowDate.timeIntervalSince(r.lastModified) < 5 * 60,
                         ago: TahoeFmt.ago(from: r.lastModified, reference: nowDate),
-                        sessionId: nil  // JSONL-only; no Clawdmeter session record
+                        sessionId: nil,  // JSONL-only; no Clawdmeter session record
+                        // v0.22.9: pass the disk path so the sidebar
+                        // RecentRow can offer "Reveal in Finder" (and,
+                        // post-v0.23, a read-only transcript preview)
+                        // instead of being a dead, disabled row.
+                        jsonlPath: r.path
                     )
                 }
             let recents = archivedRecents + jsonlRecents
