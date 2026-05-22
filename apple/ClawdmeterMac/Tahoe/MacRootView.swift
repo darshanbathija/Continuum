@@ -7,7 +7,7 @@ import ClawdmeterShared
 /// Settings) and the menu bar window. Tab routing is purely local — each
 /// tab is its own view file under `Tahoe/`.
 struct MacRootView: View {
-    enum Tab: String, CaseIterable, Hashable { case chat, usage, code, settings }
+    enum Tab: String, CaseIterable, Hashable { case chat, usage, code, design, settings }
 
     @State private var theme: TahoeThemeStore
     @State private var tab: Tab
@@ -40,6 +40,19 @@ struct MacRootView: View {
     /// sidebar `folderPlus`) and the future Chat-tab sidebar can present it.
     @State private var newSessionPreselectedRepo: String? = nil
     @State private var newSessionPresented: Bool = false
+
+    // v0.14.0 (plan v2.1 D6 + D7): handoff toast + reduce-motion guard.
+    @State private var handoffToast: String? = nil
+    @State private var toastDismissTask: Task<Void, Never>? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private func scheduleToastDismiss() {
+        toastDismissTask?.cancel()
+        toastDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if !Task.isCancelled { self.handoffToast = nil }
+        }
+    }
 
     init(runtime: AppRuntime, initialTab: Tab = .chat) {
         self.runtime = runtime
@@ -107,6 +120,15 @@ struct MacRootView: View {
                             loopbackClient: runtime.loopbackClient,
                             runtime: runtime
                         )
+                    case .design:
+                        MacDesignView(
+                            daemon: runtime.openDesignDaemon,
+                            onOpenInCode: { _ in
+                                // Bridge plugin "Open in Code →" → flip tab.
+                                // Per-repo pre-select integration pending T8 wiring.
+                                tab = .code
+                            }
+                        )
                     case .settings:
                         MacSettingsView(
                             theme: theme,
@@ -122,6 +144,42 @@ struct MacRootView: View {
             }
         }
         .frame(minWidth: 1280, minHeight: 820)
+        // v0.14.0 (plan v2.1 T8): Code→Design handoff. When AppRuntime
+        // emits clawdmeterDidOpenInDesign (after bridge mints token +
+        // Open Design returns the projectId), flip to Design tab.
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterDidOpenInDesign)) { note in
+            tab = .design
+            if let projectId = note.userInfo?["projectId"] as? String, !projectId.isEmpty {
+                handoffToast = "Switched to: \(projectId.prefix(40))"
+                scheduleToastDismiss()
+            }
+        }
+        // v0.14.0 (D8): Cmd-1..Cmd-5 keyboard shortcuts for tabs.
+        .background(
+            Group {
+                Button("") { tab = .chat }     .keyboardShortcut("1", modifiers: .command).opacity(0)
+                Button("") { tab = .usage }    .keyboardShortcut("2", modifiers: .command).opacity(0)
+                Button("") { tab = .code }     .keyboardShortcut("3", modifiers: .command).opacity(0)
+                Button("") { tab = .design }   .keyboardShortcut("4", modifiers: .command).opacity(0)
+                Button("") { tab = .settings } .keyboardShortcut("5", modifiers: .command).opacity(0)
+            }
+        )
+        // v0.14.0 (D7): handoff toast overlay — top-anchored Tahoe chip
+        // that autodismisses after 2s. Visible across all tabs.
+        .overlay(alignment: .top) {
+            if let handoffToast {
+                Text(handoffToast)
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
+                    .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
+                    .padding(.top, 56)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .accessibilityLabel(handoffToast)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: handoffToast)
         .tahoeTheme(theme)
         .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 0.94, green: 0.97, blue: 0.98))
         .sheet(isPresented: $newSessionPresented) {
@@ -145,6 +203,8 @@ struct MacTitlebar: View {
     /// PR #26 D6: runtime for the secondary-right chips (repo count,
     /// pairing state, sync popover trigger). Nil falls back to static
     /// text for Previews.
+    /// v0.21.0 (Design tab): also drives the .design chip via
+    /// runtime?.openDesignDaemon.
     var runtime: AppRuntime?
 
     init(
@@ -209,6 +269,7 @@ struct MacTitlebar: View {
                     TahoeDashTab("Chat",     active: active == .chat)     { onTab(.chat) }
                     TahoeDashTab("Usage",    active: active == .usage)    { onTab(.usage) }
                     TahoeDashTab("Code",     active: active == .code)     { onTab(.code) }
+                    TahoeDashTab("Design",   active: active == .design)   { onTab(.design) }
                     TahoeDashTab("Settings", active: active == .settings) { onTab(.settings) }
                     Spacer(minLength: 0)
                     secondaryRight
@@ -246,10 +307,52 @@ struct MacTitlebar: View {
             }
         case .code:
             syncChipCode
+        case .design:
+            // v0.21.0: health-dot + active project name from the daemon.
+            // Nil-runtime (Previews) falls back to a neutral placeholder.
+            if let daemon = runtime?.openDesignDaemon {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(designHealthColor(for: daemon))
+                        .frame(width: 8, height: 8)
+                    Text(designChipText(for: daemon))
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 200, alignment: .leading)
+                }
+            } else {
+                Text("Design").font(TahoeFont.body(12)).foregroundStyle(t.fg3)
+            }
         case .settings:
             Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1") · synced")
                 .font(TahoeFont.body(12))
                 .foregroundStyle(t.fg2)
+        }
+    }
+
+    private func designHealthColor(for daemon: OpenDesignDaemonManager) -> Color {
+        switch daemon.lifecycle {
+        case .ready:                                 return .green
+        case .starting, .loading, .restarting:       return .orange
+        case .crashed, .failed:                      return .red
+        case .idle:                                  return .gray
+        }
+    }
+
+    private func designChipText(for daemon: OpenDesignDaemonManager) -> String {
+        if let name = daemon.activeProjectName, !name.isEmpty {
+            return name
+        }
+        switch daemon.lifecycle {
+        case .ready:    return "No project open"
+        case .starting: return "Starting…"
+        case .loading:  return "Loading…"
+        case .crashed:  return "Daemon crashed"
+        case .failed:   return "Daemon failed"
+        case .restarting: return "Restarting…"
+        case .idle:     return "Not started"
         }
     }
 }

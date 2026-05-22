@@ -100,14 +100,22 @@ struct PairingScannerView: UIViewControllerRepresentable {
         else { return nil }
         var token: String?
         var wsPort: Int?
+        var designPort: Int?
+        var designToken: String?
         if let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
            let items = comps.queryItems {
             for item in items {
-                if item.name == "token" { token = item.value }
-                if item.name == "ws", let v = item.value, let n = Int(v) { wsPort = n }
+                switch item.name {
+                case "token":   token = item.value
+                case "ws":      if let v = item.value, let n = Int(v) { wsPort = n }
+                case "dp":      if let v = item.value, let n = Int(v) { designPort = n }
+                case "dt":      designToken = item.value
+                default: break
+                }
             }
         }
         guard let token, let wsPort else { return nil }
-        return PairingChallenge(host: host, port: httpPort, wsPort: wsPort, token: token)
+        return PairingChallenge(host: host, port: httpPort, wsPort: wsPort, token: token,
+                                designPort: designPort, designToken: designToken)
     }
 }

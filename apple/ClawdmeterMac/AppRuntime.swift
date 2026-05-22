@@ -14,6 +14,16 @@ private let runtimeLogger = Logger(subsystem: "com.clawdmeter.mac", category: "A
 /// owning both models here and forwarding their `objectWillChange` to this
 /// runtime, every per-model `@Published` change re-invalidates the parent
 /// scene, which reliably re-snapshots the menu bar label.
+extension Notification.Name {
+    /// Posted by `AppRuntime.openFolderInDesign` when a folder is
+    /// successfully imported into Open Design. UserInfo contains
+    /// `projectId: String` and `baseDir: String`. MacRootView listens
+    /// to flip its tab + navigate the WebView.
+    public static let clawdmeterDidOpenInDesign = Notification.Name("clawdmeter.didOpenInDesign")
+    /// Posted when the bridge sidecar isn't ready — UI can show a toast.
+    public static let clawdmeterDesignBridgeUnavailable = Notification.Name("clawdmeter.designBridgeUnavailable")
+}
+
 @MainActor
 final class AppRuntime: ObservableObject {
 
@@ -31,6 +41,54 @@ final class AppRuntime: ObservableObject {
     let notificationDispatcher: NotificationDispatcher
     let sessionsModel: SessionsModel
     let sessionScheduler: SessionScheduler
+
+    // Design tab (v0.14.0 — plan v2.1). Owns the bundled Open Design
+    // daemon + bridge sidecar lifecycle. Lazy-started by MacDesignView
+    // on first appearance so cold start cost is paid only when the
+    // user opens the tab.
+    let openDesignDaemon: OpenDesignDaemonManager
+
+    /// v0.14.0 (plan v2.1 T8): import a folder into Open Design via the
+    /// bridge sidecar. Posts `.clawdmeterDidOpenInDesign` on success so
+    /// MacRootView can flip its tab + navigate the WebView. Used by the
+    /// "Open in Design" affordance on Code session cards and File menu.
+    public func openFolderInDesign(baseDir: String) async {
+        guard let bridgePort = openDesignDaemon.bridgePortAtomic.get() else {
+            runtimeLogger.warning("openFolderInDesign called but bridge isn't ready yet")
+            NotificationCenter.default.post(
+                name: .clawdmeterDesignBridgeUnavailable,
+                object: nil,
+                userInfo: ["baseDir": baseDir]
+            )
+            return
+        }
+        let url = URL(string: "http://127.0.0.1:\(bridgePort)/import-folder")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // /review codex P1-2: bridge bearer token (per-spawn random hex).
+        if let bridgeToken = openDesignDaemon.bridgeAuthTokenAtomic.get() {
+            req.setValue("Bearer \(bridgeToken)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["baseDir": baseDir])
+        req.timeoutInterval = 30
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                runtimeLogger.warning("bridge import-folder returned \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+                return
+            }
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let projectId = (json?["projectId"] ?? json?["id"]) as? String ?? ""
+            NotificationCenter.default.post(
+                name: .clawdmeterDidOpenInDesign,
+                object: nil,
+                userInfo: ["projectId": projectId, "baseDir": baseDir]
+            )
+        } catch {
+            runtimeLogger.error("openFolderInDesign failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 
     private var cancellables = Set<AnyCancellable>()
     private var usageQueryService: UsageQueryService?
@@ -117,6 +175,9 @@ final class AppRuntime: ObservableObject {
             registry: self.agentSessionRegistry
         )
         self.notificationDispatcher = NotificationDispatcher()
+        // Design tab daemon manager (lazy — first ensureRunning() comes
+        // from MacDesignView.onAppear, not from app launch).
+        self.openDesignDaemon = OpenDesignDaemonManager()
         self.agentControlServer = AgentControlServer(
             repoIndex: self.repoIndex,
             registry: self.agentSessionRegistry,
@@ -178,6 +239,17 @@ final class AppRuntime: ObservableObject {
         let sessionsEnabled = UserDefaults.standard.object(forKey: "clawdmeter.sessions.enabled") as? Bool ?? true
         if sessionsEnabled {
             self.tmuxSupervisor.start()
+            // v0.14.0 (plan v2.1 T20): wire the design-bridge port provider
+            // BEFORE the server starts handling requests so /design/import-folder
+            // doesn't 503 in the race window. The provider closure is read on
+            // each request; the OpenDesignDaemonManager populates bridgePort
+            // when it spawns the sidecar (lazy).
+            let bridgeAtomic = openDesignDaemon.bridgePortAtomic
+            let bridgeAuthAtomic = openDesignDaemon.bridgeAuthTokenAtomic
+            self.agentControlServer.attachDesignBridge(
+                bridgePortProvider: { bridgeAtomic.get() },
+                bridgeAuthTokenProvider: { bridgeAuthAtomic.get() }
+            )
             self.agentControlServer.start()
             // PR #24a A1: synchronous loopback bootstrap. `start()` above
             // is sync and assigns `boundPort`/`boundWsPort` before

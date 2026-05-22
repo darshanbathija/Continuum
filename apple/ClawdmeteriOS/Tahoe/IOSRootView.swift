@@ -11,7 +11,7 @@ public struct IOSRootView: View {
     @State private var newSessionPresented: Bool = false
     @State private var settingsPresented: Bool = false
 
-    public enum Tab: String, CaseIterable { case chat, live, analytics, code }
+    public enum Tab: String, CaseIterable { case chat, live, analytics, code, design }
     /// Routes the modal/pushed screens above the tab bar. `sessionDetail`
     /// carries the opened session's UUID so the detail view can look up
     /// real data instead of rendering a fixture.
@@ -83,7 +83,17 @@ public struct IOSRootView: View {
                     onOpenSettings: { settingsPresented = true },
                     agentClient: agentClient
                 )
-            case .analytics: IOSAnalyticsView(agentClient: agentClient)
+            case .analytics:
+                // v0.14.0 (plan v2.1 D1): fold Live gauges into Analytics
+                // as a permanent header. Settings sheet trigger moves here
+                // so the gear that used to live in the Live tab still works.
+                IOSAnalyticsView(agentClient: agentClient) {
+                    LiveGaugesHeader(
+                        model: usageModel,
+                        agentClient: agentClient,
+                        showingSettings: $settingsPresented
+                    )
+                }
             case .code:
                 IOSCodeView(
                     data: code,
@@ -95,6 +105,14 @@ public struct IOSRootView: View {
                 .refreshable {
                     await agentClient.refreshAll()
                 }
+            case .design:
+                // /review I2: wire Design→Code handoff so the bundled
+                // clawdmeter-bridge plugin's "Open in Code →" button
+                // actually flips the iOS tab. Repo pre-selection deferred
+                // until iOS Code tab learns a repo-key argument.
+                IOSDesignView(agentClient: agentClient, onOpenInCode: { _ in
+                    tab = .code
+                })
             }
         }
     }
@@ -106,11 +124,17 @@ public struct IOSTabBar: View {
     @Environment(\.tahoe) private var t
     @Binding var tab: IOSRootView.Tab
 
+    // v0.14.0 (plan v2.1 D1): Live folds into Analytics as a permanent
+    // header; tab bar shrinks to Chat / Analytics / Code / Design (4 items).
+    // The `.live` enum case stays for binary-compat with code that
+    // references it; deep-link from elsewhere still routes there but
+    // it's no longer surfaced in the tab bar. Full LiveGaugesHeader →
+    // Analytics integration is tracked as a follow-up (see plan T6).
     private let items: [(IOSRootView.Tab, String, String)] = [
         (.chat,      "Chat",      "sparkles"),
-        (.live,      "Live",      "gauge"),
         (.analytics, "Analytics", "diff"),
         (.code,      "Code",      "chat"),
+        (.design,    "Design",    "pencil.and.ruler"),
     ]
 
     public var body: some View {

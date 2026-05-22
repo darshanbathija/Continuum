@@ -1752,12 +1752,22 @@ public struct PairingChallenge: Codable, Sendable {
     public let wsPort: Int
     /// 32-byte high-entropy bearer token, base64url-encoded.
     public let token: String
+    /// v0.14.0 (plan v2.1): TCP port on the Mac that fronts the Open Design
+    /// daemon via DesignPortForwarder. Optional — older Mac builds omit it
+    /// and iOS falls back to the empty-state pairing CTA.
+    public let designPort: Int?
+    /// v0.14.0 (plan v2.1 T19): per-pairing HKDF-derived design credential.
+    /// Stable across daemon restarts, revocable via PairingTokenStore.
+    public let designToken: String?
 
-    public init(host: String, port: Int, wsPort: Int, token: String) {
+    public init(host: String, port: Int, wsPort: Int, token: String,
+                designPort: Int? = nil, designToken: String? = nil) {
         self.host = host
         self.port = port
         self.wsPort = wsPort
         self.token = token
+        self.designPort = designPort
+        self.designToken = designToken
     }
 }
 

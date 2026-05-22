@@ -4,6 +4,117 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.0 build 82] - 2026-05-22 — Design tab: Open Design embedded on Mac + iOS (`feat/design-tab-open-design`)
+
+The biggest feature add in months: a fully-functional **Design** tab that
+embeds [Open Design](https://github.com/darshanbathija/open-design) v0.7.0
+across Mac and iOS, with seamless Code↔Design handoff. ~3000 LOC across
+26 source/test files + bundled Node daemon, web build, plugin, and bridge
+sidecar (~80MB of vendored runtime artifacts).
+
+### Added
+
+- **Mac Design tab** (`MacDesignView` + `MacRootView` routing) — clickable
+  titlebar tab between Code and Settings; live "● project-name" chip in the
+  titlebar with health-dot color tied to daemon lifecycle (green=running,
+  amber=starting, red=crashed). Loads `http://127.0.0.1:<od-port>/` in a
+  WKWebView once the daemon is ready. Cold-start UX uses a Tahoe glass card
+  with pulsing sparkles + live status line streamed from the daemon's stdout.
+  Bloom-pink accent (`TahoeAccent.bloom`) across the tab chip, sparkles, and
+  Open-in-Design CTA.
+- **iOS Design tab** (`IOSDesignView`) — replaces the standalone Live tab
+  (which folds permanently into Analytics as a header). New 4-tab order:
+  Chat / Analytics / Code / Design with `pencil.and.ruler` icon. Loads the
+  paired Mac's daemon through the new `DesignPortForwarder` over Tailscale,
+  with `WKHTTPCookieStore`-backed auth so subresources keep working.
+- **`OpenDesignDaemonManager`** — spawns the bundled Open Design daemon in
+  sidecar mode (`apps/daemon/dist/sidecar/index.js` with `--od-stamp-*`
+  flags) so the daemon opens its IPC socket. Singleton `flock` on
+  `~/Library/Application Support/Clawdmeter/open-design/.daemon.lock` runs
+  on a detached task so the blocking `LOCK_SH` syscall never freezes
+  MainActor. Atomic rendezvous file (write-temp + `rename(2)`) lets a
+  second Clawdmeter instance attach without spawning a duplicate daemon.
+  `OD_API_TOKEN` persisted in Keychain, never written to disk. Real
+  parent-death tracking via `OD_TOOLS_DEV_PARENT_PID` so `kill -9` of the
+  parent reaps the child within ~1s.
+- **`DesignPortForwarder`** — `NWListener` TCP byte-pump that fronts the
+  loopback daemon for iOS. Parses only the first 8KB header block to
+  extract auth, then switches to pure streaming pass-through (SSE, WS,
+  multipart, range, abort — all transparent). Cookie injector skips
+  1xx + recognizes 101 Switching Protocols as terminal so WebSocket
+  upgrades work. Real DNS-rebind defense (loopback, system hostname,
+  `.ts.net`, `.local` only). Strips `?token=` from the request line
+  before forwarding to keep tokens out of daemon access logs.
+- **Code → Design handoff** — File menu **"Open Folder in Design…"**
+  (`Cmd-Shift-O`) on Mac picks a folder, calls the bundled
+  `clawdmeter-bridge-host` Node sidecar which mints an HMAC-signed
+  desktop-import-token and calls Open Design's `/api/import/folder`. On
+  success, MacRootView flips to the Design tab and shows a "Switched to:
+  <project>" toast (autodismiss 2s; degrades to instant cut under
+  `accessibilityReduceMotion`). iOS reaches the bridge via the new
+  `POST /design/import-folder` route on AgentControlServer (bearer
+  protected, same as every other AgentControl route).
+- **Design → Code handoff** — bundled `clawdmeter-bridge` Open Design
+  plugin renders an "Open in Code →" button in the artifact toolbar.
+  Posts to the WKWebView's native bridge, which routes to a Swift
+  `WKScriptMessageHandler` that flips the tab back. Works identically on
+  Mac and iOS (iOS wires through a `@Binding tab` cascade).
+- **`Cmd-1`..`Cmd-5` keyboard shortcuts** for the Mac titlebar tabs
+  (Chat / Usage / Code / Design / Settings).
+- **Pairing QR extended** with `&dp=<forwarder-port>&dt=<HKDF(OD_API_TOKEN,
+  pairingToken)>` so iOS gets per-pairing-rotated design credentials.
+  Revoking the pairing automatically invalidates the design token.
+- **Bundled artifacts** under `apple/ClawdmeterMac/Resources/Vendor/open-design/`:
+  daemon dist (254KB cli.js + sidecar), Next.js static export (~30MB),
+  production node_modules (~80MB total tree), plugin manifest + renderer,
+  and the bridge sidecar. `tools/build-bundled-open-design.sh` is
+  stamp-gated (skips when source unchanged), forces arm64 native prebuilds
+  for `better-sqlite3`, and per-file `codesign`s every `.node` Mach-O
+  binary (no `--deep`, no `|| true` swallowing).
+- **DMG smoke test** asserts `Vendor/open-design/{daemon,web,bridge}` are
+  present in the mounted .app and that DMG size stays under the 350MB
+  soft budget (final size: ~330MB measured).
+
+### Changed
+
+- **iOS tab bar reshuffled** to 4 items: Chat / Analytics / Code / Design.
+  Live tab folded into Analytics as a permanent `LiveGaugesHeader` so the
+  always-on live gauges still surface. `.live` enum case retained for
+  binary compat with deep-links.
+- **`MacTitlebar` signature** updated to take `runtime: AppRuntime?`
+  (matching origin/main's PR #28 refactor) so the Design chip can read
+  `runtime.openDesignDaemon.lifecycle` directly.
+- **AgentControlServer** gains a `/design/import-folder` route + an
+  `attachDesignBridge(bridgePortProvider:bridgeAuthTokenProvider:)` wiring
+  method. Two-listener coexistence test (R3) confirms existing `/usage`,
+  `/sessions`, `/analytics` routes still work.
+
+### Fixed
+
+- 1 critical race + 3 informational issues caught by `/review`
+  (MainActor `flock` deadlock, daemon orphan on `kill -9`, iOS handoff
+  no-op, double-kill cosmetic warning).
+- 6 P1 + 3 P2 issues caught by Codex adversarial review (forwarder never
+  instantiated, bridge had no auth, rendezvous leaked apiToken to disk,
+  stale port stamp, missing termination handlers, fake DNS-rebind
+  defense, WKUserScript injected into all frames, 101 Switching Protocols
+  mis-classified, codesign failures silenced).
+
+### Tests
+
+- 22 new unit tests added (`DesignPortForwarderTests` × 9 + `OpenDesignDaemonManagerTests` × 13)
+  covering token-strip, 1xx-skip cookie injection, bracketed-IPv6 host
+  validation, `BridgePortAtomic` concurrent stress, HKDF derivation
+  determinism. Total Mac test suite: **104 tests, 0 failures**.
+
+### Live verification
+
+- Daemon spawned in sidecar mode against the built bundle; IPC socket
+  opened at `/tmp/open-design/ipc/clawdmeter/daemon.sock`.
+- Bridge IPC handshake logged `HMAC secret registered with daemon`.
+- `POST /import-folder { baseDir: /tmp/od-test-import }` end-to-end:
+  bridge minted token → daemon imported folder → project visible in
+  subsequent `/api/projects`.
 ## [0.21.0 build 81] - 2026-05-22 — Final v1.1 polish: 4 remaining items shipped
 
 PR #32 closes the remaining v1.1 punch list flagged after PR #31:

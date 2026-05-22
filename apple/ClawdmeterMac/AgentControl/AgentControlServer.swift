@@ -230,6 +230,21 @@ public final class AgentControlServer {
         self.usageHistory = history
     }
 
+    /// v0.14.0 (plan v2.1 T20): wire the Design bridge sidecar so iOS
+    /// can mint Open Design desktop-import-tokens via the existing
+    /// authenticated AgentControlServer port. The closure returns the
+    /// current local bridge port — nil while the daemon is starting or
+    /// has crashed; the /design/import-folder handler returns 503 in
+    /// that case.
+    public func attachDesignBridge(bridgePortProvider: @escaping @Sendable () -> Int?,
+                                   bridgeAuthTokenProvider: @escaping @Sendable () -> String?) {
+        self.designBridgePortProvider = bridgePortProvider
+        self.designBridgeAuthTokenProvider = bridgeAuthTokenProvider
+    }
+    private var designBridgePortProvider: (@Sendable () -> Int?)?
+    /// /review codex P1-2: bearer token the bridge requires on every request.
+    private var designBridgeAuthTokenProvider: (@Sendable () -> String?)?
+
     // MARK: - Lifecycle
 
     /// Start the server. Tries default port first, falls back on conflict.
@@ -931,6 +946,15 @@ public final class AgentControlServer {
         }
         t.register(method: "GET", pattern: "/analytics") { [weak self] _, conn, _ in
             self?.handleGetAnalytics(connection: conn)
+        }
+
+        // v0.14.0 (plan v2.1 T20): iOS Code→Design handoff entry.
+        // Bearer-protected like every other AgentControl route. Proxies
+        // to the loopback clawdmeter-bridge-host sidecar which mints
+        // the desktop-import-token + calls Open Design's
+        // /api/import/folder. Returns 503 when the bridge isn't ready.
+        t.register(method: "POST", pattern: "/design/import-folder") { [weak self] req, conn, _ in
+            await self?.handlePostDesignImportFolder(request: req, connection: conn)
         }
 
         // --- POSTs ---
@@ -2580,6 +2604,48 @@ public final class AgentControlServer {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
             sendResponse(.internalError, on: connection)
+        }
+    }
+
+    // MARK: - Design import-folder proxy (T20)
+
+    /// POST /design/import-folder { baseDir: "/path/to/repo" } → proxies
+    /// to the loopback clawdmeter-bridge-host sidecar, which mints a
+    /// desktop-import-token and calls Open Design's /api/import/folder.
+    /// Returns the bridge's JSON response verbatim. Bearer-protected
+    /// (the existing AgentControlServer auth gate runs before we get here).
+    private func handlePostDesignImportFolder(request: HTTPRequest, connection: NWConnection) async {
+        guard let provider = designBridgePortProvider, let bridgePort = provider() else {
+            sendJSON(["error": "design bridge not ready", "code": "BRIDGE_UNAVAILABLE"], on: connection, status: 503)
+            return
+        }
+        // Validate the body parses as JSON with a baseDir field.
+        guard !request.body.isEmpty,
+              let json = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+              let baseDir = json["baseDir"] as? String, !baseDir.isEmpty else {
+            sendJSON(["error": "baseDir required"], on: connection, status: 400)
+            return
+        }
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(bridgePort)/import-folder")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // /review codex P1-2: include the bridge bearer token.
+        if let bridgeToken = designBridgeAuthTokenProvider?() {
+            req.setValue("Bearer \(bridgeToken)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["baseDir": baseDir])
+        req.timeoutInterval = 30
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 502
+            // Re-serialize as JSON so the iOS client gets a stable shape.
+            if let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                sendJSON(parsed, on: connection, status: statusCode)
+            } else {
+                sendJSON(["error": "bridge returned non-JSON", "raw": String(data: data, encoding: .utf8) ?? ""], on: connection, status: 502)
+            }
+        } catch {
+            sendJSON(["error": "bridge proxy failed: \(error.localizedDescription)", "code": "BRIDGE_PROXY_FAILED"], on: connection, status: 502)
         }
     }
 
@@ -4349,6 +4415,28 @@ public final class AgentControlServer {
             return
         }
         sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+    }
+
+    /// v0.14.0: sendJSON with arbitrary HTTP status (used by T20 design
+    /// bridge proxy to surface 503/400/502 with structured error JSON).
+    private func sendJSON(_ object: [String: Any], on connection: NWConnection, status: Int) {
+        let body = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+        let reason: String
+        switch status {
+        case 200: reason = "OK"
+        case 400: reason = "Bad Request"
+        case 401: reason = "Unauthorized"
+        case 403: reason = "Forbidden"
+        case 404: reason = "Not Found"
+        case 500: reason = "Internal Server Error"
+        case 502: reason = "Bad Gateway"
+        case 503: reason = "Service Unavailable"
+        default:  reason = "Status"
+        }
+        sendResponse(
+            HTTPResponse(status: status, reason: reason, contentType: "application/json", body: body),
+            on: connection
+        )
     }
 
     private func httpResponseBytes(
