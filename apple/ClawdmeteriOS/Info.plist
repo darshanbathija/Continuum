@@ -24,15 +24,37 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- Allow plaintext HTTP/WS to the Mac daemon on the Tailscale
-	     interface. The daemon binds to a Tailscale CGNAT IP (filtered
-	     on accept) and the tunnel itself is WireGuard-encrypted — adding
-	     TLS on top would add cert management with no security gain for
-	     the personal-use scope. -->
+	<!-- Audit P0 fix: scope ATS exceptions instead of disabling globally.
+	     The Mac daemon is reached over Tailscale (CGNAT IP + WireGuard
+	     tunnel), where adding TLS on top buys nothing for the personal-
+	     use scope, so we allow plain HTTP/WS to:
+	       - 100.64.0.0/10            (Tailscale CGNAT)
+	       - localhost / 127.0.0.1    (simulator / dev)
+	       - *.ts.net                 (MagicDNS)
+	     Every other URLSession in the app — analytics, OAuth refresh,
+	     anything a future SDK pulls in — still goes through ATS, so a
+	     misconfigured downgrade can't silently become MITM-able. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the pairing QR shown on your Mac in Clawdmeter → Settings → Sessions.</string>
