@@ -642,10 +642,46 @@ private struct AccentPicker: View {
 /// switching to the Settings tab. The "Open docs" affordance points
 /// at opencode.ai/docs/auth which covers both first-time install and
 /// the per-provider `opencode auth login` flow.
+/// Settings → Providers → OpenCode row. v0.23.0 rewrite — adds the
+/// embedded-terminal setup sheet so users can install / sign in / sign
+/// out / run diagnostics without ever dropping to a Terminal.
+///
+/// State machine (CQ3):
+///
+///   ┌─[bundle-missing]──────────┐  fallback only — DMG tampered
+///   │ orange "Reinstall app"    │
+///   └───────────────────────────┘
+///                │
+///                ▼
+///   ┌─[activated, no auth]──────┐  binary discovered, no providers
+///   │ yellow "Sign in required" │
+///   │ button: Sign in           │── launches OpencodeSetupSheet
+///   └───────────────────────────┘    in `.signIn` mode
+///                │
+///                │ sheet exits with code 0 → reprobe (O5)
+///                ▼
+///   ┌─[activated + signed in]───┐
+///   │ green "Signed in"         │
+///   │ per-provider info rows    │
+///   │ button: Add provider      │── launches sheet `.addProvider`
+///   │ button: Sign out          │── launches sheet `.signOut` (O6 global)
+///   │ button: Diagnostic        │── launches sheet `.diagnostic`
+///   └───────────────────────────┘
 private struct OpencodeProviderRow: View {
     @Environment(\.tahoe) private var t
     @State private var managerState: OpencodeProcessManager.State = .stopped
     @State private var authStatus: [String: String]? = nil
+    @State private var setupCommand: OpencodeSetupSheet.Command?
+    @State private var activating: Bool = false
+
+    private var hasBinary: Bool {
+        OpencodeProcessManager.shared.binaryPath != nil
+    }
+
+    private var isAuthed: Bool {
+        guard let s = authStatus else { return false }
+        return !s.isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -668,31 +704,84 @@ private struct OpencodeProviderRow: View {
                             .foregroundStyle(t.fg2)
                     }
                 }
-                Spacer()
+                Spacer(minLength: 12)
+                actionButtons
+            }
+            HStack(spacing: 12) {
                 Button {
-                    // v0.22.9: the /docs/auth path 404s on current
-                    // opencode.ai. Land on the docs root — it carries
-                    // both install + auth instructions.
                     if let url = URL(string: "https://opencode.ai/docs/") {
                         NSWorkspace.shared.open(url)
                     }
                 } label: {
                     Text("Open docs")
-                        .font(TahoeFont.body(12, weight: .semibold))
-                        .foregroundStyle(t.accent)
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .foregroundStyle(t.fg4)
                 }
                 .buttonStyle(.plain)
+                Spacer()
             }
         }
         .task {
-            // Snapshot current state + kick off an auth probe. The
-            // manager exposes @Published state for live updates; we
-            // also poll once on appear to catch the cold-launch case.
-            managerState = OpencodeProcessManager.shared.state
-            authStatus = OpencodeProcessManager.shared.authStatus
-            await OpencodeProcessManager.shared.refreshAuthStatus()
-            authStatus = OpencodeProcessManager.shared.authStatus
+            await refreshState()
         }
+        .sheet(item: $setupCommand) { command in
+            if let tmux = AppDelegate.runtime?.tmuxClient {
+                OpencodeSetupSheet(tmuxClient: tmux, command: command) {
+                    // onCompletion: triggered when child exits 0.
+                    Task { await refreshState() }
+                }
+            } else {
+                Text("tmux not available — relaunch Clawdmeter.")
+                    .padding()
+            }
+        }
+    }
+
+    /// Primary action area on the right side of the row. Renders
+    /// different buttons depending on the state machine in the
+    /// header comment.
+    @ViewBuilder
+    private var actionButtons: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            if !hasBinary {
+                Button("Activate") {
+                    activating = true
+                    Task {
+                        await OpencodeProcessManager.shared.reprobe()
+                        await refreshState()
+                        activating = false
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(activating)
+            } else if !isAuthed {
+                Button("Sign in") { setupCommand = .signIn }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Menu {
+                    Button("Add another provider") { setupCommand = .addProvider }
+                    Button("Diagnostic") { setupCommand = .diagnostic }
+                    Divider()
+                    Button("Sign out of OpenCode", role: .destructive) {
+                        setupCommand = .signOut
+                    }
+                } label: {
+                    Text("Manage")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                }
+                .menuStyle(.button)
+                .buttonStyle(.bordered)
+                .fixedSize()
+            }
+        }
+    }
+
+    private func refreshState() async {
+        managerState = OpencodeProcessManager.shared.state
+        authStatus = OpencodeProcessManager.shared.authStatus
+        await OpencodeProcessManager.shared.refreshAuthStatus()
+        authStatus = OpencodeProcessManager.shared.authStatus
+        managerState = OpencodeProcessManager.shared.state
     }
 
     /// Compact pill rendering whichever state the manager is in.

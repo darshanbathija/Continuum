@@ -4,6 +4,65 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.3 build 118] - 2026-05-23 — OpenCode mirror + tests (P1-05 + T10) (`feat/opencode-mirror-and-tests`)
+
+Two follow-throughs from the v0.23.2 ship:
+
+### Added — P1-05: cross-device OpenCode dollar values
+
+- **`UsageHistoryStore.scheduleOpencodeMirrorRefresh`** — when a live `.opencodeUsageRecorded` notification lands, kick a debounced analytics-snapshot rebuild (10s minimum gap). The loader reads opencode's SQLite, folds the new rows into `byProvider[.opencode]`, AppRuntime mirrors the snapshot into iCloud KV via `UsageCloudMirror.writeAnalyticsSnapshot`. Net effect: a paired iPhone sees OpenCode dollar deltas within seconds of the Mac processing the SSE `usage` event, instead of waiting up to 60s for the next periodic refresh tick.
+
+### Added — T10 test coverage for OpenCode send (v0.23.2)
+
+- **`OpencodeSSEAdapterTests` — extended**: `parseMessageAdded(properties:)` round-trips across all wire shapes (plain string, text-only array, `tool-call`/`tool_use`, `tool-result`/`tool_result` text + isError, empty content, missing role/id). `opencodeSessionId(for:)` lookup before/after register/stop. `chatStoreAccessor` is invoked on `message.added` only when the opencode session id is registered.
+- **`OpencodeSendTests.swift` — new**: the public surface of the T6 send path. BidirectionalMap gate for the 503 `opencode_session_not_registered` envelope, request body shape (`{"parts":[{"type":"text","text":"…"}]}`) JSON round-trip with multi-line + Unicode prompts, error envelope JSON validity for all three error codes, user-bubble echo ChatMessage shape, parser/echo symmetry for the dedupe layer.
+- **`DaemonChatStoreRegistryRoutingTests` — extended**: opencode sessions never route into the agentapi `.db` layout.
+
+Bumps `MARKETING_VERSION` 0.23.2 → 0.23.3, `CURRENT_PROJECT_VERSION` 117 → 118.
+
+## [0.23.2 build 117] - 2026-05-23 — OpenCode send end-to-end (P1-04) (`feat/opencode-send`)
+
+Sending into an OpenCode session + streaming the reply back now works through the same chat composer that drives Claude / Codex / Antigravity sessions.
+
+### Added
+
+- **`AgentControlServer.sendOpencodePrompt`** — replaces the 501 `opencode_send_not_implemented` stub at line 1313. Looks up the opencode session id via `OpencodeSSEAdapter.opencodeSessionId(for:)`, POSTs the prompt to opencode serve's `/session/<id>/message` endpoint, echoes the user bubble into the SessionChatStore immediately so the composer clears its sending state without waiting on the SSE round-trip.
+- **`OpencodeSSEAdapter.chatStoreAccessor`** — closure injected by `AgentControlServer` on every spawn that maps `Clawdmeter session UUID` → `SessionChatStore`. `handleMessageAdded` now parses opencode's `message.added` payload into a `ChatMessage` (text, tool-call, tool-result content parts all handled) and calls `store.appendSDKMessages([msg])` — the chat-subscribe WS broadcast picks it up and streams to iOS / Mac in real time.
+- **`OpencodeSSEAdapter.opencodeSessionId(for:)`** — convenience accessor wrapping the existing bidirectional map.
+- **`DaemonChatStoreRegistry.createStore` opencode branch** — opencode chat sessions get an sdkOnly `SessionChatStore` + `SDKChatTranscriptMirror` replay, same shape as the agentapi Gemini branch.
+
+### Error surfaces
+
+- `503 opencode_session_not_registered` — `session.created` SSE event hasn't landed yet; iOS retries
+- `503 opencode_server_unreachable` — opencode serve down; supervisor will restart
+- `502 opencode_send_failed` with `upstreamStatus` — opencode returned non-2xx
+
+Bumps `MARKETING_VERSION` 0.23.1 → 0.23.2, `CURRENT_PROJECT_VERSION` 116 → 117.
+
+## [0.23.1 build 116] - 2026-05-23 — OpenCode setup lives in the Mac app (`feat/opencode-end-to-end`)
+
+Zero-Terminal install + auth flow for OpenCode under Settings → Providers. Bundled binary, embedded interactive terminal sheet, 4-state row that actually does something.
+
+### Added
+
+- **Bundled `opencode` v1.15.7** ship-in-the-DMG via `tools/download-bundled-opencode.sh` + `project.yml` preBuildScripts. SHA-256 verified against pinned digest; `codesign --verify` + `spctl --assess` baked into `tools/build-mac-dmg.sh` so Gatekeeper rejection fails the build, not the user's first launch.
+- **`OpencodeSetupSheet`** — interactive terminal pane embedded directly in Settings. Spawns `opencode auth login` (or `logout` / diagnostic) via tmux, captures exit code via a sentinel tempfile, blocks sheet dismiss while OAuth is in-flight (scans pane scrollback for the OAuth URL).
+- **`MacInProcessTerminalView`** — new SwiftTerm wrapper that pipes bytes directly to/from `TmuxControlClient` (no WebSocket round-trip). Mirrors `TerminalWebSocketChannel:117-123` ESC-safe key routing so the opencode provider-picker arrow keys actually work.
+- **OpencodeProviderRow rewrite** — 4-state machine (bundle-missing / activated-no-auth / signed-in / running). Sign in button when unauthed. Manage menu (Add provider / Diagnostic / Sign out) when signed-in.
+
+### Changed
+
+- **`OpencodeProcessManager.locateBinary()`** — PATH-first lookup (Homebrew / `$PATH`) with the bundled binary as fallback (O4). Brew users keep their managed version; bundle exists for first-launch users. Every candidate gated by `isExecutableFile` (A1) so corrupt bundles fall through.
+- **`OpencodeProcessManager.reprobe()`** — new method that restarts `opencode serve` when binary path OR auth providers change. Without this, signing in via the embedded sheet didn't propagate to the already-running serve process (opencode reads creds at start, not per-request).
+- **`AgentControlServer` autopilot inactivity sweep** — pre-existing compile error landed in PR #69 (`Bool` literal in `[String: String]` payload + `self?.serverLogger` reference to a file-private free var). Merge from `origin/main` brought in PR #71's fix.
+
+### Out of scope (deferred to follow-up)
+
+- **`opencode send` daemon implementation** — `AgentControlServer.swift:1313` still returns 501 `opencode_send_not_implemented`. Sending into an OpenCode session + streaming the reply back requires coordinated changes across `AgentControlServer`, `OpencodeSSEAdapter`, and `DaemonChatStoreRegistry` — those layers are being actively reworked in `feat/chat-v2`. Lands when that PR settles.
+- **`UsageCloudMirror` opencode mirroring** — verified existing `writeAnalyticsSnapshot` path already keys on `UsageRecord.Provider.opencode`, so opencode usage flows through to iCloud automatically. No new code needed.
+
+Bumps `MARKETING_VERSION` 0.23.0 → 0.23.1, `CURRENT_PROJECT_VERSION` 115 → 116.
+
 ## [0.23.0 build 115] - 2026-05-23 — Cross-platform audit sweep: ~70 P0/P1/P2 fixes (`darshanbathija/bug-audit-2026-05-23`)
 
 A focused bug-audit + fix pass that closes findings across every platform. Code-only changes, no new features. Pairing and release builds get safer, pre-existing crash paths in the shared library get caught, the polyglot tools/ sidecars get input validation and HTTP timeouts. Some user-visible behavior changes flagged below.

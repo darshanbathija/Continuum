@@ -162,9 +162,46 @@ public final class UsageHistoryStore: ObservableObject {
             queue: .main
         ) { [weak self] note in
             guard let record = note.userInfo?["record"] as? UsageRecord else { return }
-            Task { @MainActor in self?.appendOpencodeRecord(record) }
+            Task { @MainActor in
+                self?.appendOpencodeRecord(record)
+                self?.scheduleOpencodeMirrorRefresh()
+            }
         })
     }
+
+    /// v0.23.3 T9 — debounced trigger that asks the analytics loader to
+    /// rebuild the snapshot soon after a live opencode usage event lands.
+    /// The loader reads opencode's SQLite database (which opencode itself
+    /// wrote when the LLM completion finished), folds the new rows into
+    /// `byProvider[.opencode]`, publishes a fresh snapshot, and AppRuntime
+    /// mirrors it into iCloud KV via `UsageCloudMirror.writeAnalyticsSnapshot`.
+    ///
+    /// Result: a paired iPhone sees the new opencode dollar values via
+    /// iCloud within seconds of the Mac processing the SSE `usage` event,
+    /// instead of waiting up to 60s for the next periodic refresh tick.
+    ///
+    /// Debounce: 10s minimum gap between refreshes triggered by opencode
+    /// events. A long opencode session can fire many `usage` events in
+    /// quick succession (one per LLM completion); coalescing them into a
+    /// single refresh per 10s window keeps the SQLite-read + iCloud-write
+    /// cost bounded.
+    @MainActor
+    private func scheduleOpencodeMirrorRefresh() {
+        let now = Date()
+        let cooldown: TimeInterval = 10
+        if let last = lastOpencodeMirrorRefreshAt,
+           now.timeIntervalSince(last) < cooldown {
+            return
+        }
+        lastOpencodeMirrorRefreshAt = now
+        Task { @MainActor in
+            await refresh()
+        }
+    }
+
+    /// Timestamp of the last opencode-event-triggered refresh. Drives the
+    /// 10s debounce in `scheduleOpencodeMirrorRefresh`.
+    private var lastOpencodeMirrorRefreshAt: Date?
 
     /// Append a live opencode UsageRecord. Trims to the 5000-item
     /// retention cap so memory stays bounded over a long-running day.

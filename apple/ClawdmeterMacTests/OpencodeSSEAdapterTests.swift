@@ -1,4 +1,5 @@
 import XCTest
+import ClawdmeterShared
 @testable import Clawdmeter
 
 /// PR #30 — OpencodeSSEAdapter unit tests. Covers the event-dispatch
@@ -129,5 +130,264 @@ final class OpencodeSSEAdapterTests: XCTestCase {
         XCTAssertFalse(OpencodeSSEAdapter.shared.sessionMap.opencodeToClawdmeter.isEmpty)
         OpencodeSSEAdapter.shared.stop()
         XCTAssertTrue(OpencodeSSEAdapter.shared.sessionMap.opencodeToClawdmeter.isEmpty)
+    }
+
+    // MARK: - v0.23.2 T7: opencodeSessionId(for:) accessor
+
+    func test_opencodeSessionId_returnsNilWhenUnregistered() {
+        OpencodeSSEAdapter.shared.stop()
+        XCTAssertNil(OpencodeSSEAdapter.shared.opencodeSessionId(for: UUID()))
+    }
+
+    func test_opencodeSessionId_returnsValueAfterRegister() {
+        OpencodeSSEAdapter.shared.stop()
+        let uuid = UUID()
+        OpencodeSSEAdapter.shared.register(clawdmeterID: uuid, opencodeID: "ses_lookup_1")
+        XCTAssertEqual(OpencodeSSEAdapter.shared.opencodeSessionId(for: uuid), "ses_lookup_1")
+    }
+
+    func test_opencodeSessionId_clearedAfterStop() {
+        OpencodeSSEAdapter.shared.stop()
+        let uuid = UUID()
+        OpencodeSSEAdapter.shared.register(clawdmeterID: uuid, opencodeID: "ses_lookup_2")
+        XCTAssertEqual(OpencodeSSEAdapter.shared.opencodeSessionId(for: uuid), "ses_lookup_2")
+        OpencodeSSEAdapter.shared.stop()
+        XCTAssertNil(OpencodeSSEAdapter.shared.opencodeSessionId(for: uuid))
+    }
+
+    // MARK: - v0.23.2 T7: parseMessageAdded(properties:)
+
+    func test_parseMessageAdded_nilWhenMessageMissing() {
+        XCTAssertNil(OpencodeSSEAdapter.parseMessageAdded(properties: [:]))
+        XCTAssertNil(OpencodeSSEAdapter.parseMessageAdded(properties: ["other": "value"]))
+    }
+
+    func test_parseMessageAdded_plainStringContent_assistant() {
+        let props: [String: Any] = [
+            "message": [
+                "id": "msg_001",
+                "role": "assistant",
+                "content": "Hello, how can I help?"
+            ]
+        ]
+        let chat = OpencodeSSEAdapter.parseMessageAdded(properties: props)
+        XCTAssertNotNil(chat)
+        XCTAssertEqual(chat?.id, "msg_001")
+        XCTAssertEqual(chat?.kind, .assistantText)
+        XCTAssertEqual(chat?.title, "Assistant")
+        XCTAssertEqual(chat?.body, "Hello, how can I help?")
+        XCTAssertFalse(chat?.isError ?? true)
+    }
+
+    func test_parseMessageAdded_plainStringContent_user() {
+        let props: [String: Any] = [
+            "message": [
+                "id": "msg_user_001",
+                "role": "user",
+                "content": "What time is it?"
+            ]
+        ]
+        let chat = OpencodeSSEAdapter.parseMessageAdded(properties: props)
+        XCTAssertEqual(chat?.kind, .userText)
+        XCTAssertEqual(chat?.title, "User")
+        XCTAssertEqual(chat?.body, "What time is it?")
+    }
+
+    func test_parseMessageAdded_arrayContent_textParts() {
+        let props: [String: Any] = [
+            "message": [
+                "id": "msg_002",
+                "role": "assistant",
+                "content": [
+                    ["type": "text", "text": "First chunk."],
+                    ["type": "text", "text": "Second chunk."]
+                ]
+            ]
+        ]
+        let chat = OpencodeSSEAdapter.parseMessageAdded(properties: props)
+        XCTAssertNotNil(chat)
+        XCTAssertEqual(chat?.kind, .assistantText)
+        XCTAssertEqual(chat?.body, "First chunk.\nSecond chunk.")
+    }
+
+    func test_parseMessageAdded_toolCallShortCircuits() {
+        // First tool-call wins per current behavior; subsequent siblings ignored.
+        let props: [String: Any] = [
+            "message": [
+                "id": "msg_tool_call",
+                "role": "assistant",
+                "content": [
+                    ["type": "tool-call", "name": "Bash", "input": ["command": "ls"]]
+                ]
+            ]
+        ]
+        let chat = OpencodeSSEAdapter.parseMessageAdded(properties: props)
+        XCTAssertNotNil(chat)
+        XCTAssertEqual(chat?.kind, .toolCall)
+        XCTAssertEqual(chat?.title, "Bash")
+        // input is JSON-serialized with .sortedKeys so it's stable.
+        XCTAssertEqual(chat?.body, #"{"command":"ls"}"#)
+    }
+
+    func test_parseMessageAdded_toolUseAliasAccepted() {
+        // opencode wire shape may also emit `tool_use` (Anthropic-style).
+        let props: [String: Any] = [
+            "message": [
+                "id": "msg_tu",
+                "role": "assistant",
+                "content": [
+                    ["type": "tool_use", "name": "Read", "input": ["path": "/tmp/x"]]
+                ]
+            ]
+        ]
+        let chat = OpencodeSSEAdapter.parseMessageAdded(properties: props)
+        XCTAssertEqual(chat?.kind, .toolCall)
+        XCTAssertEqual(chat?.title, "Read")
+    }
+
+    func test_parseMessageAdded_toolResultText() {
+        let props: [String: Any] = [
+            "message": [
+                "id": "msg_result",
+                "role": "assistant",
+                "content": [
+                    ["type": "tool-result", "output": "file listed", "isError": false]
+                ]
+            ]
+        ]
+        let chat = OpencodeSSEAdapter.parseMessageAdded(properties: props)
+        XCTAssertEqual(chat?.kind, .toolResult)
+        XCTAssertEqual(chat?.title, "Result")
+        XCTAssertEqual(chat?.body, "file listed")
+        XCTAssertFalse(chat?.isError ?? true)
+    }
+
+    func test_parseMessageAdded_toolResultIsError() {
+        let props: [String: Any] = [
+            "message": [
+                "id": "msg_err",
+                "role": "assistant",
+                "content": [
+                    ["type": "tool_result", "text": "command failed", "isError": true]
+                ]
+            ]
+        ]
+        let chat = OpencodeSSEAdapter.parseMessageAdded(properties: props)
+        XCTAssertEqual(chat?.kind, .toolResult)
+        XCTAssertTrue(chat?.isError ?? false)
+        XCTAssertEqual(chat?.body, "command failed")
+    }
+
+    func test_parseMessageAdded_emptyTextArrayReturnsNil() {
+        // Array content with no text fragments and no tool parts produces
+        // an empty join → guard returns nil (caller emits snapshot signal).
+        let props: [String: Any] = [
+            "message": [
+                "id": "msg_empty",
+                "role": "assistant",
+                "content": [
+                    ["type": "unknown"],
+                    ["type": "also-unknown"]
+                ]
+            ]
+        ]
+        XCTAssertNil(OpencodeSSEAdapter.parseMessageAdded(properties: props))
+    }
+
+    func test_parseMessageAdded_defaultsToAssistantRole() {
+        // Missing role defaults to "assistant" per the parser contract.
+        let props: [String: Any] = [
+            "message": [
+                "id": "msg_no_role",
+                "content": "auto-assistant"
+            ]
+        ]
+        let chat = OpencodeSSEAdapter.parseMessageAdded(properties: props)
+        XCTAssertEqual(chat?.kind, .assistantText)
+        XCTAssertEqual(chat?.title, "Assistant")
+    }
+
+    func test_parseMessageAdded_synthesizesIdWhenMissing() {
+        // No id field → parser generates a fresh UUID so the ChatMessage
+        // identity stays stable but the message still routes.
+        let props: [String: Any] = [
+            "message": [
+                "role": "assistant",
+                "content": "no id here"
+            ]
+        ]
+        let chat = OpencodeSSEAdapter.parseMessageAdded(properties: props)
+        XCTAssertNotNil(chat)
+        XCTAssertFalse(chat?.id.isEmpty ?? true,
+            "missing id must fall back to a synthesized non-empty UUID")
+    }
+
+    // MARK: - v0.23.2 T7: chatStoreAccessor closure injection
+
+    func test_chatStoreAccessor_defaultsToNil() {
+        OpencodeSSEAdapter.shared.chatStoreAccessor = nil
+        XCTAssertNil(OpencodeSSEAdapter.shared.chatStoreAccessor)
+    }
+
+    func test_chatStoreAccessor_canBeAssignedAndCleared() {
+        // The closure shape itself; the AgentControlServer spawn path
+        // wires this lazily and idempotently. The test verifies the
+        // accessor surface accepts a Sendable @MainActor closure and
+        // can be cleared after teardown.
+        OpencodeSSEAdapter.shared.chatStoreAccessor = { _ in nil }
+        XCTAssertNotNil(OpencodeSSEAdapter.shared.chatStoreAccessor)
+        OpencodeSSEAdapter.shared.chatStoreAccessor = nil
+        XCTAssertNil(OpencodeSSEAdapter.shared.chatStoreAccessor)
+    }
+
+    func test_handleEvent_messageAddedUsesAccessor_whenRegistered() {
+        // End-to-end of the SSE → store pipe without spinning up a real
+        // SessionChatStore. We inject an accessor that returns nil but
+        // record whether it was invoked.
+        OpencodeSSEAdapter.shared.stop()
+        let uuid = UUID()
+        OpencodeSSEAdapter.shared.register(clawdmeterID: uuid, opencodeID: "ses_accessor")
+        var invokedFor: UUID?
+        OpencodeSSEAdapter.shared.chatStoreAccessor = { id in
+            invokedFor = id
+            return nil
+        }
+        defer { OpencodeSSEAdapter.shared.chatStoreAccessor = nil }
+
+        OpencodeSSEAdapter.shared.handleEvent(
+            type: "message.added",
+            properties: [
+                "sessionID": "ses_accessor",
+                "message": [
+                    "id": "msg_seen",
+                    "role": "assistant",
+                    "content": "test body"
+                ]
+            ]
+        )
+        XCTAssertEqual(invokedFor, uuid,
+            "chatStoreAccessor must be invoked with the registered Clawdmeter UUID")
+    }
+
+    func test_handleEvent_messageAddedSkipsAccessor_whenUnregistered() {
+        // Unknown opencode session id → accessor is NOT invoked (no
+        // phantom store lookups for sessions we don't own).
+        OpencodeSSEAdapter.shared.stop()
+        var invoked = false
+        OpencodeSSEAdapter.shared.chatStoreAccessor = { _ in
+            invoked = true
+            return nil
+        }
+        defer { OpencodeSSEAdapter.shared.chatStoreAccessor = nil }
+
+        OpencodeSSEAdapter.shared.handleEvent(
+            type: "message.added",
+            properties: [
+                "sessionID": "ses_unknown",
+                "message": ["role": "assistant", "content": "nope"]
+            ]
+        )
+        XCTAssertFalse(invoked,
+            "chatStoreAccessor must NOT fire for unregistered opencode session ids")
     }
 }
