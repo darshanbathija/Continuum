@@ -2614,7 +2614,12 @@ public final class AgentControlServer {
             totalInputTokens: 0,
             totalOutputTokens: 0,
             lastEventAt: snapshotLastEventAt,
-            updateCounter: snapshotCounter
+            updateCounter: snapshotCounter,
+            // v14: surface the store's lifecycle so V2 clients can drive
+            // the Stop↔Send button + stopwatch clamp without polling
+            // for "last item arrived in last N seconds" heuristics.
+            // `.idle` fallback when there's no registry store (cold path).
+            currentTurnState: registryStore?.snapshot.currentTurnState ?? .idle
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
