@@ -57,15 +57,23 @@ public struct MacChatView: View {
     }
 
     /// Compute the thread to render. Three cases:
-    ///   - no openChatId          → TahoeDemo.chatThread (empty-state preview)
+    ///   - no openChatId          → empty thread (clean composer state)
     ///   - openChatId, solo mode  → soloThread from chatStore
     ///   - openChatId, broadcast  → broadcastThread aggregating frontier siblings
+    ///
+    /// v0.22.11: previously the no-openChatId branch returned
+    /// `TahoeDemo.chatThread` (the "react-query refactor + tradeoffs"
+    /// fixture). That made the Chat tab look like there was an active
+    /// conversation when there wasn't — users had to dismiss demo
+    /// content before they could start a real chat. Now the default is
+    /// a clean empty thread: the composer is the focal point and the
+    /// stream pane shows an empty-state hint.
     private var activeThread: TahoeDemo.ChatThread {
         guard let runtime,
               let openId = openChatId,
               let session = runtime.agentSessionRegistry.session(id: openId)
         else {
-            return TahoeDemo.chatThread
+            return TahoeDemo.ChatThread(title: "", turns: [])
         }
         // Broadcast: the open session is one of N frontier siblings;
         // aggregate all of them into one comparison thread.
