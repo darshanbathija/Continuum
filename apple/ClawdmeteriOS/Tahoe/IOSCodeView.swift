@@ -15,15 +15,21 @@ public struct IOSCodeView: View {
     /// has access to the AgentControlClient.
     var onNewSession: () -> Void
     public var data: TahoeCodeBindings
+    /// PR #35: daemon client passed down so the recent-session row can
+    /// call `unarchiveSession(id:)` when the user taps an archived
+    /// entry. Nil keeps the row read-only (Previews + cold-launch).
+    var agentClient: AgentControlClient?
 
     public init(
         data: TahoeCodeBindings = .demo,
         onOpenDetail: @escaping (UUID) -> Void = { _ in },
-        onNewSession: @escaping () -> Void = {}
+        onNewSession: @escaping () -> Void = {},
+        agentClient: AgentControlClient? = nil
     ) {
         self.data = data
         self.onOpenDetail = onOpenDetail
         self.onNewSession = onNewSession
+        self.agentClient = agentClient
     }
 
     @State private var searchQuery: String = ""
@@ -81,7 +87,12 @@ public struct IOSCodeView: View {
                 } else {
                     VStack(spacing: 14) {
                         ForEach(visible) { repo in
-                            IOSRepoCard(repo: repo, onOpen: onOpenDetail, onNewSession: onNewSession)
+                            IOSRepoCard(
+                                repo: repo,
+                                onOpen: onOpenDetail,
+                                onNewSession: onNewSession,
+                                agentClient: agentClient
+                            )
                         }
                     }
                     .padding(.horizontal, 16).padding(.bottom, 30)
@@ -121,6 +132,10 @@ private struct IOSRepoCard: View {
     var repo: TahoeCodeRepo
     var onOpen: (UUID) -> Void
     var onNewSession: () -> Void
+    /// PR #35: daemon client used by the recent-row tap handler to
+    /// call `unarchiveSession(id:)`. Nil keeps the row read-only.
+    var agentClient: AgentControlClient?
+    @State private var restoringSessionId: UUID? = nil
 
     @State private var expanded: Bool = true
 
@@ -212,12 +227,26 @@ private struct IOSRepoCard: View {
                                 if i > 0 {
                                     TahoeHair().padding(.leading, 58)
                                 }
-                                // Recents don't carry a live AgentSession.id;
-                                // tapping them is a no-op for now (the
-                                // historical sessions surface lands in a
-                                // follow-up). The button stays interactive
-                                // so the row still feels right.
-                                Button(action: {}) {
+                                // PR #35: archived sessions carry a real
+                                // sessionId so tapping calls the daemon's
+                                // unarchive RPC + pushes the session
+                                // detail screen on success. Recents
+                                // without a sessionId stay non-tappable
+                                // (read-only history entries).
+                                let restoreInFlight = (restoringSessionId == r.sessionId)
+                                let canRestore = (r.sessionId != nil && agentClient != nil)
+                                Button {
+                                    guard let sid = r.sessionId,
+                                          let client = agentClient,
+                                          !restoreInFlight else { return }
+                                    restoringSessionId = sid
+                                    Task { @MainActor in
+                                        await client.unarchiveSession(id: sid)
+                                        await client.refreshSessions()
+                                        restoringSessionId = nil
+                                        onOpen(sid)
+                                    }
+                                } label: {
                                     HStack(spacing: 12) {
                                         ZStack {
                                             TahoeProviderGlyph(provider: r.provider, size: 28)
@@ -237,11 +266,18 @@ private struct IOSRepoCard: View {
                                                 .foregroundStyle(t.fg4)
                                         }
                                         Spacer()
-                                        TahoeIcon("chevR", size: 13).foregroundStyle(t.fg4)
+                                        if restoreInFlight {
+                                            ProgressView().controlSize(.mini)
+                                        } else {
+                                            TahoeIcon("chevR", size: 13)
+                                                .foregroundStyle(canRestore ? t.fg2 : t.fg4)
+                                        }
                                     }
                                     .padding(.horizontal, 16).padding(.vertical, 12)
+                                    .opacity(canRestore ? 1.0 : 0.7)
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(!canRestore || restoreInFlight)
                             }
                         }
                     }

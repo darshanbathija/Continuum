@@ -90,7 +90,8 @@ struct MacCodeView: View {
                     repos: data.repos,
                     openId: Binding(get: { effectiveOpenId }, set: { openId = $0 }),
                     expanded: $expanded,
-                    onNewSession: onNewSession
+                    onNewSession: onNewSession,
+                    loopbackClient: loopbackClient
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -374,6 +375,10 @@ private struct Sidebar: View {
     @Binding var openId: UUID?
     @Binding var expanded: Set<String>
     var onNewSession: (String?) -> Void
+    /// PR #35: passed through to RepoSection → RecentRow so the
+    /// "re-open archived session" action can call the unarchive RPC.
+    /// Nil in Previews; production injects the real loopback client.
+    var loopbackClient: AgentControlClient? = nil
 
     /// D8 sidebar filter (PR #24b). Persisted to UserDefaults so the
     /// user's view sticks across launches.
@@ -543,7 +548,8 @@ private struct Sidebar: View {
                                 },
                                 openId: openId,
                                 onOpen: { openId = $0 },
-                                onNewSession: { onNewSession(repo.key) }
+                                onNewSession: { onNewSession(repo.key) },
+                                loopbackClient: loopbackClient
                             )
                         }
                     }
@@ -622,6 +628,10 @@ private struct RepoSection: View {
     var openId: UUID?
     var onOpen: (UUID) -> Void
     var onNewSession: () -> Void
+    /// PR #35: loopback client threaded down to RecentRow so the
+    /// "re-open archived session" action has an RPC to call. Nil =
+    /// recents render read-only (Preview path).
+    var loopbackClient: AgentControlClient? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -677,7 +687,11 @@ private struct RepoSection: View {
                             .foregroundStyle(t.fg4)
                             .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
                         ForEach(repo.recents) { r in
-                            RecentRow(recent: r)
+                            RecentRow(
+                                recent: r,
+                                loopbackClient: loopbackClient,
+                                onOpenRestored: { onOpen($0) }
+                            )
                         }
                     }
                 }
@@ -744,8 +758,22 @@ private struct SessionRow: View {
 private struct RecentRow: View {
     @Environment(\.tahoe) private var t
     var recent: TahoeCodeRecent
+    /// PR #35: loopback client for the unarchive RPC. Nil when the row
+    /// represents a JSONL-only entry (no Clawdmeter session record);
+    /// the action becomes a no-op + the row dims to signal that.
+    var loopbackClient: AgentControlClient?
+    /// PR #35: invoked when the unarchive succeeds; lets the parent
+    /// focus the newly-restored session in the right column.
+    var onOpenRestored: ((UUID) -> Void)?
+
+    @State private var isRestoring: Bool = false
+
+    private var actionable: Bool {
+        recent.sessionId != nil && loopbackClient != nil
+    }
+
     var body: some View {
-        Button(action: {}) {
+        Button(action: restore) {
             HStack(alignment: .top, spacing: 8) {
                 ZStack {
                     TahoeProviderGlyph(provider: recent.provider, size: 18)
@@ -765,11 +793,39 @@ private struct RecentRow: View {
                         .foregroundStyle(t.fg4)
                 }
                 Spacer()
+                if isRestoring {
+                    ProgressView().controlSize(.mini)
+                } else if actionable {
+                    // PR #35: chevron hints the row is tappable (its
+                    // action restores the archived session).
+                    TahoeIcon("chevR", size: 9).foregroundStyle(t.fg4)
+                }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .opacity(0.85)
+            .opacity(actionable ? 0.95 : 0.65)
         }
         .buttonStyle(.plain)
+        .disabled(!actionable || isRestoring)
+        .help(actionable ? "Re-open this archived session" : "Read-only history entry")
+    }
+
+    /// PR #35: unarchive flow. Calls the daemon's
+    /// `POST /sessions/:id/unarchive`; on success the registry's
+    /// `archivedAt` flips to nil and the session reappears in the
+    /// live sessions list (adapter rebuilds the bindings). The
+    /// `onOpenRestored` callback flips MacCodeView's `openSessionId`
+    /// to the restored session so the right column focuses it
+    /// immediately.
+    private func restore() {
+        guard let client = loopbackClient,
+              let sessionId = recent.sessionId else { return }
+        isRestoring = true
+        Task { @MainActor in
+            await client.unarchiveSession(id: sessionId)
+            await client.refreshSessions()
+            isRestoring = false
+            onOpenRestored?(sessionId)
+        }
     }
 }
 

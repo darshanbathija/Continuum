@@ -55,7 +55,12 @@ extension AppRuntime {
     var tahoeCode: TahoeCodeBindings {
         let repos = sessionsModel.repos
         guard !repos.isEmpty else { return .empty }
-        let liveSessions = agentSessionRegistry.sessions.filter { $0.archivedAt == nil }
+        let allSessions = agentSessionRegistry.sessions
+        let liveSessions = allSessions.filter { $0.archivedAt == nil }
+        // PR #35: archived Clawdmeter sessions feed the RecentRow's
+        // re-open path. Bucketed by repo so each card surfaces its
+        // own history.
+        let archivedSessions = allSessions.filter { $0.archivedAt != nil }
         let nowDate = Date()
 
         let mappedRepos: [TahoeCodeRepo] = repos.map { repo in
@@ -66,15 +71,41 @@ extension AppRuntime {
                 .filter { $0.repoKey == repo.key }
                 .sorted { $0.lastEventAt > $1.lastEventAt }
                 .map { tahoeSession($0, now: nowDate) }
-            let recents: [TahoeCodeRecent] = repo.recentSessions.prefix(4).map { r in
-                TahoeCodeRecent(
-                    id: r.path,
-                    title: r.customName ?? r.firstPrompt ?? URL(fileURLWithPath: r.path).lastPathComponent,
-                    provider: mapAgent(r.provider),
-                    live: nowDate.timeIntervalSince(r.lastModified) < 5 * 60,
-                    ago: TahoeFmt.ago(from: r.lastModified, reference: nowDate)
-                )
-            }
+
+            // PR #35: build the recents list by merging two sources:
+            //   1. Archived AgentSessions for this repo — tappable;
+            //      sessionId carried so the unarchive RPC has a target.
+            //   2. JSONL-only "recently touched" entries (no Clawdmeter
+            //      session ever existed for these) — read-only.
+            // Archived entries take priority (newer + actionable) so
+            // they appear first; we cap the combined list at 4 rows.
+            let archivedRecents: [TahoeCodeRecent] = archivedSessions
+                .filter { $0.repoKey == repo.key }
+                .sorted { ($0.archivedAt ?? .distantPast) > ($1.archivedAt ?? .distantPast) }
+                .prefix(4)
+                .map { session in
+                    TahoeCodeRecent(
+                        id: session.id.uuidString,
+                        title: session.displayLabel,
+                        provider: mapAgent(session.agent),
+                        live: false,
+                        ago: TahoeFmt.ago(from: session.archivedAt ?? session.lastEventAt, reference: nowDate),
+                        sessionId: session.id
+                    )
+                }
+            let jsonlRecents: [TahoeCodeRecent] = repo.recentSessions
+                .prefix(max(0, 4 - archivedRecents.count))
+                .map { r in
+                    TahoeCodeRecent(
+                        id: r.path,
+                        title: r.customName ?? r.firstPrompt ?? URL(fileURLWithPath: r.path).lastPathComponent,
+                        provider: mapAgent(r.provider),
+                        live: nowDate.timeIntervalSince(r.lastModified) < 5 * 60,
+                        ago: TahoeFmt.ago(from: r.lastModified, reference: nowDate),
+                        sessionId: nil  // JSONL-only; no Clawdmeter session record
+                    )
+                }
+            let recents = archivedRecents + jsonlRecents
             return TahoeCodeRepo(
                 key: repo.key,
                 name: repo.displayName,

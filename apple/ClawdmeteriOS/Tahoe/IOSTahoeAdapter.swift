@@ -15,7 +15,12 @@ extension AgentControlClient {
     /// empty state rather than the JSX fixture.
     var tahoeCode: TahoeCodeBindings {
         let live = sessions.filter { $0.archivedAt == nil }
-        guard !live.isEmpty else { return .empty }
+        // PR #35: archived sessions feed the RecentRow's re-open path
+        // on iOS Code. Bucketed by repo so each card surfaces its
+        // own history. Tappable because the daemon's
+        // `POST /sessions/:id/unarchive` is the same RPC the Mac uses.
+        let archived = sessions.filter { $0.archivedAt != nil }
+        guard !live.isEmpty || !archived.isEmpty else { return .empty }
         let now = Date()
 
         // Group sessions by repo key. Chat sessions (repoKey == nil) bucket
@@ -24,30 +29,64 @@ extension AgentControlClient {
         // path that real repos could legitimately produce.
         let chatBucketKey = "clawd:chat-sessions"
         let grouped: [String: [AgentSession]] = Dictionary(grouping: live, by: { $0.repoKey ?? chatBucketKey })
+        let archivedByRepo: [String: [AgentSession]] = Dictionary(grouping: archived, by: { $0.repoKey ?? chatBucketKey })
         let displayName: (String, [AgentSession]) -> String = { key, sessions in
             if key == chatBucketKey { return "Chat sessions" }
             return sessions.first?.repoDisplayName ?? URL(fileURLWithPath: key).lastPathComponent
         }
 
-        let mappedRepos: [TahoeCodeRepo] = grouped
-            .map { (key, sessions) -> TahoeCodeRepo in
-                let mapped = sessions
+        // Stable ordering: emit a repo entry whenever we have live OR
+        // archived sessions for that key. archivedByRepo can introduce
+        // keys grouped doesn't know about, so union the key sets.
+        let allKeys = Set(grouped.keys).union(archivedByRepo.keys)
+        let mappedRepos: [TahoeCodeRepo] = allKeys
+            .map { key -> TahoeCodeRepo in
+                let liveSessions = grouped[key] ?? []
+                let archivedSessions = archivedByRepo[key] ?? []
+                let mapped = liveSessions
                     .sorted { $0.lastEventAt > $1.lastEventAt }
                     .map { tahoeSession($0, now: now) }
                 let liveCount = mapped.filter { $0.status == .running || $0.status == .planning }.count
+                let recents: [TahoeCodeRecent] = archivedSessions
+                    .sorted { ($0.archivedAt ?? .distantPast) > ($1.archivedAt ?? .distantPast) }
+                    .prefix(4)
+                    .map { session in
+                        TahoeCodeRecent(
+                            id: session.id.uuidString,
+                            title: session.displayLabel,
+                            provider: mapTahoeProvider(for: session.agent),
+                            live: false,
+                            ago: TahoeFmt.ago(from: session.archivedAt ?? session.lastEventAt, reference: now),
+                            sessionId: session.id
+                        )
+                    }
+                let nameSeed = liveSessions.isEmpty ? archivedSessions : liveSessions
                 return TahoeCodeRepo(
                     key: key,
-                    name: displayName(key, sessions),
+                    name: displayName(key, nameSeed),
                     tint: repoTint(forKey: key),
                     liveSessionCount: liveCount,
                     sessions: mapped,
-                    recents: []
+                    recents: recents
                 )
             }
             .sorted { $0.name < $1.name }
 
         let firstOpen = mappedRepos.first(where: { !$0.sessions.isEmpty })?.sessions.first?.id
         return TahoeCodeBindings(repos: mappedRepos, openSessionId: firstOpen)
+    }
+
+    /// PR #35: same logic as `mapAgent` below but exposed under a
+    /// distinct name so the call sites that need a `TahoeProvider`
+    /// (not a TahoeCodeSession field) read clearly.
+    private func mapTahoeProvider(for agent: AgentKind) -> TahoeProvider {
+        switch agent {
+        case .claude: return .claude
+        case .codex:  return .codex
+        case .gemini: return .gemini
+        case .opencode: return .opencode
+        case .unknown: return .claude
+        }
     }
 
     private func tahoeSession(_ s: AgentSession, now: Date) -> TahoeCodeSession {

@@ -117,6 +117,51 @@ sidecar (~80MB of vendored runtime artifacts).
   bridge minted token → daemon imported folder → project visible in
   subsequent `/api/projects`.
 
+## [0.22.2 build 84] - 2026-05-22 — Historical sessions: re-open archived (PR #35)
+
+Wires the previously-no-op RecentRow on both Mac and iOS Code surfaces.
+Tapping an archived session row now calls the daemon's existing
+`POST /sessions/:id/unarchive` endpoint and re-focuses the restored
+session in the right column.
+
+### Wired
+
+- **`TahoeCodeRecent.sessionId: UUID?`** — new optional field that
+  carries the real `AgentSession.id` when the row represents an
+  archived Clawdmeter session. Nil for JSONL-only entries (no
+  Clawdmeter session ever existed for those files).
+- **MacTahoeAdapter** — merges archived AgentSessions into each repo's
+  `recents` list, sorted by `archivedAt` desc. Archived entries take
+  priority over JSONL-only ones; combined list capped at 4 rows.
+- **IOSTahoeAdapter** — same: per-repo grouping of archived sessions
+  with `sessionId` populated. Repo cards now appear even when only
+  archived sessions exist for the repo.
+- **MacCodeView.RecentRow** — tap handler calls
+  `client.unarchiveSession(id:)` + `refreshSessions()`; on success
+  invokes the parent's `onOpenRestored` callback to flip `openId` to
+  the restored session. Visible chevron when actionable; muted/no-op
+  for JSONL-only entries.
+- **IOSCodeView recent row** — same flow: tap → unarchive + refresh
+  → push session detail. Inline ProgressView during the RPC.
+
+### Backend
+
+No changes — `POST /sessions/:id/unarchive` already existed in the
+daemon (G7); `AgentControlClient.unarchiveSession(id:)` was already
+on the client. PR #35 just wired the existing surfaces.
+
+### Tests
+
+- 620/620 shared tests pass
+- 89/89 Mac tests pass
+- Mac + iOS + Watch all build clean
+
+### Wiring tally
+
+- **~96% wired** (up from ~95% post-PR #34)
+- 3 remaining by-design no-ops (iOS PickWinnerButton + 2 Mac chat
+  empty-state previews) — PR #36 closes those
+
 ## [0.22.1 build 83] - 2026-05-22 — Button-wiring audit retro
 
 User-requested audit revealed 9 still-decorative buttons across the
