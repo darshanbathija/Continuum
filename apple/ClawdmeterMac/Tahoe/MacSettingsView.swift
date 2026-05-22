@@ -655,17 +655,19 @@ private struct AccentPicker: View {
 ///                ▼
 ///   ┌─[activated, no auth]──────┐  binary discovered, no providers
 ///   │ yellow "Sign in required" │
-///   │ button: Sign in           │── launches OpencodeSetupSheet
-///   └───────────────────────────┘    in `.signIn` mode
+///   │ button: Add API key       │── launches OpencodeAPIKeySheet
+///   │ link:   Sign in w/ browser│── launches OpencodeSetupSheet
+///   └───────────────────────────┘    in `.signIn` mode (OAuth path)
 ///                │
 ///                │ sheet exits with code 0 → reprobe (O5)
 ///                ▼
 ///   ┌─[activated + signed in]───┐
 ///   │ green "Signed in"         │
 ///   │ per-provider info rows    │
-///   │ button: Add provider      │── launches sheet `.addProvider`
-///   │ button: Sign out          │── launches sheet `.signOut` (O6 global)
-///   │ button: Diagnostic        │── launches sheet `.diagnostic`
+///   │ menu: Add API key…        │── launches OpencodeAPIKeySheet
+///   │ menu: Sign in w/ browser… │── launches sheet `.addProvider` (OAuth)
+///   │ menu: Diagnostic          │── launches sheet `.diagnostic`
+///   │ menu: Sign out            │── launches sheet `.signOut` (O6 global)
 ///   └───────────────────────────┘
 private struct OpencodeProviderRow: View {
     @Environment(\.tahoe) private var t
@@ -673,6 +675,12 @@ private struct OpencodeProviderRow: View {
     @State private var authStatus: [String: String]? = nil
     @State private var setupCommand: OpencodeSetupSheet.Command?
     @State private var activating: Bool = false
+    /// v0.23.4: native API-key sheet for paste-and-go providers
+    /// (OpenRouter / Anthropic API / OpenAI API / Moonshot / …). The
+    /// terminal sheet (`setupCommand`) is reserved for OAuth flows
+    /// (Anthropic Pro browser handoff, GitHub Copilot) and Sign-out /
+    /// Diagnostic.
+    @State private var apiKeySheet: Bool = false
 
     private var hasBinary: Bool {
         OpencodeProcessManager.shared.binaryPath != nil
@@ -735,6 +743,11 @@ private struct OpencodeProviderRow: View {
                     .padding()
             }
         }
+        .sheet(isPresented: $apiKeySheet) {
+            OpencodeAPIKeySheet {
+                Task { await refreshState() }
+            }
+        }
     }
 
     /// Primary action area on the right side of the row. Renders
@@ -755,11 +768,15 @@ private struct OpencodeProviderRow: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(activating)
             } else if !isAuthed {
-                Button("Sign in") { setupCommand = .signIn }
+                Button("Add API key") { apiKeySheet = true }
                     .buttonStyle(.borderedProminent)
+                Button("Sign in with browser") { setupCommand = .signIn }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
             } else {
                 Menu {
-                    Button("Add another provider") { setupCommand = .addProvider }
+                    Button("Add API key…") { apiKeySheet = true }
+                    Button("Sign in with browser…") { setupCommand = .addProvider }
                     Button("Diagnostic") { setupCommand = .diagnostic }
                     Divider()
                     Button("Sign out of OpenCode", role: .destructive) {
