@@ -46,15 +46,33 @@ public final class AppIndicatorTray {
         #endif
     }
 
-    /// Update the icon. Called by TrayPollLoop after each Cairo render.
+    /// Update the icon. Called by TrayPollLoop (an `actor` running on a
+    /// cooperative background pool) after each Cairo render.
+    ///
+    /// Audit P0 fix: GTK4 / Cairo / GDK / libappindicator are NOT
+    /// thread-safe. When Phase 4 lands the C calls below, they MUST
+    /// run on the GTK main thread or we get segfaults / corrupted
+    /// indicator state. Funnel the call through DispatchQueue.main so
+    /// the actor → main hop is structural to this API.
     public func setIcon(at path: URL, label: String) {
-        #if os(Linux)
-        // TODO(Phase 4):
-        //   app_indicator_set_icon_full(indicatorPtr, path.path, label)
-        //   app_indicator_set_label(indicatorPtr, label, "")
-        #else
-        _ = (path, label)
-        #endif
+        let body: () -> Void = { [weak self] in
+            guard let self else { return }
+            #if os(Linux)
+            // TODO(Phase 4):
+            //   app_indicator_set_icon_full(self.indicatorPtr, path.path, label)
+            //   app_indicator_set_label(self.indicatorPtr, label, "")
+            _ = self
+            _ = (path, label)
+            #else
+            _ = self
+            _ = (path, label)
+            #endif
+        }
+        if Thread.isMainThread {
+            body()
+        } else {
+            DispatchQueue.main.async(execute: body)
+        }
     }
 
     /// Tear down the indicator (called on app quit).

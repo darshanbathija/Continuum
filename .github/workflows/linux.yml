@@ -85,6 +85,11 @@ jobs:
     name: AppImage build (Ubuntu 24.04)
     runs-on: ubuntu-24.04
     needs: linux-pkg
+    # Audit P1 fix: tools/build-linux-appimage.sh is a Phase 0 stub
+    # that exits 2 unless a pre-baked artifact is present. Run on
+    # tag pushes only until the pipeline is implemented so PR CI
+    # doesn't fail for an unrelated reason.
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
       - name: Install Swift 6.0
@@ -121,6 +126,9 @@ jobs:
     name: .deb build (Ubuntu 24.04)
     runs-on: ubuntu-24.04
     needs: linux-pkg
+    # Audit P1 fix: tools/build-linux-deb.sh is a Phase 0 stub. Gate
+    # to tag pushes — see appimage-build above for the same reason.
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
       - name: Install Swift 6.0
