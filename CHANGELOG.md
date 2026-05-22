@@ -4,6 +4,17 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.5 build 120] - 2026-05-23 — OpenCode auth.json sandbox-home hotfix (`fix/opencode-auth-real-home`)
+
+v0.23.4 saved API keys to `~/Library/Containers/com.clawdmeter.mac/Data/.local/share/opencode/auth.json` instead of the real `~/.local/share/opencode/auth.json` because `NSHomeDirectory()` resolves to the App Group container path even when the sandbox entitlement is `false`. opencode reads from the real `~`, so saved keys never took effect — the row stayed in the un-authed state with no error surfaced.
+
+### Fixed
+
+- **`OpencodeAuthFile.dataDirectoryURL`** now resolves the user's *real* home directory via `getpwuid(getuid())->pw_dir` (POSIX password database lookup) which bypasses sandbox/container redirection entirely. Falls back through `NSHomeDirectoryForUser($USER)` and `NSHomeDirectory()` defensively, but the primary path is the canonical one.
+- **Migration**: on first read, `OpencodeAuthFile.readEntries()` checks the legacy container path (`NSHomeDirectory()/.local/share/opencode/auth.json`) for any v0.23.4 entries stranded there, copies them into the real location, and removes the legacy file. Idempotent — re-running is safe. Net effect: anyone who saved a key in v0.23.4 has it automatically picked up the first time v0.23.5 reads the auth state.
+
+Bumps `MARKETING_VERSION` 0.23.4 → 0.23.5, `CURRENT_PROJECT_VERSION` 119 → 120.
+
 ## [0.23.4 build 119] - 2026-05-23 — Native API-key sheet for OpenCode (`feat/opencode-native-auth`)
 
 Replaces the embedded `opencode auth login` terminal pane with a native SwiftUI sheet for the common API-key paste-and-go flow. The terminal sheet (`OpencodeSetupSheet`) stays available for OAuth providers that need a browser handoff (Anthropic Pro, GitHub Copilot, ChatGPT OAuth) and for sign-out / diagnostic.
