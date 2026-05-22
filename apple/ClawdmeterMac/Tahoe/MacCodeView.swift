@@ -140,6 +140,8 @@ struct MacCodeView: View {
                         state: $composerState,
                         isDemo: data.isDemo,
                         hasRealPlan: openSession?.runtimePlanText?.isEmpty == false,
+                        session: openSession,
+                        client: loopbackClient,
                         onCycle: {
                             composerState = composerState == .idle ? .running
                                           : composerState == .running ? .plan
@@ -164,7 +166,13 @@ struct MacCodeView: View {
                         tab: $rightTab,
                         session: openSession,
                         isDemo: data.isDemo,
-                        runtime: runtime
+                        runtime: runtime,
+                        // v0.22.31: thread JSONL preview through so the
+                        // right pane's tabs can derive Plan / Diff /
+                        // Sources / PR from the transcript when no
+                        // live AgentSession exists.
+                        previewTranscript: previewingJsonl ? jsonlMessages : nil,
+                        previewJsonlPath: openJsonlPath
                     )
                 }
                 .frame(width: 380)
@@ -1084,61 +1092,175 @@ private struct JsonlPreviewHeader: View {
     }
 }
 
-/// v0.22.11: minimal bubble renderer for the JSONL preview transcript.
-/// Kept intentionally simple (no syntax highlighting, no streaming
-/// indicators) — this is a read-only inspector, not a full chat
-/// surface. The full transcript surface lives in MacChatView for live
-/// sessions; this is a quick "what did the agent and I say" lookup.
+/// v0.22.31: chat-like renderer for the JSONL preview transcript.
+/// Was: verbose 2-line role-prefixed dump of every tool call/result
+/// chunk including Chunk ID / Wall time / Process exited / Original
+/// token count noise. Now: compact collapsed cards that match the
+/// live MacChatView shape — tool calls fold into a one-line summary
+/// with a disclosure for the full body, user/assistant turns become
+/// bubble rows. User reported "render smoothly and be as performative
+/// as a regular messaging chat session" — this is that.
 private struct JsonlPreviewMsg: View {
     @Environment(\.tahoe) private var t
     let msg: ChatMessage
+    @State private var expanded: Bool = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: roleIcon)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(roleColor)
-                .frame(width: 18, height: 18)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(roleLabel)
-                    .font(TahoeFont.body(10, weight: .bold))
-                    .tracking(0.5)
-                    .foregroundStyle(t.fg4)
-                Text(msg.body)
-                    .font(msg.kind == .toolCall ? TahoeFont.mono(12) : TahoeFont.body(12))
-                    .foregroundStyle(t.fg)
-                    .textSelection(.enabled)
-                    .lineLimit(msg.kind == .toolResult ? 6 : nil)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        switch msg.kind {
+        case .userText:      userBubble
+        case .assistantText: assistantBubble
+        case .toolCall:      toolCard(isResult: false)
+        case .toolResult:    toolCard(isResult: true)
+        case .meta:          metaRow
+        }
+    }
+
+    // MARK: - User / Assistant bubbles
+
+    private var userBubble: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Spacer(minLength: 60)
+            Text(msg.body)
+                .font(TahoeFont.body(13))
+                .foregroundStyle(t.fg)
+                .textSelection(.enabled)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(t.accentAlpha(0.18))
+                }
+                .frame(maxWidth: 540, alignment: .trailing)
         }
         .padding(.vertical, 4)
     }
 
-    private var roleLabel: String {
-        switch msg.kind {
-        case .userText:      return "YOU"
-        case .assistantText: return "AGENT"
-        case .toolCall:      return "TOOL CALL"
-        case .toolResult:    return "TOOL RESULT"
-        case .meta:          return "META"
+    private var assistantBubble: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(t.fg3)
+                .frame(width: 18, height: 18)
+                .padding(.top, 4)
+            Text(msg.body)
+                .font(TahoeFont.body(13))
+                .foregroundStyle(t.fg)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 30)
         }
+        .padding(.vertical, 4)
     }
-    private var roleIcon: String {
-        switch msg.kind {
-        case .userText:      return "person.fill"
-        case .assistantText: return "sparkle"
-        case .toolCall:      return "wrench.and.screwdriver.fill"
-        case .toolResult:    return "checkmark.circle"
-        case .meta:          return "info.circle"
+
+    // MARK: - Tool call / result (compact card, expandable)
+
+    @ViewBuilder
+    private func toolCard(isResult: Bool) -> some View {
+        let isError = msg.isError
+        let summary = compactSummary(isResult: isResult)
+        Button {
+            withAnimation(.easeInOut(duration: 0.12)) { expanded.toggle() }
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
+                    Image(systemName: isResult
+                          ? (isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                          : "wrench.and.screwdriver.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(isError ? .red : (isResult ? .green : t.fg3))
+                    Text(headerLabel(isResult: isResult))
+                        .font(TahoeFont.body(11, weight: .bold))
+                        .tracking(0.3)
+                        .foregroundStyle(t.fg3)
+                    Spacer(minLength: 8)
+                    Text(summary)
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(t.fg4)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(t.fg4)
+                }
+                if expanded {
+                    Text(cleanedBody)
+                        .font(TahoeFont.mono(11.5))
+                        .foregroundStyle(isError ? .red : t.fg)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(t.glassTintHi.opacity(0.5))
+                        }
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(t.hair2.opacity(0.6))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .buttonStyle(.plain)
+        .padding(.vertical, 2)
     }
-    private var roleColor: Color {
-        switch msg.kind {
-        case .userText:      return t.accent
-        case .assistantText: return t.fg2
-        default:             return t.fg4
+
+    private var metaRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 10))
+                .foregroundStyle(t.fg4)
+            Text(msg.body)
+                .font(TahoeFont.body(10.5))
+                .foregroundStyle(t.fg4)
+                .lineLimit(1)
         }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Body cleanup
+
+    /// Strip JSONL/transcript boilerplate ("Chunk ID:", "Wall time:",
+    /// "Process exited", "Original token count:", "Output:") that the
+    /// CLIs sometimes prepend to tool results. The user's screenshot
+    /// flagged these as noise. Keeps the meaningful payload only.
+    private var cleanedBody: String {
+        let lines = msg.body.split(separator: "\n", omittingEmptySubsequences: false)
+        let noise = [
+            "Chunk ID:", "Wall time:", "Process exited", "Original token count:",
+            "Output:", "Total output lines:"
+        ]
+        let kept = lines.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return false }
+            for marker in noise where trimmed.hasPrefix(marker) {
+                return false
+            }
+            return true
+        }
+        return kept.joined(separator: "\n")
+    }
+
+    /// One-line summary shown next to the header — the first
+    /// meaningful line of detail (preferred) or body so the row is
+    /// scannable without expansion.
+    private func compactSummary(isResult: Bool) -> String {
+        if let detail = msg.detail, !detail.isEmpty {
+            return detail.split(separator: "\n").first.map(String.init) ?? detail
+        }
+        for line in cleanedBody.split(separator: "\n") {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return ""
+    }
+
+    private func headerLabel(isResult: Bool) -> String {
+        // `title` carries the tool name when populated; fall back to a
+        // generic label otherwise.
+        let baseLabel = isResult ? "Result" : (msg.title.isEmpty ? "Tool call" : msg.title)
+        return baseLabel.uppercased()
     }
 }
 
@@ -1435,6 +1557,8 @@ private struct ComposerBar: View {
     /// in production, the chip label stays "autopilot" rather than "plan"
     /// since there's nothing to refine.
     var hasRealPlan: Bool
+    var session: TahoeCodeSession?
+    var client: AgentControlClient?
     var onCycle: () -> Void
     /// PR #24a: real send/stop wires. When non-nil they override the
     /// demo `onCycle` state-cycler. Production passes both; demo bindings
@@ -1490,37 +1614,9 @@ private struct ComposerBar: View {
                         // dictation respectively. Previously every chip
                         // was a static label with no action — the user
                         // reported "all of them are broken".
-                        Menu {
-                            Section("Active model") {
-                                Text("Sonnet 4.5").foregroundStyle(.secondary)
-                            }
-                            // Model swap RPC is plan-tracked v0.23; for
-                            // now the menu surfaces the current model
-                            // so the chip stops being a dead label.
-                            Divider()
-                            Text("Model swap is coming in v0.23")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        } label: {
-                            TahoeComposerChip(icon: "sparkles", label: "Sonnet 4.5", caret: true)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
+                        modelMenu
 
-                        Menu {
-                            Button(action: { if planMode { onCycle() } }) {
-                                Label("Autopilot", systemImage: planMode ? "circle" : "checkmark.circle.fill")
-                            }
-                            Button(action: { if !planMode { onCycle() } }) {
-                                Label("Plan mode", systemImage: planMode ? "checkmark.circle.fill" : "circle")
-                            }
-                        } label: {
-                            TahoeComposerChip(icon: "bolt", label: planMode ? "plan" : "autopilot", caret: true, tinted: !planMode)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
+                        planModeMenu
 
                         TahoeComposerChip(icon: "paperclip", action: { Self.attachFile(into: composerText) })
                         TahoeComposerChip(icon: "code", action: { Self.insertCodeBlock(into: composerText) })
@@ -1605,6 +1701,103 @@ private struct ComposerBar: View {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Dictation") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    @ViewBuilder
+    private var modelMenu: some View {
+        Menu {
+            if let agentSession {
+                Section("Active model") {
+                    Text(currentModelLabel).foregroundStyle(.secondary)
+                }
+                Divider()
+                ForEach(modelEntries) { entry in
+                    Button {
+                        Task { await changeModel(to: entry) }
+                    } label: {
+                        Label(entry.displayName, systemImage: isCurrentModel(entry) ? "checkmark" : "")
+                    }
+                }
+            } else {
+                Text("Open a live session")
+                    .foregroundStyle(.secondary)
+            }
+        } label: {
+            TahoeComposerChip(icon: "sparkles", label: currentModelLabel, caret: true)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(agentSession == nil || modelEntries.isEmpty)
+    }
+
+    @ViewBuilder
+    private var planModeMenu: some View {
+        Menu {
+            Button(action: { Task { await setPlanMode(false) } }) {
+                Label("Autopilot", systemImage: state == .plan ? "circle" : "checkmark.circle.fill")
+            }
+            Button(action: { Task { await setPlanMode(true) } }) {
+                Label("Plan mode", systemImage: state == .plan ? "checkmark.circle.fill" : "circle")
+            }
+        } label: {
+            TahoeComposerChip(icon: "bolt", label: state == .plan ? "plan" : "autopilot", caret: true, tinted: state != .plan)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(agentSession == nil)
+    }
+
+    private var agentSession: AgentSession? {
+        guard let id = session?.id else { return nil }
+        return client?.sessions.first { $0.id == id }
+    }
+
+    private var currentModelLabel: String {
+        guard let session else { return "Model" }
+        if let model = agentSession?.model,
+           let entry = client?.modelCatalog.entry(forId: model) ?? ModelCatalog.bundled.entry(forId: model) {
+            return entry.displayName
+        }
+        return session.model
+    }
+
+    private var modelEntries: [ModelCatalogEntry] {
+        guard let agent = agentSession?.agent else { return [] }
+        let catalog = client?.modelCatalog ?? .bundled
+        switch agent {
+        case .claude: return catalog.claude
+        case .codex: return catalog.codex
+        case .gemini: return catalog.gemini
+        case .opencode, .unknown: return []
+        }
+    }
+
+    private func isCurrentModel(_ entry: ModelCatalogEntry) -> Bool {
+        guard let raw = agentSession?.model else { return false }
+        return raw == entry.id || raw == entry.cliAlias
+    }
+
+    @MainActor
+    private func changeModel(to entry: ModelCatalogEntry) async {
+        guard let agentSession, let client else { return }
+        _ = await client.changeModel(
+            sessionId: agentSession.id,
+            request: ChangeModelRequest(model: entry.cliAlias ?? entry.id, effort: agentSession.effort)
+        )
+    }
+
+    @MainActor
+    private func setPlanMode(_ enabled: Bool) async {
+        guard let agentSession, let client else {
+            if (enabled && state != .plan) || (!enabled && state == .plan) {
+                onCycle()
+            }
+            return
+        }
+        _ = await client.changeMode(sessionId: agentSession.id, mode: agentSession.mode, planMode: enabled)
+        state = enabled ? .plan : .idle
     }
 
     private func placeholder(running: Bool, plan: Bool) -> String {
@@ -1719,6 +1912,15 @@ private struct ReviewPane: View {
     /// in-process views. Nil falls back to the demo placeholders so
     /// Previews keep working.
     var runtime: AppRuntime?
+    /// v0.22.31: JSONL preview transcript — when non-nil, the user
+    /// opened a rollout from disk rather than a live AgentSession.
+    /// Right-pane tabs derive Plan / Diff / Sources / PR data from
+    /// this transcript instead of looking up an AgentSession by id.
+    var previewTranscript: [ChatMessage]?
+    /// Path on disk for the JSONL preview — used to surface the file
+    /// in the empty-state copy and to resolve the rollout's cwd for
+    /// the Diff tab.
+    var previewJsonlPath: String?
 
     /// All 5 tabs visible in both demo and production after PR #24b.
     private var visibleTabs: [(MacCodeView.ReviewTab, String, String)] {
@@ -1786,7 +1988,7 @@ private struct ReviewPane: View {
             ScrollView {
                 Group {
                     switch tab {
-                    case .plan:    ReviewPlan(session: session, isDemo: isDemo)
+                    case .plan:    planTab
                     case .diff:    diffTab
                     case .sources: sourcesTab
                     case .pr:      prTab
@@ -1798,12 +2000,30 @@ private struct ReviewPane: View {
         }
     }
 
-    // MARK: - Real-view embeds (PR #24b D9 + X1)
+    // MARK: - Real-view embeds (PR #24b D9 + X1, + v0.22.31 JSONL preview wires)
+
+    /// v0.22.31: Plan tab — uses session.runtimePlanText for live
+    /// sessions; for JSONL preview, falls back to TranscriptPlanExtract
+    /// which scans the transcript for plan-shaped assistant turns.
+    @ViewBuilder
+    private var planTab: some View {
+        if session?.runtimePlanText?.isEmpty == false || isDemo {
+            ReviewPlan(session: session, isDemo: isDemo)
+        } else if let transcript = previewTranscript {
+            JsonlPlanTab(transcript: transcript)
+        } else {
+            ReviewPlan(session: session, isDemo: isDemo)
+        }
+    }
 
     @ViewBuilder
     private var diffTab: some View {
         if let agentSession = agentSession() {
             GitDiffPane(repoCwd: agentSession.effectiveCwd)
+        } else if let cwd = previewCwd() {
+            // v0.22.31: JSONL preview — embed GitDiffPane against the
+            // rollout's cwd (parsed from the meta line).
+            GitDiffPane(repoCwd: cwd.path)
         } else if isDemo {
             ReviewDiff()
         } else {
@@ -1818,6 +2038,10 @@ private struct ReviewPane: View {
            let agentSession = agentSession(),
            let chatStore = runtime.agentControlServer.chatStore(for: agentSession) {
             SourcesPane(session: agentSession, chatStore: chatStore)
+        } else if let transcript = previewTranscript {
+            // v0.22.31: JSONL preview — list files referenced in tool
+            // calls (Bash / Read / Write / Edit). No live store needed.
+            JsonlSourcesTab(transcript: transcript, cwd: previewCwd())
         } else if isDemo {
             ReviewSources()
         } else {
@@ -1836,6 +2060,10 @@ private struct ReviewPane: View {
                 session: agentSession,
                 mirror: runtime.sessionsModel.prMirror(for: agentSession)
             )
+        } else if let transcript = previewTranscript {
+            // v0.22.31: JSONL preview — scan transcript for github
+            // pull-request URLs and surface them as taps to open.
+            JsonlPRTab(transcript: transcript)
         } else if isDemo {
             ReviewPR()
         } else {
@@ -1863,10 +2091,34 @@ private struct ReviewPane: View {
             .id(agentSession.id) // recreate on session swap
         } else if isDemo {
             ReviewTerm()
+        } else if previewTranscript != nil {
+            // v0.22.31: JSONL preview terminal — no live tmux to wire,
+            // so explain rather than say "unavailable".
+            placeholder(title: "Terminal — preview mode",
+                        body: "This is a read-only transcript from disk. Open the live session to see the terminal pane.")
         } else {
             placeholder(title: "Terminal unavailable",
                         body: "Open a session to see live agent output.")
         }
+    }
+
+    /// v0.22.31: extract the working directory from the JSONL preview's
+    /// first meta line. Codex rollouts include `cwd` in the meta dict;
+    /// Claude Code logs include `cwd` too. Returns nil when not present
+    /// so the caller falls back to the unavailable placeholder.
+    private func previewCwd() -> URL? {
+        guard let path = previewJsonlPath else { return nil }
+        // Heuristic: the parent directory of the rollout file is
+        // usually `~/.codex/sessions/YYYY/MM/DD/` which is NOT the
+        // session's working directory. But the meta line itself has
+        // `cwd` populated. Scan the transcript's first meta msg.
+        if let metaCwd = previewTranscript?.first(where: { $0.kind == .meta })?.detail,
+           !metaCwd.isEmpty {
+            return URL(fileURLWithPath: metaCwd, isDirectory: true)
+        }
+        // Fallback: nil. Don't fabricate a path.
+        _ = path
+        return nil
     }
 
     @ViewBuilder
@@ -1885,6 +2137,243 @@ private struct ReviewPane: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 32)
+    }
+}
+
+// MARK: - JSONL preview tab content (v0.22.31)
+
+/// Plan tab content derived from a JSONL transcript. Scans the
+/// transcript for assistant messages that look like a plan (numbered
+/// list, dash-prefixed steps, or "## Plan"/"Plan:" headers) and
+/// surfaces them as a step list. Falls back to "No plan yet" copy when
+/// nothing plan-shaped is found.
+private struct JsonlPlanTab: View {
+    @Environment(\.tahoe) private var t
+    var transcript: [ChatMessage]
+
+    private var planText: String? {
+        // Prefer the most recent assistant turn that looks like a plan.
+        let assistant = transcript.reversed().filter { $0.kind == .assistantText }
+        for msg in assistant {
+            let body = msg.body
+            if body.range(of: #"(?im)^\s*(?:#+\s*plan|plan:|##\s)"#, options: .regularExpression) != nil {
+                return body
+            }
+            if body.range(of: #"(?m)^\s*(?:\d+[.)]\s|[-*]\s)"#, options: .regularExpression) != nil {
+                return body
+            }
+        }
+        return nil
+    }
+
+    private var steps: [String] {
+        guard let raw = planText else { return [] }
+        return TahoePlanParser.steps(from: raw, cap: 12)
+    }
+
+    var body: some View {
+        if steps.isEmpty {
+            VStack(alignment: .center, spacing: 8) {
+                TahoeIcon("doc", size: 22).foregroundStyle(t.fg4)
+                Text("No plan in this transcript")
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Text("The agent didn't post a plan-shaped step list in this rollout.")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 40)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("PLAN · \(steps.count) STEPS")
+                    .font(TahoeFont.body(11, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(t.fg3)
+                    .padding(.bottom, 10)
+                ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                    HStack(alignment: .top, spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(t.hair2)
+                            Text("\(i+1)")
+                                .font(TahoeFont.mono(11, weight: .bold))
+                                .foregroundStyle(t.fg2)
+                        }
+                        .frame(width: 22, height: 22)
+                        Text(step)
+                            .font(TahoeFont.body(12.5))
+                            .foregroundStyle(t.fg)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 10)
+                    if i < steps.count - 1 { TahoeHair() }
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 14)
+        }
+    }
+}
+
+/// Sources tab content derived from JSONL transcript. Scans tool calls
+/// + results for file paths and surfaces unique entries grouped by
+/// directory. Tapping a row reveals the file in Finder.
+private struct JsonlSourcesTab: View {
+    @Environment(\.tahoe) private var t
+    var transcript: [ChatMessage]
+    var cwd: URL?
+
+    private var files: [String] {
+        // Match relative repo paths in tool detail/body (e.g.
+        // `apple/ClawdmeterMac/Foo.swift:42:`). Also catches absolute
+        // paths under common roots. Returns sorted unique list.
+        var seen = Set<String>()
+        let pattern = #"(?<![\w/])([A-Za-z0-9_\-./]+\.[A-Za-z0-9]{1,8})(?=[:\s]|$)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        for msg in transcript where msg.kind == .toolCall || msg.kind == .toolResult {
+            let text = (msg.detail ?? "") + "\n" + msg.body
+            let nsText = text as NSString
+            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+            for m in matches where m.numberOfRanges > 1 {
+                let path = nsText.substring(with: m.range(at: 1))
+                // Heuristics to drop false positives.
+                if path.hasPrefix(".") { continue }
+                if path.count < 4 { continue }
+                if path.contains("..") { continue }
+                seen.insert(path)
+            }
+        }
+        return seen.sorted()
+    }
+
+    var body: some View {
+        if files.isEmpty {
+            VStack(alignment: .center, spacing: 8) {
+                TahoeIcon("search", size: 22).foregroundStyle(t.fg4)
+                Text("No source files found")
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Text("This transcript doesn't reference any file paths.")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 40)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("SOURCES · \(files.count) FILES")
+                    .font(TahoeFont.body(11, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(t.fg3)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                ForEach(Array(files.enumerated()), id: \.offset) { _, path in
+                    Button {
+                        let absolute: URL
+                        if path.hasPrefix("/") {
+                            absolute = URL(fileURLWithPath: path)
+                        } else if let cwd {
+                            absolute = cwd.appendingPathComponent(path)
+                        } else {
+                            return
+                        }
+                        if FileManager.default.fileExists(atPath: absolute.path) {
+                            NSWorkspace.shared.activateFileViewerSelecting([absolute])
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            TahoeIcon("folder", size: 10).foregroundStyle(t.fg4)
+                            Text(path)
+                                .font(TahoeFont.mono(11.5))
+                                .foregroundStyle(t.fg2)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    TahoeHair()
+                }
+            }
+        }
+    }
+}
+
+/// PR tab content derived from JSONL transcript. Scans for GitHub
+/// pull-request URLs (`https://github.com/{owner}/{repo}/pull/{n}`) in
+/// any message body/detail and renders them as a list. Tap opens in
+/// the default browser.
+private struct JsonlPRTab: View {
+    @Environment(\.tahoe) private var t
+    var transcript: [ChatMessage]
+
+    private var prURLs: [URL] {
+        var seen = Set<String>()
+        var urls: [URL] = []
+        let pattern = #"https?://github\.com/[A-Za-z0-9_./-]+/(?:pull|issues)/\d+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        for msg in transcript {
+            let text = (msg.detail ?? "") + "\n" + msg.body
+            let nsText = text as NSString
+            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+            for m in matches {
+                let raw = nsText.substring(with: m.range)
+                if seen.contains(raw) { continue }
+                seen.insert(raw)
+                if let u = URL(string: raw) { urls.append(u) }
+            }
+        }
+        return urls
+    }
+
+    var body: some View {
+        if prURLs.isEmpty {
+            VStack(alignment: .center, spacing: 8) {
+                TahoeIcon("pull", size: 22).foregroundStyle(t.fg4)
+                Text("No PR detected")
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Text("The agent didn't reference any github.com/.../pull/N URLs in this transcript.")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 40)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("LINKED PRS · \(prURLs.count)")
+                    .font(TahoeFont.body(11, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(t.fg3)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                ForEach(Array(prURLs.enumerated()), id: \.offset) { _, url in
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        HStack(spacing: 6) {
+                            TahoeIcon("pull", size: 10).foregroundStyle(t.accent)
+                            Text(url.absoluteString)
+                                .font(TahoeFont.mono(11.5))
+                                .foregroundStyle(t.accent)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    TahoeHair()
+                }
+            }
+        }
     }
 }
 
