@@ -207,6 +207,7 @@ public final class CodexSource: AISource {
     /// weekly side-by-side regardless of bucket grouping.
     private func parseLiveUsagePayload(_ data: Data) -> UsageData? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            logger.warning("Codex live usage: top-level JSON is not an object — first 200B: \(String(data: data.prefix(200), encoding: .utf8) ?? "<binary>", privacy: .public)")
             return nil
         }
 
@@ -228,6 +229,15 @@ public final class CodexSource: AISource {
             if let single = root[key] as? [String: Any] {
                 buckets.append(single)
             }
+        }
+
+        // v0.22.25 diagnostic: when no buckets surfaced, dump the
+        // top-level keys so the next failure mode is debuggable from
+        // logs alone. We log keys (not values) to avoid leaking any
+        // workspace metadata that might be inside the response.
+        if buckets.isEmpty {
+            let topKeys = root.keys.sorted().joined(separator: ", ")
+            logger.warning("Codex live usage: top-level keys produced no buckets — keys=[\(topKeys, privacy: .public)]")
         }
 
         // Walk every (primary, secondary) pair across every bucket and
@@ -288,6 +298,25 @@ public final class CodexSource: AISource {
                 }
             }
         }
+
+        // v0.22.25 diagnostic: when buckets existed but no winner came
+        // out, log the keys of the first bucket so we can see what the
+        // server is returning. This is the bucket BucketView would have
+        // rejected — its primary/secondary dict keys reveal whether
+        // the server shipped yet another renaming.
+        if sessionWinner == nil, let first = buckets.first {
+            let bucketKeys = first.keys.sorted().joined(separator: ", ")
+            let primaryKeys: String
+            if let primary = first["primary"] as? [String: Any] {
+                primaryKeys = primary.keys.sorted().joined(separator: ", ")
+            } else if let primaryNS = first["primary"] {
+                primaryKeys = "<not-dict: \(type(of: primaryNS))>"
+            } else {
+                primaryKeys = "<missing>"
+            }
+            logger.warning("Codex live usage: \(buckets.count) buckets but no winner — first bucket.keys=[\(bucketKeys, privacy: .public)] first.primary.keys=[\(primaryKeys, privacy: .public)]")
+        }
+
         guard let session = sessionWinner else { return nil }
 
         let now = Date()
@@ -391,11 +420,17 @@ public final class CodexSource: AISource {
             else if let v = dict["resetsAt"] as? Double { resets = Int(v) }
             else if let v = dict["resets_at"] as? Double { resets = Int(v) }
             else { resets = 0 }
-            // We only need resets to be plausible (positive). A future
-            // bucket reset epoch is required for the gauge "resets in"
-            // string. If absent, drop the bucket — the parser's
-            // sessionWinner-fallback will pick another if available.
-            guard resets > 0 else { return nil }
+            // v0.22.25: don't require resets > 0. The Codex v2 schema
+            // marks `resets_at` as Option<i64> — an active rate-limit
+            // bucket can have a usedPercent but no scheduled reset
+            // (e.g. credits buckets, account-tier buckets that reset
+            // on billing-cycle dates that the server doesn't surface
+            // explicitly). Reject the bucket only if BOTH usedPercent
+            // AND resets are absent (i.e. the dict carried no real
+            // signal). The downstream `sessionMins` math will produce
+            // 0 if resets was missing — that's better than dropping
+            // the bucket entirely and falling back to the JSONL.
+            guard resets > 0 || pct > 0 else { return nil }
             self.usedPercent = pct
             self.resetsAt = resets
 
