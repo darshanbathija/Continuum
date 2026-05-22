@@ -4,6 +4,17 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.15 build 96] - 2026-05-22 — Fix: Linux CI can build shared crypto code (`fix/linux-swift-crypto`)
+
+Linux CI can now compile the shared package again after the Design and Watch bridge code started using SHA-256 helpers.
+
+### Fixed
+
+- **`ClawdmeterShared` crypto imports** — Apple platforms keep using native `CryptoKit`; Linux builds now fall back to Swift Crypto's `Crypto` module for the same SHA-256 APIs.
+- **`ClawdmeterShared` package graph** — adds `swift-crypto` to the package dependencies so the Linux Swift 5.10 and Swift 6.0 jobs can resolve the crypto module instead of failing at import time.
+
+Bumps `MARKETING_VERSION` 0.22.14 → 0.22.15, `CURRENT_PROJECT_VERSION` 95 → 96.
+
 ## [0.22.12 build 94] - 2026-05-22 — Fix: "+ New chat" button actually clears the open chat (`fix/new-chat-button`)
 
 User reported that clicking "+ New chat" still rendered the previous chat's transcript in the middle pane.

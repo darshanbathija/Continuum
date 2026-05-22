@@ -21,7 +21,11 @@
 // streaming when only the timestamp changes.
 
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 
 public enum WatchPlanBridge {
     /// Typed schema for the WCSession context. Encoded fields use the
