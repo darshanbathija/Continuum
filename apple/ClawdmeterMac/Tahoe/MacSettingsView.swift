@@ -26,8 +26,6 @@ public struct MacSettingsView: View {
     /// Source of truth for the auto-revive toggle. Reads the real state
     /// off whichever provider supports it (Claude is the canonical one
     /// today). Setter fans out to every provider that supports auto-revive.
-    @State private var notifyAt90: Bool = true
-    @State private var mirrorToiPhone: Bool = true
     @SceneStorage("clawdmeter.mac.settings.selectedSection") private var selectedSectionRaw: String = SettingsSection.visual.rawValue
 
     // v0.22.9: dropped to `internal` because the `runtime` parameter
@@ -167,7 +165,18 @@ public struct MacSettingsView: View {
         // PR #31 chunk 2: Providers card surfaces install + auth state for adapters that run external CLIs.
         SettingsCard(title: "Providers",
                      sub: "External agent runtimes Clawdmeter can drive. Listed providers must be installed and signed in to spawn sessions.") {
-            OpencodeProviderRow()
+            VStack(alignment: .leading, spacing: 14) {
+                // v0.22.23: explicit Claude Code CLI row at the top
+                // since Claude is the headline provider. Shows
+                // install status + a "Has been used" proxy for the
+                // sign-in state (the real OAuth token lives in
+                // macOS Keychain and isn't readable without entitlement,
+                // so we infer auth from `~/.claude/projects/` having
+                // any entries).
+                ClaudeCLIProviderRow()
+                TahoeHair()
+                OpencodeProviderRow()
+            }
         }
 
         SettingsCard(title: "Codex SDK",
@@ -193,13 +202,13 @@ public struct MacSettingsView: View {
             }
             TahoeHair().padding(.vertical, 14)
             SettingsRow(label: "Mirror to iPhone",
-                        hint: "Push live gauges to a paired iPhone so you can glance at quota from the Lock Screen. (Coming with the next pairing pass.)") {
-                TahoeToggleView(on: $mirrorToiPhone)
+                        hint: "Live gauges sync through the pairing service when a phone is paired. No separate toggle exists yet.") {
+                SettingsUnavailableBadge()
             }
             TahoeHair().padding(.vertical, 14)
             SettingsRow(label: "Notify at 90%",
-                        hint: "Send a system notification when any session passes 90% of its rolling window. (Coming with the next notifications pass.)") {
-                TahoeToggleView(on: $notifyAt90)
+                        hint: "Notification routing is not implemented in this settings surface yet.") {
+                SettingsUnavailableBadge()
             }
         }
 
@@ -225,6 +234,20 @@ public struct MacSettingsView: View {
             DiagnosticsSettingsView()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+private struct SettingsUnavailableBadge: View {
+    @Environment(\.tahoe) private var t
+
+    var body: some View {
+        Text("Unavailable")
+            .font(TahoeFont.body(11, weight: .bold))
+            .foregroundStyle(t.fg3)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background { Capsule().fill(t.glassTintHi) }
+            .overlay { Capsule().stroke(t.hairline, lineWidth: 0.5) }
     }
 }
 
@@ -733,5 +756,224 @@ private struct OpencodeProviderRow: View {
             .sorted()
             .joined(separator: " · ")
         return "Signed in: \(pairs)"
+    }
+}
+
+// MARK: - Claude Code CLI provider row (v0.22.23)
+
+/// Mirrors `OpencodeProviderRow`'s shape — install + auth status for the
+/// Claude Code CLI. Authentication isn't directly observable (Claude
+/// stores OAuth tokens in macOS Keychain, which requires user-prompted
+/// entitlement to read), so we use `~/.claude/projects/` having any
+/// entries as a proxy for "Claude has been signed in + used at least
+/// once on this machine". A user who just installed but hasn't run
+/// `claude` yet sees a "Signed in?" pending state with a "Sign in"
+/// button that launches Terminal to run `claude` (which kicks off
+/// the OAuth flow).
+private struct ClaudeCLIProviderRow: View {
+    @Environment(\.tahoe) private var t
+    @State private var probe: ProbeState = .pending
+    @State private var version: String?
+    @State private var binaryPath: String?
+    @State private var hasUsedClaude: Bool = false
+
+    enum ProbeState: Equatable {
+        case pending
+        case notInstalled
+        case installedNoActivity   // binary present but ~/.claude/projects/ empty
+        case installedActive       // binary present + has activity (probably signed in)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            TahoeProviderGlyph(provider: .claude, size: 32)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("Claude Code")
+                        .font(TahoeFont.body(14, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    statePill
+                }
+                Text(detailLine)
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let binaryPath, probe == .installedActive || probe == .installedNoActivity {
+                    Text("Binary: \(binaryPath)\(version.map { "  ·  \($0)" } ?? "")")
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(t.fg2)
+                }
+            }
+            Spacer()
+            actionButton
+        }
+        .task { await refreshProbe() }
+    }
+
+    @ViewBuilder
+    private var statePill: some View {
+        let (label, color): (String, Color) = {
+            switch probe {
+            case .pending:           return ("Checking…", t.fg4)
+            case .notInstalled:      return ("Not installed", Color.orange)
+            case .installedNoActivity: return ("Sign-in pending", Color.yellow)
+            case .installedActive:   return ("Ready", Color.green)
+            }
+        }()
+        Text(label)
+            .font(TahoeFont.body(10, weight: .bold))
+            .tracking(0.3)
+            .foregroundStyle(color)
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background { Capsule().fill(color.opacity(0.15)) }
+            .overlay { Capsule().stroke(color.opacity(0.35), lineWidth: 0.5) }
+    }
+
+    private var detailLine: String {
+        switch probe {
+        case .pending:
+            return "Probing the `claude` binary + activity history…"
+        case .notInstalled:
+            return "Not installed. `npm i -g @anthropic-ai/claude-code` or `brew install anthropic/claude/claude` to enable Claude-backed sessions."
+        case .installedNoActivity:
+            return "Installed, but no project activity in ~/.claude/projects/ yet — run `claude` once in a terminal to sign in via OAuth."
+        case .installedActive:
+            return "Installed and signed in. Clawdmeter spawns Claude sessions via the `claude` CLI."
+        }
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        switch probe {
+        case .pending:
+            EmptyView()
+        case .notInstalled:
+            Button {
+                if let url = URL(string: "https://docs.anthropic.com/en/docs/claude-code/setup") {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                Text("Install docs")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.accent)
+            }
+            .buttonStyle(.plain)
+        case .installedNoActivity:
+            Button {
+                openTerminalRunningClaude()
+            } label: {
+                Text("Sign in")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.accent)
+            }
+            .buttonStyle(.plain)
+            .help("Open Terminal and run `claude` so the OAuth flow can complete.")
+        case .installedActive:
+            Button {
+                let url = URL(fileURLWithPath: NSHomeDirectory())
+                    .appendingPathComponent(".claude", isDirectory: true)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } label: {
+                Text("Open ~/.claude")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.accent)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Probe is cheap — single file existence + one `claude --version`
+    /// invocation. Run off the main actor to avoid janking the
+    /// Settings tab on first appear.
+    private func refreshProbe() async {
+        let detected = await Task.detached(priority: .userInitiated) {
+            ClaudeCLIProbe.run()
+        }.value
+        self.binaryPath = detected.binaryPath
+        self.version = detected.version
+        self.hasUsedClaude = detected.hasActivity
+        if detected.binaryPath == nil {
+            self.probe = .notInstalled
+        } else if detected.hasActivity {
+            self.probe = .installedActive
+        } else {
+            self.probe = .installedNoActivity
+        }
+    }
+
+    /// AppleScript a Terminal window that runs `claude` so the user
+    /// can complete the OAuth handshake inline. No-op if the script
+    /// fails (e.g. Terminal denied, sandbox restriction); the help
+    /// tooltip on the button explains the manual path.
+    private func openTerminalRunningClaude() {
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "claude"
+        end tell
+        """
+        let appleScript = NSAppleScript(source: script)
+        var error: NSDictionary?
+        _ = appleScript?.executeAndReturnError(&error)
+    }
+}
+
+/// Static probe helper that walks the standard install locations,
+/// runs `--version`, and counts `~/.claude/projects/` children. Kept
+/// out of the View struct so it can be called off the main actor
+/// without touching SwiftUI state. The "has activity" signal proxies
+/// for sign-in status without needing Keychain access.
+private enum ClaudeCLIProbe {
+    struct Result {
+        let binaryPath: String?
+        let version: String?
+        let hasActivity: Bool
+    }
+
+    nonisolated static func run() -> Result {
+        let path = locateBinary()
+        let version: String? = path.flatMap { runVersion(binary: $0) }
+        let activity = projectsDirHasEntries()
+        return Result(binaryPath: path, version: version, hasActivity: activity)
+    }
+
+    private nonisolated static func locateBinary() -> String? {
+        let candidates = [
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            NSHomeDirectory() + "/.claude/local/claude",
+            NSHomeDirectory() + "/.npm-global/bin/claude",
+            NSHomeDirectory() + "/.local/bin/claude",
+        ]
+        for c in candidates {
+            if FileManager.default.isExecutableFile(atPath: c) { return c }
+        }
+        return nil
+    }
+
+    private nonisolated static func runVersion(binary: String) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: binary)
+        p.arguments = ["--version"]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = Pipe()
+        do {
+            try p.run()
+            p.waitUntilExit()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            let raw = String(decoding: data, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return raw.isEmpty ? nil : raw
+        } catch {
+            return nil
+        }
+    }
+
+    private nonisolated static func projectsDirHasEntries() -> Bool {
+        let url = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".claude/projects", isDirectory: true)
+        let kids = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
+        return !kids.isEmpty
     }
 }
