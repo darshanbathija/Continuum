@@ -1313,22 +1313,14 @@ public final class AgentControlServer {
             await sendChatSDKPrompt(session: session, prompt: req.text, connection: connection)
             return
         }
-        // Audit P1 fix: OpenCode sessions have no tmux pane and no send
-        // branch implemented. Previously they fell through to the
-        // pane-id guard and returned a generic 500, which the iOS app
-        // surfaced as an opaque "something went wrong". Return a
-        // structured 501 so the UI can render a clear "OpenCode send
-        // is not yet supported" state and the user understands the
-        // limitation instead of being told the server crashed.
+        // v0.23.2 P1-04: OpenCode send. Wires the iOS / Mac composer's
+        // POST /sessions/:id/send to opencode's `POST /session/<id>/message`.
+        // The reply streams back asynchronously via the SSE `message.added`
+        // events that OpencodeSSEAdapter routes into the session's
+        // SessionChatStore — clients reading the chat-subscribe WS see
+        // the assistant turn appear without an additional poll.
         if session.agent == .opencode {
-            serverLogger.notice(
-                "send-prompt: opencode session=\(uuid.uuidString, privacy: .public) — send not yet implemented (audit P1-04)"
-            )
-            sendResponse(HTTPResponse(
-                status: 501, reason: "Not Implemented",
-                contentType: "application/json",
-                body: Data(#"{"error":"opencode_send_not_implemented","detail":"OpenCode sessions are read-only in this build. POST /sessions/:id/send for opencode lands in a follow-up."}"#.utf8)
-            ), on: connection)
+            await sendOpencodePrompt(session: session, prompt: req.text, connection: connection)
             return
         }
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
@@ -2603,6 +2595,22 @@ public final class AgentControlServer {
         // running.
         OpencodeSSEAdapter.shared.start()
 
+        // v0.23.2: wire the chat-store accessor so message.added
+        // events route into the per-session SessionChatStore. Idempotent
+        // — re-setting on every spawn is cheap and resists the rare
+        // race where the adapter restarted (e.g. after opencode serve
+        // crashed) and lost the closure. Weak capture on self keeps
+        // the closure from pinning AgentControlServer.
+        if OpencodeSSEAdapter.shared.chatStoreAccessor == nil {
+            let registry = self.registry
+            let chatStoreRegistry = self.chatStoreRegistry
+            OpencodeSSEAdapter.shared.chatStoreAccessor = { [weak registry, weak chatStoreRegistry] uuid in
+                guard let registry, let chatStoreRegistry else { return nil }
+                guard let session = registry.session(id: uuid) else { return nil }
+                return chatStoreRegistry.acquire(for: session)
+            }
+        }
+
         // Step 2: mint an opencode session id via the server's
         // `/session` POST. Body is minimal — title is optional but
         // surfaces in the OpenCode TUI's session list (which the
@@ -3774,6 +3782,125 @@ public final class AgentControlServer {
     /// customName yet, derive a 40-char title from the prompt body and
     /// persist via `registry.rename(...)`. Future renames via /rename
     /// override this.
+    /// v0.23.2 P1-04: send a prompt into an OpenCode session.
+    ///
+    /// Flow:
+    ///   1. Echo the user prompt into the SessionChatStore so the
+    ///      composer clears the "sending…" state and the user bubble
+    ///      renders immediately (mirrors how sendChatSDKPrompt does it).
+    ///   2. Resolve the opencode session id (registered when the
+    ///      AgentSession was spawned via `handleSpawnOpencodeSession`).
+    ///   3. POST to `opencode serve`'s `/session/<oc-id>/message` with
+    ///      a minimal `parts: [{type: "text", text: <prompt>}]` body.
+    ///      opencode picks the user's default provider+model — we
+    ///      don't override unless a session-specific override is set.
+    ///   4. Return 200; the reply streams back asynchronously via
+    ///      `message.added` SSE events that OpencodeSSEAdapter routes
+    ///      into the same SessionChatStore.
+    ///
+    /// Error surfaces:
+    ///   - opencode serve down → 503 `opencode_server_unreachable`
+    ///   - no opencode session-id registered → 503 `opencode_session_not_registered`
+    ///     (caller should retry after a brief delay; the SSE
+    ///     `session.created` event populates the map asynchronously)
+    ///   - opencode returns non-2xx → 502 `opencode_send_failed` w/
+    ///     the upstream status code
+    private func sendOpencodePrompt(
+        session: AgentSession,
+        prompt: String,
+        connection: NWConnection
+    ) async {
+        // First-prompt naming, same convention as sendChatSDKPrompt.
+        if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+            let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let cap = 40
+                let truncated = trimmed.count <= cap
+                    ? trimmed
+                    : String(trimmed[..<trimmed.index(trimmed.startIndex, offsetBy: cap - 1)]) + "…"
+                registry.rename(id: session.id, name: truncated)
+            }
+        }
+        // Echo the user prompt into the chat store so the UI clears
+        // its "sending…" state and the user bubble renders without
+        // waiting on the SSE round-trip.
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            let userMsgId = "opencode-user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
+            store.appendSDKMessages([
+                ChatMessage(
+                    id: userMsgId,
+                    kind: .userText,
+                    title: "You",
+                    body: prompt,
+                    at: Date()
+                )
+            ])
+        }
+        // Resolve the opencode session id.
+        guard let opencodeID = await OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
+            serverLogger.warning("opencode send: no session-id mapping for \(session.id.uuidString, privacy: .public)")
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"opencode_session_not_registered","detail":"Opencode session has not been registered yet — retry in a moment."}"#.utf8)
+            ), on: connection)
+            return
+        }
+        // Build the upstream POST.
+        guard var req = await OpencodeProcessManager.shared.makeAuthorizedRequest(
+            path: "/session/\(opencodeID)/message"
+        ) else {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"opencode_server_unreachable","detail":"opencode serve is not running"}"#.utf8)
+            ), on: connection)
+            return
+        }
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Minimal body: a single text part. opencode infers provider +
+        // model from the active auth-list defaults. Override hook lives
+        // in `AgentSession.codexModel` / future opencode-specific fields
+        // — wire if/when sessions need per-session model pinning.
+        let body: [String: Any] = [
+            "parts": [
+                ["type": "text", "text": prompt]
+            ]
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        req.timeoutInterval = 20
+
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse else {
+                throw URLError(.badServerResponse)
+            }
+            if !(200..<300).contains(http.statusCode) {
+                serverLogger.warning("opencode send: upstream returned \(http.statusCode, privacy: .public)")
+                let detailBody = #"{"error":"opencode_send_failed","upstreamStatus":\#(http.statusCode)}"#
+                sendResponse(HTTPResponse(
+                    status: 502, reason: "Bad Gateway",
+                    contentType: "application/json",
+                    body: Data(detailBody.utf8)
+                ), on: connection)
+                return
+            }
+            sendResponse(HTTPResponse(
+                status: 200, reason: "OK",
+                contentType: "application/json",
+                body: Data(#"{"ok":true}"#.utf8)
+            ), on: connection)
+        } catch {
+            serverLogger.warning("opencode send: \(error.localizedDescription, privacy: .public)")
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"opencode_server_unreachable","detail":"\#(error.localizedDescription)"}"#.utf8)
+            ), on: connection)
+        }
+    }
+
     private func sendChatSDKPrompt(
         session: AgentSession,
         prompt: String,
