@@ -15,6 +15,15 @@ import AppKit
 /// Plan A8: refreshes on app-foreground via `NotificationCenter` + every
 /// 60s via a `Timer`. Both invalidations are cheap because the cache makes
 /// warm-load near-zero.
+/// PR #31: OpencodeSSEAdapter posts this when an opencode `usage`
+/// event arrives + maps through OpencodeUsageMapper. UsageHistoryStore
+/// subscribes and folds the record into `opencodeLiveRecords` for the
+/// menu-bar dollar gauge and Analytics. `userInfo["record"]` carries
+/// the `UsageRecord`.
+public extension Notification.Name {
+    static let opencodeUsageRecorded = Notification.Name("clawdmeter.opencode.usage.recorded")
+}
+
 @MainActor
 public final class UsageHistoryStore: ObservableObject {
 
@@ -22,6 +31,15 @@ public final class UsageHistoryStore: ObservableObject {
     @Published public private(set) var loading: Bool = false
     @Published public var activeWindow: UsageHistorySnapshot.Window = .past30d
     @Published public var providerFilter: ProviderFilter = .both
+
+    /// PR #31 chunk 3: live opencode usage events recorded since app
+    /// launch. Driven by the `opencodeUsageRecorded` notification the
+    /// SSE adapter posts; rolled into `opencodeTodayCostUSD` /
+    /// `opencodeWeekCostUSD` for the menu-bar dollar gauge (A2).
+    /// Bounded to the last 5000 events to keep memory bounded for
+    /// long-running sessions; older events are dropped FIFO.
+    @Published public private(set) var opencodeLiveRecords: [UsageRecord] = []
+    private static let maxLiveRecords = 5000
 
     public enum ProviderFilter: String, CaseIterable, Sendable {
         /// All providers visible (replaces `.both` for the N-provider world
@@ -130,5 +148,52 @@ public final class UsageHistoryStore: ObservableObject {
             Task { @MainActor in await self?.refresh() }
         })
 #endif
+        // PR #31 chunk 3: subscribe to opencode usage events so the
+        // menu-bar dollar gauge + Analytics fold opencode costs in
+        // alongside the loader-sourced providers.
+        observers.append(center.addObserver(
+            forName: .opencodeUsageRecorded,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let record = note.userInfo?["record"] as? UsageRecord else { return }
+            Task { @MainActor in self?.appendOpencodeRecord(record) }
+        })
+    }
+
+    /// Append a live opencode UsageRecord. Trims to the 5000-item
+    /// retention cap so memory stays bounded over a long-running day.
+    /// Called from the .opencodeUsageRecorded observer; exposed
+    /// `internal` so tests can drive it directly without dispatching
+    /// a real Notification.
+    internal func appendOpencodeRecord(_ record: UsageRecord) {
+        opencodeLiveRecords.append(record)
+        if opencodeLiveRecords.count > Self.maxLiveRecords {
+            opencodeLiveRecords.removeFirst(opencodeLiveRecords.count - Self.maxLiveRecords)
+        }
+    }
+
+    /// PR #31 chunk 3 (A2): sum of opencode cost recorded since 00:00
+    /// of the user's local day. Drives the menu-bar dollar gauge's
+    /// "$X today" label.
+    public var opencodeTodayCostUSD: Decimal {
+        let startOfDay = Calendar.current.startOfDay(for: Date())
+        return opencodeLiveRecords
+            .lazy
+            .filter { $0.timestamp >= startOfDay }
+            .map { $0.tokens.costUSD }
+            .reduce(Decimal(0), +)
+    }
+
+    /// PR #31 chunk 3 (A2): sum of opencode cost over the trailing
+    /// 7 days (rolling — NOT a calendar week). Drives the "$Y this
+    /// week" sub-label on the dollar gauge.
+    public var opencodeWeekCostUSD: Decimal {
+        let cutoff = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+        return opencodeLiveRecords
+            .lazy
+            .filter { $0.timestamp >= cutoff }
+            .map { $0.tokens.costUSD }
+            .reduce(Decimal(0), +)
     }
 }

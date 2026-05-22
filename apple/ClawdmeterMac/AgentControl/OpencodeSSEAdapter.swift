@@ -40,6 +40,7 @@
 
 import Foundation
 import OSLog
+import ClawdmeterShared
 
 @MainActor
 public final class OpencodeSSEAdapter {
@@ -209,9 +210,7 @@ public final class OpencodeSSEAdapter {
         case "message.added":
             handleMessageAdded(properties: properties)
         case "usage":
-            // Forwarded to OpencodeUsageMapper (PR #31). For now, log
-            // so we can confirm the wire shape against real traffic.
-            logger.debug("opencode usage event: \(String(describing: properties), privacy: .public)")
+            handleUsage(properties: properties)
         case "session.error":
             handleSessionError(properties: properties)
         case "":
@@ -255,6 +254,38 @@ public final class OpencodeSSEAdapter {
             kind: .snapshot,
             payload: ["opencodeSessionID": opencodeID]
         )
+    }
+
+    /// Handle an opencode `usage` event by mapping it to a UsageRecord
+    /// through OpencodeUsageMapper and broadcasting via NotificationCenter.
+    /// UsageHistoryStore subscribes to the notification and folds the
+    /// record into its rolling in-memory bag for the menu-bar dollar
+    /// gauge + Analytics. PR #31 chunk 3.
+    ///
+    /// Notification-based wire (instead of a direct UsageHistoryStore
+    /// singleton) keeps the SSE adapter loosely coupled — the store is
+    /// owned by AppRuntime and not globally addressable.
+    private func handleUsage(properties: [String: Any]) {
+        // Resolve the repo from the session map's cousin store — we
+        // don't carry the cwd on the SSE event itself. The Mac's
+        // registry knows it via the AgentSession; for now we pass nil
+        // (analytics buckets under "(unknown)" until repo plumbing
+        // lands on the spawn path). Future polish: tag the repo at
+        // session.created time + retrieve it here from the registry.
+        let repo: String? = nil
+        guard let record = OpencodeUsageMapper.mapEvent(
+            properties: properties,
+            repo: repo
+        ) else {
+            logger.debug("opencode usage: dropped malformed event payload")
+            return
+        }
+        NotificationCenter.default.post(
+            name: .opencodeUsageRecorded,
+            object: nil,
+            userInfo: ["record": record]
+        )
+        logger.debug("opencode usage: ingested model=\(record.model, privacy: .public) total=\(record.tokens.totalTokens, privacy: .public) cost=\(String(describing: record.tokens.costUSD), privacy: .public)")
     }
 
     private func handleSessionError(properties: [String: Any]) {

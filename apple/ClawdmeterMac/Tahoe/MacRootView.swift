@@ -93,7 +93,8 @@ struct MacRootView: View {
                             data: live,
                             claudeModel: claudeModel,
                             codexModel: codexModel,
-                            geminiModel: geminiModel
+                            geminiModel: geminiModel,
+                            usageHistoryStore: runtime.usageHistoryStore
                         )
                     case .code:
                         MacCodeView(
