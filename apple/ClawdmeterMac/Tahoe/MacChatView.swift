@@ -34,6 +34,16 @@ public struct MacChatView: View {
     /// hoists this into a shared model.
     @State private var openChatId: UUID?
 
+    /// v0.22.13: real source of truth for which providers receive a
+    /// broadcast. The legacy `mode` + `soloProvider` are now derived
+    /// from this set in `.onChange(of: selectedProviders)`. Without
+    /// this state the BroadcastChip's "unselect" was a no-op: its
+    /// previous `selectedSet` was synthesized from `mode` and reset
+    /// to `[claude, codex, gemini]` whenever `mode == .broadcast`,
+    /// so removing one of three providers immediately re-included it
+    /// on the next render. Default = all 3; users can toggle freely.
+    @State private var selectedProviders: Set<TahoeProvider> = [.claude, .codex, .gemini]
+
     /// Internal because `AppRuntime` is internal to the Mac target.
     /// MacChatView is only constructed from MacRootView in this target,
     /// so dropping the public access on the init is safe + correct.
@@ -131,11 +141,38 @@ public struct MacChatView: View {
                 ChatComposer(
                     mode: $mode,
                     soloProvider: $soloProvider,
+                    selectedProviders: $selectedProviders,
                     loopbackClient: loopbackClient,
                     openChatId: $openChatId
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        // v0.22.13: keep the legacy `mode` + `soloProvider` bindings
+        // in sync with the real `selectedProviders` set. Lots of
+        // downstream code (ChatColumnHeaders, ChatStream, placeholder
+        // strings) still reads from mode/soloProvider; this `.onChange`
+        // makes those derivations honest without rewiring every
+        // consumer in one shot.
+        .onChange(of: selectedProviders) { _, set in
+            if set.count == 1, let only = set.first {
+                soloProvider = only
+                mode = .solo
+            } else if set.count > 1 {
+                mode = .broadcast
+            }
+        }
+        .onAppear {
+            // Seed `selectedProviders` from the inbound mode/soloProvider
+            // so a paired iPhone / restored window state still picks the
+            // right initial selection.
+            if mode == .solo {
+                selectedProviders = [soloProvider]
+            } else if !selectedProviders.contains(.claude)
+                   && !selectedProviders.contains(.codex)
+                   && !selectedProviders.contains(.gemini) {
+                selectedProviders = [.claude, .codex, .gemini]
+            }
         }
     }
 }
@@ -894,6 +931,11 @@ private struct ChatComposer: View {
     @Environment(\.tahoe) private var t
     @Binding var mode: MacChatView.Mode
     @Binding var soloProvider: TahoeProvider
+    /// v0.22.13: real multi-select source of truth shared with
+    /// BroadcastChip. Used directly to build the FrontierModelSlot
+    /// list for createFrontier so the user's broadcast subset is
+    /// honored (previously hardcoded to Claude + Codex + Antigravity).
+    @Binding var selectedProviders: Set<TahoeProvider>
     /// Daemon client for create / send. Nil = decorative (Preview).
     var loopbackClient: AgentControlClient?
     /// Tracks the open chat session id at the parent. nil means "no
@@ -915,11 +957,13 @@ private struct ChatComposer: View {
     init(
         mode: Binding<MacChatView.Mode>,
         soloProvider: Binding<TahoeProvider>,
+        selectedProviders: Binding<Set<TahoeProvider>>,
         loopbackClient: AgentControlClient?,
         openChatId: Binding<UUID?>
     ) {
         self._mode = mode
         self._soloProvider = soloProvider
+        self._selectedProviders = selectedProviders
         self.loopbackClient = loopbackClient
         self._openChatId = openChatId
         // Mirror the IOSChatView pattern: fall back to a UserDefaults-
@@ -969,7 +1013,7 @@ private struct ChatComposer: View {
                     // v0.22.9: multi-select model picker replaces the
                     // titlebar "MODE [Broadcast] [Solo]" toggle. Click
                     // the chip → toggle providers; 1 = solo, >1 = broadcast.
-                    BroadcastChip(mode: $mode, soloProvider: $soloProvider)
+                    BroadcastChip(selected: $selectedProviders)
                     TahoeComposerChip(icon: "paperclip", action: { Self.attachFile(into: $sendCtl.text) })
                     TahoeComposerChip(icon: "code", action: { Self.insertCodeBlock(into: $sendCtl.text) })
                     TahoeComposerChip(icon: "mic", action: { Self.openDictation() })
@@ -1136,11 +1180,24 @@ private struct ChatComposer: View {
                 guard let client = loopbackClient else { return }
                 let trimmed = sendCtl.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
-                let slots: [FrontierModelSlot] = [
-                    FrontierModelSlot(provider: .claude),
-                    FrontierModelSlot(provider: .codex),
-                    FrontierModelSlot(provider: .gemini),
-                ]
+                // v0.22.13: honor the user's BroadcastChip selection
+                // instead of hardcoding all 3 providers. `selectedProviders`
+                // is the source of truth; fallback to all 3 if somehow
+                // empty (defensive — the chip's toggle refuses to drop
+                // the last selection). FrontierModelSlot.provider is
+                // an AgentKind, so map TahoeProvider → AgentKind here.
+                let providerOrder: [TahoeProvider] = [.claude, .codex, .gemini]
+                let chosen = providerOrder.filter { selectedProviders.contains($0) }
+                let resolvedTahoe = chosen.isEmpty ? providerOrder : chosen
+                let resolved: [AgentKind] = resolvedTahoe.compactMap { p in
+                    switch p {
+                    case .claude:   return .claude
+                    case .codex:    return .codex
+                    case .gemini:   return .gemini
+                    case .opencode: return .opencode
+                    }
+                }
+                let slots: [FrontierModelSlot] = resolved.map { FrontierModelSlot(provider: $0) }
                 let response = await client.createFrontier(slots: slots)
                 guard let response else {
                     broadcastNote = "Couldn't create broadcast group — see Settings → Providers."
@@ -1183,36 +1240,31 @@ private struct ChatComposer: View {
 /// branch tag.
 private enum ChatMode { case solo, broadcast }
 
-/// v0.22.9: was `BroadcastChip` (static label). Now a Menu-bound chip
-/// that lets the user multi-select which providers receive the prompt.
-/// Replaces the titlebar "MODE [Broadcast] [Solo]" toggle entirely —
-/// selection count drives mode automatically:
-///   - 1 selected → solo mode, that provider
-///   - >1 selected → broadcast mode
-/// Selecting zero providers re-checks the last one (we always have at
-/// least one recipient).
+/// v0.22.13: Menu-bound chip with a REAL multi-select set as its
+/// source of truth. The v0.22.9 implementation derived its selection
+/// from `mode` + `soloProvider` and re-synthesized
+/// `[claude, codex, gemini]` whenever `mode == .broadcast` — which
+/// made "unselect" impossible: clicking Codex with all 3 selected
+/// removed it from the local copy but the next render recomputed the
+/// full set from `mode == .broadcast`, immediately re-checking it.
+///
+/// Now we bind directly to `Set<TahoeProvider>`. MacChatView holds it
+/// as `@State` and reflects changes into `mode` / `soloProvider` via
+/// an `.onChange(...)` so the legacy send-paths keep working.
+///   - 0 selected → toggle refuses (always at least 1 recipient)
+///   - 1 selected → soloProvider = that one; mode = .solo
+///   - >1 selected → mode = .broadcast
 private struct BroadcastChip: View {
     @Environment(\.tahoe) private var t
-    @Binding var mode: MacChatView.Mode
-    @Binding var soloProvider: TahoeProvider
-
-    /// Currently-selected providers. Derived from `mode` + `soloProvider`
-    /// so the menu opens reflecting the live state and persisting back
-    /// re-maps the set into mode/soloProvider.
-    private var selectedSet: Set<TahoeProvider> {
-        switch mode {
-        case .broadcast: return [.claude, .codex, .gemini]
-        case .solo:      return [soloProvider]
-        }
-    }
+    @Binding var selected: Set<TahoeProvider>
 
     private var displayProviders: [TahoeProvider] {
-        TahoeProvider.allCases.filter { selectedSet.contains($0) }
+        TahoeProvider.allCases.filter { selected.contains($0) }
     }
 
     private var label: String {
-        let count = selectedSet.count
-        if count == 1, let only = selectedSet.first {
+        let count = selected.count
+        if count == 1, let only = selected.first {
             return only.displayName
         }
         return "\(count) models"
@@ -1221,7 +1273,7 @@ private struct BroadcastChip: View {
     var body: some View {
         Menu {
             ForEach([TahoeProvider.claude, .codex, .gemini], id: \.self) { p in
-                let on = selectedSet.contains(p)
+                let on = selected.contains(p)
                 Button {
                     toggle(p)
                 } label: {
@@ -1267,22 +1319,15 @@ private struct BroadcastChip: View {
         }
     }
 
-    /// Toggle a provider in the selection. Maps the resulting set back
-    /// to `mode` + `soloProvider`. Refuses to drop the last selection
-    /// (the composer needs at least one recipient).
+    /// Toggle a provider. Refuses to drop the last selection — the
+    /// composer needs at least one recipient or the send button has
+    /// nowhere to fan out to.
     private func toggle(_ p: TahoeProvider) {
-        var next = selectedSet
-        if next.contains(p) {
-            if next.count <= 1 { return }   // refuse to clear the last one
-            next.remove(p)
+        if selected.contains(p) {
+            if selected.count <= 1 { return }
+            selected.remove(p)
         } else {
-            next.insert(p)
-        }
-        if next.count == 1, let only = next.first {
-            mode = .solo
-            soloProvider = only
-        } else {
-            mode = .broadcast
+            selected.insert(p)
         }
     }
 }
