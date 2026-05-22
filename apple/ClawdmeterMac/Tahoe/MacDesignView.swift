@@ -147,7 +147,9 @@ private struct DesignWebViewHost: NSViewRepresentable {
         };
         window.clawdmeter.activeRepo = null;
         """
-        userContent.addUserScript(WKUserScript(source: bridgeJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        // /review codex P2-1: main frame only — iframes/subframes shouldn't
+        // get the native bridge channel.
+        userContent.addUserScript(WKUserScript(source: bridgeJS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = userContent
 
         let webView = WKWebView(frame: .zero, configuration: config)

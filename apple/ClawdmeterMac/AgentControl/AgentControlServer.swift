@@ -229,10 +229,14 @@ public final class AgentControlServer {
     /// current local bridge port — nil while the daemon is starting or
     /// has crashed; the /design/import-folder handler returns 503 in
     /// that case.
-    public func attachDesignBridge(bridgePortProvider: @escaping @Sendable () -> Int?) {
+    public func attachDesignBridge(bridgePortProvider: @escaping @Sendable () -> Int?,
+                                   bridgeAuthTokenProvider: @escaping @Sendable () -> String?) {
         self.designBridgePortProvider = bridgePortProvider
+        self.designBridgeAuthTokenProvider = bridgeAuthTokenProvider
     }
     private var designBridgePortProvider: (@Sendable () -> Int?)?
+    /// /review codex P1-2: bearer token the bridge requires on every request.
+    private var designBridgeAuthTokenProvider: (@Sendable () -> String?)?
 
     // MARK: - Lifecycle
 
@@ -2424,6 +2428,10 @@ public final class AgentControlServer {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(bridgePort)/import-folder")!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // /review codex P1-2: include the bridge bearer token.
+        if let bridgeToken = designBridgeAuthTokenProvider?() {
+            req.setValue("Bearer \(bridgeToken)", forHTTPHeaderField: "Authorization")
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["baseDir": baseDir])
         req.timeoutInterval = 30
         do {

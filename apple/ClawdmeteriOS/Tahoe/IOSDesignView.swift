@@ -59,7 +59,8 @@ private struct DesignWebView: UIViewRepresentable {
         };
         window.clawdmeter.activeRepo = null;
         """
-        userContent.addUserScript(WKUserScript(source: bridgeJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        // /review codex P2-1: main frame only.
+        userContent.addUserScript(WKUserScript(source: bridgeJS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = userContent
         // Persistent data store so WKHTTPCookieStore survives toggles.
         let webView = WKWebView(frame: .zero, configuration: config)

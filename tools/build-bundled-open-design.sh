@@ -151,18 +151,22 @@ fi
 DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-$(awk -F'"' '/DEVELOPMENT_TEAM/{print $2; exit}' "$REPO_ROOT/apple/project.yml" 2>/dev/null || true)}"
 if [[ -z "$DEVELOPMENT_TEAM" ]]; then
   echo "⚠ DEVELOPMENT_TEAM not set — skipping codesign. Set DEVELOPMENT_TEAM env or in project.yml." >&2
+elif ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$DEVELOPMENT_TEAM"; then
+  echo "⚠ No codesigning identity for team $DEVELOPMENT_TEAM in keychain — skipping codesign." >&2
+  echo "  (DMG will only run on this Mac. Install the team's developer cert to sign for distribution.)" >&2
 else
   echo "▸ Per-file codesign of native .node binaries + bundle sign (team $DEVELOPMENT_TEAM)…"
+  # /review codex P2-3: surface signing failures instead of swallowing
+  # them. Unsigned .node modules under hardened runtime fail at user-
+  # machine launch with cryptic errors. Make the build fail loudly.
   NODE_COUNT="$(find "$VENDOR_DIR" -name '*.node' -type f | wc -l | tr -d ' ')"
   if [[ "$NODE_COUNT" -gt 0 ]]; then
-    find "$VENDOR_DIR" -name '*.node' -type f -print0 | \
-      xargs -0 -n1 codesign --force --options runtime --timestamp \
-        --sign "$DEVELOPMENT_TEAM" 2>&1 | grep -E "error|warning" || true
+    while IFS= read -r -d '' nodebin; do
+      codesign --force --options runtime --timestamp --sign "$DEVELOPMENT_TEAM" "$nodebin"
+    done < <(find "$VENDOR_DIR" -name '*.node' -type f -print0)
     echo "✓ Signed $NODE_COUNT .node binaries"
   fi
-  # Bundle-sign the whole tree (not --deep — top-level only since inner
-  # Mach-O was already signed above).
-  codesign --force --options runtime --timestamp --sign "$DEVELOPMENT_TEAM" "$VENDOR_DIR" || true
+  codesign --force --options runtime --timestamp --sign "$DEVELOPMENT_TEAM" "$VENDOR_DIR"
   codesign --verify --strict "$VENDOR_DIR" && echo "✓ Vendor/open-design/ signature verified"
 fi
 

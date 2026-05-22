@@ -33,9 +33,17 @@ const DEFAULT_TTL_MS = 60_000;
 const DEFAULT_BRIDGE_PORT = parseInt(process.env.CLAWDMETER_BRIDGE_PORT || "27457", 10);
 const DAEMON_PORT = parseInt(process.env.OD_DAEMON_PORT || "", 10);
 const DATA_DIR = process.env.OD_DATA_DIR;
+// /review codex P1-2: per-spawn auth token. Bridge rejects any request
+// (except /health) lacking `Authorization: Bearer <token>`. Mac Swift
+// passes the token in env and uses it when proxying.
+const AUTH_TOKEN = (process.env.CLAWDMETER_BRIDGE_AUTH_TOKEN || "").trim();
 
 if (!Number.isFinite(DAEMON_PORT) || DAEMON_PORT <= 0) {
   console.error("[bridge] OD_DAEMON_PORT must be set to a positive integer");
+  process.exit(2);
+}
+if (!AUTH_TOKEN) {
+  console.error("[bridge] CLAWDMETER_BRIDGE_AUTH_TOKEN must be set");
   process.exit(2);
 }
 
@@ -192,12 +200,29 @@ function isLoopback(req) {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
+function authOK(req) {
+  const header = req.headers["authorization"] || "";
+  if (!header.toLowerCase().startsWith("bearer ")) return false;
+  const provided = header.slice(7).trim();
+  // Constant-time comparison.
+  if (provided.length !== AUTH_TOKEN.length) return false;
+  let diff = 0;
+  for (let i = 0; i < provided.length; i++) {
+    diff |= provided.charCodeAt(i) ^ AUTH_TOKEN.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 const server = createServer(async (req, res) => {
   if (!isLoopback(req)) {
     res.statusCode = 403; res.end("loopback only"); return;
   }
   if (req.method === "GET" && req.url === "/health") {
     return handleHealth(req, res);
+  }
+  // /review codex P1-2: auth gate on every non-health route.
+  if (!authOK(req)) {
+    res.statusCode = 401; res.end("unauthorized"); return;
   }
   if (req.method !== "POST") {
     res.statusCode = 405; res.end("POST required"); return;

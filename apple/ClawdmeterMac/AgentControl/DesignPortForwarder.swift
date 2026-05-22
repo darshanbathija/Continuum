@@ -232,26 +232,49 @@ public final class DesignPortForwarder {
     }
 
     private func isAcceptableHost(_ host: String?) -> Bool {
-        guard let host else { return false }
-        // Strip trailing :port
+        guard let host, !host.isEmpty else { return false }
+        // Strip trailing :port (handling bracketed IPv6).
         let bareHost: String
         if host.hasPrefix("[") {
             // Bracketed IPv6 literal: "[::1]:21732" or "[fd7a:115c::1]"
-            if let closeBracket = host.firstIndex(of: "]") {
-                bareHost = String(host[host.index(after: host.startIndex)..<closeBracket])
-            } else {
-                return false
-            }
+            guard let closeBracket = host.firstIndex(of: "]") else { return false }
+            bareHost = String(host[host.index(after: host.startIndex)..<closeBracket])
         } else if let lastColon = host.lastIndex(of: ":") {
-            bareHost = String(host[..<lastColon])
+            // IPv4 / bare-hostname:port  — only strip if the remainder
+            // after the last colon parses as a port.
+            let candidate = String(host[host.index(after: lastColon)...])
+            if Int(candidate) != nil {
+                bareHost = String(host[..<lastColon])
+            } else {
+                bareHost = host
+            }
         } else {
             bareHost = host
         }
-        // Loopback or any non-empty host. We don't strictly validate that the
-        // host is "our" bind because Tailscale rewrites hostnames in MagicDNS
-        // and we'd otherwise reject valid peers. The auth check is the real
-        // gate; this just stops the most trivial DNS-rebind attempts.
-        return !bareHost.isEmpty
+        let lowered = bareHost.lowercased()
+        // /review codex P1-6: real DNS-rebind defense. Accept only:
+        //   - loopback literals (127.0.0.1, ::1)
+        //   - the system's own hostname (with or without .local)
+        //   - Tailscale MagicDNS suffixes (.ts.net)
+        //   - any *.local mDNS name
+        // Reject everything else. A token alone doesn't stop rebind if the
+        // attacker can convince a victim browser to send our token to evil.com
+        // resolved via cache poisoning.
+        if lowered == "127.0.0.1" || lowered == "::1" || lowered == "localhost" {
+            return true
+        }
+        if lowered.hasSuffix(".ts.net") || lowered.hasSuffix(".local") {
+            return true
+        }
+        // System hostname check (case-insensitive). Strip trailing dot.
+        let systemHost = (Host.current().localizedName ?? ProcessInfo.processInfo.hostName)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let systemBare = systemHost.split(separator: ".").first.map(String.init) ?? systemHost
+        if lowered == systemHost || lowered == systemBare || lowered == "\(systemBare).local" {
+            return true
+        }
+        return false
     }
 
     // MARK: - Byte pumps
@@ -337,11 +360,17 @@ private final class CookieInjector {
         }
         let firstLine = str.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
         let parts = firstLine.split(separator: " ", maxSplits: 2).map(String.init)
-        let isInformational = parts.count >= 2 && parts[1].hasPrefix("1")
+        let status = parts.count >= 2 ? parts[1] : ""
+        // /review codex P2-2: 101 Switching Protocols is terminal — the
+        // bytes after the header block are WebSocket frames, NOT another
+        // HTTP response. Stop processing entirely and pass through verbatim.
+        if status == "101" {
+            injected = true
+            let drained = preludeBuffer; preludeBuffer = Data(); return drained
+        }
+        let isInformational = status.hasPrefix("1")  // 100, 102, 103 only
         if isInformational {
-            // Skip this response — emit it as-is, keep waiting for the next.
-            // Slice off the informational response (up through the header block)
-            // and recursively process the remainder.
+            // Skip this response — emit it as-is, keep waiting for the final response.
             let headerEnd = endOfHeaders.upperBound
             let informationalPart = preludeBuffer.subdata(in: 0..<headerEnd)
             let remainder = preludeBuffer.subdata(in: headerEnd..<preludeBuffer.count)

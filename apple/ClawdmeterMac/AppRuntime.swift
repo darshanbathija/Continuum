@@ -66,6 +66,10 @@ final class AppRuntime: ObservableObject {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // /review codex P1-2: bridge bearer token (per-spawn random hex).
+        if let bridgeToken = openDesignDaemon.bridgeAuthTokenAtomic.get() {
+            req.setValue("Bearer \(bridgeToken)", forHTTPHeaderField: "Authorization")
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["baseDir": baseDir])
         req.timeoutInterval = 30
         do {
@@ -215,9 +219,11 @@ final class AppRuntime: ObservableObject {
             // each request; the OpenDesignDaemonManager populates bridgePort
             // when it spawns the sidecar (lazy).
             let bridgeAtomic = openDesignDaemon.bridgePortAtomic
-            self.agentControlServer.attachDesignBridge {
-                bridgeAtomic.get()
-            }
+            let bridgeAuthAtomic = openDesignDaemon.bridgeAuthTokenAtomic
+            self.agentControlServer.attachDesignBridge(
+                bridgePortProvider: { bridgeAtomic.get() },
+                bridgeAuthTokenProvider: { bridgeAuthAtomic.get() }
+            )
             self.agentControlServer.start()
             // PR #24a A1: synchronous loopback bootstrap. `start()` above
             // is sync and assigns `boundPort`/`boundWsPort` before

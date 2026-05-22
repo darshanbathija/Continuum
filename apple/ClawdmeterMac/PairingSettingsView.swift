@@ -284,7 +284,7 @@ struct PairingSettingsView: View {
               let wsPort = runtime.agentControlServer.boundWsPort else { return }
         var url = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
         // v0.14.0 (plan v2.1): append Design routing fields when daemon ready.
-        if let dp = runtime.openDesignDaemon.bridgePortAtomic.get(),
+        if let dp = runtime.openDesignDaemon.forwarderPortAtomic.get(),
            let dt = runtime.openDesignDaemon.deriveDesignToken(forPairingId: tokenForDisplay) {
             url += "&dp=\(dp)&dt=\(dt)"
         }
@@ -308,7 +308,7 @@ struct PairingSettingsView: View {
             return
         }
         var urlString = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
-        if let dp = runtime.openDesignDaemon.bridgePortAtomic.get(),
+        if let dp = runtime.openDesignDaemon.forwarderPortAtomic.get(),
            let dt = runtime.openDesignDaemon.deriveDesignToken(forPairingId: tokenForDisplay) {
             urlString += "&dp=\(dp)&dt=\(dt)"
         }

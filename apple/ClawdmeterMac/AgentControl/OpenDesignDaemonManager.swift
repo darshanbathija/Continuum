@@ -42,6 +42,15 @@ public final class BridgePortAtomic: @unchecked Sendable {
     public func set(_ v: Int?) { lock.lock(); value = v; lock.unlock() }
 }
 
+/// Sendable atomic for the per-spawn bridge auth token (codex P1-2).
+public final class StringAtomic: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+    public init() {}
+    public func get() -> String? { lock.lock(); defer { lock.unlock() }; return value }
+    public func set(_ v: String?) { lock.lock(); value = v; lock.unlock() }
+}
+
 @MainActor
 public final class OpenDesignDaemonManager: ObservableObject {
 
@@ -53,10 +62,24 @@ public final class OpenDesignDaemonManager: ObservableObject {
     @Published public private(set) var lifecycleStatus: String = ""
     @Published public private(set) var daemonPort: Int? = nil
     @Published public private(set) var bridgePort: Int? = nil
+    /// /review codex P1-1: TCP forwarder port (the one iOS reaches over
+    /// Tailscale). NIL while the daemon is starting/crashed. Published
+    /// separately from `bridgePort` because the bridge is loopback-only
+    /// (Mac-internal) while the forwarder is Tailscale-exposed.
+    @Published public private(set) var forwarderPort: Int? = nil
     /// Thread-safe atomic mirror of `bridgePort` for use from Sendable
     /// closures (T20 — AgentControlServer's bridgePortProvider reads
     /// this from request-handling actors that aren't @MainActor).
     public let bridgePortAtomic = BridgePortAtomic()
+    /// /review codex P1-1: atomic mirror of `forwarderPort` for the
+    /// pairing-QR emission path on Sendable closures.
+    public let forwarderPortAtomic = BridgePortAtomic()
+    /// /review codex P1-2: per-spawn bridge auth token. The bridge sidecar
+    /// validates `Authorization: Bearer <token>` on every request except
+    /// /health. Closes the loophole where any local same-user process could
+    /// POST /sign-import-token with any baseDir and mint trusted import
+    /// tokens. Mac AgentControlServer + AppRuntime use this when proxying.
+    public let bridgeAuthTokenAtomic = StringAtomic()
     @Published public private(set) var lastError: String? = nil
     @Published public private(set) var activeProjectName: String? = nil
 
@@ -162,6 +185,8 @@ public final class OpenDesignDaemonManager: ObservableObject {
             self.lockFileHandle = handle
         case .attached(let rendezvous):
             // Another Clawdmeter instance is the daemon owner. Attach.
+            self.forwarderPort = rendezvous.forwarderPort == 0 ? nil : rendezvous.forwarderPort
+            self.forwarderPortAtomic.set(self.forwarderPort)
             await setReady(daemonPort: rendezvous.port, bridgePort: rendezvous.bridgePort, attached: true)
             return
         case .failed(let reason):
@@ -227,6 +252,16 @@ public final class OpenDesignDaemonManager: ObservableObject {
         attachStdoutPipe(daemon, label: "daemon")
         attachStderrPipe(daemon, label: "daemon")
         setProcessGroup(daemon)
+        // /review codex P1-5: termination handler — if daemon exits after
+        // ready, lifecycle would otherwise stay .ready while the port is
+        // dead. Flip to .crashed so the UI shows the error card and the
+        // restart-on-crash counter can fire on next ensureRunning().
+        daemon.terminationHandler = { [weak self] proc in
+            let code = proc.terminationStatus
+            Task { @MainActor [weak self] in
+                self?.handleChildExit(label: "daemon", exitCode: Int(code))
+            }
+        }
         do {
             try daemon.run()
             self.daemonProcess = daemon
@@ -244,30 +279,56 @@ public final class OpenDesignDaemonManager: ObservableObject {
         }
 
         await update(.loading, "Starting bridge sidecar…")
-        let bridgeStarted = await startBridge(daemonPort: port, apiToken: apiToken)
+        let bridgeStarted = await startBridge(daemonPort: port)
         if !bridgeStarted {
             // Bridge failure is non-fatal — Mac WebView still works,
             // only Code↔Design handoff is broken. Log + continue.
             logger.error("Bridge sidecar failed to start; Code↔Design handoff inert")
         }
 
+        // /review codex P1-1: start the DesignPortForwarder so iOS can
+        // reach the daemon over Tailscale. Non-fatal on failure — Mac
+        // WebView still works on loopback.
+        let forwarderStarted = await startDesignForwarder(daemonPort: port)
+        if !forwarderStarted {
+            logger.error("DesignPortForwarder failed to start; iOS Design tab will be unreachable")
+        }
+
         // Write the rendezvous payload atomically.
+        // /review codex P1-3: apiToken is NOT persisted to disk — Keychain
+        // is the only authoritative store. Second instances re-read from
+        // Keychain via loadOrGenerateAPIToken().
         let bridgePortValue = self.bridgePort ?? 0
-        let rendezvous = Rendezvous(port: port, apiToken: apiToken, bridgePort: bridgePortValue, pid: Int(ProcessInfo.processInfo.processIdentifier), startedAt: Date().timeIntervalSince1970)
+        let forwarderPortValue = self.forwarderPort ?? 0
+        let rendezvous = Rendezvous(port: port, bridgePort: bridgePortValue, forwarderPort: forwarderPortValue, pid: Int(ProcessInfo.processInfo.processIdentifier), startedAt: Date().timeIntervalSince1970)
         writeRendezvousAtomic(rendezvous)
 
         await setReady(daemonPort: port, bridgePort: bridgePortValue, attached: false)
         startProjectPolling()
     }
 
-    private func startBridge(daemonPort: Int, apiToken: String) async -> Bool {
+    private func startBridge(daemonPort: Int) async -> Bool {
         guard let nodeURL = locateNode(), let bridgeEntry = locateBridgeEntry() else {
             return false
         }
+        // /review codex P1-4: delete any stale port stamp BEFORE the
+        // spawn so a crashed previous run can't make us publish an old
+        // (potentially attacker-controlled) port.
+        let stampURL = dataDir.appendingPathComponent(".clawdmeter-bridge-port")
+        try? FileManager.default.removeItem(at: stampURL)
+
+        // /review codex P1-2: mint a per-spawn bridge auth token (32-byte
+        // hex). Bridge requires Authorization: Bearer <token> on every
+        // route except /health. Mac AgentControlServer + AppRuntime pass
+        // it when proxying. Closes the same-user-process loophole.
+        let bridgeAuthToken = Self.generateRandomHex32()
+        self.bridgeAuthTokenAtomic.set(bridgeAuthToken)
+
         var env = ProcessInfo.processInfo.environment
         env["OD_DAEMON_PORT"] = String(daemonPort)
         env["OD_DATA_DIR"] = dataDir.path
         env["CLAWDMETER_BRIDGE_PORT"] = "27457"
+        env["CLAWDMETER_BRIDGE_AUTH_TOKEN"] = bridgeAuthToken
         // v2.1 T8: bridge IPC client must use same namespace as the daemon.
         env["OD_SIDECAR_NAMESPACE"] = "clawdmeter"
         // /review I1: same parent-death tracking as the daemon — bridge
@@ -281,6 +342,13 @@ public final class OpenDesignDaemonManager: ObservableObject {
         attachStdoutPipe(bridge, label: "bridge")
         attachStderrPipe(bridge, label: "bridge")
         setProcessGroup(bridge)
+        // /review codex P1-5: bridge termination → mark lifecycle.
+        bridge.terminationHandler = { [weak self] proc in
+            let code = proc.terminationStatus
+            Task { @MainActor [weak self] in
+                self?.handleChildExit(label: "bridge", exitCode: Int(code))
+            }
+        }
         do {
             try bridge.run()
             self.bridgeProcess = bridge
@@ -288,13 +356,13 @@ public final class OpenDesignDaemonManager: ObservableObject {
             logger.error("Failed to spawn bridge: \(error.localizedDescription)")
             return false
         }
-        // The bridge writes its chosen port to .clawdmeter-bridge-port; wait for it.
-        let stampURL = dataDir.appendingPathComponent(".clawdmeter-bridge-port")
+        // Wait for the bridge to stamp its chosen port.
         for _ in 0..<60 {
             if FileManager.default.fileExists(atPath: stampURL.path),
                let portStr = try? String(contentsOf: stampURL, encoding: .utf8),
                let port = Int(portStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
                 self.bridgePort = port
+                self.bridgePortAtomic.set(port)
                 return true
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -303,12 +371,85 @@ public final class OpenDesignDaemonManager: ObservableObject {
         return false
     }
 
+    /// /review codex P1-1: instantiate DesignPortForwarder + publish its port.
+    /// The forwarder accepts iOS connections over Tailscale and tunnels them
+    /// to the loopback daemon. The token validator checks each candidate
+    /// against HKDF(OD_API_TOKEN, currentBearer) so the per-pairing rotation
+    /// in PairingTokenStore actually invalidates leaked tokens.
+    private var designForwarder: DesignPortForwarder?
+    private func startDesignForwarder(daemonPort: Int) async -> Bool {
+        let validator: @Sendable (String) -> Bool = { [weak self] candidate in
+            guard let self else { return false }
+            // Read the latest bearer from the shared PairingTokenStore + the
+            // OD_API_TOKEN from Keychain; derive the expected designToken
+            // and constant-time compare. Reading both happens off MainActor
+            // since the closure runs on the forwarder's queue.
+            let expected = MainActor.assumeIsolated {
+                self.deriveDesignToken(forPairingId: PairingTokenStore.shared.currentToken())
+            }
+            guard let expected, !expected.isEmpty, !candidate.isEmpty else { return false }
+            return Self.constantTimeEquals(expected, candidate)
+        }
+        let forwarder = DesignPortForwarder(daemonPort: daemonPort, bindPort: 21732, tokenValidator: validator)
+        do {
+            try forwarder.start()
+            self.designForwarder = forwarder
+            self.forwarderPort = 21732
+            self.forwarderPortAtomic.set(21732)
+            return true
+        } catch {
+            logger.error("DesignPortForwarder bind failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private nonisolated static func generateRandomHex32() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Constant-time string comparison usable from the forwarder validator
+    /// closure (which runs off MainActor).
+    nonisolated static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
+        let aBytes = Array(a.utf8); let bBytes = Array(b.utf8)
+        if aBytes.count != bBytes.count { return false }
+        var diff: UInt8 = 0
+        for i in 0..<aBytes.count { diff |= aBytes[i] ^ bBytes[i] }
+        return diff == 0
+    }
+
+    /// /review codex P1-5: handle child process exit. Flips lifecycle to
+    /// .crashed so the UI shows an error card and the next ensureRunning()
+    /// can trigger restart-on-crash. Also clears the port atomics so a
+    /// stale port isn't published to iOS via the rendezvous file.
+    private func handleChildExit(label: String, exitCode: Int) {
+        // Only react if we previously thought we were ready — a clean
+        // shutdown (stop() called from app quit) doesn't need to surface
+        // an error to the user.
+        guard lifecycle == .ready else { return }
+        logger.error("\(label, privacy: .public) exited unexpectedly with code \(exitCode)")
+        lifecycle = .crashed
+        lifecycleStatus = "\(label) crashed (exit \(exitCode))"
+        // Tear down both children so a partial state doesn't linger.
+        if label == "daemon" {
+            terminateChild(bridgeProcess); bridgeProcess = nil
+            bridgePort = nil; bridgePortAtomic.set(nil)
+            forwarderPort = nil; forwarderPortAtomic.set(nil)
+            designForwarder?.stop(); designForwarder = nil
+        } else if label == "bridge" {
+            bridgePort = nil; bridgePortAtomic.set(nil)
+        }
+    }
+
     // MARK: - Lock + rendezvous
 
     private struct Rendezvous: Codable {
         let port: Int
-        let apiToken: String
         let bridgePort: Int
+        /// /review codex P1-1: forwarder port (Tailscale-exposed) so
+        /// attached second-instances can publish the right port too.
+        let forwarderPort: Int
         let pid: Int
         let startedAt: TimeInterval
     }
