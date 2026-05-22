@@ -4,6 +4,31 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.7 build 89] - 2026-05-22 — Fix: flush Tahoe titlebar against the top of the window (`fix/titlebar-top-flush`)
+
+Follow-up to v0.22.6. The native title strip was gone, but the Tahoe
+chip was still sitting ~30pt below the top of the window — a visible
+dark band hung above it. Two compounding insets caused this:
+
+### Changed
+
+- **`ClawdmeterMacApp.swift`** — dropped `.windowToolbarStyle(.unifiedCompact(showsTitle: false))`.
+  Even with no `.toolbar { … }` modifier present, that style reserves
+  a thin toolbar band at the top of the window (~28pt), pushing
+  everything down. `.windowStyle(.hiddenTitleBar)` by itself is what
+  we actually want: SwiftUI content extends to y=0 and the macOS
+  traffic lights overlay at their canonical position.
+- **`MacRootView.body`** — removed `.padding(.top, 10)` from the
+  `MacTitlebar` invocation. The 44pt chip frame now starts at y=0
+  and the macOS traffic lights overlay vertically centered against
+  it (lights at y≈14..30, chip glass at y≈7..37).
+
+### Result
+
+- Tab chip (Chat / Usage / Code / Design / Settings) at the top edge
+  of the window, level with the traffic lights.
+- No more empty dark band above the chip.
+
 ## [0.22.6 build 88] - 2026-05-22 — Fix: hide native macOS titlebar so the Tahoe chip is the top (`fix/native-titlebar-hide`)
 
 Cosmetic-but-glaring fix to the dashboard window. The Tahoe titlebar

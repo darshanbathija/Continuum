@@ -91,7 +91,13 @@ struct MacRootView: View {
                     runtime: runtime
                 )
                     .padding(.horizontal, 10)
-                    .padding(.top, 10)
+                    // v0.22.7: flush the titlebar chip against the top of
+                    // the window — previously a 10pt top inset was leaving
+                    // a visible dark band above the chip even with the
+                    // native title bar hidden. The chip now occupies y=0..44
+                    // and the macOS traffic lights overlay vertically
+                    // centered against it.
+                    .padding(.top, 0)
 
                 Group {
                     switch tab {
