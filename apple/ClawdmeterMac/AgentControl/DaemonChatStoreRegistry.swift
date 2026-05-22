@@ -453,6 +453,19 @@ public final class DaemonChatStoreRegistry {
                     return store
                 }
             }
+            // v0.23.2 OpenCode chat — same shape as the agentapi branch
+            // below. No JSONL on disk; messages arrive via the opencode
+            // SSE `/event` stream and `OpencodeSSEAdapter` routes
+            // `message.added` events into this store via
+            // `appendSDKMessages`. The chat-subscribe WS reads
+            // uniformly. The store stays sdkOnly so SDKChatTranscriptMirror
+            // persists messages across idle-eviction.
+            if session.agent == .opencode {
+                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+                store.start()
+                SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
+                return store
+            }
             // v0.9: Gemini agentapi chat — start an sdkOnly store and
             // attach an AntigravityChatIngestor that subscribes to the
             // conversation's SQLite WAL DB. Each step row becomes a

@@ -4,6 +4,25 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.2 build 117] - 2026-05-23 — OpenCode send end-to-end (P1-04) (`feat/opencode-send`)
+
+Sending into an OpenCode session + streaming the reply back now works through the same chat composer that drives Claude / Codex / Antigravity sessions.
+
+### Added
+
+- **`AgentControlServer.sendOpencodePrompt`** — replaces the 501 `opencode_send_not_implemented` stub at line 1313. Looks up the opencode session id via `OpencodeSSEAdapter.opencodeSessionId(for:)`, POSTs the prompt to opencode serve's `/session/<id>/message` endpoint, echoes the user bubble into the SessionChatStore immediately so the composer clears its sending state without waiting on the SSE round-trip.
+- **`OpencodeSSEAdapter.chatStoreAccessor`** — closure injected by `AgentControlServer` on every spawn that maps `Clawdmeter session UUID` → `SessionChatStore`. `handleMessageAdded` now parses opencode's `message.added` payload into a `ChatMessage` (text, tool-call, tool-result content parts all handled) and calls `store.appendSDKMessages([msg])` — the chat-subscribe WS broadcast picks it up and streams to iOS / Mac in real time.
+- **`OpencodeSSEAdapter.opencodeSessionId(for:)`** — convenience accessor wrapping the existing bidirectional map.
+- **`DaemonChatStoreRegistry.createStore` opencode branch** — opencode chat sessions get an sdkOnly `SessionChatStore` + `SDKChatTranscriptMirror` replay, same shape as the agentapi Gemini branch.
+
+### Error surfaces
+
+- `503 opencode_session_not_registered` — `session.created` SSE event hasn't landed yet; iOS retries
+- `503 opencode_server_unreachable` — opencode serve down; supervisor will restart
+- `502 opencode_send_failed` with `upstreamStatus` — opencode returned non-2xx
+
+Bumps `MARKETING_VERSION` 0.23.1 → 0.23.2, `CURRENT_PROJECT_VERSION` 116 → 117.
+
 ## [0.23.1 build 116] - 2026-05-23 — OpenCode setup lives in the Mac app (`feat/opencode-end-to-end`)
 
 Zero-Terminal install + auth flow for OpenCode under Settings → Providers. Bundled binary, embedded interactive terminal sheet, 4-state row that actually does something.
