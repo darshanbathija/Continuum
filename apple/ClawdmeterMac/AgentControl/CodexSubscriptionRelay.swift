@@ -375,6 +375,12 @@ public final class CodexSubscriptionRelay {
         }
         if !exited {
             handle.process.terminate()
+            // Audit P1 fix: reap the child off-main so it doesn't linger
+            // as a zombie. terminate() only sends SIGTERM; without a
+            // matching wait the kernel keeps the PID slot until the
+            // parent reaps it (or exits).
+            let proc = handle.process
+            Task.detached { proc.waitUntilExit() }
             relayLogger.info("Codex relay force-terminated sidecar for session=\(sessionId.uuidString, privacy: .public) after 3s")
         }
         handle.continuation.finish()
@@ -558,10 +564,16 @@ public final class CodexSubscriptionRelay {
                 // process gets reaped on app quit anyway.
                 _ = try? writeLine(to: handle.stdinPipe, ["op": "shutdown"])
                 DispatchQueue.global().asyncAfter(deadline: .now() + 3) { [weak handle] in
-                    if let h = handle, h.process.isRunning { h.process.terminate() }
+                    if let h = handle, h.process.isRunning {
+                        h.process.terminate()
+                        let proc = h.process
+                        Task.detached { proc.waitUntilExit() }
+                    }
                 }
             } else {
                 handle.process.terminate()
+                let proc = handle.process
+                Task.detached { proc.waitUntilExit() }
             }
         }
     }

@@ -51,6 +51,12 @@ public final class AppModel: ObservableObject {
     }
 
     deinit {
+        // Audit P1 fix: invalidate the run-loop-retained tick timer so a
+        // replaced AppModel (e.g. on sign-in switch) doesn't keep firing
+        // refresh callbacks through `[weak self]` against a zombie
+        // instance.
+        clockTimer?.invalidate()
+        clockTimer = nil
         logger.warning("AppModel.deinit \(self.config.id)")
     }
 

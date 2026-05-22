@@ -205,7 +205,12 @@ struct MenuBarGaugeView {
             return fallback
         }
         // Copy so isTemplate/size tweaks don't poison the shared bundle image.
-        let copy = source.copy() as! NSImage
+        // Audit P1 fix: `NSImage.copy()` returns `Any` and may yield a
+        // non-NSImage for proxy-backed images. Fall back to mutating the
+        // shared image when copy doesn't produce an NSImage — better
+        // a slightly-shared instance than a crash on every menu-bar
+        // refresh tick.
+        let copy: NSImage = (source.copy() as? NSImage) ?? source
         copy.size = NSSize(width: size, height: size)
         copy.isTemplate = template
         cache[key] = copy
