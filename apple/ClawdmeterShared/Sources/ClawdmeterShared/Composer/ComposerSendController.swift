@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Combine)
 import Combine
+#endif
 
 /// Composer send-state state machine, shared across every send surface:
 /// Mac Code IDE composer, Mac Chat composer, iOS Chat composer, iOS

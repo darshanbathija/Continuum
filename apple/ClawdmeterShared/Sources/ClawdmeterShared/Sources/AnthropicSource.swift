@@ -1,5 +1,10 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(OSLog)
 import OSLog
+#endif
 
 private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "AnthropicSource")
 

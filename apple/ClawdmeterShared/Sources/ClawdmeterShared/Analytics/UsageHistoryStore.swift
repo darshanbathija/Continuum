@@ -1,6 +1,10 @@
 import Foundation
+#if canImport(Combine)
 import Combine
+#endif
+#if canImport(OSLog)
 import OSLog
+#endif
 
 #if canImport(UIKit) && !os(watchOS)
 import UIKit

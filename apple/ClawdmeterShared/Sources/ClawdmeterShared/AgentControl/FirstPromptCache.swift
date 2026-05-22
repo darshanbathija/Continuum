@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 
 // Now lives in ClawdmeterShared so the unit tests can exercise it
 // (XCTest hits the Shared package; the Mac target is closed to it).
