@@ -3204,13 +3204,16 @@ public final class AgentControlServer {
             return req.codexChatBackend ?? .sdk
         }()
         // Create the session record first (assigns a UUID we can use to
-        // name the chat-cwd).
+        // name the chat-cwd). v0.23 (Chat V2): persist deepResearch on
+        // the session so respawn/restore preserves it (Codex outside-
+        // voice review P1 #6).
         let session = registry.createChat(
             provider: req.provider,
             model: req.model,
             chatCwd: "",  // placeholder; we'll patch it post-cwd-creation
             codexChatBackend: codexBackend,
-            effort: req.effort
+            effort: req.effort,
+            deepResearch: req.deepResearch
         )
         let chatCwd: String
         do {

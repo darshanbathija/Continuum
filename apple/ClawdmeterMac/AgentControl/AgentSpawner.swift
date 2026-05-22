@@ -26,6 +26,7 @@ public enum AgentSpawner {
         autopilot: Bool = false,
         acceptEdits: Bool = false,
         resumeSessionId: String? = nil,
+        deepResearch: Bool = false,
         extraArgs: [String] = []
     ) -> [String]? {
         guard let claude = ShellRunner.locateBinary("claude") else { return nil }
@@ -46,11 +47,39 @@ public enum AgentSpawner {
         } else if acceptEdits {
             argv += ["--permission-mode", "acceptEdits"]
         }
-        if let effort {
+        // v0.23 (Chat V2): Deep Research overrides effort to max
+        // (multi-step search benefits from the deepest reasoning) and
+        // forces the WebSearch/WebFetch tool family on. The system-
+        // prompt file is shipped in the app bundle's Resources at
+        // build time; we load and pass it through `--append-system-prompt`
+        // so the agent follows the [research-step]/[research-step-done]
+        // contract the V2 UI extracts.
+        if deepResearch {
+            // Force max effort. Anything else (including a caller-
+            // supplied effort) downgrades to max for DR.
+            argv += ["--effort", ReasoningEffort.max.claudeFlagValue]
+            argv += ["--allowedTools", "WebSearch,WebFetch,Read,Glob,Grep"]
+            if let promptText = loadDeepResearchPrompt() {
+                argv += ["--append-system-prompt", promptText]
+            }
+        } else if let effort {
             argv += ["--effort", effort.claudeFlagValue]
         }
         argv.append(contentsOf: extraArgs)
         return argv
+    }
+
+    /// Loads the bundled Deep Research system prompt. Lives in the Mac
+    /// app's Resources directory; `Bundle.main.url(forResource:withExtension:)`
+    /// resolves it at runtime. Returns nil when the resource is missing
+    /// — caller falls back to argv without the system prompt addendum
+    /// (research mode still works via the tool-allowance flag, just
+    /// without the structured trace contract).
+    static func loadDeepResearchPrompt() -> String? {
+        guard let url = Bundle.main.url(forResource: "deep-research-prompt", withExtension: "txt") else {
+            return nil
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
     }
 
     /// Build argv for spawning Codex with the given options. Returns nil if
@@ -209,7 +238,8 @@ public enum AgentSpawner {
                 model: session.model,
                 planMode: planMode,
                 effort: session.effort,
-                autopilot: chatAutopilot
+                autopilot: chatAutopilot,
+                deepResearch: session.deepResearch
             ) ?? []
         case (.codex, .chat):
             // SDK backend: caller routes to CodexSubscriptionRelay
