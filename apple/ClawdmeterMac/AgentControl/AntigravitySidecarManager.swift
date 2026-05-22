@@ -68,6 +68,36 @@ public final class AntigravitySidecarManager {
         venvRoot.appendingPathComponent("bin/python", isDirectory: false)
     }
 
+    /// v0.22.27: checks that the `google` namespace package is actually
+    /// installed inside the venv. After `uv pip install google-antigravity`,
+    /// site-packages should contain `google/antigravity/` (namespace
+    /// package — no `__init__.py` at `google/` itself). When the v0.22.20
+    /// bad pin failed install silently, site-packages was left with only
+    /// `_virtualenv.py` + `__pycache__`. This check distinguishes a
+    /// real-installed venv from a shell-only one without spawning Python.
+    ///
+    /// Walks both common Python versions (3.13 today, 3.14 future).
+    /// Returns true if the SDK package directory exists for at least
+    /// one Python version, false otherwise (including when the venv
+    /// itself doesn't exist yet).
+    private func sdkPackageInstalled() -> Bool {
+        let fm = FileManager.default
+        let libRoot = venvRoot.appendingPathComponent("lib", isDirectory: true)
+        guard fm.fileExists(atPath: libRoot.path),
+              let pythonDirs = try? fm.contentsOfDirectory(atPath: libRoot.path) else {
+            return false
+        }
+        for pyDir in pythonDirs where pyDir.hasPrefix("python") {
+            let pkg = libRoot
+                .appendingPathComponent(pyDir, isDirectory: true)
+                .appendingPathComponent("site-packages/google/antigravity", isDirectory: true)
+            if fm.fileExists(atPath: pkg.path) {
+                return true
+            }
+        }
+        return false
+    }
+
     // MARK: - Public API
 
     /// Attempts to enable SDK mode. Runs full uv venv + pip install
@@ -104,8 +134,22 @@ public final class AntigravitySidecarManager {
             // a fresh `uv venv` actually runs instead of being
             // skipped by the `!fileExists(venvPython)` short-circuit
             // doing nothing while the old shell sits there.
+            //
+            // v0.22.27: also detect "venv exists + bin/python exists
+            // BUT google package was never installed" — this is what
+            // happens when a previous app launched with the v0.22.20
+            // bad pin (`~=0.0.3`) created the venv but pip install
+            // silently failed, leaving site-packages with only
+            // `_virtualenv.py`. Today's app with the good pin would
+            // skip reinstall because bin/python is present. Detect by
+            // looking for the actual `google/` namespace dir in
+            // site-packages — that only exists if pip install
+            // succeeded against a real version.
             if FileManager.default.fileExists(atPath: venvRoot.path)
-                && !FileManager.default.fileExists(atPath: venvPython.path) {
+                && (!FileManager.default.fileExists(atPath: venvPython.path)
+                    || !sdkPackageInstalled()) {
+                let path = self.venvRoot.path
+                logger.info("Antigravity SDK: nuking stale venv at \(path, privacy: .public) so fresh provisioning can run.")
                 try? FileManager.default.removeItem(at: venvRoot)
             }
             if !FileManager.default.fileExists(atPath: venvPython.path) {
