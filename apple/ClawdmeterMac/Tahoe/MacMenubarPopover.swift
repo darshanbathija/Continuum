@@ -234,7 +234,7 @@ public struct MacMenubarPopover: View {
             }
         }
         .padding(14)
-        .frame(width: 360)
+        .frame(width: 388)
     }
 
     /// v0.22.8: extracted into its own builder so the per-button state
@@ -259,11 +259,15 @@ public struct MacMenubarPopover: View {
             tx.disablesAnimations = true
             withTransaction(tx) { selected = p }
         } label: {
-            HStack(spacing: 6) {
-                TahoeProviderGlyph(provider: p, size: 18)
+            HStack(spacing: 4) {
+                TahoeProviderGlyph(provider: p, size: 16)
                 Text(p.displayName)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .allowsTightening(true)
+                    .layoutPriority(1)
             }
-            .font(TahoeFont.body(12, weight: active ? .bold : .semibold))
+            .font(TahoeFont.body(11, weight: active ? .bold : .semibold))
             .foregroundStyle(active ? t.fg : t.fg3)
             .frame(maxWidth: .infinity, minHeight: 30)
             .contentShape(Capsule(style: .continuous))
