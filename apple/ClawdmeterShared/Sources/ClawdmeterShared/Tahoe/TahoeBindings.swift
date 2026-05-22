@@ -21,6 +21,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
     public var modelName: String           // "Sonnet 4.5" / "gpt-5" / "antigravity-pro"
     public var autoReviveOn: Bool
     public var autoReviveAgo: String       // "4h ago" / "" if never fired
+    public var supportsAutoRevive: Bool
     public var hasWeekly: Bool
     /// v0.22.18: true when this row's numbers came from a fallback /
     /// cached source rather than a live API poll. Today the only path
@@ -39,6 +40,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         modelName: String = "",
         autoReviveOn: Bool = false,
         autoReviveAgo: String = "",
+        supportsAutoRevive: Bool = true,
         hasWeekly: Bool = true,
         stale: Bool = false
     ) {
@@ -49,6 +51,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         self.modelName = modelName
         self.autoReviveOn = autoReviveOn
         self.autoReviveAgo = autoReviveAgo
+        self.supportsAutoRevive = supportsAutoRevive
         self.hasWeekly = hasWeekly
         self.stale = stale
     }
@@ -72,6 +75,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
                 }
             }(),
             autoReviveOn: d.reviveOn, autoReviveAgo: d.reviveAgo,
+            supportsAutoRevive: true,
             hasWeekly: true
         )
     }

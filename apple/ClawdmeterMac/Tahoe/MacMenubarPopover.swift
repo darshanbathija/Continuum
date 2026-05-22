@@ -122,8 +122,9 @@ public struct MacMenubarPopover: View {
                 sessionResetIn: "—",
                 weeklyResetIn: "—",
                 modelName: modelName,
-                autoReviveOn: model.autoReviver.isEnabled,
+                autoReviveOn: model.config.supportsAutoRevive ? model.autoReviver.isEnabled : false,
                 autoReviveAgo: "—",
+                supportsAutoRevive: model.config.supportsAutoRevive,
                 hasWeekly: model.config.hasWeeklyWindow
             )
         }
@@ -135,8 +136,9 @@ public struct MacMenubarPopover: View {
             sessionResetIn: sessionResetIn,
             weeklyResetIn:  weeklyResetIn,
             modelName:      modelName,
-            autoReviveOn:   model.autoReviver.isEnabled,
+            autoReviveOn:   model.config.supportsAutoRevive ? model.autoReviver.isEnabled : false,
             autoReviveAgo:  "—",
+            supportsAutoRevive: model.config.supportsAutoRevive,
             hasWeekly:      model.config.hasWeeklyWindow,
             // v0.22.18: surface the source's fallback/cached state.
             // CodexSource sets status = .unknown when it had to read

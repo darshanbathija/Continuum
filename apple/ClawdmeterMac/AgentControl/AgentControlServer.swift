@@ -1918,6 +1918,116 @@ public final class AgentControlServer {
         }
     }
 
+    private func handleGetDiffFile(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let gitBin = ShellRunner.locateBinary("git") else {
+            sendResponse(.internalError, on: connection); return
+        }
+        guard let relPath = diffRelativePath(sessionId: sessionId, requestPath: request.path),
+              isSafeGitRelativePath(relPath) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let context = diffContext(from: request.path)
+        do {
+            let numstat = try await ShellRunner.shared.run(
+                executable: gitBin,
+                arguments: ["diff", "--numstat", "HEAD", "--", relPath],
+                cwd: session.effectiveCwd,
+                timeout: 10
+            )
+            let counts = parseDiffCounts(numstat.stdoutString)
+            let diff = try await ShellRunner.shared.run(
+                executable: gitBin,
+                arguments: ["diff", "--unified=\(context)", "HEAD", "--", relPath],
+                cwd: session.effectiveCwd,
+                timeout: 10
+            )
+            let file = ClawdmeterShared.GitDiffFile(
+                path: relPath,
+                status: "M",
+                additions: counts.additions,
+                deletions: counts.deletions,
+                hunks: parseUnifiedDiffHunks(diff.stdoutString),
+                truncated: false
+            )
+            let encoder = JSONEncoder()
+            if let body = try? encoder.encode(file) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
+            serverLogger.error("git diff file failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func diffRelativePath(sessionId: String, requestPath: String) -> String? {
+        let pathOnly = requestPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? requestPath
+        let prefix = "/sessions/\(sessionId)/diff/"
+        guard pathOnly.hasPrefix(prefix) else { return nil }
+        let encoded = String(pathOnly.dropFirst(prefix.count))
+        return encoded.removingPercentEncoding
+    }
+
+    private func isSafeGitRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/") else { return false }
+        guard !path.contains("\0"), !path.contains("\\") else { return false }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        return parts.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+
+    private func diffContext(from requestPath: String) -> Int {
+        guard let comps = URLComponents(string: requestPath),
+              let raw = comps.queryItems?.first(where: { $0.name == "context" })?.value,
+              let value = Int(raw) else {
+            return 80
+        }
+        return min(max(value, 0), 500)
+    }
+
+    private func parseDiffCounts(_ stdout: String) -> (additions: Int, deletions: Int) {
+        guard let line = stdout.split(separator: "\n").first else { return (0, 0) }
+        let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+        guard parts.count >= 2 else { return (0, 0) }
+        return (Int(parts[0]) ?? 0, Int(parts[1]) ?? 0)
+    }
+
+    private func parseUnifiedDiffHunks(_ stdout: String) -> [ClawdmeterShared.GitDiffHunk] {
+        var hunks: [ClawdmeterShared.GitDiffHunk] = []
+        var currentHeader: String?
+        var currentLines: [ClawdmeterShared.GitDiffHunk.Line] = []
+
+        func flush() {
+            guard let header = currentHeader else { return }
+            hunks.append(ClawdmeterShared.GitDiffHunk(header: header, lines: currentLines))
+            currentHeader = nil
+            currentLines = []
+        }
+
+        for rawLine in stdout.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if rawLine.hasPrefix("@@") {
+                flush()
+                currentHeader = rawLine
+                continue
+            }
+            guard currentHeader != nil else { continue }
+            if rawLine.hasPrefix("+") {
+                currentLines.append(.init(kind: .addition, text: String(rawLine.dropFirst())))
+            } else if rawLine.hasPrefix("-") {
+                currentLines.append(.init(kind: .deletion, text: String(rawLine.dropFirst())))
+            } else if rawLine.hasPrefix(" ") {
+                currentLines.append(.init(kind: .context, text: String(rawLine.dropFirst())))
+            } else {
+                currentLines.append(.init(kind: .context, text: rawLine))
+            }
+        }
+        flush()
+        return hunks
+    }
+
     private func handleGetPR(sessionId: String, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId), registry.session(id: uuid) != nil else {
             sendResponse(.notFound, on: connection); return
@@ -2177,6 +2287,29 @@ public final class AgentControlServer {
             registry.removeTerminalPane(sessionId: uuid, paneRefId: pane.id)
             sendJSON(["ok": true], on: connection)
         } catch {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleRenameTerminal(sessionId: String, paneId: String, request: HTTPRequest, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: sessionId),
+              let paneUUID = UUID(uuidString: paneId),
+              registry.session(id: uuid) != nil else {
+            sendResponse(.notFound, on: connection); return
+        }
+        struct RenameTerminalRequest: Codable { let title: String? }
+        guard let req = try? JSONDecoder().decode(RenameTerminalRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let title = (req.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let pane = registry.renameTerminalPane(sessionId: uuid, paneRefId: paneUUID, title: title) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(pane) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
             sendResponse(.internalError, on: connection)
         }
     }
@@ -3075,6 +3208,11 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    private func handleRefreshChatProviders(connection: NWConnection) async {
+        await ChatProviderProbe.shared.invalidate()
+        await handleGetChatProviders(connection: connection)
     }
 
     /// Frontier endpoints stub. Returns 501 in v0.8 — the routes exist
