@@ -11,9 +11,9 @@ import ClawdmeterShared
 @MainActor
 extension AppRuntime {
     /// Compose live bindings from the three per-provider AppModels. Each
-    /// `.usage` is optional (poller hasn't returned yet); we fall back to a
-    /// demo row in that case so the layout doesn't collapse with empty
-    /// strings.
+    /// `.usage` is optional (poller hasn't returned yet). Production rows
+    /// must not fall back to the SwiftUI preview fixture because those demo
+    /// values look like real quota numbers in the live Usage tab.
     var tahoeLive: TahoeLiveBindings {
         TahoeLiveBindings(
             claude: tahoeRow(model: claudeModel, provider: .claude),
@@ -23,12 +23,25 @@ extension AppRuntime {
     }
 
     private func tahoeRow(model: AppModel, provider: TahoeProvider) -> TahoeLiveRow {
-        guard let usage = model.usage else { return .demo(provider) }
+        let fallbackModelName = model.config.reviveModel.isEmpty ? provider.displayName : model.config.reviveModel
+        guard let usage = model.usage else {
+            return TahoeLiveRow(
+                sessionPercent: 0,
+                weeklyPercent: model.config.hasWeeklyWindow ? 0 : -1,
+                sessionResetIn: "\u{2014}",
+                weeklyResetIn: model.config.hasWeeklyWindow ? "\u{2014}" : "",
+                modelName: fallbackModelName,
+                autoReviveOn: false,
+                autoReviveAgo: "",
+                supportsAutoRevive: model.config.supportsAutoRevive,
+                hasWeekly: model.config.hasWeeklyWindow
+            )
+        }
         let modelName: String = {
             if provider == .gemini, let m = usage.antigravityModel, !m.isEmpty {
                 return m
             }
-            return model.config.reviveModel.isEmpty ? provider.displayName : model.config.reviveModel
+            return fallbackModelName
         }()
         return TahoeLiveRow(
             sessionPercent: Double(usage.sessionPct),
@@ -41,6 +54,7 @@ extension AppRuntime {
                 ? TahoeFmt.ago(from: nil) // AutoReviver doesn't currently surface lastFiredAt;
                                           // when added, plumb here.
                 : "",
+            supportsAutoRevive: model.config.supportsAutoRevive,
             hasWeekly: model.config.hasWeeklyWindow
         )
     }

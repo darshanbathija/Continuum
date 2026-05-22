@@ -4,6 +4,18 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.18 build 99] - 2026-05-22 — Fix: Antigravity usage tab no longer shows demo quota data (`darshanbathija/gemini-usage`)
+
+Antigravity usage now renders honest live-state data instead of borrowing SwiftUI preview fixture values.
+
+### Fixed
+
+- **Usage tab Antigravity quota state** — production Tahoe usage rows no longer fall back to demo percentages when a provider has not returned live usage yet, so the Usage tab stops showing fake Antigravity 5h/weekly values.
+- **Antigravity weekly and auto-revive UI** — weekly bars remain hidden for providers without a real weekly bucket, and auto-revive controls now only render when the provider actually supports revive.
+- **iOS usage rows** — iOS Tahoe bindings use the same honest empty/live behavior instead of demo data when snapshots are missing.
+
+Bumps `MARKETING_VERSION` 0.22.17 → 0.22.18, `CURRENT_PROJECT_VERSION` 98 → 99.
+
 ## [0.22.15 build 96] - 2026-05-22 — Fix: Linux CI can build shared crypto code (`fix/linux-swift-crypto`)
 
 Linux CI can now compile the shared package again after the Design and Watch bridge code started using SHA-256 helpers.

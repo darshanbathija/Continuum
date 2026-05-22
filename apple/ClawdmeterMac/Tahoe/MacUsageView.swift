@@ -131,23 +131,25 @@ private struct ProviderColumn: View {
 
                 Spacer(minLength: 12)
 
-                // Auto-revive card
-                TahoeGlass(radius: 12, tone: .chip) {
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Keep 5h timer ticking")
-                                .font(TahoeFont.body(12, weight: .semibold))
-                                .foregroundStyle(t.fg)
-                            Text("Auto-revive · " + (autoRevive ? "last fired \(row.autoReviveAgo)" : "off"))
-                                .font(TahoeFont.body(10.5))
-                                .foregroundStyle(t.fg3)
+                if row.supportsAutoRevive {
+                    // Auto-revive card
+                    TahoeGlass(radius: 12, tone: .chip) {
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Keep 5h timer ticking")
+                                    .font(TahoeFont.body(12, weight: .semibold))
+                                    .foregroundStyle(t.fg)
+                                Text("Auto-revive · " + (autoRevive ? "last fired \(row.autoReviveAgo)" : "off"))
+                                    .font(TahoeFont.body(10.5))
+                                    .foregroundStyle(t.fg3)
+                            }
+                            Spacer()
+                            TahoeToggleView(on: $autoRevive)
                         }
-                        Spacer()
-                        TahoeToggleView(on: $autoRevive)
+                        .padding(.horizontal, 12).padding(.vertical, 10)
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .padding(.top, 0)
                 }
-                .padding(.top, 0)
             }
             .padding(22)
             .frame(maxWidth: .infinity, minHeight: 380, alignment: .topLeading)

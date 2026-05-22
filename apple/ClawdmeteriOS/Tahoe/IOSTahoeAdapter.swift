@@ -159,7 +159,19 @@ extension UsageModel {
     }
 
     private func row(usage: UsageData?, provider: TahoeProvider, hasWeekly: Bool, modelFallback: String) -> TahoeLiveRow {
-        guard let usage else { return .demo(provider) }
+        guard let usage else {
+            return TahoeLiveRow(
+                sessionPercent: 0,
+                weeklyPercent: hasWeekly ? 0 : -1,
+                sessionResetIn: "\u{2014}",
+                weeklyResetIn: hasWeekly ? "\u{2014}" : "",
+                modelName: modelFallback,
+                autoReviveOn: false,
+                autoReviveAgo: "",
+                supportsAutoRevive: false,
+                hasWeekly: hasWeekly
+            )
+        }
         let modelName: String = {
             if provider == .gemini, let m = usage.antigravityModel, !m.isEmpty { return m }
             return modelFallback
@@ -172,6 +184,7 @@ extension UsageModel {
             modelName: modelName,
             autoReviveOn: false, // iOS doesn't surface AutoReviver state today
             autoReviveAgo: "",
+            supportsAutoRevive: false,
             hasWeekly: hasWeekly
         )
     }
