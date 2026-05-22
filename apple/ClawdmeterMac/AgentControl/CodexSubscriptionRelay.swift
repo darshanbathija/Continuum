@@ -433,8 +433,21 @@ public final class CodexSubscriptionRelay {
         }
         var withNewline = data
         withNewline.append(0x0a)
-        let preview = String(data: data, encoding: .utf8) ?? "<binary>"
-        relayLogger.info("Codex relay stdin write: \(preview, privacy: .public)")
+        // Audit P0 fix: never log full prompt / workingDirectory / output
+        // text at `.public`. Prompts routinely contain secrets, tokens,
+        // and PII; OSLog `.public` makes them readable by anyone with
+        // Console.app or sysdiagnose access. Build a redacted summary
+        // (op + thread id + lengths + cwd basename) for the public log
+        // and stash the full payload under `.private` so a developer
+        // who explicitly enables private resolution still gets it.
+        let op = (payload["op"] as? String) ?? "?"
+        let threadId = (payload["threadId"] as? String) ?? "(new)"
+        let promptLen = (payload["prompt"] as? String)?.utf8.count ?? 0
+        let cwdBasename = ((payload["workingDirectory"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent }) ?? "—"
+        let fullPreview = String(data: data, encoding: .utf8) ?? "<binary>"
+        relayLogger.info(
+            "Codex relay stdin: op=\(op, privacy: .public) thread=\(threadId, privacy: .public) cwd=\(cwdBasename, privacy: .public) promptLen=\(promptLen, privacy: .public) full=\(fullPreview, privacy: .private)"
+        )
         try stdin.fileHandleForWriting.write(contentsOf: withNewline)
     }
 
@@ -460,7 +473,12 @@ public final class CodexSubscriptionRelay {
                 buffer.removeSubrange(buffer.startIndex...newlineIdx)
                 guard !lineBytes.isEmpty else { continue }
                 let linePreview = String(data: lineBytes.prefix(200), encoding: .utf8) ?? "<binary>"
-                relayLogger.info("Codex relay stdout line session=\(sessionId.uuidString, privacy: .public): \(linePreview, privacy: .public)")
+                // Audit P0 fix: stdout from the SDK frequently includes
+                // model output / tool-call payloads. Log only length +
+                // a short prefix at .public; full text stays .private.
+                relayLogger.info(
+                    "Codex relay stdout session=\(sessionId.uuidString, privacy: .public) bytes=\(lineBytes.count, privacy: .public) preview=\(linePreview, privacy: .private)"
+                )
                 guard let json = try? JSONSerialization.jsonObject(with: lineBytes) as? [String: Any] else {
                     relayLogger.debug("Codex relay session=\(sessionId.uuidString, privacy: .public): unparseable line, len=\(lineBytes.count)")
                     continue
@@ -497,7 +515,11 @@ public final class CodexSubscriptionRelay {
                 buffer.removeSubrange(buffer.startIndex...newlineIdx)
                 guard !lineBytes.isEmpty else { continue }
                 let line = String(data: lineBytes, encoding: .utf8) ?? "<non-utf8 \(lineBytes.count) bytes>"
-                relayLogger.info("Codex relay stderr session=\(sessionId.uuidString, privacy: .public): \(line, privacy: .public)")
+                // Audit P0 fix: stderr can include auth errors / paths /
+                // tokens. Length + private payload only.
+                relayLogger.info(
+                    "Codex relay stderr session=\(sessionId.uuidString, privacy: .public) bytes=\(lineBytes.count, privacy: .public) line=\(line, privacy: .private)"
+                )
             }
             _ = handle
         }

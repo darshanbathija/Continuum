@@ -87,7 +87,15 @@ public final class DaemonChatStoreRegistry {
     }
 
     deinit {
-        sweepTask?.cancel()
+        // Audit P2 fix: `deinit` is implicitly non-isolated and the
+        // class is `@MainActor`-isolated. Capture the task ref into a
+        // local non-isolated copy so Swift 6 strict-concurrency doesn't
+        // complain about accessing actor-isolated state from a non-
+        // isolated context. `Task.cancel()` is itself thread-safe.
+        let sweep = sweepTask
+        sweep?.cancel()
+        let warmup = warmupTask
+        warmup?.cancel()
     }
 
     // MARK: - Public API
@@ -141,43 +149,31 @@ public final class DaemonChatStoreRegistry {
         // (switchTailedFile) — don't construct a fresh store. A fresh
         // store invalidates the Mac UI's @ObservedObject reference and
         // the chat thread freezes on the previous turn's snapshot.
-        if let entry = entries[session.id],
-           session.kind == .chat {
-            let desiredURL: URL?
-            if session.agent == .codex, session.codexChatBackend == .cli {
-                // F1: bind to THIS session's rollout by matching
-                // session_meta.cwd against effectiveCwd, gated by
-                // session.createdAt so prior rollouts are excluded.
-                // Falls back to nil (no swap) when no matching rollout
-                // exists yet, instead of grabbing an unrelated one.
-                desiredURL = Self.newestCodexJSONLMatching(
-                    cwd: session.effectiveCwd,
-                    after: session.createdAt
-                )
-            } else if session.agent == .claude {
-                desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
-            } else {
-                desiredURL = nil
-            }
+        //
+        // Audit P1 fix: previously this branch was gated on
+        // `session.kind == .chat`. That left .code (Codex plan-mode)
+        // sessions stuck on their pre-approve rollout file after the
+        // user clicked "Approve Plan" — the spawned execution JSONL is
+        // a brand-new file and the registry's cache hit returned the
+        // stale store. Drop the kind gate and resolve the desired URL
+        // via `resolveURL` (which already knows the per-agent rules
+        // and lineage tracking from SessionFileResolver) so .code
+        // sessions get the file-swap they need too.
+        if let entry = entries[session.id] {
+            let desiredURL: URL? = resolveURL(session.id, session)
             if let desired = desiredURL, entry.store.currentFileURL != desired {
-                // F1 follow-up: if the existing entry is an sdkOnly
-                // fallback (e.g. Codex CLI chat created before its first
-                // rollout existed), switchTailedFile is a no-op. Drop
-                // the entry and let createStore rebuild — this is the
-                // one place where @ObservedObject invalidation is
-                // acceptable because the user hasn't started interacting
-                // with the chat yet (no rollout = no turns).
                 if entry.store.isSDKOnly {
+                    // sdkOnly fallback: drop and let createStore() rebuild
+                    // (acceptable invalidation — user hasn't interacted
+                    // with the chat yet since there were no turns).
                     entry.store.stop()
                     entries.removeValue(forKey: session.id)
-                    // Fall through to the "no entry" path which calls
-                    // createStore — which now finds the matching rollout.
                 } else {
                     entry.store.switchTailedFile(to: desired)
                     var refreshed = entry
                     refreshed.lastTouchedAt = Date()
                     entries[session.id] = refreshed
-                    registryLogger.info("snapshot-cache file-swap session=\(session.id.uuidString, privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
+                    registryLogger.info("snapshot-cache file-swap session=\(session.id.uuidString, privacy: .public) kind=\(String(describing: session.kind), privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
                     return entry.store
                 }
             }
@@ -659,6 +655,10 @@ public final class DaemonChatStoreRegistry {
                 for url in recents {
                     _ = self.snapshotStore(forJSONLPath: url)
                 }
+                // Audit P2 fix: clear the slot so a later force-rewarm
+                // (e.g. after the user adds a new repo) can run instead
+                // of short-circuiting on the lingering completed task.
+                self.warmupTask = nil
                 registryLogger.info("warmup complete: \(recents.count) JSONLs preloaded")
             }
         }

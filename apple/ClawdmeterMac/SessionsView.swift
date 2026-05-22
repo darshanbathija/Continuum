@@ -359,6 +359,19 @@ public final class SessionsModel: ObservableObject {
         }
         if let existing = chatStores[session.id] {
             touchLRU(session.id)
+            // Audit P1 fix: when the daemon spawns a fresh post-approve
+            // rollout (Codex `approve-plan` writes a new JSONL), the
+            // cached store keeps tailing the dead plan-mode file unless
+            // we swap it in place. Compare the cached URL against the
+            // currently-resolved one and call switchTailedFile when
+            // they diverge — without this the Mac chat freezes on the
+            // plan and the user has to relaunch the app to see live
+            // execution turns.
+            let resolved = forcedChatStoreURLs[session.id]
+                ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.effectiveCwd)
+            if let resolved, existing.currentFileURL != resolved {
+                existing.switchTailedFile(to: resolved)
+            }
             return existing
         }
         let url: URL? = forcedChatStoreURLs[session.id]
