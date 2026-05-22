@@ -839,14 +839,22 @@ private struct RecentRow: View {
     var body: some View {
         Button(action: restore) {
             HStack(alignment: .top, spacing: 8) {
+                // v0.22.14: lock the glyph cell to a fixed 22pt square
+                // so the "live" green outline doesn't push the icon out
+                // and offset the row's label. Previously the stroke
+                // used `.padding(-2)` which extended the ZStack's
+                // natural size to 22pt for live rows but left non-live
+                // rows at 18pt — rows with different sizes broke the
+                // vertical alignment in the sidebar.
                 ZStack {
                     TahoeProviderGlyph(provider: recent.provider, size: 18)
                     if recent.live {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0), lineWidth: 1.5)
-                            .padding(-2)
+                            .frame(width: 22, height: 22)
                     }
                 }
+                .frame(width: 22, height: 22)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(recent.title)
                         .font(TahoeFont.body(11.5))
@@ -1688,7 +1696,14 @@ private struct ReviewPane: View {
             HStack(spacing: 4) {
                 ForEach(visibleTabs, id: \.0) { tb in
                     let active = tab == tb.0
-                    Button { tab = tb.0 } label: {
+                    Button {
+                        // v0.22.14: animation-disabling transaction so
+                        // the active-pill swap is instant. Without it
+                        // SwiftUI's default animation on the @Binding
+                        // change made the tab feel laggy.
+                        var tx = Transaction(); tx.disablesAnimations = true
+                        withTransaction(tx) { tab = tb.0 }
+                    } label: {
                         HStack(spacing: 5) {
                             TahoeIcon(tb.2, size: 12)
                             Text(tb.1)
@@ -1697,6 +1712,11 @@ private struct ReviewPane: View {
                         .foregroundStyle(active ? t.fg : t.fg3)
                         .padding(.horizontal, 0)
                         .frame(maxWidth: .infinity, minHeight: 30)
+                        // v0.22.14: explicit hit shape so the whole
+                        // pill is tappable. Without this, taps fell
+                        // through the spacing between the icon and
+                        // label.
+                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .background {
                             if active {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)

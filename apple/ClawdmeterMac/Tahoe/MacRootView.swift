@@ -98,6 +98,17 @@ struct MacRootView: View {
                     // and the macOS traffic lights overlay vertically
                     // centered against it.
                     .padding(.top, 0)
+                    // v0.22.14: even with .windowStyle(.hiddenTitleBar) +
+                    // padding(.top, 0), AppKit still reserves a ~28pt
+                    // titlebar-region safe-area inset by default — which
+                    // showed as a visible dark band above the chip. The
+                    // user reported "move the top row to the entire
+                    // top (same level as the red/yellow/green buttons)".
+                    // `.ignoresSafeArea(edges: .top)` on the chip lets
+                    // it draw into the reserved titlebar region so its
+                    // vertical center aligns with the macOS traffic
+                    // lights.
+                    .ignoresSafeArea(edges: .top)
 
                 Group {
                     switch tab {
