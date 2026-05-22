@@ -2091,11 +2091,12 @@ private struct ReviewPane: View {
             .id(agentSession.id) // recreate on session swap
         } else if isDemo {
             ReviewTerm()
-        } else if previewTranscript != nil {
-            // v0.22.31: JSONL preview terminal — no live tmux to wire,
-            // so explain rather than say "unavailable".
-            placeholder(title: "Terminal — preview mode",
-                        body: "This is a read-only transcript from disk. Open the live session to see the terminal pane.")
+        } else if let transcript = previewTranscript {
+            // v0.22.33: JSONL preview — there's no live tmux to attach
+            // to, but the rollout has every Bash/shell tool call + its
+            // output stored. Replay them as a terminal-shaped scroll
+            // so the user sees the agent's actual command history.
+            JsonlTermTab(transcript: transcript)
         } else {
             placeholder(title: "Terminal unavailable",
                         body: "Open a session to see live agent output.")
@@ -2373,6 +2374,135 @@ private struct JsonlPRTab: View {
                     TahoeHair()
                 }
             }
+        }
+    }
+}
+
+/// v0.22.33: Term tab content for JSONL preview mode. There's no live
+/// tmux to attach to in preview, but the transcript records every
+/// shell command the agent ran (Bash / shell / exec tool calls) along
+/// with the output. Render them as a terminal-shaped scroll: prompt
+/// + command + output, monospaced, chronological. Better than the
+/// previous "preview mode — open the live session" placeholder which
+/// left users staring at an empty panel.
+private struct JsonlTermTab: View {
+    @Environment(\.tahoe) private var t
+    var transcript: [ChatMessage]
+
+    /// Pair each shell tool call with its result. Walks the
+    /// chronological transcript and joins consecutive toolCall +
+    /// toolResult entries where the call's title looks shell-shaped
+    /// (Bash / shell / exec / pwsh / zsh / sh).
+    private struct ShellEntry: Identifiable {
+        let id: String
+        let command: String
+        let output: String
+        let isError: Bool
+    }
+
+    private var entries: [ShellEntry] {
+        let shellTools: Set<String> = ["bash", "shell", "exec", "sh", "zsh", "pwsh", "run", "execute"]
+        var result: [ShellEntry] = []
+        // Walk transcript pairing toolCall→next toolResult of any shell-ish tool.
+        var lastCallIndex: Int? = nil
+        for (idx, msg) in transcript.enumerated() {
+            if msg.kind == .toolCall, shellTools.contains(msg.title.lowercased()) {
+                lastCallIndex = idx
+            } else if msg.kind == .toolResult, let i = lastCallIndex {
+                let call = transcript[i]
+                let cleaned = Self.stripNoise(msg.body)
+                result.append(ShellEntry(
+                    id: msg.id,
+                    command: (call.detail?.isEmpty == false ? call.detail! : call.body)
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                    output: cleaned,
+                    isError: msg.isError
+                ))
+                lastCallIndex = nil
+            }
+        }
+        return result
+    }
+
+    /// Strip transcript boilerplate (Chunk ID / Wall time / Process
+    /// exited / Original token count / Output:) so the terminal view
+    /// shows only the actual stdout/stderr the command produced.
+    /// Mirrors `JsonlPreviewMsg.cleanedBody` so the two views stay in
+    /// sync.
+    private static func stripNoise(_ raw: String) -> String {
+        let prefixes = ["Chunk ID:", "Wall time:", "Process exited", "Original token count:", "Output:", "Total output lines:"]
+        let kept = raw.split(separator: "\n", omittingEmptySubsequences: false).filter { line in
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return false }
+            for marker in prefixes where trimmed.hasPrefix(marker) { return false }
+            return true
+        }
+        return kept.joined(separator: "\n")
+    }
+
+    var body: some View {
+        let list = entries
+        if list.isEmpty {
+            VStack(alignment: .center, spacing: 8) {
+                TahoeIcon("terminal", size: 22).foregroundStyle(t.fg4)
+                Text("No shell activity")
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Text("This transcript doesn't include any Bash / shell tool calls.")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 40)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("REPLAY · \(list.count) COMMAND\(list.count == 1 ? "" : "S")")
+                        .font(TahoeFont.body(11, weight: .bold))
+                        .tracking(0.5)
+                        .foregroundStyle(t.fg3)
+                    Spacer()
+                }
+                .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 8)
+
+                ForEach(list) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("$")
+                                .font(TahoeFont.mono(11.5, weight: .bold))
+                                .foregroundStyle(t.accent)
+                            Text(entry.command)
+                                .font(TahoeFont.mono(11.5, weight: .semibold))
+                                .foregroundStyle(t.fg)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if !entry.output.isEmpty {
+                            Text(entry.output)
+                                .font(TahoeFont.mono(11))
+                                .foregroundStyle(entry.isError ? .red : t.fg2)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.leading, 12)
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    TahoeHair()
+                }
+            }
+            // Subtle terminal-y backdrop so the prompts read as a
+            // shell session rather than a regular list.
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(t.dark
+                          ? Color(.sRGB, white: 0, opacity: 0.18)
+                          : Color(.sRGB, white: 0.96, opacity: 0.6))
+            }
+            .padding(.horizontal, 6).padding(.vertical, 6)
         }
     }
 }
