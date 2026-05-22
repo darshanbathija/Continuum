@@ -435,6 +435,15 @@ private struct Sidebar: View {
     @AppStorage("clawdmeter.codeIDE.filter.providerGemini") private var providerGeminiEnabled: Bool = true
     @AppStorage("clawdmeter.codeIDE.filter.providerOpenCode") private var providerOpenCodeEnabled: Bool = true
 
+    /// v0.22.19: free-text query the user types in the Search field at
+    /// the top of the sidebar. ⌘K from anywhere flips to the Code tab
+    /// and focuses this field (see `.clawdmeterFocusCodeSearch` in
+    /// ClawdmeterMacApp). Filters projects + sessions case-insensitively
+    /// — a repo stays in the list if its name OR any of its sessions'
+    /// titles OR any of its recent-jsonl entries' titles match.
+    @State private var searchQuery: String = ""
+    @FocusState private var searchFocused: Bool
+
     private var statusFilter: StatusFilter {
         StatusFilter(rawValue: statusFilterRaw) ?? .all
     }
@@ -490,6 +499,19 @@ private struct Sidebar: View {
             case .done: return s == .done
             }
         }
+        // v0.22.19: case-insensitive substring query applied to each
+        // repo's name, its sessions' titles, and its recents' titles.
+        // When the query is empty, every repo passes (back-compat).
+        let trimmedQuery = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryActive = !trimmedQuery.isEmpty
+        let needle = trimmedQuery.lowercased()
+        func matchesQuery(_ repo: TahoeCodeRepo, sessions: [TahoeCodeSession]) -> Bool {
+            if !queryActive { return true }
+            if repo.name.lowercased().contains(needle) { return true }
+            if sessions.contains(where: { $0.title.lowercased().contains(needle) }) { return true }
+            if repo.recents.contains(where: { $0.title.lowercased().contains(needle) }) { return true }
+            return false
+        }
         let processed: [TahoeCodeRepo] = repos.map { repo in
             let kept = repo.sessions.filter { s in
                 providerAllowed(s.agent) && statusAllowed(s.status)
@@ -505,7 +527,7 @@ private struct Sidebar: View {
         }
         // Drop repos that now have neither sessions nor recents.
         let nonEmpty = processed.filter {
-            !$0.sessions.isEmpty || !$0.recents.isEmpty
+            (!$0.sessions.isEmpty || !$0.recents.isEmpty) && matchesQuery($0, sessions: $0.sessions)
         }
         switch sortKey {
         case .lastActive:
@@ -521,11 +543,30 @@ private struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // search
+            // v0.22.19: real TextField (was a static `Text("Search…")`
+            // label). Filters repo + session + recent titles. ⌘K
+            // focuses it via the .clawdmeterFocusCodeSearch
+            // notification fired from the View menu's "Search Code"
+            // command (wired in ClawdmeterMacApp).
             HStack(spacing: 8) {
                 TahoeIcon("search", size: 13).foregroundStyle(t.fg3)
-                Text("Search\u{2026}").font(TahoeFont.body(12.5)).foregroundStyle(t.fg3)
-                Spacer()
+                TextField("Search\u{2026}", text: $searchQuery)
+                    .textFieldStyle(.plain)
+                    .font(TahoeFont.body(12.5))
+                    .foregroundStyle(t.fg)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .onSubmit { /* filtering is live as the user types */ }
+                if !searchQuery.isEmpty {
+                    Button {
+                        searchQuery = ""
+                        searchFocused = true
+                    } label: {
+                        TahoeIcon("x", size: 11).foregroundStyle(t.fg3)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search (Esc)")
+                }
                 Text("\u{2318}K")
                     .font(TahoeFont.body(10.5))
                     .foregroundStyle(t.fg4)
@@ -540,9 +581,19 @@ private struct Sidebar: View {
                     .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.06) : Color(.sRGB, white: 15.0/255, opacity: 0.05))
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(t.hairline, lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(searchFocused ? t.accent : t.hairline, lineWidth: searchFocused ? 1 : 0.5)
             }
             .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 8)
+            // ⌘K from anywhere → focus this field. Wrapping the post
+            // in `Task { @MainActor in … }` ensures the FocusState
+            // update happens on the run loop tick after the notification
+            // fires, dodging "modifying state during view update" warnings.
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterFocusCodeSearch)) { _ in
+                Task { @MainActor in
+                    searchFocused = true
+                }
+            }
 
             // Projects header — `folderPlus` opens NewSessionMacSheet with no
             // repo pre-selected (the sheet's picker shows the full list).
