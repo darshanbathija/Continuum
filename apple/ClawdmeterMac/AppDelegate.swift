@@ -373,11 +373,19 @@ final class ProviderStatusController: NSObject {
         // (and any future surface tweaks) no longer need hand-tuned heights.
         pop.contentSize = NSSize(width: 380, height: 600)
         // Tahoe 26 redesign: swap the legacy `PopoverView` for the new
-        // `MacMenubarPopover` glass card. Each menu-bar item now opens the
-        // same popover (all three providers visible via a segmented control
-        // inside), but the segmented control still defaults to whichever
-        // provider's status item was clicked. Live data via `runtime.tahoeLive`.
-        let popoverData = runtime?.tahoeLive ?? .demo
+        // `MacMenubarPopover` glass card. Each menu-bar item opens the
+        // same popover (all three providers via segmented control); the
+        // segmented control defaults to whichever provider's status
+        // item was clicked.
+        //
+        // v0.22.4 fix: pass the per-provider AppModels directly so the
+        // popover observes them via @ObservedObject (through a
+        // MenuBarLiveSource wrapper). The previous wiring captured a
+        // value-typed TahoeLiveBindings snapshot at status-item
+        // construction time — which was often `.demo` because pollers
+        // hadn't completed when the status item was eagerly built at
+        // launch. NSPopover never re-rendered the SwiftUI content, so
+        // the demo data stuck around forever.
         let providerCase: TahoeProvider = {
             switch model.config.id {
             case "claude": return .claude
@@ -386,25 +394,38 @@ final class ProviderStatusController: NSObject {
             default:       return .claude
             }
         }()
-        let popoverView = MacMenubarPopover(
-            data: popoverData,
-            initialProvider: providerCase,
-            onOpenDashboard: { [weak self] in
-                guard let self else { return }
-                self.popover?.performClose(nil)
-                // Same path used by Dock/Spotlight re-launch — restores
-                // activation policy, brings the dashboard window forward.
-                NotificationCenter.default.post(name: AppDelegate.openDashboardRequest, object: nil)
-                NSApp.setActivationPolicy(.regular)
-                NSApp.activate(ignoringOtherApps: true)
-            },
-            onSyncIPhone: { [weak self] in
-                self?.showPairingPopover()
-            }
-        )
+        let popoverView: MacMenubarPopover
+        if let runtime {
+            popoverView = MacMenubarPopover(
+                initialProvider: providerCase,
+                onOpenDashboard: { [weak self] in
+                    guard let self else { return }
+                    self.popover?.performClose(nil)
+                    NotificationCenter.default.post(name: AppDelegate.openDashboardRequest, object: nil)
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+                },
+                onSyncIPhone: { [weak self] in
+                    self?.showPairingPopover()
+                },
+                claudeModel: runtime.claudeModel,
+                codexModel: runtime.codexModel,
+                geminiModel: runtime.geminiModel
+            )
+        } else {
+            // Test / preview safety net — no live runtime, no live data.
+            popoverView = MacMenubarPopover(
+                initialProvider: providerCase,
+                onOpenDashboard: {},
+                onSyncIPhone: {}
+            )
+        }
+        // Apply chrome modifiers outside the if-else so both branches
+        // get the same theme + width framing.
+        let themedPopover = popoverView
             .tahoeTheme(TahoeThemeStore.loaded())
             .frame(width: 388)
-        let host = NSHostingController(rootView: popoverView)
+        let host = NSHostingController(rootView: themedPopover)
         host.sizingOptions = NSHostingSizingOptions.preferredContentSize
         pop.contentViewController = host
         popover = pop

@@ -117,6 +117,61 @@ sidecar (~80MB of vendored runtime artifacts).
   bridge minted token → daemon imported folder → project visible in
   subsequent `/api/projects`.
 
+## [0.22.4 build 86] - 2026-05-22 — Fix: menu-bar popover showed demo data instead of real Claude/Codex/Antigravity usage
+
+User-reported bug: opening any menu-bar status item's popover showed
+`67% / 4d 6h` for all three providers regardless of actual usage. The
+status item label itself (`15% 3h 10m`) was correct, but the popover
+hovering below it showed `TahoeDemo.liveData[.claude]` placeholder
+values.
+
+### Root cause
+
+`MacMenubarPopover` took its data as a value-typed
+`TahoeLiveBindings` snapshot via init parameter. `NSPopover` hosts the
+SwiftUI content through an `NSHostingController` that captures the
+struct **once at construction time**. Status items are eagerly built
+in `AppDelegate.applicationDidFinishLaunching` → `configure(runtime:)`
+→ `ProviderStatusController.ensureStatusItem()`, which runs *before*
+any of the per-provider `UsagePoller`s has completed its first poll.
+At that point `runtime.tahoeLive` returned `.demo` for every provider
+without real data. The snapshot stuck there forever — subsequent
+polls updated the menu-bar status text (which uses a direct
+`model.objectWillChange` subscription) but the popover content never
+re-rendered.
+
+### Fix
+
+- New `MenuBarLiveSource` `@MainActor`-isolated `ObservableObject`
+  wrapper carries the three `AppModel`s together and forwards each
+  one's `objectWillChange` to its own publisher.
+- `MacMenubarPopover` adds a production init that takes
+  `claudeModel`/`codexModel`/`geminiModel` directly + an
+  `@ObservedObject private var liveSource: MenuBarLiveSource`. SwiftUI
+  re-renders the popover `body` on every poll because the wrapper's
+  `objectWillChange` fires whenever any model's `usage` updates.
+- The body computes `liveData: TahoeLiveBindings` per render from
+  current `model.usage` values via a new `liveRow(model:provider:)`
+  helper that mirrors `MacTahoeAdapter.tahoeLive` for the same
+  provider.
+- `AppDelegate.ensureStatusItem()` switched to the new production
+  init when `runtime` is non-nil; preserves the old `.demo` init for
+  the no-runtime test path.
+- Existing Preview / demo `data:` init kept as a convenience.
+
+### Tests
+
+- 620/620 shared tests pass; 104/104 Mac tests pass
+- Mac + iOS + Watch all build clean
+
+### Verification (manual)
+
+Open menu bar popover → segmented control shows real Claude/Codex/
+Antigravity percentages matching the status-item label beside the
+popover. Switch between segments → numbers update for each provider.
+After ~60s (next poll) → all three providers' meters animate to the
+fresh values without re-opening the popover.
+
 ## [0.22.3 build 85] - 2026-05-22 — Zero decoration: retire iOS PickWinner + Mac chat empty-state demo (PR #36)
 
 Closes the last 2 by-design no-ops surfaced in the PR #34 audit retro.
