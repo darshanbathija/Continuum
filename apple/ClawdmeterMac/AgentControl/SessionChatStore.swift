@@ -410,6 +410,39 @@ public final class SessionChatStore: ObservableObject {
             // `stop()` can cancel it; the closure-level generation check
             // also drops late ingests from a prior parse generation.
             let tail = JSONLTail(fileURL: sessionFileURL) { [weak self] json in
+                // v0.23 T4: per-turn lifecycle dispatch BEFORE the
+                // typed parse. Claude's JSONL line shape carries the
+                // turn-state hint in the top-level "type" field:
+                //   - "assistant"  → first content of a new turn (or
+                //                    continuation); transition into
+                //                    `.streaming`. Idempotent on the
+                //                    store side so re-firing on every
+                //                    assistant line is cheap.
+                //   - "result"     → Claude's end-of-turn marker.
+                //                    Transition into `.completed` —
+                //                    the V2 status strip clamps the
+                //                    stopwatch + flips Stop→Send.
+                //   - "user"       → starts a fresh turn; reset to
+                //                    `.streaming` because the
+                //                    assistant's response is about to
+                //                    begin. (`.idle` would briefly
+                //                    flicker the UI off; leave it as
+                //                    `.streaming` so the indicator
+                //                    stays on through the round trip.)
+                if let type = json["type"] as? String {
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        guard self.parseGeneration == generation else { return }
+                        switch type {
+                        case "result":
+                            self.setCurrentTurnState(.completed)
+                        case "assistant", "user":
+                            self.setCurrentTurnState(.streaming)
+                        default:
+                            break
+                        }
+                    }
+                }
                 guard let parsed = ParsedLine.from(json: json) else { return }
                 let task = Task { [weak self] in
                     guard let self else { return }
