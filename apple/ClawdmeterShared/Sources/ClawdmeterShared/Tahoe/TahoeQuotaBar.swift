@@ -97,14 +97,24 @@ public struct TahoePillBar: View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
-                    .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.08)
-                                 : Color(.sRGB, white: 15.0/255, opacity: 0.06))
+                    .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.12)
+                                 : Color(.sRGB, white: 15.0/255, opacity: 0.08))
                 Capsule(style: .continuous)
+                    // v0.22.16: was `[glow, base]` which for Codex
+                    // resolved to `[gray, near-black]` — invisible
+                    // against the dark popover background. Now uses
+                    // the vivid `halo` color (the same color used for
+                    // each provider's outer-glow accent) as the
+                    // gradient anchor so every provider's fill is
+                    // legible even at 6pt height. Claude → bright
+                    // orange, Codex → OpenAI cool blue, Antigravity →
+                    // vivid violet, OpenCode → magenta-violet.
                     .fill(LinearGradient(
-                        colors: [provider.glow.color, provider.base.color],
+                        colors: [provider.halo.color, provider.glow.color],
                         startPoint: .leading, endPoint: .trailing))
-                    .frame(width: geo.size.width * percent / 100)
-                    .shadow(color: provider.base.color(opacity: 0.5), radius: 5, x: 0, y: 0)
+                    .frame(width: max(geo.size.width * percent / 100,
+                                      percent > 0 ? max(height, 4) : 0))
+                    .shadow(color: provider.halo.color(opacity: 0.45), radius: 5, x: 0, y: 0)
                     // Motion polish: smooth fill-in when percent changes.
                     .animation(.easeInOut(duration: 0.45), value: percent)
             }
