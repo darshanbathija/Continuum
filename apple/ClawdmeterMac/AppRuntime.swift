@@ -273,6 +273,26 @@ final class AppRuntime: ObservableObject {
             // ensureRunning() in MacDesignView.onAppear is now a
             // safety-net; the supervisor is idempotent.
             self.openDesignDaemon.ensureRunning()
+            // v0.22.11: auto-archive chat sessions idle > 5 minutes.
+            // User reported the chat view defaulting to whatever was
+            // last active even hours later — having stale active
+            // sessions makes the sidebar feel cluttered. Code-tab
+            // sessions are unaffected (they're long-running by nature
+            // and the user explicitly archives them via the IDE).
+            // Sweep every 60 s; idempotent (archive is a no-op for
+            // already-archived sessions).
+            let chatIdleTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let cutoff = Date().addingTimeInterval(-5 * 60)
+                    for s in self.agentSessionRegistry.sessions
+                        where s.kind == .chat && s.archivedAt == nil && s.lastEventAt < cutoff
+                    {
+                        self.agentSessionRegistry.archive(id: s.id)
+                    }
+                }
+            }
+            RunLoop.main.add(chatIdleTimer, forMode: .common)
             // Phase 10: APNS Live Activity push trigger.
             // Subscribe to registry deltas; whenever a session status,
             // planText, or active-set changes, hand a fresh wire-shape

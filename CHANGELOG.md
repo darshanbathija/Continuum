@@ -4,6 +4,36 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.11 build 93] - 2026-05-22 — Fix: clean default chat state + auto-archive idle chats + Code IDE JSONL renders inline (`fix/chat-default-and-jsonl-render`)
+
+User reported:
+1. Chat tab opens onto the canned "react-query refactor + tradeoffs" demo data — should be a clean composer instead, and idle chat sessions should auto-archive into history.
+2. Clicking a JSONL row in the Code IDE sidebar reveals the file in Finder (v0.22.9 behavior) — should render the transcript inline in the middle pane instead.
+
+### Changed
+
+**`MacChatView.activeThread` — clean default state**
+- Previously, when `openChatId` was nil the view fell back to `TahoeDemo.chatThread` (the "react-query refactor" fixture with 2 mocked turns and 3 provider replies). That made the Chat tab look like there was an in-flight conversation on every fresh launch.
+- Now returns an empty `ChatThread(title: "", turns: [])` so the stream pane is bare and the composer is the focal point.
+
+**`AppRuntime` — auto-archive chat sessions idle > 5 minutes**
+- New 60-second `Timer` walks `agentSessionRegistry.sessions` and calls `archive(id:)` for any chat session (`kind == .chat`) whose `lastEventAt` is older than 5 minutes (and isn't already archived). Idempotent.
+- Code-tab sessions are deliberately excluded — they're long-running by nature and users archive them via the IDE.
+- Archived sessions remain discoverable via the sidebar's "RECENT" entries (the existing JSONL-recents pipeline picks them up by mtime).
+
+**`MacCodeView` + new `JsonlPreviewHeader` / `JsonlPreviewMsg`**
+- `Thread` accepts `previewTranscript: [ChatMessage]?` + `previewJsonlPath: String?`. When `previewTranscript` is non-nil, the view renders a read-only transcript preview header + simple bubble rows for each message (user / agent / tool call / tool result / meta).
+- `MacCodeView` adds `@State openJsonlPath: String?` + `@State jsonlMessages: [ChatMessage] = []`. A `.task(id: openJsonlPath)` modifier loads the transcript via `TranscriptLoader.load(from:URL, maxMessages: 500)` off the main actor whenever the path changes.
+- New `onOpenJsonl: (String) -> Void` callback threaded through Sidebar → RepoSection → RecentRow. JSONL-only rows now call this instead of the v0.22.9 `NSWorkspace.activateFileViewerSelecting` reveal.
+- The preview header surfaces a "Reveal in Finder" action so the prior workflow is still one click away when wanted.
+
+### Notes
+
+- The 5-minute idle threshold matches the user's stated UX preference; raise/lower in `AppRuntime` if you want a different cadence.
+- The JSONL preview is intentionally simple (no syntax highlighting, no streaming indicator) — it's a read-only inspector, not the full live chat surface. Full in-app rendering parity with `MacChatView` is tracked for v0.23.
+
+Bumps `MARKETING_VERSION` 0.22.10 → 0.22.11, `CURRENT_PROJECT_VERSION` 92 → 93.
+
 ## [0.22.10 build 92] - 2026-05-22 — Fix: Codex 5h reading matches Codex Desktop (window-aware bucket pick) + popover force-polls on open (`fix/codex-5h-usage`)
 
 User reported the menu-bar popover's "Codex 5h session" reading was wildly off — Codex Desktop showed 93% / 12:38, Clawdmeter showed 15% / "resets in —".

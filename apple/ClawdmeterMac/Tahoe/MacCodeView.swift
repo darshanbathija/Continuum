@@ -43,6 +43,15 @@ struct MacCodeView: View {
     @State private var expanded: Set<String> = []
     @State private var didInitComposer: Bool = false
 
+    /// v0.22.11: JSONL preview path. Set when the user clicks a
+    /// RECENT sidebar row whose `sessionId` is nil (i.e. a disk-only
+    /// transcript). The `.task(id: openJsonlPath)` below loads it
+    /// asynchronously into `jsonlMessages`; the middle pane swaps to
+    /// the read-only preview while this is non-nil. Selecting any
+    /// real live session clears it.
+    @State private var openJsonlPath: String? = nil
+    @State private var jsonlMessages: [ChatMessage] = []
+
     /// Refine/Edit plan modal state — both share the same wire (A3:
     /// Edit plan = Refine via sendPrompt). The bool drives sheet
     /// presentation; the text holds the in-flight user input.
@@ -78,7 +87,13 @@ struct MacCodeView: View {
     }
 
     public var body: some View {
-        let effectiveOpenId = openId ?? data.openSessionId
+        // v0.22.11: JSONL preview wins over the live session pick. When
+        // the user clicks a RECENT row that's JSONL-only (sessionId
+        // nil), `openJsonlPath` flips and the middle pane swaps to the
+        // read-only preview. Clearing the path or picking a real
+        // session restores the normal flow.
+        let previewingJsonl = openJsonlPath != nil
+        let effectiveOpenId = previewingJsonl ? nil : (openId ?? data.openSessionId)
         let openRepo = data.repos.first { repo in
             repo.sessions.contains { $0.id == effectiveOpenId }
         } ?? data.repos.first
@@ -88,10 +103,15 @@ struct MacCodeView: View {
             TahoeGlass(radius: 20, tone: .panel) {
                 Sidebar(
                     repos: data.repos,
-                    openId: Binding(get: { effectiveOpenId }, set: { openId = $0 }),
+                    openId: Binding(get: { effectiveOpenId }, set: { openId = $0; openJsonlPath = nil }),
                     expanded: $expanded,
                     onNewSession: onNewSession,
-                    loopbackClient: loopbackClient
+                    loopbackClient: loopbackClient,
+                    onOpenJsonl: { path in
+                        openJsonlPath = path
+                        openId = nil
+                        jsonlMessages = []  // clear so spinner shows
+                    }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -111,7 +131,9 @@ struct MacCodeView: View {
                             approvePlan(sessionId: openSession!.id)
                         } : {},
                         onRefinePlan: { refineSheetPresented = true },
-                        canAct: loopbackClient != nil && openSession != nil
+                        canAct: loopbackClient != nil && openSession != nil,
+                        previewTranscript: previewingJsonl ? jsonlMessages : nil,
+                        previewJsonlPath: openJsonlPath
                     )
                     .frame(maxHeight: .infinity)
                     ComposerBar(
@@ -174,6 +196,25 @@ struct MacCodeView: View {
             // without manual clicking.
             for repo in data.repos where repo.liveSessionCount > 0 {
                 expanded.insert(repo.key)
+            }
+        }
+        // v0.22.11: load the JSONL transcript whenever the user picks
+        // a different RECENT row. TranscriptLoader.load is synchronous
+        // I/O (memory-mapped) but we hop off the main actor to avoid
+        // blocking the UI on multi-MB files. Cap at 500 messages —
+        // matches the AgentControlServer chat-history limit and keeps
+        // the SwiftUI ForEach tractable.
+        .task(id: openJsonlPath) {
+            guard let path = openJsonlPath else { return }
+            let url = URL(fileURLWithPath: path)
+            let loaded = await Task.detached(priority: .userInitiated) {
+                TranscriptLoader.load(from: url, maxMessages: 500)
+            }.value
+            // Guard against a tap-then-tap race: only commit if the
+            // path we just finished loading is still the one the user
+            // is looking at.
+            if openJsonlPath == path {
+                jsonlMessages = loaded
             }
         }
         .onChange(of: openSession?.id) { _, newId in
@@ -379,6 +420,11 @@ private struct Sidebar: View {
     /// "re-open archived session" action can call the unarchive RPC.
     /// Nil in Previews; production injects the real loopback client.
     var loopbackClient: AgentControlClient? = nil
+    /// v0.22.11: invoked when the user taps a RECENT row whose backing
+    /// row is JSONL-only (no live AgentSession). The parent flips
+    /// `openJsonlPath` and the middle pane renders the read-only
+    /// transcript preview. Falls through to `nil` in Previews.
+    var onOpenJsonl: ((String) -> Void)? = nil
 
     /// D8 sidebar filter (PR #24b). Persisted to UserDefaults so the
     /// user's view sticks across launches.
@@ -549,7 +595,8 @@ private struct Sidebar: View {
                                 openId: openId,
                                 onOpen: { openId = $0 },
                                 onNewSession: { onNewSession(repo.key) },
-                                loopbackClient: loopbackClient
+                                loopbackClient: loopbackClient,
+                                onOpenJsonl: onOpenJsonl
                             )
                         }
                     }
@@ -632,6 +679,10 @@ private struct RepoSection: View {
     /// "re-open archived session" action has an RPC to call. Nil =
     /// recents render read-only (Preview path).
     var loopbackClient: AgentControlClient? = nil
+    /// v0.22.11: invoked when a JSONL-only RecentRow is tapped. The
+    /// parent flips MacCodeView's openJsonlPath; the middle pane
+    /// swaps to the read-only transcript preview.
+    var onOpenJsonl: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -690,7 +741,8 @@ private struct RepoSection: View {
                             RecentRow(
                                 recent: r,
                                 loopbackClient: loopbackClient,
-                                onOpenRestored: { onOpen($0) }
+                                onOpenRestored: { onOpen($0) },
+                                onOpenJsonl: onOpenJsonl
                             )
                         }
                     }
@@ -765,6 +817,10 @@ private struct RecentRow: View {
     /// PR #35: invoked when the unarchive succeeds; lets the parent
     /// focus the newly-restored session in the right column.
     var onOpenRestored: ((UUID) -> Void)?
+    /// v0.22.11: invoked when this is a JSONL-only row (no live
+    /// session). The parent flips `openJsonlPath`; the middle pane
+    /// renders the read-only transcript preview inline.
+    var onOpenJsonl: ((String) -> Void)?
 
     @State private var isRestoring: Bool = false
 
@@ -772,14 +828,12 @@ private struct RecentRow: View {
         recent.sessionId != nil && loopbackClient != nil
     }
 
-    /// v0.22.9: a recent row is always tappable now — `canUnarchive`
-    /// drives the unarchive flow, otherwise we reveal the JSONL on
-    /// disk so the user can inspect the transcript externally until
-    /// the in-app preview lands in v0.23. Previously JSONL-only rows
-    /// were `.disabled(true)` and the user reported "the left side is
-    /// not clickable".
+    /// v0.22.11: row tappable when either we can unarchive OR there's a
+    /// JSONL path + an `onOpenJsonl` handler to receive it. Previously
+    /// (v0.22.9) the fallback was reveal-in-Finder, which the user
+    /// flagged as wrong — the desired UX is inline preview.
     private var tappable: Bool {
-        canUnarchive || recent.jsonlPath != nil
+        canUnarchive || (recent.jsonlPath != nil && onOpenJsonl != nil)
     }
 
     var body: some View {
@@ -819,12 +873,14 @@ private struct RecentRow: View {
         .disabled(!tappable || isRestoring)
         .help(canUnarchive
             ? "Re-open this archived session"
-            : (recent.jsonlPath != nil ? "Show this transcript in Finder" : "Read-only history entry"))
+            : (recent.jsonlPath != nil ? "Open this transcript inline" : "Read-only history entry"))
     }
 
     /// Restore: for a real archived session, calls the daemon's
-    /// `POST /sessions/:id/unarchive`. For a JSONL-only row, reveals
-    /// the file in Finder so the user can inspect the raw transcript.
+    /// `POST /sessions/:id/unarchive`. For a JSONL-only row, hands the
+    /// path to the parent's `onOpenJsonl` so MacCodeView can flip
+    /// `openJsonlPath` and render a read-only transcript preview in
+    /// the middle pane (v0.22.11 — previously revealed in Finder).
     private func restore() {
         if let client = loopbackClient,
            let sessionId = recent.sessionId {
@@ -837,9 +893,8 @@ private struct RecentRow: View {
             }
             return
         }
-        if let path = recent.jsonlPath {
-            let url = URL(fileURLWithPath: path)
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+        if let path = recent.jsonlPath, let handler = onOpenJsonl {
+            handler(path)
         }
     }
 }
@@ -856,6 +911,17 @@ private struct Thread: View {
     var onApprovePlan: () -> Void = {}
     var onRefinePlan: () -> Void = {}
     var canAct: Bool = false
+    /// v0.22.11: read-only transcript preview rendered when the user
+    /// clicks a JSONL-only "RECENT" row in the sidebar (no live
+    /// AgentSession to drive the regular stream). When non-nil this
+    /// takes precedence over the EmptyThreadState / demo / placeholder
+    /// branches. Loaded by the parent MacCodeView via
+    /// `TranscriptLoader.load(from:URL(fileURLWithPath:openJsonlPath))`.
+    var previewTranscript: [ChatMessage]?
+    /// Path being previewed — surfaced in the empty-state copy so the
+    /// user knows which file is loading when `previewTranscript` is
+    /// still empty (load is async).
+    var previewJsonlPath: String?
 
     /// Whether the open session has a real plan from the agent. Drives
     /// whether the PlanHalo renders at all in production — empty plan +
@@ -869,7 +935,24 @@ private struct Thread: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if session == nil {
+                if let transcript = previewTranscript {
+                    JsonlPreviewHeader(path: previewJsonlPath)
+                    if transcript.isEmpty {
+                        // Async load in flight — show a tiny spinner row
+                        // rather than an empty pane so the user knows the
+                        // tap registered.
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text("Loading transcript…").font(TahoeFont.body(12)).foregroundStyle(t.fg3)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 32)
+                    } else {
+                        ForEach(Array(transcript.enumerated()), id: \.offset) { _, msg in
+                            JsonlPreviewMsg(msg: msg)
+                        }
+                    }
+                } else if session == nil {
                     EmptyThreadState()
                 } else if isDemo {
                     // Demo bindings keep the JSX fixture so Previews remain
@@ -895,6 +978,107 @@ private struct Thread: View {
                 }
             }
             .padding(.horizontal, 22).padding(.top, 8).padding(.bottom, 18)
+        }
+    }
+}
+
+/// v0.22.11: header strip rendered above a JSONL preview transcript.
+/// Mirrors `ThreadHeader` but communicates the read-only nature of the
+/// view so the user doesn't expect the composer to send into the
+/// preview (it won't — there's no live AgentSession to send to).
+private struct JsonlPreviewHeader: View {
+    @Environment(\.tahoe) private var t
+    var path: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                TahoeIcon("folder", size: 12).foregroundStyle(t.fg4)
+                Text("Read-only transcript preview")
+                    .font(TahoeFont.body(11, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(t.fg3)
+                Spacer()
+                if let path {
+                    Button {
+                        let url = URL(fileURLWithPath: path)
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    } label: {
+                        HStack(spacing: 4) {
+                            TahoeIcon("folder", size: 10)
+                            Text("Reveal in Finder").font(TahoeFont.body(11))
+                        }
+                        .foregroundStyle(t.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            if let path {
+                Text(URL(fileURLWithPath: path).lastPathComponent)
+                    .font(TahoeFont.mono(11))
+                    .foregroundStyle(t.fg4)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+/// v0.22.11: minimal bubble renderer for the JSONL preview transcript.
+/// Kept intentionally simple (no syntax highlighting, no streaming
+/// indicators) — this is a read-only inspector, not a full chat
+/// surface. The full transcript surface lives in MacChatView for live
+/// sessions; this is a quick "what did the agent and I say" lookup.
+private struct JsonlPreviewMsg: View {
+    @Environment(\.tahoe) private var t
+    let msg: ChatMessage
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: roleIcon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(roleColor)
+                .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(roleLabel)
+                    .font(TahoeFont.body(10, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(t.fg4)
+                Text(msg.body)
+                    .font(msg.kind == .toolCall ? TahoeFont.mono(12) : TahoeFont.body(12))
+                    .foregroundStyle(t.fg)
+                    .textSelection(.enabled)
+                    .lineLimit(msg.kind == .toolResult ? 6 : nil)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var roleLabel: String {
+        switch msg.kind {
+        case .userText:      return "YOU"
+        case .assistantText: return "AGENT"
+        case .toolCall:      return "TOOL CALL"
+        case .toolResult:    return "TOOL RESULT"
+        case .meta:          return "META"
+        }
+    }
+    private var roleIcon: String {
+        switch msg.kind {
+        case .userText:      return "person.fill"
+        case .assistantText: return "sparkle"
+        case .toolCall:      return "wrench.and.screwdriver.fill"
+        case .toolResult:    return "checkmark.circle"
+        case .meta:          return "info.circle"
+        }
+    }
+    private var roleColor: Color {
+        switch msg.kind {
+        case .userText:      return t.accent
+        case .assistantText: return t.fg2
+        default:             return t.fg4
         }
     }
 }
