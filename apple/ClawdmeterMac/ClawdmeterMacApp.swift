@@ -15,6 +15,10 @@ extension Notification.Name {
     /// this and updates its `@State tab`. Carries `userInfo["tab"]` ==
     /// "chat"|"usage"|"code"|"design"|"settings".
     static let clawdmeterSwitchTab = Notification.Name("clawdmeter.switchTab")
+    /// v0.22.19: ⌘K from anywhere flips to the Code tab and focuses the
+    /// sidebar Search field. MacRootView listens — it flips the tab if
+    /// needed and re-emits to the Sidebar via FocusState binding.
+    static let clawdmeterFocusCodeSearch = Notification.Name("clawdmeter.focusCodeSearch")
 }
 
 @main
@@ -102,6 +106,25 @@ struct ClawdmeterMacApp: App {
                     .keyboardShortcut("4", modifiers: .command)
                 Button("Settings") { Self.postSwitchTab("settings") }
                     .keyboardShortcut("5", modifiers: .command)
+                Divider()
+                // v0.22.19: ⌘K flips to the Code tab and focuses the
+                // sidebar Search field. The button shows "Search Code"
+                // in the View menu so it's discoverable + matches the
+                // existing CommandMenu pattern. The Sidebar listens
+                // for the .clawdmeterFocusCodeSearch notification and
+                // bumps its @FocusState.
+                Button("Search Code") {
+                    NotificationCenter.default.post(
+                        name: .clawdmeterSwitchTab,
+                        object: nil,
+                        userInfo: ["tab": "code"]
+                    )
+                    NotificationCenter.default.post(
+                        name: .clawdmeterFocusCodeSearch,
+                        object: nil
+                    )
+                }
+                .keyboardShortcut("k", modifiers: .command)
             }
         }
         // v0.22.6 fix: hide the native macOS titlebar so the Tahoe

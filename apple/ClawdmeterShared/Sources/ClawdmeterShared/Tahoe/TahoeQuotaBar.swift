@@ -130,20 +130,48 @@ public struct TahoeMenuBarMeter: View {
     public var percent: Double
     public var hint: String?
     public var provider: TahoeProvider
+    /// v0.22.18: true when the underlying data is from a fallback /
+    /// cached source instead of a live poll. Triggers a small "Stale"
+    /// pill next to the percent so the user knows the value may not
+    /// match what each provider's own desktop app shows in real time.
+    public var stale: Bool
 
-    public init(label: String, percent: Double, hint: String? = nil, provider: TahoeProvider) {
+    public init(
+        label: String,
+        percent: Double,
+        hint: String? = nil,
+        provider: TahoeProvider,
+        stale: Bool = false
+    ) {
         self.label = label
         self.percent = percent
         self.hint = hint
         self.provider = provider
+        self.stale = stale
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            HStack {
+            HStack(spacing: 6) {
                 Text(label)
                     .font(TahoeFont.body(11, weight: .semibold))
                     .foregroundStyle(t.fg2)
+                if stale {
+                    Text("STALE")
+                        .font(TahoeFont.body(8.5, weight: .bold))
+                        .tracking(0.6)
+                        .foregroundStyle(Color(.sRGB, red: 0xF4 / 255.0, green: 0xB4 / 255.0, blue: 0x00 / 255.0))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background {
+                            Capsule(style: .continuous)
+                                .fill(Color(.sRGB, red: 0xF4 / 255.0, green: 0xB4 / 255.0, blue: 0x00 / 255.0, opacity: 0.14))
+                        }
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .stroke(Color(.sRGB, red: 0xF4 / 255.0, green: 0xB4 / 255.0, blue: 0x00 / 255.0, opacity: 0.40), lineWidth: 0.5)
+                        }
+                        .help("Underlying source is using cached / fallback data — value may not match the provider's live count.")
+                }
                 Spacer()
                 Text("\(Int(percent))%")
                     .font(TahoeFont.mono(11))

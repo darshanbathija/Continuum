@@ -347,6 +347,30 @@ public final class AgentSessionRegistry: ObservableObject {
         }
     }
 
+    /// v0.22.20: rename a terminal pane by id. Returns the updated
+    /// `TerminalPaneRef` on success, nil when the session or pane id
+    /// can't be resolved. Used by the AgentControlServer's
+    /// `POST /sessions/:id/terminal-panes/:pane/rename` endpoint a
+    /// parallel agent introduced — the registry side of that wire
+    /// landed in this PR.
+    @discardableResult
+    public func renameTerminalPane(sessionId: UUID, paneRefId: UUID, title: String) -> TerminalPaneRef? {
+        update(id: sessionId) { s in
+            let panes = s.terminalPanes.map { p -> TerminalPaneRef in
+                guard p.id == paneRefId else { return p }
+                return TerminalPaneRef(
+                    id: p.id,
+                    paneId: p.paneId,
+                    title: title,
+                    isPrimary: p.isPrimary,
+                    createdAt: p.createdAt
+                )
+            }
+            return with(s, terminalPanes: panes)
+        }
+        return session(id: sessionId)?.terminalPanes.first { $0.id == paneRefId }
+    }
+
     // MARK: - G15 scheduled follow-ups
 
     public func addScheduledFollowUp(sessionId: UUID, followUp: ScheduledFollowUp) {

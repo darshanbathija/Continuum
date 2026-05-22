@@ -94,7 +94,30 @@ public final class CodexSource: AISource {
         do {
             let usage = try parseLatestUsage(from: url)
             logger.info("Codex usage (JSONL fallback): session=\(usage.sessionPct)% (resets \(usage.sessionEpoch)) weekly=\(usage.weeklyPct)% source=jsonl")
-            return usage
+            // v0.22.18: tag JSONL-fallback reads with status .unknown so
+            // the UI can surface a "Stale" badge. User reported the
+            // fallback "shows entirely wrong numbers" — the JSONL only
+            // gets refreshed when the user invokes `codex` directly, so
+            // a session left idle for hours surfaces stale rate-limit
+            // values that contradict what Codex Desktop is showing.
+            // Marking the value stale rather than masquerading as
+            // .allowed lets users SEE the fallback fired so they can
+            // judge whether to trust the numbers.
+            return UsageData(
+                sessionPct: usage.sessionPct,
+                sessionResetMins: usage.sessionResetMins,
+                sessionEpoch: usage.sessionEpoch,
+                weeklyPct: usage.weeklyPct,
+                weeklyResetMins: usage.weeklyResetMins,
+                weeklyEpoch: usage.weeklyEpoch,
+                status: .unknown,
+                representativeClaim: usage.representativeClaim,
+                updatedAt: usage.updatedAt,
+                organizationID: usage.organizationID,
+                antigravityModel: usage.antigravityModel,
+                sdkModeActive: usage.sdkModeActive,
+                codexSDKModeActive: usage.codexSDKModeActive
+            )
         } catch let err as AISourceError {
             throw err
         } catch {
