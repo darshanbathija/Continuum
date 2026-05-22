@@ -171,10 +171,8 @@ public final class OpenDesignDaemonManager: ObservableObject {
         }
 
         await update(.starting, "Acquiring singleton lock…")
-        // /review C1: flock(LOCK_SH) blocks until the LOCK_EX holder releases.
         // Run on a detached task with file paths captured by value so the
-        // syscall executes off MainActor and the UI stays responsive while
-        // we wait for the other Clawdmeter instance.
+        // syscall work executes off MainActor and the UI stays responsive.
         let lockPath = self.lockFile.path
         let rendezvousPath = self.rendezvousFile.path
         let lockResult = await Task.detached(priority: .userInitiated) { () -> LockResult in
@@ -460,9 +458,9 @@ public final class OpenDesignDaemonManager: ObservableObject {
         case failed(String)
     }
 
-    /// Sendable lock-acquisition helper. Runs off MainActor so the
-    /// blocking `flock(LOCK_SH)` syscall doesn't freeze the UI when
-    /// another Clawdmeter instance holds the exclusive lock.
+    /// Sendable lock-acquisition helper. Runs off MainActor so filesystem
+    /// polling does not freeze the UI when another Clawdmeter instance owns
+    /// the daemon.
     private nonisolated static func acquireLockOffActor(lockPath: String, rendezvousPath: String) -> LockResult {
         if !FileManager.default.fileExists(atPath: lockPath) {
             FileManager.default.createFile(atPath: lockPath, contents: nil)
@@ -471,26 +469,48 @@ public final class OpenDesignDaemonManager: ObservableObject {
         guard let handle = try? FileHandle(forUpdating: url) else {
             return .failed("Cannot open lock file")
         }
+        setCloseOnExec(fd: handle.fileDescriptor)
         // Non-blocking exclusive flock
         if flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) == 0 {
             return .acquired(handle)
         }
-        // Lock is held — acquire shared lock (BLOCKING until writer's rename
-        // is observable, eliminating partial-read race). Safe to block here
-        // because we're on a detached task, not MainActor.
-        if flock(handle.fileDescriptor, LOCK_SH) == 0 {
-            defer { _ = flock(handle.fileDescriptor, LOCK_UN); try? handle.close() }
-            let rendezvousURL = URL(fileURLWithPath: rendezvousPath)
+        try? handle.close()
+
+        // Lock is held by the owner for the daemon lifetime. Do not attempt
+        // `LOCK_SH`: it would wait for the owner to exit and strand this
+        // instance on "Acquiring singleton lock...". Instead, poll the
+        // atomically-renamed rendezvous file until the owner publishes it.
+        let rendezvousURL = URL(fileURLWithPath: rendezvousPath)
+        let deadline = Date().addingTimeInterval(30)
+        var sawRendezvous = false
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: rendezvousPath) {
+                sawRendezvous = true
+            }
             if let data = try? Data(contentsOf: rendezvousURL),
                let r = try? JSONDecoder().decode(Rendezvous.self, from: data) {
-                // Sanity-check the lock holder is alive
-                if kill(pid_t(r.pid), 0) == 0 {
+                if processIsAlive(pid: r.pid) {
                     return .attached(r)
                 }
+                return .failed("Existing Design daemon owner is no longer running")
             }
-            return .failed("Lock holder is stale; restart Clawdmeter to reclaim")
+            Thread.sleep(forTimeInterval: 0.25)
         }
-        return .failed("Cannot acquire lock (shared or exclusive)")
+        if sawRendezvous {
+            return .failed("Existing Design daemon rendezvous is invalid")
+        }
+        return .failed("Another Clawdmeter instance holds the Design lock but did not publish a rendezvous file")
+    }
+
+    private nonisolated static func processIsAlive(pid: Int) -> Bool {
+        let result = kill(pid_t(pid), 0)
+        return result == 0 || errno == EPERM
+    }
+
+    private nonisolated static func setCloseOnExec(fd: Int32) {
+        let flags = fcntl(fd, F_GETFD)
+        guard flags >= 0 else { return }
+        _ = fcntl(fd, F_SETFD, flags | FD_CLOEXEC)
     }
 
     private func releaseLock() {

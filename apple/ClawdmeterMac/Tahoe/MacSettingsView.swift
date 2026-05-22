@@ -28,6 +28,7 @@ public struct MacSettingsView: View {
     /// today). Setter fans out to every provider that supports auto-revive.
     @State private var notifyAt90: Bool = true
     @State private var mirrorToiPhone: Bool = true
+    @SceneStorage("clawdmeter.mac.settings.selectedSection") private var selectedSectionRaw: String = SettingsSection.visual.rawValue
 
     // v0.22.9: dropped to `internal` because the `runtime` parameter
     // exposes `AppRuntime`, which lives in the Mac target (not the
@@ -70,123 +71,296 @@ public struct MacSettingsView: View {
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                SettingsHeader(onReset: { theme.resetToDefaults() })
+        VStack(spacing: 18) {
+            SettingsHeader(onReset: { theme.resetToDefaults() })
 
-                SettingsCard(title: "Appearance",
-                             sub: "How the app looks. Independent of your system setting.") {
-                    SettingsRow(label: "Theme", hint: "Light for daytime, Dark for late-night sessions.") {
-                        SwatchToggle(
-                            value: theme.appearance == .dark ? "dark" : "light",
-                            options: [
-                                .init(key: "light", label: "Light", swatch: AnyView(ThemeSwatch(dark: false))),
-                                .init(key: "dark",  label: "Dark",  swatch: AnyView(ThemeSwatch(dark: true))),
-                            ]
-                        ) { theme.appearance = $0 == "dark" ? .dark : .light }
+            HStack(alignment: .top, spacing: 18) {
+                SettingsSidebar(
+                    selection: selectedSection,
+                    onSelect: { selectedSectionRaw = $0.rawValue }
+                )
+                .frame(width: 220)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        SettingsSectionHeader(section: selectedSection)
+                        selectedSectionContent
                     }
-                    TahoeHair().padding(.vertical, 14)
-                    SettingsRow(label: "Surface",
-                                hint: "Translucent layers refract the wallpaper through every panel. Solid is calmer and faster on older Macs.") {
-                        SwatchToggle(
-                            value: theme.surface == .translucent ? "translucent" : "solid",
-                            options: [
-                                .init(key: "solid",        label: "Solid",       swatch: AnyView(SurfaceSwatch(glass: false))),
-                                .init(key: "translucent",  label: "Translucent", swatch: AnyView(SurfaceSwatch(glass: true))),
-                            ]
-                        ) { theme.surface = $0 == "translucent" ? .translucent : .solid }
-                    }
+                    .frame(maxWidth: 920)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(.bottom, 20)
                 }
-
-                SettingsCard(title: "Background",
-                             sub: "Tints the wallpaper that sits behind every glass panel.") {
-                    SettingsRow(label: "Vibrance",
-                                hint: "Colorful gives you the aurora-tinted hero look. Muted strips out the hue for a focus-mode feel.") {
-                        SwatchToggle(
-                            value: theme.wallpaper.isMuted ? "muted" : "colorful",
-                            options: [
-                                .init(key: "colorful", label: "Colorful", swatch: AnyView(WallSwatch(name: .aurora))),
-                                .init(key: "muted",    label: "Muted",    swatch: AnyView(WallSwatch(name: .graphite))),
-                            ]
-                        ) { theme.wallpaper = $0 == "muted" ? .graphite : .aurora }
-                    }
-                    TahoeHair().padding(.vertical, 14)
-                    SettingsRow(label: "Accent", hint: "Used on the primary button, active tab, and the iPhone Live ring.") {
-                        AccentPicker(value: $theme.accent)
-                    }
-                }
-
-                SettingsCard(title: "Quota & sync",
-                             sub: "Behavior that affects the menu-bar agent and the paired iPhone.") {
-                    SettingsRow(label: "Auto-revive 5h timer",
-                                hint: "Sends a no-op every ~4 hours so you don't lose your rolling session window. Applies to every provider that supports it.") {
-                        TahoeToggleView(on: autoReviveBinding)
-                    }
-                    TahoeHair().padding(.vertical, 14)
-                    SettingsRow(label: "Mirror to iPhone",
-                                hint: "Push live gauges to a paired iPhone so you can glance at quota from the Lock Screen. (Coming with the next pairing pass.)") {
-                        TahoeToggleView(on: $mirrorToiPhone)
-                    }
-                    TahoeHair().padding(.vertical, 14)
-                    SettingsRow(label: "Notify at 90%",
-                                hint: "Send a system notification when any session passes 90% of its rolling window. (Coming with the next notifications pass.)") {
-                        TahoeToggleView(on: $notifyAt90)
-                    }
-                }
-
-                // PR #31 chunk 2: Providers card surfaces install + auth
-                // state for adapters that run external CLIs (currently
-                // OpenCode). The OpenCode row binds to
-                // `OpencodeProcessManager.shared.state` so spawn-time
-                // failures + auth-list refreshes surface here without a
-                // restart.
-                SettingsCard(title: "Providers",
-                             sub: "External agent runtimes Clawdmeter can drive. Listed providers must be installed and signed in to spawn sessions.") {
-                    OpencodeProviderRow()
-                }
-
-                // v0.22.9: consolidated sub-settings. Previously each of
-                // these was a separate tab in a `Settings { TabView { … } }`
-                // scene that opened on Cmd+, in a broken-looking light/dark
-                // modal. They now live inline as cards in the dashboard's
-                // Settings tab so everything is one comprehensive page.
-
-                SettingsCard(title: "Codex SDK",
-                             sub: "Observation mode toggle + diagnostics for the Codex provider.") {
-                    CodexSDKSettingsView()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                SettingsCard(title: "Antigravity SDK",
-                             sub: "Antigravity 2 native runtime — bundled IPC bridge + plan-mode hand-off.") {
-                    AntigravitySDKSettingsView()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                SettingsCard(title: "Live Activities",
-                             sub: "Real-time iPhone Lock Screen + Dynamic Island state for each running session.") {
-                    LiveActivitySetupView()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let runtime {
-                    SettingsCard(title: "Pairing",
-                                 sub: "Pair an iPhone over Tailscale so the iPhone app + widgets see live quota + sessions.") {
-                        PairingSettingsView(runtime: runtime)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-
-                SettingsCard(title: "Diagnostics",
-                             sub: "Diagnose data sources, copy debug bundles, force refresh, and explore the on-disk cache.") {
-                    DiagnosticsSettingsView()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .frame(maxWidth: 920)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 6).padding(.bottom, 20).padding(.top, 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .frame(maxWidth: 1180, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.horizontal, 6).padding(.bottom, 20).padding(.top, 20)
+    }
+
+    private var selectedSection: SettingsSection {
+        SettingsSection(rawValue: selectedSectionRaw) ?? .visual
+    }
+
+    @ViewBuilder
+    private var selectedSectionContent: some View {
+        switch selectedSection {
+        case .visual:
+            visualSettings
+        case .providers:
+            providerSettings
+        case .devices:
+            deviceSettings
+        case .diagnostics:
+            diagnosticsSettings
+        }
+    }
+
+    @ViewBuilder
+    private var visualSettings: some View {
+        SettingsCard(title: "Appearance",
+                     sub: "How the app looks. Independent of your system setting.") {
+            SettingsRow(label: "Theme", hint: "Light for daytime, Dark for late-night sessions.") {
+                SwatchToggle(
+                    value: theme.appearance == .dark ? "dark" : "light",
+                    options: [
+                        .init(key: "light", label: "Light", swatch: AnyView(ThemeSwatch(dark: false))),
+                        .init(key: "dark",  label: "Dark",  swatch: AnyView(ThemeSwatch(dark: true))),
+                    ]
+                ) { theme.appearance = $0 == "dark" ? .dark : .light }
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Surface",
+                        hint: "Translucent layers refract the wallpaper through every panel. Solid is calmer and faster on older Macs.") {
+                SwatchToggle(
+                    value: theme.surface == .translucent ? "translucent" : "solid",
+                    options: [
+                        .init(key: "solid",        label: "Solid",       swatch: AnyView(SurfaceSwatch(glass: false))),
+                        .init(key: "translucent",  label: "Translucent", swatch: AnyView(SurfaceSwatch(glass: true))),
+                    ]
+                ) { theme.surface = $0 == "translucent" ? .translucent : .solid }
+            }
+        }
+
+        SettingsCard(title: "Background",
+                     sub: "Tints the wallpaper that sits behind every glass panel.") {
+            SettingsRow(label: "Vibrance",
+                        hint: "Colorful gives you the aurora-tinted hero look. Muted strips out the hue for a focus-mode feel.") {
+                SwatchToggle(
+                    value: theme.wallpaper.isMuted ? "muted" : "colorful",
+                    options: [
+                        .init(key: "colorful", label: "Colorful", swatch: AnyView(WallSwatch(name: .aurora))),
+                        .init(key: "muted",    label: "Muted",    swatch: AnyView(WallSwatch(name: .graphite))),
+                    ]
+                ) { theme.wallpaper = $0 == "muted" ? .graphite : .aurora }
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Accent", hint: "Used on the primary button, active tab, and the iPhone Live ring.") {
+                AccentPicker(value: $theme.accent)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var providerSettings: some View {
+        // PR #31 chunk 2: Providers card surfaces install + auth state for adapters that run external CLIs.
+        SettingsCard(title: "Providers",
+                     sub: "External agent runtimes Clawdmeter can drive. Listed providers must be installed and signed in to spawn sessions.") {
+            OpencodeProviderRow()
+        }
+
+        SettingsCard(title: "Codex SDK",
+                     sub: "Observation mode toggle + diagnostics for the Codex provider.") {
+            CodexSDKSettingsView()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        SettingsCard(title: "Antigravity SDK",
+                     sub: "Antigravity 2 native runtime — bundled IPC bridge + plan-mode hand-off.") {
+            AntigravitySDKSettingsView()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var deviceSettings: some View {
+        SettingsCard(title: "Quota & sync",
+                     sub: "Behavior that affects the menu-bar agent and the paired iPhone.") {
+            SettingsRow(label: "Auto-revive 5h timer",
+                        hint: "Sends a no-op every ~4 hours so you don't lose your rolling session window. Applies to every provider that supports it.") {
+                TahoeToggleView(on: autoReviveBinding)
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Mirror to iPhone",
+                        hint: "Push live gauges to a paired iPhone so you can glance at quota from the Lock Screen. (Coming with the next pairing pass.)") {
+                TahoeToggleView(on: $mirrorToiPhone)
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Notify at 90%",
+                        hint: "Send a system notification when any session passes 90% of its rolling window. (Coming with the next notifications pass.)") {
+                TahoeToggleView(on: $notifyAt90)
+            }
+        }
+
+        SettingsCard(title: "Live Activities",
+                     sub: "Real-time iPhone Lock Screen + Dynamic Island state for each running session.") {
+            LiveActivitySetupView()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        if let runtime {
+            SettingsCard(title: "Pairing",
+                         sub: "Pair an iPhone over Tailscale so the iPhone app + widgets see live quota + sessions.") {
+                PairingSettingsView(runtime: runtime)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var diagnosticsSettings: some View {
+        SettingsCard(title: "Diagnostics",
+                     sub: "Diagnose data sources, copy debug bundles, force refresh, and explore the on-disk cache.") {
+            DiagnosticsSettingsView()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case visual
+    case providers
+    case devices
+    case diagnostics
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .visual: return "Visual"
+        case .providers: return "Providers"
+        case .devices: return "Devices"
+        case .diagnostics: return "Diagnostics"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .visual:
+            return "Theme, glass surface, wallpaper, and accent color."
+        case .providers:
+            return "External agent runtimes and native SDK modes."
+        case .devices:
+            return "Quota behavior, iPhone mirroring, Live Activities, and pairing."
+        case .diagnostics:
+            return "Debug bundles, source checks, cache tools, and wire inspection."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .visual: return "sparkles"
+        case .providers: return "terminal"
+        case .devices: return "link"
+        case .diagnostics: return "gear"
+        }
+    }
+}
+
+private struct SettingsSidebar: View {
+    @Environment(\.tahoe) private var t
+    var selection: SettingsSection
+    var onSelect: (SettingsSection) -> Void
+
+    var body: some View {
+        TahoeGlass(radius: 20, tone: .panel) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("GROUPS")
+                    .font(TahoeFont.body(10, weight: .bold))
+                    .tracking(0.6)
+                    .foregroundStyle(t.fg4)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 4)
+
+                ForEach(SettingsSection.allCases) { section in
+                    SettingsSidebarRow(
+                        section: section,
+                        isSelected: section == selection,
+                        onSelect: { onSelect(section) }
+                    )
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, minHeight: 320, alignment: .topLeading)
+        }
+    }
+}
+
+private struct SettingsSidebarRow: View {
+    @Environment(\.tahoe) private var t
+    var section: SettingsSection
+    var isSelected: Bool
+    var onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                TahoeIcon(section.icon, size: 13, weight: .semibold)
+                    .foregroundStyle(isSelected ? t.accent : t.fg3)
+                    .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(section.title)
+                        .font(TahoeFont.body(13, weight: .semibold))
+                        .foregroundStyle(isSelected ? t.fg : t.fg2)
+                        .lineLimit(1)
+                    Text(section.subtitle)
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(t.fg4)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? t.accentAlpha(t.dark ? 0.16 : 0.09) : .clear)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isSelected ? t.accentAlpha(0.55) : Color.clear, lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SettingsSectionHeader: View {
+    @Environment(\.tahoe) private var t
+    var section: SettingsSection
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                TahoeIcon(section.icon, size: 13, weight: .semibold)
+                    .foregroundStyle(t.accent)
+                Text(section.title)
+                    .font(TahoeFont.body(18, weight: .bold))
+                    .foregroundStyle(t.fg)
+            }
+            Text(section.subtitle)
+                .font(TahoeFont.body(12.5))
+                .foregroundStyle(t.fg3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 6)
+        .padding(.bottom, 2)
     }
 }
 
