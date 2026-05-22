@@ -246,17 +246,23 @@ public final class WatchTokenBridge: NSObject, WCSessionDelegate, @unchecked Sen
             logger.info("rx token len=\(token.count, privacy: .public)")
             DispatchQueue.main.async { self.didReceiveToken.send(payload) }
         }
-        if let usageData = ctx["usage"] as? Data,
-           let usage = try? JSONDecoder().decode(UsageData.self, from: usageData) {
-            logger.info("rx usage session=\(usage.sessionPct, privacy: .public)% weekly=\(usage.weeklyPct, privacy: .public)%")
-            DispatchQueue.main.async { self.didReceiveUsage.send(usage) }
+        if let usageData = ctx["usage"] as? Data {
+            do {
+                let usage = try JSONDecoder().decode(UsageData.self, from: usageData)
+                logger.info("rx usage session=\(usage.sessionPct, privacy: .public)% weekly=\(usage.weeklyPct, privacy: .public)%")
+                DispatchQueue.main.async { self.didReceiveUsage.send(usage) }
+            } catch {
+                logger.error("rx usage decode failed: \(error.localizedDescription, privacy: .public) bytes=\(usageData.count, privacy: .public)")
+            }
         }
         if let dict = ctx["usageByProvider"] as? [String: Data] {
             let decoder = JSONDecoder()
             var byProvider: [String: UsageData] = [:]
             for (id, data) in dict {
-                if let snap = try? decoder.decode(UsageData.self, from: data) {
-                    byProvider[id] = snap
+                do {
+                    byProvider[id] = try decoder.decode(UsageData.self, from: data)
+                } catch {
+                    logger.error("rx usageByProvider[\(id, privacy: .public)] decode failed: \(error.localizedDescription, privacy: .public)")
                 }
             }
             if !byProvider.isEmpty {

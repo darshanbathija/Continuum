@@ -136,8 +136,10 @@ lane :release do
   Fastlane::LaneManager.cruise_lane("ios", "ios_testflight")
 
   # GitHub release with the DMG attached.
-  dmg = Dir["../../dist/Clawdmeter-*-arm64.dmg"].sort.last
-  raise "DMG not found in dist/" unless dmg
+  # Use the exact expected path for the version we just built. Globbing +
+  # sort.last is lexicographic and would prefer e.g. 0.9.2 over 0.22.32.
+  dmg = "../../dist/Clawdmeter-#{market}-arm64.dmg"
+  raise "DMG not found at #{dmg}" unless File.exist?(dmg)
   set_github_release(
     repository_name: "darshanbathija/Clawdmeter",
     api_token: ENV["CLAWDMETER_GH_RELEASE_TOKEN"],

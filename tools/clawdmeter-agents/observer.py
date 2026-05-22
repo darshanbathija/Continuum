@@ -67,6 +67,21 @@ def main(initial_cmd: dict[str, Any]) -> int:
 
     emit({"type": "ready", "version": "0.7.15"})
 
+    import select
+
+    def _emit_exc(code: str, exc: BaseException) -> None:
+        # Audit P1 fix: every exception path emits both the type/message
+        # and a short traceback so the Mac app can distinguish "SDK
+        # offline" from "permissions issue" from "regression in our
+        # parsing". Previously some sites preserved the trace and others
+        # didn't — the inconsistency was unhelpful.
+        emit({
+            "type": "error",
+            "code": code,
+            "msg": f"{type(exc).__name__}: {exc}",
+            "trace": traceback.format_exc(limit=2),
+        })
+
     # Initial inventory.
     try:
         convos = list(conn.list_conversations())
@@ -83,26 +98,29 @@ def main(initial_cmd: dict[str, Any]) -> int:
             ],
         })
     except Exception as exc:  # noqa: BLE001
-        emit({
-            "type": "error",
-            "code": "list_conversations_failed",
-            "msg": f"{type(exc).__name__}: {exc}",
-        })
+        _emit_exc("list_conversations_failed", exc)
 
     # Polling loop — emit total_usage deltas every 2s. Watches stdin
     # closing as the shutdown signal (Swift closes when toggle goes OFF).
+    #
+    # Audit P1 fix: previous loop did `select(..., timeout=0)` then
+    # `time.sleep(2.0)`, which (a) made the select pointless and
+    # (b) made shutdown latency 2s after stdin close. Folding the wait
+    # into select gives near-instant shutdown and halves wake-ups.
     last_totals: dict[str, dict[str, int]] = {}
+    POLL_INTERVAL = 2.0
     while True:
         try:
-            import select
-            ready, _, _ = select.select([sys.stdin], [], [], 0)
+            ready, _, _ = select.select([sys.stdin], [], [], POLL_INTERVAL)
             if ready:
                 line = sys.stdin.readline()
                 if not line:
-                    break
+                    break  # stdin closed → shutdown
                 emit({"type": "log", "msg": f"control: {line.strip()!r}"})
-        except Exception:  # noqa: BLE001
-            pass
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            _emit_exc("stdin_select_failed", exc)
 
         try:
             for c in conn.list_conversations():
@@ -111,6 +129,23 @@ def main(initial_cmd: dict[str, Any]) -> int:
                     continue
                 usage = getattr(c, "total_usage", None)
                 if usage is None:
+                    continue
+                # Audit P2 fix: explicit attribute presence check instead
+                # of silently defaulting to 0. If the SDK API renames
+                # a field, we want a loud error (once) rather than the
+                # quiet "user used 0 tokens" lie.
+                missing = [
+                    name for name in
+                    ("prompt_tokens", "candidate_tokens", "cached_tokens", "thoughts_tokens")
+                    if not hasattr(usage, name)
+                ]
+                if missing:
+                    emit({
+                        "type": "error",
+                        "code": "sdk_usage_schema_mismatch",
+                        "missing_attrs": missing,
+                        "uuid": uuid,
+                    })
                     continue
                 totals = {
                     "input": int(getattr(usage, "prompt_tokens", 0) or 0),
@@ -125,15 +160,10 @@ def main(initial_cmd: dict[str, Any]) -> int:
                 if last_totals.get(uuid) != totals:
                     last_totals[uuid] = totals
                     emit({"type": "usage", "uuid": uuid, "totals": totals})
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as exc:  # noqa: BLE001
-            emit({
-                "type": "error",
-                "code": "poll_failed",
-                "msg": f"{type(exc).__name__}: {exc}",
-                "trace": traceback.format_exc(limit=2),
-            })
-
-        time.sleep(2.0)
+            _emit_exc("poll_failed", exc)
 
     emit({"type": "shutdown"})
     return 0

@@ -27,6 +27,13 @@ public actor LinuxUsageStore {
 
     /// Load on first access — kept lazy because the JSON parse is small but
     /// not worth doing at process start if no one calls.
+    ///
+    /// Audit P2 fix: previously a corrupt / empty / old-schema
+    /// `usage-store.json` threw, left `loaded = false`, and every
+    /// subsequent call re-failed — the dashboard would lock up showing
+    /// "no data" forever. Now on decode error we log, delete the bad
+    /// file, treat the cache as empty, and set `loaded = true` so the
+    /// store self-heals on the next write.
     private func loadIfNeeded() throws {
         guard !loaded else { return }
         let url = LinuxConfigPaths.usageStoreFile
@@ -36,10 +43,19 @@ public actor LinuxUsageStore {
             loaded = true
             return
         }
-        let data = try Data(contentsOf: url)
-        let dict = try JSONDecoder().decode([String: UsageData].self, from: data)
-        providers = dict
-        loaded = true
+        do {
+            let data = try Data(contentsOf: url)
+            let dict = try JSONDecoder().decode([String: UsageData].self, from: data)
+            providers = dict
+            loaded = true
+        } catch {
+            FileHandle.standardError.write(Data(
+                "LinuxUsageStore: \(url.path) failed to decode (\(error.localizedDescription)); resetting cache\n".utf8
+            ))
+            try? FileManager.default.removeItem(at: url)
+            providers = [:]
+            loaded = true
+        }
     }
 
     /// Atomic write: `Data.write(options: .atomic)` writes to a sibling
@@ -65,6 +81,13 @@ public actor LinuxUsageStore {
 
     public func writeSnapshot(_ usage: UsageData, for providerID: String) throws {
         try loadIfNeeded()
+        // Audit P2 fix: route through `UsageData.shouldReplace` so a
+        // late-arriving older reset epoch can't clobber freshly-reset
+        // post-quota state. This matches the guard the shared Apple
+        // store has used for years.
+        if let existing = providers[providerID], !existing.shouldReplace(with: usage) {
+            return
+        }
         providers[providerID] = usage
         try persist()
     }

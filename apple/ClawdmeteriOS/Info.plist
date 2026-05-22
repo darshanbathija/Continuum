@@ -24,15 +24,42 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- Allow plaintext HTTP/WS to the Mac daemon on the Tailscale
-	     interface. The daemon binds to a Tailscale CGNAT IP (filtered
-	     on accept) and the tunnel itself is WireGuard-encrypted — adding
-	     TLS on top would add cert management with no security gain for
-	     the personal-use scope. -->
+	<!-- Audit P0 fix: scope ATS exceptions instead of disabling globally.
+	     The Mac daemon is reached over Tailscale (WireGuard-tunneled), so
+	     adding TLS on top buys nothing for the personal-use scope. ATS
+	     only takes domain exceptions (no CIDR), so plaintext HTTP/WS is
+	     allowed for these hosts:
+	       - *.ts.net                 (Tailscale MagicDNS)
+	       - localhost                (simulator + dev)
+	       - link-local + loopback    (via NSAllowsLocalNetworking)
+	     Bare-IP Tailscale CGNAT (100.64.0.0/10) is NOT covered — those
+	     URLs hit normal ATS and will fail without TLS. The pairing flow
+	     should hand out MagicDNS hostnames from the Mac side; users
+	     without MagicDNS need to enable it on the Tailscale dashboard.
+	     Every other URLSession in the app — analytics, OAuth refresh,
+	     anything a future SDK pulls in — still goes through ATS, so a
+	     misconfigured downgrade can't silently become MITM-able. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the pairing QR shown on your Mac in Clawdmeter → Settings → Sessions.</string>

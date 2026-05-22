@@ -7,6 +7,10 @@ on:
   pull_request:
     branches: [main]
 
+# Default to read-only token scope. release-upload widens to contents:write.
+permissions:
+  contents: read
+
 jobs:
   shared-tests:
     name: Shared package on Linux (Swift ${{ matrix.swift }})
@@ -24,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Swift ${{ matrix.swift }}
-        uses: SwiftyLab/setup-swift@latest
+        uses: SwiftyLab/setup-swift@38f54a76b70d989321de9dc7c840618c08cf56e9 # v1.14.0
         with:
           swift-version: ${{ matrix.swift }}
 
@@ -50,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Swift 6.0
-        uses: SwiftyLab/setup-swift@latest
+        uses: SwiftyLab/setup-swift@38f54a76b70d989321de9dc7c840618c08cf56e9 # v1.14.0
         with:
           swift-version: "6.0"
 
@@ -81,10 +85,15 @@ jobs:
     name: AppImage build (Ubuntu 24.04)
     runs-on: ubuntu-24.04
     needs: linux-pkg
+    # Audit P1 fix: tools/build-linux-appimage.sh is a Phase 0 stub
+    # that exits 2 unless a pre-baked artifact is present. Run on
+    # tag pushes only until the pipeline is implemented so PR CI
+    # doesn't fail for an unrelated reason.
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
       - name: Install Swift 6.0
-        uses: SwiftyLab/setup-swift@latest
+        uses: SwiftyLab/setup-swift@38f54a76b70d989321de9dc7c840618c08cf56e9 # v1.14.0
         with:
           swift-version: "6.0"
       - name: Install system deps
@@ -117,10 +126,13 @@ jobs:
     name: .deb build (Ubuntu 24.04)
     runs-on: ubuntu-24.04
     needs: linux-pkg
+    # Audit P1 fix: tools/build-linux-deb.sh is a Phase 0 stub. Gate
+    # to tag pushes — see appimage-build above for the same reason.
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
       - name: Install Swift 6.0
-        uses: SwiftyLab/setup-swift@latest
+        uses: SwiftyLab/setup-swift@38f54a76b70d989321de9dc7c840618c08cf56e9 # v1.14.0
         with:
           swift-version: "6.0"
       - name: Install system deps
@@ -184,6 +196,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [appimage-install-test, deb-install-test]
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

@@ -227,7 +227,50 @@ public final class SessionFileResolver: @unchecked Sendable {
         if let cached, FileManager.default.fileExists(atPath: cached.path) {
             return cached
         }
-        return nil
+
+        // Audit P1 fix: the geminiLinks cache had a reader but no writer
+        // — every lookup missed. Scan the legacy `.gemini/tmp/<uuid>/`
+        // tree once per session and record the JSONL if found, so the
+        // next hot path is fast. Returns nil for v2-native sessions
+        // (no legacy file on disk).
+        let candidate = locateLegacyGeminiJSONL(for: session)
+        if let candidate {
+            lock.lock()
+            insertBoundedCache(
+                id: session.id,
+                url: candidate,
+                store: &geminiLinks,
+                order: &geminiLinkOrder,
+                cap: geminiLinkCap
+            )
+            lock.unlock()
+        }
+        return candidate
+    }
+
+    /// Locate the JSONL transcript for a pre-v0.6.0 Gemini session under
+    /// `~/.gemini/tmp/<session-uuid>/`. Walks the dir tree once looking
+    /// for any `*.jsonl` whose mtime falls within the session's activity
+    /// window. Returns nil when nothing matches (the common case on
+    /// Antigravity 2 installs).
+    private func locateLegacyGeminiJSONL(for session: AgentSession) -> URL? {
+        let dir = geminiTmpRoot.appendingPathComponent(session.id.uuidString, isDirectory: true)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.path) else { return nil }
+        let candidates: [URL]
+        do {
+            candidates = try fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
+        } catch {
+            return nil
+        }
+        return candidates
+            .filter { $0.pathExtension == "jsonl" }
+            .sorted { lhs, rhs in
+                let lTime = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let rTime = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return lTime > rTime
+            }
+            .first
     }
 
     /// v0.6.0 (eng review 1C fix): bounded LRU helper. Touches the entry

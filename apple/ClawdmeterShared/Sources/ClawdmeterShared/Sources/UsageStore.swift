@@ -40,22 +40,27 @@ public struct UsageStore: Sendable {
         public let providerID: String
         public let displayName: String
         public let usage: UsageData
-        /// When the snapshot was last written (epoch seconds). Distinct from
-        /// `usage.updatedAt` (which is the server-time of the poll).
+        /// When the snapshot was last written (epoch seconds, integer
+        /// resolution). Kept for backward compat with v1 readers.
         public let writtenAt: Int
+        /// Sub-second-precise version of `writtenAt` (added in v2).
+        /// Optional so v1-only readers can still decode v1 envelopes.
+        public let writtenAtPrecise: TimeInterval?
 
         public init(
             version: Int,
             providerID: String,
             displayName: String,
             usage: UsageData,
-            writtenAt: Int
+            writtenAt: Int,
+            writtenAtPrecise: TimeInterval? = nil
         ) {
             self.version = version
             self.providerID = providerID
             self.displayName = displayName
             self.usage = usage
             self.writtenAt = writtenAt
+            self.writtenAtPrecise = writtenAtPrecise
         }
     }
 
@@ -91,7 +96,11 @@ public struct UsageStore: Sendable {
     private static var usageDirectory: URL? {
         guard let root = containerURL else { return nil }
         let dir = root.appendingPathComponent("usage", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            logger.error("UsageStore.usageDirectory create failed \(dir.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
         return dir
     }
 
@@ -102,14 +111,26 @@ public struct UsageStore: Sendable {
     // MARK: - Storage
 
     private static func decodeSnapshot(_ data: Data) -> Snapshot? {
-        guard let env = try? JSONDecoder().decode(Envelope.self, from: data) else {
+        // Some legacy snapshots on disk used snake_case keys from the
+        // pre-1.x daemon. `.convertFromSnakeCase` lets us decode those
+        // alongside the camelCase ones the current encoder writes.
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let env: Envelope
+        do {
+            env = try decoder.decode(Envelope.self, from: data)
+        } catch {
+            logger.error("UsageStore decodeSnapshot failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+        // Prefer sub-second precision when available; fall back to
+        // integer-seconds writtenAt for v1 envelopes.
+        let stamp = env.writtenAtPrecise ?? TimeInterval(env.writtenAt)
         return Snapshot(
             providerID: env.providerID,
             displayName: env.displayName,
             usage: env.usage,
-            writtenAt: Date(timeIntervalSince1970: TimeInterval(env.writtenAt))
+            writtenAt: Date(timeIntervalSince1970: stamp)
         )
     }
 
@@ -207,14 +228,22 @@ public struct UsageStore: Sendable {
         displayName: String
     ) -> Bool {
         guard let defaults = sharedDefaults else { return false }
+        let now = Date().timeIntervalSince1970
         let envelope = Envelope(
-            version: 1,
+            version: 2,
             providerID: providerID,
             displayName: displayName,
             usage: usage,
-            writtenAt: Int(Date().timeIntervalSince1970)
+            writtenAt: Int(now),
+            writtenAtPrecise: now
         )
-        guard let data = try? JSONEncoder().encode(envelope) else { return false }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            logger.error("UsageStore encode envelope failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
         defaults.set(data, forKey: key(for: providerID))
         var index = Set(defaults.stringArray(forKey: providerIDsKey) ?? [])
         index.insert(providerID)

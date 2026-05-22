@@ -10,8 +10,10 @@ for user_uid in $(ls /run/user 2>/dev/null); do
         sudo -u "#$user_uid" systemctl --user stop clawdmeter.service 2>/dev/null || true
 done
 
-# Kill foreground clawdmeterd processes (started via desktop launcher).
-pkill -f clawdmeterd 2>/dev/null || true
-pkill -f /usr/bin/clawdmeter 2>/dev/null || true
+# Kill foreground processes started via desktop launcher.
+# Use -x (exact process name match) to avoid killing editors / terminals
+# that happen to have "clawdmeterd" or "clawdmeter" in their command line.
+pkill -x clawdmeterd 2>/dev/null || true
+pkill -x clawdmeter 2>/dev/null || true
 
 exit 0

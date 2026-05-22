@@ -56,6 +56,14 @@ public final class UsageModel: ObservableObject {
     private var daemonRefreshTimer: Timer?
     private weak var daemonClient: AgentControlClient?
 
+    deinit {
+        // Audit P1 fix: invalidate the run-loop-retained refresh timer
+        // so a replaced UsageModel (sign-in switch, app reset) doesn't
+        // keep firing `refreshFromDaemon` against a zombie instance.
+        daemonRefreshTimer?.invalidate()
+        daemonRefreshTimer = nil
+    }
+
     public init() {
         // Use the shared, iCloud-synced Keychain entry. The Mac app mirrors
         // Claude Code's token here on launch, so on a fresh iPhone install

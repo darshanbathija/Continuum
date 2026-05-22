@@ -349,6 +349,9 @@ public final class AntigravitySidecarManager {
             if output.components(separatedBy: "\n").count >= 3 { break }
         }
         process.terminate()
+        // Audit P1 fix: reap the child to avoid zombie accumulation
+        // across repeated probes.
+        Task.detached { process.waitUntilExit() }
 
         // Parse lines as JSON; first line is the ready marker, the
         // subsequent line carries either the result or the error.

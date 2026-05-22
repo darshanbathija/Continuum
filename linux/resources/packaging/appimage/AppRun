@@ -15,7 +15,14 @@
 
 HERE="$(dirname "$(readlink -f "${0}")")"
 export PATH="$HERE/usr/bin:$PATH"
-export LD_LIBRARY_PATH="$HERE/usr/lib:${LD_LIBRARY_PATH:-}"
+# Avoid a trailing colon when the inbound LD_LIBRARY_PATH is empty: ld.so
+# treats an empty path segment as CWD, which would let an attacker preload a
+# malicious libfoo.so from the directory the AppImage is launched from.
+if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+    export LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"
+else
+    export LD_LIBRARY_PATH="$HERE/usr/lib"
+fi
 export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/share}"
 
 # GTK4 + WebKit asset paths (bundled). Override system paths so the

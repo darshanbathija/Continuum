@@ -87,7 +87,15 @@ public final class DaemonChatStoreRegistry {
     }
 
     deinit {
-        sweepTask?.cancel()
+        // Audit P2 fix: `deinit` is implicitly non-isolated and the
+        // class is `@MainActor`-isolated. Capture the task ref into a
+        // local non-isolated copy so Swift 6 strict-concurrency doesn't
+        // complain about accessing actor-isolated state from a non-
+        // isolated context. `Task.cancel()` is itself thread-safe.
+        let sweep = sweepTask
+        sweep?.cancel()
+        let warmup = warmupTask
+        warmup?.cancel()
     }
 
     // MARK: - Public API
@@ -141,43 +149,59 @@ public final class DaemonChatStoreRegistry {
         // (switchTailedFile) — don't construct a fresh store. A fresh
         // store invalidates the Mac UI's @ObservedObject reference and
         // the chat thread freezes on the previous turn's snapshot.
-        if let entry = entries[session.id],
-           session.kind == .chat {
+        //
+        // Audit P1 fix: extend the file-swap check to .code sessions
+        // (previously gated to .chat only). Codex plan-mode approve-plan
+        // writes a brand-new rollout JSONL; without this, the registry
+        // kept tailing the stale plan-mode file and iOS chat-subscribe
+        // WS clients saw no execution turns.
+        //
+        // Resolution rules MUST differ by kind:
+        //   - .chat sessions: use the chat-specific selectors
+        //     (`newestCodexJSONLMatching` is scoped to this session's
+        //     cwd + createdAt; `chatCwdClaudeJSONL` is the chat-mode
+        //     Claude JSONL). The /review pass caught that just calling
+        //     `resolveURL` here would silently downgrade Codex chat to
+        //     `newestCodexJSONL()` (global newest), which can pick up
+        //     a concurrent Codex run on the same machine.
+        //   - .code sessions: use the injected `resolveURL` closure
+        //     (delegates to `SessionFileResolver` in production for
+        //     respawn-lineage tracking).
+        if let entry = entries[session.id] {
             let desiredURL: URL?
-            if session.agent == .codex, session.codexChatBackend == .cli {
-                // F1: bind to THIS session's rollout by matching
-                // session_meta.cwd against effectiveCwd, gated by
-                // session.createdAt so prior rollouts are excluded.
-                // Falls back to nil (no swap) when no matching rollout
-                // exists yet, instead of grabbing an unrelated one.
-                desiredURL = Self.newestCodexJSONLMatching(
-                    cwd: session.effectiveCwd,
-                    after: session.createdAt
-                )
-            } else if session.agent == .claude {
-                desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
-            } else {
-                desiredURL = nil
+            switch session.kind {
+            case .chat:
+                if session.agent == .codex, session.codexChatBackend == .cli {
+                    // Codex chat: scope to this session's rollout to
+                    // avoid grabbing another concurrent run's transcript.
+                    desiredURL = Self.newestCodexJSONLMatching(
+                        cwd: session.effectiveCwd,
+                        after: session.createdAt
+                    )
+                } else if session.agent == .claude {
+                    desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
+                } else {
+                    desiredURL = nil
+                }
+            case .code:
+                // Plan-mode rollout swap on approve-plan. resolveURL
+                // delegates to SessionFileResolver which tracks Codex
+                // respawn lineage via record(sessionId:rolloutURL:).
+                desiredURL = resolveURL(session.id, session)
             }
             if let desired = desiredURL, entry.store.currentFileURL != desired {
-                // F1 follow-up: if the existing entry is an sdkOnly
-                // fallback (e.g. Codex CLI chat created before its first
-                // rollout existed), switchTailedFile is a no-op. Drop
-                // the entry and let createStore rebuild — this is the
-                // one place where @ObservedObject invalidation is
-                // acceptable because the user hasn't started interacting
-                // with the chat yet (no rollout = no turns).
                 if entry.store.isSDKOnly {
+                    // sdkOnly fallback: drop and let createStore() rebuild
+                    // (acceptable invalidation — user hasn't interacted
+                    // with the chat yet since there were no turns).
                     entry.store.stop()
                     entries.removeValue(forKey: session.id)
-                    // Fall through to the "no entry" path which calls
-                    // createStore — which now finds the matching rollout.
                 } else {
                     entry.store.switchTailedFile(to: desired)
                     var refreshed = entry
                     refreshed.lastTouchedAt = Date()
                     entries[session.id] = refreshed
-                    registryLogger.info("snapshot-cache file-swap session=\(session.id.uuidString, privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
+                    registryLogger.info("snapshot-cache file-swap session=\(session.id.uuidString, privacy: .public) kind=\(String(describing: session.kind), privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
                     return entry.store
                 }
             }
@@ -659,6 +683,10 @@ public final class DaemonChatStoreRegistry {
                 for url in recents {
                     _ = self.snapshotStore(forJSONLPath: url)
                 }
+                // Audit P2 fix: clear the slot so a later force-rewarm
+                // (e.g. after the user adds a new repo) can run instead
+                // of short-circuiting on the lingering completed task.
+                self.warmupTask = nil
                 registryLogger.info("warmup complete: \(recents.count) JSONLs preloaded")
             }
         }

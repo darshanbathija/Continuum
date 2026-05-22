@@ -176,16 +176,27 @@ struct WatchSessionDetailView: View {
             .accessibilityLabel("Interrupt session")
             .accessibilityHint("Stops the agent. Same as pressing escape on the Mac.")
 
-            Button {
-                bridge.requestVoiceReply(sessionId: summary.id)
-            } label: {
-                Label("Voice reply", systemImage: "mic.fill")
-                    .frame(maxWidth: .infinity)
+            // Audit P2 fix: "Voice reply" was a dead button — the watch
+            // sent the op via WCSession but iOS only logged it. Hide
+            // the control entirely until the iPhone-side dictation flow
+            // exists. Flip `Self.voiceReplyAvailable` to true (and
+            // implement WatchPlanBridgeIOS.handleVoiceReply) to bring
+            // it back.
+            if Self.voiceReplyAvailable {
+                Button {
+                    bridge.requestVoiceReply(sessionId: summary.id)
+                } label: {
+                    Label("Voice reply", systemImage: "mic.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(TahoeProvider.codex.halo.color)
+                .accessibilityLabel("Send a voice reply")
+                .accessibilityHint("Records a short message and sends it to the agent.")
             }
-            .buttonStyle(.bordered)
-            .tint(TahoeProvider.codex.halo.color)
-            .accessibilityLabel("Send a voice reply")
-            .accessibilityHint("Records a short message and sends it to the agent.")
         }
     }
+
+    /// Feature flag for the not-yet-implemented voice-reply flow.
+    private static let voiceReplyAvailable: Bool = false
 }

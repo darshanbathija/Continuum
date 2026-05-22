@@ -123,9 +123,12 @@ public final class LinuxSecretServiceTokenProvider: TokenProvider, @unchecked Se
             }
             dict[account.rawValue] = token
             let data = try JSONEncoder().encode(dict)
-            // Write umask-tight then chmod for belt-and-suspenders.
-            let prevMask = umask(0o077)
-            defer { _ = umask(prevMask) }
+            // Audit P1 fix: drop the global umask() dance. umask is a
+            // process-wide value, so toggling it on a single file writer
+            // races with every other thread that might be opening files
+            // concurrently (Hummingbird sockets, observer writes). Use
+            // explicit posixPermissions on the destination file after
+            // the atomic write — same end state, no shared mutation.
             try data.write(to: url, options: .atomic)
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600],

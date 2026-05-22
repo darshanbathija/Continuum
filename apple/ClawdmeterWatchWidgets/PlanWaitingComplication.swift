@@ -42,9 +42,15 @@ struct PlanWaitingTimeline: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<PlanWaitingEntry>) -> Void) {
         let entry = readEntry()
-        // Refresh every 30 minutes; WCSession from iPhone explicitly reloads
-        // when an event arrives.
-        let next = Date().addingTimeInterval(30 * 60)
+        // Audit P1 fix: dynamic refresh cadence. When something is
+        // actually waiting, refresh every minute so the approval clears
+        // promptly after the user acts on Mac/iPhone; when the queue is
+        // empty fall back to 30 min to conserve battery. The watch app
+        // also calls WidgetCenter.shared.reloadTimelines() when WCSession
+        // delivers a new plan event, so this is the worst case rather
+        // than the only refresh path.
+        let interval: TimeInterval = entry.count > 0 ? 60 : 30 * 60
+        let next = Date().addingTimeInterval(interval)
         completion(Timeline(entries: [entry], policy: .after(next)))
     }
 
@@ -77,6 +83,20 @@ struct PlanWaitingView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .widgetURL(URL(string: "clawdmeter://approve")!)
+        .widgetURL(Self.approveURL)
     }
+
+    /// Audit P2 fix: lift the deep-link URL out of the body closure so
+    /// it isn't constructed every render, and resolve safely.
+    /// `URL(string:)!` would crash if someone ever templated the literal.
+    private static let approveURL: URL = {
+        guard let u = URL(string: "clawdmeter://approve") else {
+            // The string is a compile-time constant; if this ever
+            // returns nil, fail loudly with a meaningful message rather
+            // than crashing with a force-unwrap site future readers
+            // will misjudge as safe.
+            preconditionFailure("clawdmeter://approve must parse as URL")
+        }
+        return u
+    }()
 }

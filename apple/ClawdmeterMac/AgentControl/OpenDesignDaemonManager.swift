@@ -272,6 +272,18 @@ public final class OpenDesignDaemonManager: ObservableObject {
         // Wait for /health
         let ready = await waitForHealth(port: port, timeout: 30)
         guard ready else {
+            // Audit P1 fix: terminate the orphaned daemon process + clear
+            // the cached port. Previously setFailed() flipped lifecycle
+            // state but left daemonProcess / daemonPort populated, so the
+            // next ensureRunning() would see leftover state and a stale
+            // PID listening (or partially listening) on the old port.
+            if let proc = self.daemonProcess, proc.isRunning {
+                proc.terminate()
+                let reap = proc
+                Task.detached { reap.waitUntilExit() }
+            }
+            self.daemonProcess = nil
+            self.daemonPort = nil
             await setFailed("Daemon did not reach /health within 30s")
             return
         }

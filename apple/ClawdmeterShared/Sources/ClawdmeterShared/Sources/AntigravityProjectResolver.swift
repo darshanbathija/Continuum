@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "AntigravityProjectResolver")
 
 /// Maps a Clawdmeter session's `repoKey` (canonical git-repo path) to
 /// the Antigravity 2 project UUID it should run under.
@@ -150,12 +153,21 @@ public actor AntigravityProjectResolver {
 
     private func indexProjects() {
         var fresh: [String: ProjectInfo] = [:]
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: projectsDir,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else {
-            // No projects dir → leave cache empty; next call retries.
+        let urls: [URL]
+        do {
+            urls = try FileManager.default.contentsOfDirectory(
+                at: projectsDir,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        } catch CocoaError.fileReadNoSuchFile {
+            // Antigravity hasn't created any projects yet — expected on a
+            // fresh install. Treat as empty index without noise.
+            indexedAt = Date()
+            cache = [:]
+            return
+        } catch {
+            logger.error("AntigravityProjectResolver.indexProjects: contentsOfDirectory \(self.projectsDir.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             indexedAt = Date()
             cache = [:]
             return
@@ -181,9 +193,17 @@ public actor AntigravityProjectResolver {
     /// file parse. Tests call this directly to verify the field
     /// extraction logic without spinning through the async cache path.
     nonisolated func parseProject(at url: URL) -> ProjectInfo? {
-        guard let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            logger.error("AntigravityProjectResolver.parseProject read \(url.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            logger.debug("AntigravityProjectResolver.parseProject \(url.path, privacy: .public) is not a JSON object")
+            return nil
+        }
 
         guard let id = json["id"] as? String, !id.isEmpty,
               id != "outside-of-project"

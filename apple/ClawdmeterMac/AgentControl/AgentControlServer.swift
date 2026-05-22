@@ -241,6 +241,13 @@ public final class AgentControlServer {
         self.designBridgePortProvider = bridgePortProvider
         self.designBridgeAuthTokenProvider = bridgeAuthTokenProvider
     }
+    /// Audit P1 fix: 15-minute autopilot inactivity sweep. AutopilotState
+    /// already implements the timing logic but nothing was calling
+    /// expiredSessions() — so the 15-min safety guardrail advertised in
+    /// the eng review was dead code. Started in `start()`, cancelled in
+    /// `stop()`, ticks every 30s.
+    private var autopilotSweepTask: Task<Void, Never>?
+
     private var designBridgePortProvider: (@Sendable () -> Int?)?
     /// /review codex P1-2: bearer token the bridge requires on every request.
     private var designBridgeAuthTokenProvider: (@Sendable () -> String?)?
@@ -282,6 +289,7 @@ public final class AgentControlServer {
         // Mac restart hits a warm store instead of a cold reparse.
         // Async on a detached Task so it doesn't block listener bind.
         chatStoreRegistry.warm(recentLimit: 5)
+        startAutopilotSweep()
     }
 
     public func stop() {
@@ -297,7 +305,38 @@ public final class AgentControlServer {
             channel.stop()
         }
         self.wsChannels.removeAll()
+        autopilotSweepTask?.cancel()
+        autopilotSweepTask = nil
         serverLogger.info("Server stopped")
+    }
+
+    /// Audit P1 fix: tick AutopilotState every 30s, disable any sessions
+    /// that have been idle for >15 min, and emit a statusChanged event
+    /// so the UI clears the autopilot indicator. Without this loop the
+    /// safety guardrail described in the CEO+Eng review never fires.
+    private func startAutopilotSweep() {
+        guard autopilotSweepTask == nil else { return }
+        autopilotSweepTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                let expired = await MainActor.run { AutopilotState.shared.expiredSessions() }
+                guard !expired.isEmpty else { continue }
+                for id in expired {
+                    await MainActor.run {
+                        AutopilotState.shared.setEnabled(false, sessionId: id)
+                    }
+                    AgentEventStream.recordEvent(
+                        sessionId: id,
+                        kind: .statusChanged,
+                        payload: ["autopilot": false, "reason": "inactivity_timeout"]
+                    )
+                    self?.serverLogger.info(
+                        "autopilot disabled by 15-min inactivity sweep: session=\(id.uuidString, privacy: .public)"
+                    )
+                }
+            }
+        }
     }
 
     private func startListening(on port: UInt16, queue: DispatchQueue) -> Bool {
@@ -1261,6 +1300,24 @@ public final class AgentControlServer {
             && session.agent == .codex
             && session.codexChatBackend == .sdk {
             await sendChatSDKPrompt(session: session, prompt: req.text, connection: connection)
+            return
+        }
+        // Audit P1 fix: OpenCode sessions have no tmux pane and no send
+        // branch implemented. Previously they fell through to the
+        // pane-id guard and returned a generic 500, which the iOS app
+        // surfaced as an opaque "something went wrong". Return a
+        // structured 501 so the UI can render a clear "OpenCode send
+        // is not yet supported" state and the user understands the
+        // limitation instead of being told the server crashed.
+        if session.agent == .opencode {
+            serverLogger.notice(
+                "send-prompt: opencode session=\(uuid.uuidString, privacy: .public) — send not yet implemented (audit P1-04)"
+            )
+            sendResponse(HTTPResponse(
+                status: 501, reason: "Not Implemented",
+                contentType: "application/json",
+                body: Data(#"{"error":"opencode_send_not_implemented","detail":"OpenCode sessions are read-only in this build. POST /sessions/:id/send for opencode lands in a follow-up."}"#.utf8)
+            ), on: connection)
             return
         }
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
@@ -2775,6 +2832,23 @@ public final class AgentControlServer {
             sendJSON(["error": "baseDir required"], on: connection, status: 400)
             return
         }
+        // Audit P0 fix: constrain baseDir before forwarding to the
+        // bridge. The bridge marks every call `fromTrustedPicker: true`
+        // — without this guard, a paired iPhone could request import
+        // of `~/.ssh` (or any sensitive folder) and Open Design would
+        // ingest the contents. We allow only known-good roots: the
+        // Mac's repo bookmarks + the project paths Antigravity has
+        // resolved for the current user. Symlinks are resolved first
+        // and the canonical path must still match the allow-list.
+        guard Self.isSafeDesignImportBase(baseDir) else {
+            serverLogger.warning("design-import-folder: refusing baseDir \(baseDir, privacy: .public)")
+            sendJSON(
+                ["error": "baseDir must resolve under a known repo / project root",
+                 "code": "BASEDIR_NOT_ALLOWED"],
+                on: connection, status: 400
+            )
+            return
+        }
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(bridgePort)/import-folder")!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -2903,6 +2977,21 @@ public final class AgentControlServer {
         decoder.dateDecodingStrategy = .iso8601
         guard let req = try? decoder.decode(NewSessionRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection)
+            return
+        }
+
+        // Audit P0 fix: validate `repoKey` BEFORE either dispatch path
+        // — the OpenCode branch and the worktree/tmux branch both use
+        // it as cwd / worktree-root / registry-state. Without this
+        // guard, an authenticated paired client could POST a /tmp or
+        // symlink-escaping path and the Mac would spawn the agent
+        // rooted there. The sibling readonly-continuation handler
+        // already validates against this same boundary.
+        guard Self.isValidRepoKey(req.repoKey) else {
+            sendResponse(
+                .badRequest(detail: "repoKey rejects traversal/control bytes/symlinks/out-of-root"),
+                on: connection
+            )
             return
         }
 
@@ -4450,6 +4539,13 @@ public final class AgentControlServer {
             status: 400, reason: "Bad Request",
             contentType: "text/plain", body: Data("Bad Request\n".utf8)
         )
+        static func badRequest(detail: String) -> HTTPResponse {
+            HTTPResponse(
+                status: 400, reason: "Bad Request",
+                contentType: "text/plain",
+                body: Data("Bad Request: \(detail)\n".utf8)
+            )
+        }
         static let notFound = HTTPResponse(
             status: 404, reason: "Not Found",
             contentType: "text/plain", body: Data("Not Found\n".utf8)
@@ -4517,6 +4613,29 @@ public final class AgentControlServer {
         // v0.7.7: delegated to PathValidator. Allowlist of agent project
         // directories lives in the shared helper now.
         PathValidator.isValidJsonlPath(path)
+    }
+
+    /// Audit P0 fix: restrict `baseDir` accepted by /design/import-folder
+    /// to paths that pass `isValidRepoKey`. That validator already
+    /// requires an absolute, traversal-free, non-symlink-escaping path
+    /// under the user's home directory, which is the right shape for an
+    /// import-target (a paired iPhone has no legitimate reason to ask
+    /// the daemon to import `~/.ssh` or `~/Library/Keychains`).
+    static func isSafeDesignImportBase(_ baseDir: String) -> Bool {
+        guard isValidRepoKey(baseDir) else { return false }
+        // Belt-and-braces: refuse a handful of obviously sensitive
+        // subtrees inside $HOME that should never legitimately be a
+        // design-import target. Keep the list small + concrete; the
+        // primary defense is the validator above.
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let blocked = ["/.ssh", "/.gnupg", "/.aws", "/Library/Keychains"]
+        let canonical = (try? URL(fileURLWithPath: baseDir).resolvingSymlinksInPath().path) ?? baseDir
+        for sub in blocked {
+            if canonical == home + sub || canonical.hasPrefix(home + sub + "/") {
+                return false
+            }
+        }
+        return true
     }
 
     private func sendResponse(_ response: HTTPResponse, on connection: NWConnection) {

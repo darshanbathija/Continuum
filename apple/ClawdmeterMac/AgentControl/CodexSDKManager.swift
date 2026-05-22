@@ -247,6 +247,9 @@ public final class CodexSDKManager {
             if result != nil || failure != nil { break }
         }
         process.terminate()
+        // Audit P1 fix: reap the child so we don't leak a zombie PID
+        // for every resume call.
+        Task.detached { process.waitUntilExit() }
         if let result { return result }
         if let failure { throw SidecarError.probeFailed(detail: failure) }
         throw SidecarError.probeFailed(detail: "Codex SDK resume timed out after \(Int(timeout))s")
@@ -435,6 +438,8 @@ public final class CodexSDKManager {
             if output.contains("probe_ok") || output.contains("sdk_not_provisioned") { break }
         }
         process.terminate()
+        // Audit P1 fix: reap so the probe doesn't leak a zombie.
+        Task.detached { process.waitUntilExit() }
 
         // Parse the response.
         let lines = output.split(separator: "\n").compactMap { line -> [String: Any]? in

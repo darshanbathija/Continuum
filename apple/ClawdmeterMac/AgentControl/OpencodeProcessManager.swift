@@ -167,6 +167,9 @@ public final class OpencodeProcessManager {
             state = .failed(detail: detail)
             // Tear down the process — it's not useful.
             process.terminate()
+            // Audit P1 fix: reap so we don't leak zombies on every
+            // failed-healthcheck retry.
+            Task.detached { process.waitUntilExit() }
             serveProcess = nil
             serverPort = nil
             return nil
@@ -185,7 +188,11 @@ public final class OpencodeProcessManager {
     public func stop() {
         supervisorTask?.cancel()
         supervisorTask = nil
-        serveProcess?.terminate()
+        if let proc = serveProcess {
+            proc.terminate()
+            // Audit P1 fix: reap so the OS doesn't hold the PID slot.
+            Task.detached { proc.waitUntilExit() }
+        }
         serveProcess = nil
         serverPort = nil
         serverPassword = nil
@@ -343,8 +350,15 @@ public final class OpencodeProcessManager {
 
     @MainActor
     private func handleUnexpectedExit() async {
+        // Audit P1 fix: reset state to .stopped BEFORE calling
+        // ensureRunning(). Previously this method left `state` at
+        // .running, so ensureRunning() saw the cached running-state
+        // and returned early without spawning a new `opencode serve` —
+        // crash recovery never actually recovered.
         serveProcess = nil
         serverPort = nil
+        serverPassword = nil
+        state = .stopped
         restartCount += 1
         if restartCount > Self.maxRestarts {
             let detail = "opencode serve crashed \(restartCount) times in a row; giving up"

@@ -39,6 +39,10 @@ struct iOSChatTranscriptView: View {
     /// When false the "Jump to latest" floating CTA appears and a reload
     /// won't auto-scroll the user out of history.
     @State private var userPinnedToBottom: Bool = true
+    /// Audit P1 fix: track the deferred-scroll task so we can cancel it
+    /// on disappear instead of letting a DispatchWorkItem fire against
+    /// stale state.
+    @State private var scrollSettleTask: Task<Void, Never>? = nil
     /// v0.5.8: per-tool_use_id selection state for AskUserQuestion
     /// trays embedded in the transcript. Persists across reloads
     /// triggered by the `.task(id: jsonlPath)` modifier.
@@ -115,9 +119,23 @@ struct iOSChatTranscriptView: View {
                 .background(Color(.systemGroupedBackground))
                 .onAppear {
                     jumpToLatest(proxy, animated: false)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    // Audit P1 fix: previous code did a 0.15s `asyncAfter`
+                    // to retry the scroll after the layout settled; the
+                    // deadline races against rapid state changes (filter
+                    // toggles, transcript reload) and ends up scrolling
+                    // against stale state. Use a SwiftUI Task that
+                    // suspends instead of a queued DispatchWorkItem —
+                    // cancelled automatically when the view disappears.
+                    scrollSettleTask?.cancel()
+                    scrollSettleTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        guard !Task.isCancelled else { return }
                         jumpToLatest(proxy, animated: false)
                     }
+                }
+                .onDisappear {
+                    scrollSettleTask?.cancel()
+                    scrollSettleTask = nil
                 }
                 .onChange(of: messages.count) { _, _ in
                     guard userPinnedToBottom else { return }

@@ -19,8 +19,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.22.33"
-    CURRENT_PROJECT_VERSION: "114"
+    MARKETING_VERSION: "0.23.0"
+    CURRENT_PROJECT_VERSION: "115"
 
 packages:
   ClawdmeterShared:
@@ -45,6 +45,7 @@ targets:
         excludes:
           - "Info.plist"
           - "ClawdmeterMac.entitlements"
+          - "ClawdmeterMac-Release.entitlements"
           # v0.7.1: bundled Node binary is added via the Copy Files
           # build phase below; exclude from default source scanning so
           # xcodegen doesn't try to compile it as a "source file".
@@ -156,9 +157,16 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "76S62SDSD3"
         INFOPLIST_FILE: ClawdmeterMac/Info.plist
-        CODE_SIGN_ENTITLEMENTS: ClawdmeterMac/ClawdmeterMac.entitlements
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: NO
+      # Audit P0 fix: ship sandboxed Release builds. Debug keeps the
+      # unsandboxed entitlements so devs can still read Claude Code's
+      # Keychain entry locally.
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: ClawdmeterMac/ClawdmeterMac.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: ClawdmeterMac/ClawdmeterMac-Release.entitlements
 
   # ───────────────────────────────────────────────────────────────
   # iPhone companion app — Plan D6: iOS app with Lock Screen widgets,
