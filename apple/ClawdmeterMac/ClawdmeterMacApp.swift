@@ -58,11 +58,14 @@ struct ClawdmeterMacApp: App {
         // `MacTitlebar` reserves left padding so they don't collide
         // with the tab text.
         .windowStyle(.hiddenTitleBar)
-        // Allow the window content to fill the corners (otherwise
-        // SwiftUI still draws the titlebar background). Combined with
-        // `.hiddenTitleBar` above, the Tahoe wallpaper + glass
-        // titlebar paint the entire window chrome.
-        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        // v0.22.7: drop `.windowToolbarStyle(.unifiedCompact(...))` —
+        // even with no `.toolbar { … }` modifier present, that style
+        // reserves a thin toolbar band at the top of the window which
+        // pushed the Tahoe titlebar chip down by ~28pt and left a
+        // visible dark gap above it. `.hiddenTitleBar` alone is what
+        // we want: SwiftUI content extends to the very top of the
+        // window and the macOS traffic lights overlay the top-left
+        // at their canonical position.
 
         // G14: pop-out window for a single session. Accepts a UUID via the
         // `openWindow(value:)` environment action. The window's title and
