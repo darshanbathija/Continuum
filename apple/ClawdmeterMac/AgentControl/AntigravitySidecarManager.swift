@@ -89,6 +89,25 @@ public final class AntigravitySidecarManager {
 
             // Step 2: provision the venv + pip install on first run.
             // Idempotent — fast path is ~150ms when venv already exists.
+            //
+            // v0.22.21 fix: bump the version pin from `~=0.0.3` to
+            // `>=0.1.0,<0.2.0`. PyPI dropped every 0.0.x release of
+            // `google-antigravity`; only 0.1.0+ exists today.
+            // `uv pip install google-antigravity~=0.0.3` was failing
+            // resolution silently, leaving the venv shell behind
+            // (just .gitignore + .lock) but no `google` module —
+            // which surfaced as the misleading "SDK installed but
+            // import failed" probe error.
+            //
+            // Also v0.22.21: detect the "venv shell only" state
+            // (directory exists, bin/python doesn't) and nuke it so
+            // a fresh `uv venv` actually runs instead of being
+            // skipped by the `!fileExists(venvPython)` short-circuit
+            // doing nothing while the old shell sits there.
+            if FileManager.default.fileExists(atPath: venvRoot.path)
+                && !FileManager.default.fileExists(atPath: venvPython.path) {
+                try? FileManager.default.removeItem(at: venvRoot)
+            }
             if !FileManager.default.fileExists(atPath: venvPython.path) {
                 provisioningStep = "Creating Python 3.13 venv (~10s)…"
                 try await runUV(uvBinary, args: ["venv", "--python", "3.13", venvRoot.path])
@@ -96,7 +115,7 @@ public final class AntigravitySidecarManager {
                 provisioningStep = "Installing google-antigravity (~5s)…"
                 try await runUV(
                     uvBinary,
-                    args: ["pip", "install", "--python", venvPython.path, "google-antigravity~=0.0.3"]
+                    args: ["pip", "install", "--python", venvPython.path, "google-antigravity>=0.1.0,<0.2.0"]
                 )
             }
 
