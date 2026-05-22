@@ -9,6 +9,9 @@
 // `implementation_plan.md` or a new annotation arrives.
 
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// Watches a directory for filesystem events. The callback fires on the
 /// caller's chosen queue (defaults to main) with no arguments; the caller
@@ -24,8 +27,10 @@ public final class BrainDirWatcher {
     private let dirURL: URL
     private let debounceInterval: TimeInterval
     private let queue: DispatchQueue
+#if canImport(Darwin)
     private var fileDescriptor: Int32 = -1
     private var source: DispatchSourceFileSystemObject?
+#endif
     private var debounceTimer: DispatchSourceTimer?
     private var pendingChange = false
 
@@ -49,6 +54,7 @@ public final class BrainDirWatcher {
     /// the brain URL and try again.
     @discardableResult
     public func start(onChange: @escaping () -> Void) -> Bool {
+#if canImport(Darwin)
         stop()
 
         let fd = open(dirURL.path, O_EVTONLY)
@@ -78,17 +84,24 @@ public final class BrainDirWatcher {
         src.resume()
         self.source = src
         return true
+#else
+        return false
+#endif
     }
 
     /// Pauses event delivery without closing the fd. Useful when the
     /// containing view goes off-screen — no UI cost while paused.
     public func pause() {
+#if canImport(Darwin)
         source?.suspend()
+#endif
     }
 
     /// Resumes a paused watcher.
     public func resume() {
+#if canImport(Darwin)
         source?.resume()
+#endif
     }
 
     /// Stops watching and releases the file descriptor. The watcher can
@@ -96,6 +109,7 @@ public final class BrainDirWatcher {
     public func stop() {
         debounceTimer?.cancel()
         debounceTimer = nil
+#if canImport(Darwin)
         if let source {
             source.cancel()
             self.source = nil
@@ -106,6 +120,7 @@ public final class BrainDirWatcher {
             close(fileDescriptor)
             fileDescriptor = -1
         }
+#endif
         pendingChange = false
     }
 
