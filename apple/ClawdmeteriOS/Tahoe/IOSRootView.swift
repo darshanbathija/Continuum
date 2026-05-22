@@ -115,14 +115,17 @@ public struct IOSRootView: View {
                     )
                 }
             case .code:
+                // v0.22.30: drop `focusedRepoKey:` — IOSCodeView init
+                // doesn't declare it yet (the parallel-agent's repo-
+                // focus refactor is in-flight elsewhere). Re-adding
+                // once IOSCodeView's signature catches up.
                 IOSCodeView(
                     data: code,
                     onOpenDetail: { sessionId in
                         pushedScreen = .sessionDetail(sessionId)
                     },
                     onNewSession: { newSessionPresented = true },
-                    agentClient: agentClient,
-                    focusedRepoKey: focusedCodeRepoKey
+                    agentClient: agentClient
                 )
                 .refreshable {
                     await agentClient.refreshAll()

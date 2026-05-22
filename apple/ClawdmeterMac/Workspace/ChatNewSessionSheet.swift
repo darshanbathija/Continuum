@@ -3,8 +3,7 @@ import ClawdmeterShared
 
 /// "+ New Chat" sheet on Mac. Provider + model + (for Codex) backend.
 /// POSTs to local daemon's `/chat-sessions` via MacComposerSender (rate
-/// limit + audit run uniformly with iOS). Gemini row is disabled until
-/// the v0.9 Antigravity replacement lands.
+/// limit + audit run uniformly with iOS).
 @available(macOS 14, *)
 struct ChatNewSessionSheet: View {
     @ObservedObject var model: SessionsModel
@@ -27,7 +26,7 @@ struct ChatNewSessionSheet: View {
                 HStack(spacing: 8) {
                     providerButton(.claude, label: "Claude")
                     providerButton(.codex, label: "Codex")
-                    providerButton(.gemini, label: "Gemini", disabled: true)
+                    providerButton(.gemini, label: "Gemini")
                 }
                 if selectedProvider == .codex {
                     Text("Backend").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
@@ -60,7 +59,7 @@ struct ChatNewSessionSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(isCreating || selectedProvider == .gemini || selectedModelId == nil)
+                .disabled(isCreating || selectedModelId == nil)
             }
         }
         .padding(24)

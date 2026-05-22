@@ -39,8 +39,17 @@ public struct MacMenubarPopover: View {
     /// observable for `body` to re-fire correctly on any of their
     /// `@Published.usage` changes).
     @ObservedObject private var liveSource: MenuBarLiveSource
+    /// v0.22.30: optional UsageHistoryStore so the OpenCode tab can
+    /// render its dollar-cost tile (`$X today / $Y this week` per A2).
+    /// When nil (preview path or when opencode isn't wired) the
+    /// OpenCode tab still appears but shows "$—.——".
+    @ObservedObject private var usageHistoryStore: UsageHistoryStore
 
-    private let enabled: [TahoeProvider] = [.claude, .codex, .gemini]
+    /// v0.22.30: OpenCode joins Claude / Codex / Antigravity as a
+    /// first-class tab in the popover. The user reported "we built
+    /// complete integrations with OpenCode but I don't see that
+    /// anywhere in the UI". The tab itself was missing here.
+    private let enabled: [TahoeProvider] = [.claude, .codex, .gemini, .opencode]
 
     /// Preview / demo init — no live AppModels; uses the static
     /// `data` snapshot.
@@ -55,6 +64,7 @@ public struct MacMenubarPopover: View {
         self.onOpenDashboard = onOpenDashboard
         self.onSyncIPhone = onSyncIPhone
         self.liveSource = MenuBarLiveSource()  // no live models
+        self.usageHistoryStore = UsageHistoryStore()
     }
 
     /// Production init — wires live per-provider AppModels so meters
@@ -66,7 +76,8 @@ public struct MacMenubarPopover: View {
         onSyncIPhone: @escaping () -> Void,
         claudeModel: AppModel,
         codexModel: AppModel,
-        geminiModel: AppModel
+        geminiModel: AppModel,
+        usageHistoryStore: UsageHistoryStore
     ) {
         self.data = .demo  // fallback never used when liveSource is wired
         self._selected = State(initialValue: initialProvider)
@@ -75,6 +86,7 @@ public struct MacMenubarPopover: View {
         self.liveSource = MenuBarLiveSource(
             claude: claudeModel, codex: codexModel, gemini: geminiModel
         )
+        self.usageHistoryStore = usageHistoryStore
     }
 
     /// Rebuild bindings from live AppModel state on every render. The
@@ -173,14 +185,31 @@ public struct MacMenubarPopover: View {
             }
             .padding(.bottom, 12)
 
-            // 5h + Weekly meters
-            VStack(spacing: 12) {
-                TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: selected, stale: row.stale)
-                if row.hasWeekly {
-                    TahoeMenuBarMeter(label: "Weekly", percent: row.weeklyPercent, hint: "resets in \(row.weeklyResetIn)", provider: selected, stale: row.stale)
+            // v0.22.30: OpenCode renders a dollar-cost variant per A2
+            // (pay-as-you-go through underlying provider; no rolling
+            // 5h window or weekly quota). Other providers keep the
+            // percent meter shape.
+            if selected == .opencode {
+                VStack(spacing: 12) {
+                    OpencodeDollarTile(
+                        label: "Today",
+                        value: usageHistoryStore.opencodeTodayCostUSD
+                    )
+                    OpencodeDollarTile(
+                        label: "This week",
+                        value: usageHistoryStore.opencodeWeekCostUSD
+                    )
                 }
+                .padding(.horizontal, 4)
+            } else {
+                VStack(spacing: 12) {
+                    TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: selected, stale: row.stale)
+                    if row.hasWeekly {
+                        TahoeMenuBarMeter(label: "Weekly", percent: row.weeklyPercent, hint: "resets in \(row.weeklyResetIn)", provider: selected, stale: row.stale)
+                    }
+                }
+                .padding(.horizontal, 4)
             }
-            .padding(.horizontal, 4)
 
             // JSX `<Hair style={{ margin: '12px 0 10px' }} />` (mac-dashboard.jsx:646)
             // — asymmetric: 12pt above, 10pt below.
@@ -248,6 +277,55 @@ public struct MacMenubarPopover: View {
             .animation(nil, value: selected)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// v0.22.30: OpenCode dollar tile for the popover. Pay-as-you-go
+/// usage rendered as `$X.XX` per A2, no percent meter or "resets in"
+/// line. Mirrors the visual shape of TahoeMenuBarMeter so the popover
+/// height stays consistent when the user switches between Codex (5h
+/// + Weekly) and OpenCode (Today + This week) tabs.
+private struct OpencodeDollarTile: View {
+    @Environment(\.tahoe) private var t
+    var label: String
+    var value: Decimal
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(TahoeFont.body(13, weight: .bold))
+                    .foregroundStyle(t.fg)
+                Text("OpenCode usage")
+                    .font(TahoeFont.mono(11))
+                    .foregroundStyle(t.fg3)
+            }
+            Spacer(minLength: 12)
+            Text(Self.format(value))
+                .font(TahoeFont.rounded(20, weight: .heavy))
+                .tracking(-0.4)
+                .monospacedDigit()
+                .foregroundStyle(t.fg)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(t.glassTintHi.opacity(0.6))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(t.hairline, lineWidth: 0.5)
+        }
+    }
+
+    private static func format(_ v: Decimal) -> String {
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.currencyCode = "USD"
+        f.maximumFractionDigits = 2
+        f.minimumFractionDigits = 2
+        return f.string(from: v as NSDecimalNumber) ?? "$0.00"
     }
 }
 
