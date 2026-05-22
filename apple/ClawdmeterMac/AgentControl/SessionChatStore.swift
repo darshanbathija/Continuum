@@ -632,6 +632,13 @@ public final class SessionChatStore: ObservableObject {
             if let url = dict["url"] as? String { return url }
         case "WebSearch":
             if let q = dict["query"] as? String { return q }
+        // v0.23 T12: Codex SDK + Antigravity emit `web_search` /
+        // `web_fetch` instead of CamelCase. Same field shape.
+        case "web_search":
+            if let q = dict["query"] as? String { return q }
+            if let q = dict["q"] as? String { return q }
+        case "web_fetch":
+            if let url = dict["url"] as? String { return url }
         case "Task":
             if let desc = dict["description"] as? String { return desc }
         default:
@@ -1347,7 +1354,14 @@ actor StagingParser {
                 }
             case "Glob", "Grep":
                 fileCounts[trimmed, default: 0] += 1
-            case "WebFetch", "WebSearch":
+            // v0.23 (Chat V2 — T12): provider-specific tool names for
+            // web search. Claude CLI emits `WebFetch` / `WebSearch`
+            // (CamelCase); Codex SDK emits `web_search` (snake_case)
+            // through the SDK event stream; Antigravity agentapi emits
+            // `web_search` too. Map all variants to urlCounts so the V2
+            // Deep Research trace's citations footer pulls URLs out of
+            // every provider's tool results uniformly.
+            case "WebFetch", "WebSearch", "web_search", "WebFetchTool", "WebSearchTool":
                 urlCounts[trimmed, default: 0] += 1
             default:
                 break
