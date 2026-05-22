@@ -91,6 +91,7 @@
 		5FB161B730DF9EAE1712B31B /* MacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CDBC01D36234EF483722038 /* MacRootView.swift */; };
 		604846A327EC4EDB6CFD3529 /* LiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FE801BE3944A9DD21D9452C /* LiveActivityCoordinator.swift */; };
 		60A48BFCE0BBD51D03ADE378 /* RouteTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69F9BF1DB0AAF2EE4A463E7C /* RouteTable.swift */; };
+		611D8E9B338AA7AEBEBFCE51 /* MacChatV2View.swift in Sources */ = {isa = PBXBuildFile; fileRef = 649173B8471CA7E5116645A5 /* MacChatV2View.swift */; };
 		61794D0EF2D8FF16588C087C /* ClawdmeteriOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCD9574C1A626280070D394 /* ClawdmeteriOSApp.swift */; };
 		62C7229BE15443B5FF6B2555 /* PlanModeWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDDB2A4C242F45EC4FCD4241 /* PlanModeWatcher.swift */; };
 		63B6862C7101C88DCC150054 /* WireInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94EDF3CEF7F199E2380D7927 /* WireInspector.swift */; };
@@ -357,6 +358,7 @@
 		60C622DD99169A6ABCBC6F8C /* UsageStatusChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageStatusChip.swift; sourceTree = "<group>"; };
 		60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSpawner.swift; sourceTree = "<group>"; };
 		61DCEB1020CBB0E324C60959 /* GeminiLogo.svg */ = {isa = PBXFileReference; path = GeminiLogo.svg; sourceTree = "<group>"; };
+		649173B8471CA7E5116645A5 /* MacChatV2View.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatV2View.swift; sourceTree = "<group>"; };
 		64C634F7C5D8CBEF39FAA084 /* SessionActivityStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionActivityStrip.swift; sourceTree = "<group>"; };
 		6576347309635291F6B4C01B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		65C348780612E22B3A37DBC8 /* SidecarAskCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarAskCoordinator.swift; sourceTree = "<group>"; };
@@ -639,6 +641,14 @@
 			path = ClawdmeterWatch;
 			sourceTree = "<group>";
 		};
+		12B67C07ADA0F05C70B94CD5 /* ChatV2 */ = {
+			isa = PBXGroup;
+			children = (
+				649173B8471CA7E5116645A5 /* MacChatV2View.swift */,
+			);
+			path = ChatV2;
+			sourceTree = "<group>";
+		};
 		38CA2D6F4DBC6FA5380F3A72 /* Components */ = {
 			isa = PBXGroup;
 			children = (
@@ -756,6 +766,7 @@
 				28ABE2A3E4E9C6025F5B9E5D /* SessionSidebarGrouper.swift */,
 				EB6CC1AA9EB4821E16119827 /* SessionWorkspaceView.swift */,
 				96C446A0B7936EDEA144F30E /* SourcesPane.swift */,
+				12B67C07ADA0F05C70B94CD5 /* ChatV2 */,
 				4A0FA6AC91AE9DE6B4FF45C4 /* Composer */,
 			);
 			path = Workspace;
@@ -1363,6 +1374,7 @@
 				882A3D7032BBBDBD07777059 /* LiveCostCalculator.swift in Sources */,
 				0BB33AAC47F2E78EC1950812 /* MacAPNSPusher.swift in Sources */,
 				B86808A96FFAB197F66D4646 /* MacChatDataAdapter.swift in Sources */,
+				611D8E9B338AA7AEBEBFCE51 /* MacChatV2View.swift in Sources */,
 				7BA5CB74F2B365B516C32366 /* MacChatView.swift in Sources */,
 				ED74E95DB9CD21EDB7AD21F6 /* MacCodeView.swift in Sources */,
 				A2CA9959AFA87857A2BD8831 /* MacComposerSender.swift in Sources */,

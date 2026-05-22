@@ -773,13 +773,15 @@ public final class AgentControlClient: ObservableObject {
         provider: AgentKind,
         model: String? = nil,
         codexBackend: CodexChatBackend? = nil,
-        effort: ReasoningEffort? = nil
+        effort: ReasoningEffort? = nil,
+        deepResearch: Bool = false
     ) async -> AgentSession? {
         let req = CreateChatSessionRequest(
             provider: provider,
             model: model,
             effort: effort,
-            codexChatBackend: codexBackend
+            codexChatBackend: codexBackend,
+            deepResearch: deepResearch
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

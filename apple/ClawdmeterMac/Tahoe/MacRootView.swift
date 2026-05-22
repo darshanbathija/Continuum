@@ -114,9 +114,14 @@ struct MacRootView: View {
                 Group {
                     switch tab {
                     case .chat:
-                        MacChatView(
-                            mode: $chatMode,
-                            soloProvider: $chatSoloProvider,
+                        // v0.23 (Chat V2): the new chat surface replaces
+                        // the legacy MacChatView. Phase 1 foundation
+                        // (wire v14 + ChatSnapshotSource protocol +
+                        // SessionInterruptDispatcher + Deep Research
+                        // argv + /chat-sessions/search) is live; this
+                        // V2 view consumes it end-to-end with sidebar +
+                        // transcript + composer + status strip.
+                        MacChatV2View(
                             loopbackClient: runtime.loopbackClient,
                             runtime: runtime
                         )
