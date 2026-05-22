@@ -326,12 +326,23 @@ public final class AgentControlServer {
                     await MainActor.run {
                         AutopilotState.shared.setEnabled(false, sessionId: id)
                     }
+                    // `AgentEventStream.recordEvent` expects
+                    // `payload: [String: String]`; the original `false`
+                    // Bool literal made the dictionary infer to
+                    // `[String: any Sendable]` and the call site
+                    // refused to type-check. Stringify so the autopilot
+                    // sweep ships at all.
                     AgentEventStream.recordEvent(
                         sessionId: id,
                         kind: .statusChanged,
-                        payload: ["autopilot": false, "reason": "inactivity_timeout"]
+                        payload: ["autopilot": "false", "reason": "inactivity_timeout"]
                     )
-                    self?.serverLogger.info(
+                    // `serverLogger` is a module-level `private let`
+                    // (top of this file), not an instance member —
+                    // `self?.serverLogger` doesn't resolve. Reference
+                    // the global directly; the weak self capture
+                    // covers the actor isolation around AutopilotState.
+                    serverLogger.info(
                         "autopilot disabled by 15-min inactivity sweep: session=\(id.uuidString, privacy: .public)"
                     )
                 }
