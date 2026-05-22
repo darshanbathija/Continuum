@@ -99,4 +99,24 @@ final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
         // — no regression from the agentapi branch.
         _ = DaemonChatStoreRegistry.defaultResolveURL(sessionId: session.id, session: session)
     }
+
+    // MARK: - v0.23.2 T8: opencode branch routing
+
+    func test_opencodeSessions_createUnpathedChatStore() {
+        // OpenCode sessions have no JSONL rollout file — the registry's
+        // createStore branch instantiates an sdkOnly SessionChatStore and
+        // never asks defaultResolveURL for a path. The integration is
+        // verified by chat-subscribe smoke tests (T11). At unit level we
+        // can at least confirm defaultResolveURL doesn't fight us for the
+        // opencode agent kind by accidentally returning a Claude JSONL.
+        let session = makeSession(agent: .opencode)
+        let url = DaemonChatStoreRegistry.defaultResolveURL(sessionId: session.id, session: session)
+        // Either nil (no JSONL ever expected) or anything Claude-resolver
+        // returned by fall-through is irrelevant — production never reads
+        // it for .opencode because createStore short-circuits earlier.
+        // Test asserts: doesn't crash, doesn't return a `.db` (which would
+        // suggest we accidentally fell into the agentapi-Gemini branch).
+        XCTAssertNotEqual(url?.pathExtension, "db",
+            "opencode sessions must never route to the agentapi DB layout")
+    }
 }

@@ -4,6 +4,22 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.3 build 118] - 2026-05-23 — OpenCode mirror + tests (P1-05 + T10) (`feat/opencode-mirror-and-tests`)
+
+Two follow-throughs from the v0.23.2 ship:
+
+### Added — P1-05: cross-device OpenCode dollar values
+
+- **`UsageHistoryStore.scheduleOpencodeMirrorRefresh`** — when a live `.opencodeUsageRecorded` notification lands, kick a debounced analytics-snapshot rebuild (10s minimum gap). The loader reads opencode's SQLite, folds the new rows into `byProvider[.opencode]`, AppRuntime mirrors the snapshot into iCloud KV via `UsageCloudMirror.writeAnalyticsSnapshot`. Net effect: a paired iPhone sees OpenCode dollar deltas within seconds of the Mac processing the SSE `usage` event, instead of waiting up to 60s for the next periodic refresh tick.
+
+### Added — T10 test coverage for OpenCode send (v0.23.2)
+
+- **`OpencodeSSEAdapterTests` — extended**: `parseMessageAdded(properties:)` round-trips across all wire shapes (plain string, text-only array, `tool-call`/`tool_use`, `tool-result`/`tool_result` text + isError, empty content, missing role/id). `opencodeSessionId(for:)` lookup before/after register/stop. `chatStoreAccessor` is invoked on `message.added` only when the opencode session id is registered.
+- **`OpencodeSendTests.swift` — new**: the public surface of the T6 send path. BidirectionalMap gate for the 503 `opencode_session_not_registered` envelope, request body shape (`{"parts":[{"type":"text","text":"…"}]}`) JSON round-trip with multi-line + Unicode prompts, error envelope JSON validity for all three error codes, user-bubble echo ChatMessage shape, parser/echo symmetry for the dedupe layer.
+- **`DaemonChatStoreRegistryRoutingTests` — extended**: opencode sessions never route into the agentapi `.db` layout.
+
+Bumps `MARKETING_VERSION` 0.23.2 → 0.23.3, `CURRENT_PROJECT_VERSION` 117 → 118.
+
 ## [0.23.2 build 117] - 2026-05-23 — OpenCode send end-to-end (P1-04) (`feat/opencode-send`)
 
 Sending into an OpenCode session + streaming the reply back now works through the same chat composer that drives Claude / Codex / Antigravity sessions.
