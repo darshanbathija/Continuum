@@ -7,19 +7,63 @@ Originally generated 2026-05-22 against `feat/button-wiring-audit` off
 Goal: every button on every Tahoe surface either invokes a real backend
 action or is removed. No decorative buttons in production.
 
-## Totals — v1.1 final (post-audit-retro)
+## Totals — v1.2 final (post-PR #35 + PR #36)
 
 | Platform | Wired | By-design no-op | Decorative |
 |----------|-------|-----------------|------------|
-| Mac      | ~52   | 2 (RecentRow stub, empty-state HistoryRow) | 0 |
-| iOS      | ~43   | 2 (RecentRow stub, dormant PickWinnerButton) | 0 |
-| **Total**| **~95 (~95%)** | **4 (4%)** | **0 (0%)** |
+| Mac      | ~53   | 0 | 0 |
+| iOS      | ~44   | 0 | 0 |
+| **Total**| **~97 (100%)** | **0** | **0 (0%)** |
 
-Final ratio: **~95% wired, 0% decorative, 4 by-design no-ops** with
-documented v1.2 follow-up scope (historical-sessions surface + iOS
-broadcast UI). Down from 102 interactive controls original because D3
-+ D7 retired ~7 surface elements (`PairingFlow` segmented picker,
-`refresh`/`star`/`arrowR` icons on reply cards).
+**Zero decorative or by-design no-ops left** on the Tahoe surfaces.
+Down from 102 interactive controls original because D3 + D7 + audit
+retros retired ~5 surface elements (`PairingFlow` segmented picker,
+`refresh`/`star`/`arrowR` icons on reply cards, demo `HistoryRow` +
+demo `PickWinnerButton`).
+
+### Wiring progression — full history
+
+| PR | Wired % | What landed |
+|---|---|---|
+| #23 pre-Phase | 48% | Audit baseline (49/102) |
+| #23 post-Phase A/B | 68% | +20 quick-wire wins |
+| #24 (Mac loopback) | 75% | Mac Code IDE actions via daemon |
+| #25 (ReviewPane) | 79% | Diff/Sources/PR/Term embeds |
+| #26 (iOS chat) | 84% | iOS chat composer + D7 reply cleanup |
+| #27 (D5+D6) | 87% | iOS search + Mac titlebar truth |
+| #28 (v1.0 polish) | 91% | D3 pairing + D4 setAutoRevive + X3 + Mac chat composer |
+| #29–#33 (OpenCode + polish) | 93% | OpenCode end-to-end across Mac+iOS |
+| #34 (audit retro) | 95% | Mac chat broadcast + D7 retro + sync popover |
+| **#35 (historical sessions)** | **96%** | Re-open archived from RecentRow (Mac + iOS) |
+| **#36 (zero-decoration)** | **100%** | Retire iOS PickWinnerButton + Mac empty-state HistoryRow |
+
+## Decorative surfaces retired (history)
+
+| Surface | Retired in | Why |
+|---|---|---|
+| `PairingFlow.swift` segmented picker | PR #28 (D3) | Replaced by IOSPairingView with both Scan + Paste wired |
+| Mac chat reply `refresh` icon | PR #34 (D7 retro) | Never wired, never asked for |
+| Mac chat reply `arrowR` (share) icon | PR #34 (D7 retro) | Same |
+| Mac chat reply `StarButton` | PR #34 (D7 retro) | Same |
+| iOS chat reply `refresh` icon | PR #26 (D7) | Same |
+| iOS chat reply `share` icon | PR #26 (D7) | Same |
+| **iOS chat reply `PickWinnerButton`** | **PR #36** | Empty action; iOS broadcast UI is a v1.2 surface — button comes back wired when that surface ships |
+| **Mac chat sidebar `HistoryRow` + `HistorySection`** | **PR #36** | Demo-only fixture rows with no-op clicks; replaced by `ChatSidebarEmptyState` informational view + `ActiveSessionsSection` (real data) |
+
+## Wired in PR #35 + PR #36
+
+- `MacCodeView.RecentRow` — tap calls `client.unarchiveSession(id:)` +
+  `refreshSessions()` + focuses the restored session
+- `IOSCodeView` recent row — same flow on iOS with inline
+  ProgressView during RPC
+- `TahoeCodeRecent.sessionId: UUID?` — new optional field; nil for
+  JSONL-only "recently touched" entries (those stay non-actionable)
+- `MacTahoeAdapter` + `IOSTahoeAdapter` populate recents from
+  archived AgentSessions (sorted by `archivedAt` desc)
+- iOS `PickWinnerButton` removed; `PickWinnerMenu` lives in
+  MacChatView's ChatStream where broadcast sessions actually exist
+- `ChatSidebarEmptyState` replaces `HistoryRow`/`HistorySection`
+  empty-state preview with honest "No chats yet" copy
 
 ## Original totals (pre-PR #23)
 
@@ -39,32 +83,15 @@ Chat tab being almost entirely decorative.
 |-----------|---------|-------|
 | PR #23 pre-Phase | 48% | Audit baseline (49/102) |
 | PR #23 post-Phase A/B | 68% | +20 quick-wire wins |
-| PR #24 (Mac loopback) | 75% | +Mac Code IDE actions |
-| PR #25 (ReviewPane) | 79% | +Diff/Sources/PR/Term tabs |
-| PR #26 (iOS chat composer) | 84% | +iOS chat send loop |
-| PR #27 (D5+D6) | 87% | +iOS search +Mac titlebar |
-| PR #28 (D3+D4+X3+Mac chat) | 91% | +D3 pairing +D4 setAutoRevive +Mac chat composer |
-| PR #29/#30/#31/#33 (OpenCode + polish) | 93% | +OpenCode end-to-end |
-| **PR #34 (audit retro)** | **~95%** | +Mac Copy reply (D7) +syncChipUsage QR popover +hide demo HistoryRow when real sessions exist |
+| (See top-of-doc table for full per-PR progression) | | |
 
-## Remaining by-design no-ops (v1.2+ scope)
+## Remaining by-design no-ops
 
-1. **`MacCodeView.RecentRow`** — clicking a "RECENT" entry under a
-   repo card is a no-op. The historical-sessions surface (re-open a
-   recently-archived session) is a v1.2 product feature; the rows
-   exist today so the empty space on the right column doesn't read
-   as broken.
-2. **`IOSCodeView` recent row** — same as Mac. Comment in source
-   explicitly tags "the historical sessions surface lands in a
-   follow-up".
-3. **`IOSChatView.PickWinnerButton`** — wired UI but no group/child
-   plumbing yet on iOS. The Mac surface ships the wired version via
-   `PickWinnerMenu` in `MacChatView`; iOS broadcast UI is a v1.2
-   surface that'll thread groupId + childIndex.
-4. **`MacChatView.HistoryRow`** (empty-state preview only) — renders
-   only when `client.chatSessions` is empty, as a visual preview of
-   what the sidebar will look like. Clicking is a no-op because
-   there's no real session behind the row.
+**None.** After PR #36, every Tahoe interactive control either calls a
+real backend RPC or has been deleted (with a code comment documenting
+why). v1.2 product surfaces like the full iOS broadcast UI will
+re-introduce wired controls when they ship; until then no decorative
+placeholders are rendered.
 
 ## Surfaces with no buttons but were decorative (now real)
 

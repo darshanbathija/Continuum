@@ -117,6 +117,45 @@ sidecar (~80MB of vendored runtime artifacts).
   bridge minted token → daemon imported folder → project visible in
   subsequent `/api/projects`.
 
+## [0.22.3 build 85] - 2026-05-22 — Zero decoration: retire iOS PickWinner + Mac chat empty-state demo (PR #36)
+
+Closes the last 2 by-design no-ops surfaced in the PR #34 audit retro.
+After this PR, the Tahoe surfaces have **0 decorative buttons and 0
+documented no-ops**.
+
+### Retired
+
+- **`IOSChatView.PickWinnerButton`** (`apple/ClawdmeteriOS/Tahoe/IOSChatView.swift`)
+  — was: empty `action: {}`. iOS chat doesn't construct frontier
+  (broadcast) sessions yet, so there was no groupId or childIndex to
+  fire against. Removed from `IOSReplyCard` + the struct definition
+  itself deleted. The Mac surface keeps its wired equivalent
+  (`PickWinnerMenu` in `MacChatView`'s ChatStream header) where
+  broadcast sessions actually exist. iOS broadcast UI returns the
+  button (with proper threading) as a v1.2 surface.
+- **`MacChatView.HistoryRow` + `HistorySection`** (`apple/ClawdmeterMac/Tahoe/MacChatView.swift`)
+  — was: empty `action: {}` rendered for fixture `TahoeDemo.chatHistory`
+  entries in the sidebar empty-state preview. Replaced by a new
+  `ChatSidebarEmptyState` informational view that says "No chats yet"
+  with clear copy directing the user to the New chat button. Mixing
+  real + demo rows confused users; honest empty-state beats a
+  fake-looking sidebar.
+
+### Wiring tally
+
+- **100% wired** (up from ~96% post-PR #35)
+- 0 decorative, 0 by-design no-ops
+- All buttons either call a real RPC, navigate, or have been deleted
+
+### Tests
+
+- 620/620 shared tests pass
+- 89/89 Mac tests pass
+- Mac + iOS + Watch all build clean
+
+See [`docs/button-wiring-audit.md`](docs/button-wiring-audit.md) for
+the final v1.2 audit table.
+
 ## [0.22.2 build 84] - 2026-05-22 — Historical sessions: re-open archived (PR #35)
 
 Wires the previously-no-op RecentRow on both Mac and iOS Code surfaces.
