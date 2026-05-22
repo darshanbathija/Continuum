@@ -100,15 +100,21 @@ struct SessionWorkspaceView: View {
                     if showingModeSwitchOverlay {
                         modeSwitchOverlay
                     }
-                    // v0.8 QA: floating permission-prompt tray (same as
-                    // Chat tab). Overlay so it doesn't disrupt the
-                    // CenterThread's layout when no prompt is pending.
+                    // v0.23 (T11+T16): use the lifted Shared
+                    // PermissionPromptCard + MacPermissionResponder.
+                    // Replaces the deleted LegacyMacPermissionPromptCard
+                    // that used to live in ChatSoloView.swift.
                     if let session = model.openSession,
-                       let store = model.chatStore(for: session) {
-                        LegacyMacPermissionPromptCard(store: store, sessionId: session.id)
-                            .padding(.horizontal, 20)
-                            .padding(.bottom, 16)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                       let store = model.chatStore(for: session),
+                       let prompt = store.pendingPermissionPrompt {
+                        PermissionPromptCard(
+                            prompt: prompt,
+                            sessionId: session.id,
+                            responder: MacPermissionResponder()
+                        )
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
                 .frame(maxWidth: .infinity)

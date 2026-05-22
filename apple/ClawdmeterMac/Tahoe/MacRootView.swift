@@ -28,11 +28,10 @@ struct MacRootView: View {
     @ObservedObject private var codexModel: AppModel
     @ObservedObject private var geminiModel: AppModel
 
-    // Chat-tab state hoisted to the root so the titlebar can host the
-    // Broadcast/Solo toggle inline (mac-chat.jsx:175 nests it inside the
-    // tabs chip; we mirror that by passing bindings down to MacChatView).
-    @State private var chatMode: MacChatView.Mode = .broadcast
-    @State private var chatSoloProvider: TahoeProvider = .claude
+    // v0.23: legacy chatMode + chatSoloProvider bindings retired with
+    // MacChatView (T16). The V2 chat composer owns its own selection
+    // state via `ChatV2Store` (T10). MacTitlebar's `secondaryRight`
+    // branch for `.chat` is `EmptyView()` so it doesn't need bindings.
 
     /// New-session sheet state — `nil` means closed; an empty string means
     /// "no repo preselected"; a non-empty value pre-selects the repo on
@@ -87,8 +86,6 @@ struct MacRootView: View {
                     active: tab,
                     onTab: { tab = $0 },
                     theme: theme,
-                    chatMode: $chatMode,
-                    chatSoloProvider: $chatSoloProvider,
                     runtime: runtime
                 )
                     .padding(.horizontal, 10)
@@ -236,8 +233,6 @@ struct MacTitlebar: View {
     var active: MacRootView.Tab
     var onTab: (MacRootView.Tab) -> Void
     var theme: TahoeThemeStore
-    @Binding var chatMode: MacChatView.Mode
-    @Binding var chatSoloProvider: TahoeProvider
     /// PR #26 D6: runtime for the secondary-right chips (repo count,
     /// pairing state, sync popover trigger). Nil falls back to static
     /// text for Previews.
@@ -249,15 +244,11 @@ struct MacTitlebar: View {
         active: MacRootView.Tab,
         onTab: @escaping (MacRootView.Tab) -> Void,
         theme: TahoeThemeStore,
-        chatMode: Binding<MacChatView.Mode>,
-        chatSoloProvider: Binding<TahoeProvider>,
         runtime: AppRuntime? = nil
     ) {
         self.active = active
         self.onTab = onTab
         self.theme = theme
-        self._chatMode = chatMode
-        self._chatSoloProvider = chatSoloProvider
         self.runtime = runtime
     }
 
