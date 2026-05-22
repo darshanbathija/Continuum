@@ -1,7 +1,8 @@
 {
   "_meta": {
-    "capturedAt": "2026-05-14T18:08:32Z",
-    "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+    "capturedAt": "2026-05-23T02:45:00Z",
+    "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+    "manualOverrides": "gemini-3.5-flash (+ -thinking): official I/O 2026 rate card ($1.50/$9.00/M, $0.15/M cached) — 2026-05-23"
   },
   "models": {
     "chatgpt-4o-latest": {
@@ -662,28 +663,30 @@
       "supports_vision": true
     },
     "gemini-3.5-flash": {
-      "_note": "Antigravity 2 default model. Provisional pricing pending official Google pricing API; refresh via tools/refresh-pricing.sh when published.",
-      "_provisional": true,
-      "input_cost_per_token": 7.5e-08,
+      "_note": "Antigravity 2 default model. Official pricing announced at Google I/O 2026 (2026-05-19): $1.50/M input, $9.00/M output, $0.15/M cached input (90% discount).",
+      "cache_read_input_token_cost": 1.5e-07,
+      "input_cost_per_token": 1.5e-06,
       "litellm_provider": "vertex_ai-language-models",
       "max_input_tokens": 1048576,
       "max_output_tokens": 8192,
       "mode": "chat",
-      "output_cost_per_token": 3e-07,
+      "output_cost_per_token": 9e-06,
       "supports_function_calling": true,
+      "supports_prompt_caching": true,
       "supports_system_messages": true,
       "supports_vision": true
     },
     "gemini-3.5-flash-thinking": {
-      "_note": "v0.7.17: Gemini 3.5 Flash's Extended thinking mode. Same per-token cost as the base model; the API bills thinking tokens at the output rate, so users see a higher total when extended thinking is active. Provisional until Google publishes an official rate card for thinking budgets.",
-      "_provisional": true,
-      "input_cost_per_token": 7.5e-08,
+      "_note": "Gemini 3.5 Flash's Extended thinking mode. Same per-token rate card as the base model — Google bills thinking tokens at the output rate, so a session with extended thinking enabled produces a larger output-token total but the price per token is unchanged.",
+      "cache_read_input_token_cost": 1.5e-07,
+      "input_cost_per_token": 1.5e-06,
       "litellm_provider": "vertex_ai-language-models",
       "max_input_tokens": 1048576,
       "max_output_tokens": 8192,
       "mode": "chat",
-      "output_cost_per_token": 3e-07,
+      "output_cost_per_token": 9e-06,
       "supports_function_calling": true,
+      "supports_prompt_caching": true,
       "supports_system_messages": true,
       "supports_vision": true
     },
