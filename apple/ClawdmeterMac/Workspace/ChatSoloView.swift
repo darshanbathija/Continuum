@@ -31,7 +31,7 @@ struct ChatSoloView: View {
         .navigationTitle(session.displayLabel)
         .overlay(alignment: .bottom) {
             if let store = chatStore {
-                PermissionPromptCard(store: store, sessionId: session.id)
+                LegacyMacPermissionPromptCard(store: store, sessionId: session.id)
                     .padding(.horizontal, 20)
                     .padding(.bottom, 16)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -213,19 +213,15 @@ struct ChatSoloView: View {
     }
 }
 
-/// v0.8 QA: AskUserQuestion-style card surfacing a CLI permission prompt.
-/// Renders when the SessionChatStore has a pending prompt (e.g. Codex's
-/// "Trust this directory?"); user clicks an option → POST to daemon →
-/// daemon dispatches the corresponding keys to the CLI's TUI → card
-/// disappears. Recommended option gets the prominent button style.
-/// v0.8 QA: PermissionPromptCard matches the AskUserQuestion tray UX —
-/// a floating panel with header chip + bold question + numbered options.
-/// Each option row shows label + description; the recommended option is
-/// pre-focused (Return submits it); number keys 1-9 are keyboard
-/// shortcuts. No close / skip buttons — permission prompts MUST be
-/// answered, never auto-dismissed.
+/// v0.23: legacy Mac-only PermissionPromptCard was lifted to
+/// `ClawdmeterShared/Chat/Views/PermissionPromptCard.swift` with a
+/// platform-agnostic `PermissionResponder` protocol (T11). The legacy
+/// type is renamed to `LegacyMacPermissionPromptCard` to avoid the
+/// name clash; it still drives `ChatSoloView`'s overlay until that
+/// view is retired in T16. The V2 chat surface (`MacChatV2View`) uses
+/// the lifted Shared card with `MacPermissionResponder`.
 @available(macOS 14, *)
-struct PermissionPromptCard: View {
+struct LegacyMacPermissionPromptCard: View {
     @ObservedObject var store: SessionChatStore
     let sessionId: UUID
 

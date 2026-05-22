@@ -239,12 +239,44 @@ private struct Transcript: View {
     var body: some View {
         if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
             TranscriptScroll(store: store)
+                // T11: cross-platform PermissionPromptCard overlays the
+                // transcript when the daemon surfaces a CLI permission
+                // prompt (Codex trust, Claude per-tool approval). The
+                // composer disables itself in parallel — see
+                // `Composer.isStreaming`-style gating that future
+                // iterations layer on top.
+                .overlay(alignment: .bottom) {
+                    PermissionPromptOverlay(store: store, sessionId: session.id)
+                }
         } else {
             VStack(spacing: 10) {
                 ProgressView().controlSize(.small)
                 Text("Connecting…").font(.system(size: 12)).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+/// Bridges the store's `pendingPermissionPrompt` @Published field to
+/// the lifted Shared `PermissionPromptCard`. Wrapping in its own view
+/// makes SwiftUI re-render when the prompt changes — the parent's
+/// `.overlay` modifier wouldn't otherwise subscribe to the store.
+@available(macOS 14, *)
+private struct PermissionPromptOverlay: View {
+    @ObservedObject var store: SessionChatStore
+    let sessionId: UUID
+
+    var body: some View {
+        if let prompt = store.pendingPermissionPrompt {
+            PermissionPromptCard(
+                prompt: prompt,
+                sessionId: sessionId,
+                responder: MacPermissionResponder()
+            )
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 }

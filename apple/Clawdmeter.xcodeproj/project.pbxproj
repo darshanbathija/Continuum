@@ -12,6 +12,7 @@
 		0127E090A7799D2F4A7BC9BB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 052C6AEF07A486E8A35669C5 /* Assets.xcassets */; };
 		0190050C63A0552D50548BA8 /* CodexPlanPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCF9A1F1CC3BBCFFE5BFE1B3 /* CodexPlanPane.swift */; };
 		02ABAFEED5AAA54ADA6094A2 /* ClawdmeteriOSWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96732148372DBB9D002F93B9 /* ClawdmeteriOSWidgets.swift */; };
+		02F877979649BE4348C031CE /* IOSPermissionResponder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7328B46D75569B7C07ED261D /* IOSPermissionResponder.swift */; };
 		030F8C597B7C15295B250217 /* SidecarAskCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96A2F50347CBD669083BB20A /* SidecarAskCoordinatorTests.swift */; };
 		03A84A49FEA03B5FE83AAB9D /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7EDE305AE4E9350183F0920 /* AppDelegate.swift */; };
 		0524A1F795D299795862AA1B /* SpeechDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69F2E3291A6E0BEC1EE5ABEC /* SpeechDictation.swift */; };
@@ -102,6 +103,7 @@
 		6972BC3349D69FBCEEA26136 /* SidecarAskCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C348780612E22B3A37DBC8 /* SidecarAskCoordinator.swift */; };
 		69BB1B4EA6D9FED589AC46BD /* OpencodeSSEAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C523F489FF4A0361B5DAF2CD /* OpencodeSSEAdapter.swift */; };
 		6C249C45CE80F037E5833FD4 /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 62CE064984915F22CE6D0444 /* ClawdmeterShared */; };
+		6ECB302F90A377848A2E6021 /* MacPermissionResponder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222ECFE9B726D54B46F1F6C7 /* MacPermissionResponder.swift */; };
 		6EE13264AFF611DAB56A9E1C /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = BE3F00806303DA92CDA654D3 /* ClawdmeterShared */; };
 		717F946EC17A0E83AFF05B9D /* iOSTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27CA03750EC59D41E11FB18 /* iOSTerminalView.swift */; };
 		71D2F5C5DA48D0A6A2076B75 /* PRReviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93A894C6B7326CFA1F502397 /* PRReviewPane.swift */; };
@@ -311,6 +313,7 @@
 		1E39AAB6A67BB3A87A9206F9 /* LanguageServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageServerClient.swift; sourceTree = "<group>"; };
 		202860F4E3FE38BDC6097299 /* IOSAnalyticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSAnalyticsView.swift; sourceTree = "<group>"; };
 		21239F87404DC4B4E7F21AB7 /* APNSCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNSCredentialStore.swift; sourceTree = "<group>"; };
+		222ECFE9B726D54B46F1F6C7 /* MacPermissionResponder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPermissionResponder.swift; sourceTree = "<group>"; };
 		23BA2D80741F5E8B24ACEA51 /* ControlModeFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlModeFrame.swift; sourceTree = "<group>"; };
 		24E844E6256A865A0DFEEF18 /* UsageQueryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageQueryService.swift; sourceTree = "<group>"; };
 		258860E4C81547276D4E7F3C /* iOSComposerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSComposerBar.swift; sourceTree = "<group>"; };
@@ -372,6 +375,7 @@
 		6FF9E7F2868CDF9804D82F59 /* PluginRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginRegistry.swift; sourceTree = "<group>"; };
 		717807F26A96613EF8C57F1C /* iOSModelEffortPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSModelEffortPill.swift; sourceTree = "<group>"; };
 		731A7AB283726BD3FFA5CA18 /* LiveGaugesHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGaugesHeader.swift; sourceTree = "<group>"; };
+		7328B46D75569B7C07ED261D /* IOSPermissionResponder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSPermissionResponder.swift; sourceTree = "<group>"; };
 		7362FF39C8EADA00222188BE /* MacDesignView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacDesignView.swift; sourceTree = "<group>"; };
 		748E1F1BC9C3BDE9E666458C /* ClawdmeterMacWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeterMacWidgets.swift; sourceTree = "<group>"; };
 		7522B33A2BBD974C63BEDC00 /* CodexSDKSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexSDKSettingsView.swift; sourceTree = "<group>"; };
@@ -589,6 +593,7 @@
 				C09B39BC5A520970D7D673F5 /* LiveCostCalculator.swift */,
 				FCE2CE86D461B7E5CF1FA73F /* MacAPNSPusher.swift */,
 				D6DBC6F360778F38504200A2 /* MacLoopbackClient.swift */,
+				222ECFE9B726D54B46F1F6C7 /* MacPermissionResponder.swift */,
 				68EF91556CDC1149B2B2C480 /* MacTerminalView.swift */,
 				DDE036C3B197F45A234547AD /* MarkdownRenderer.swift */,
 				0A4AA299B141BD4D1652F66B /* NotificationDispatcher.swift */,
@@ -821,6 +826,7 @@
 			children = (
 				0BE652466D437D2E8099589C /* iOSChatStore.swift */,
 				9BE24F0540974DFD90D7CBDE /* iOSChatStore+ChatSnapshotSource.swift */,
+				7328B46D75569B7C07ED261D /* IOSPermissionResponder.swift */,
 			);
 			path = AgentControl;
 			sourceTree = "<group>";
@@ -1381,6 +1387,7 @@
 				5AFE413059DF12B9B03FE57F /* MacDesignView.swift in Sources */,
 				6501702B48607D3BC64EDBF1 /* MacLoopbackClient.swift in Sources */,
 				180F0F522D2CF2CBD7EEE500 /* MacMenubarPopover.swift in Sources */,
+				6ECB302F90A377848A2E6021 /* MacPermissionResponder.swift in Sources */,
 				5FB161B730DF9EAE1712B31B /* MacRootView.swift in Sources */,
 				66E8795E411E0FFC14C61C7E /* MacSettingsView.swift in Sources */,
 				0D5249B534DF8025B1A19E2C /* MacTahoeAdapter.swift in Sources */,
@@ -1457,6 +1464,7 @@
 				7713CEF45F11F9A4B59F3361 /* IOSDesignView.swift in Sources */,
 				BF953F6EFA5428F1648B071A /* IOSLiveView.swift in Sources */,
 				E948CA597F3EDF2454033FAA /* IOSPairingView.swift in Sources */,
+				02F877979649BE4348C031CE /* IOSPermissionResponder.swift in Sources */,
 				1777EFD96F6AB3DA3918D8A1 /* IOSRootView.swift in Sources */,
 				B028C8D132320086B733BC2B /* IOSSessionDetailView.swift in Sources */,
 				9E2FE6275C411B4BD5F4A8E8 /* IOSTahoeAdapter.swift in Sources */,

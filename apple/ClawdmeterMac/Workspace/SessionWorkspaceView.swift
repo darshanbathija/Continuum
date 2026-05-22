@@ -105,7 +105,7 @@ struct SessionWorkspaceView: View {
                     // CenterThread's layout when no prompt is pending.
                     if let session = model.openSession,
                        let store = model.chatStore(for: session) {
-                        PermissionPromptCard(store: store, sessionId: session.id)
+                        LegacyMacPermissionPromptCard(store: store, sessionId: session.id)
                             .padding(.horizontal, 20)
                             .padding(.bottom, 16)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
