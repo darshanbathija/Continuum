@@ -57,6 +57,23 @@ public final class OpencodeSSEAdapter {
     /// session-id over the prompt POST.
     public private(set) var sessionMap: BidirectionalMap = .init()
 
+    /// v0.23.2: chat-store lookup for routing `message.added` events
+    /// into the per-session SessionChatStore (so chat-subscribe WS
+    /// streams them to iOS/Mac). AppRuntime injects this at startup
+    /// to break the circular dependency between the adapter and the
+    /// registry — without it, `handleMessageAdded` falls back to
+    /// just emitting a snapshot AgentEventStream signal as before.
+    public var chatStoreAccessor: (@MainActor (UUID) -> SessionChatStore?)?
+
+    /// v0.23.2: convenience accessor for `AgentControlServer` — given
+    /// our Clawdmeter session UUID, return the opencode session id
+    /// the server hands back in the `session.created` event. Returns
+    /// nil for sessions that haven't been registered yet (the SSE
+    /// stream hasn't observed their creation).
+    public func opencodeSessionId(for clawdmeterID: UUID) -> String? {
+        sessionMap.clawdmeterToOpencode[clawdmeterID]
+    }
+
     /// PR #32: per-session repo lookup. The opencode `usage` event
     /// doesn't carry the cwd, but the Clawdmeter-side session was
     /// created against a specific repo path; we stash that here at
@@ -259,18 +276,134 @@ public final class OpencodeSSEAdapter {
             logger.debug("opencode message.added for unknown sessionID")
             return
         }
-        // Surface as a snapshot delta — existing AgentEventStream
-        // doesn't carry per-message opencode shapes (yet). The chat
-        // subscribe channel + chat store pull the message body from
-        // the opencode HTTP API when they receive this nudge. Future
-        // PR can add a dedicated `.opencodeMessage` kind to the
-        // AgentEventKind enum; for now snapshot is the right fan-out
-        // signal ("this session's state changed; re-render").
+        // v0.23.2: route the opencode `message.added` payload into
+        // the session's SessionChatStore so chat-subscribe WS clients
+        // (iOS chat thread, Mac live workspace) see the assistant turn
+        // immediately. Falls back to a snapshot AgentEventStream signal
+        // when the chat-store accessor isn't wired (test paths /
+        // pre-injection).
+        if let chatMessage = Self.parseMessageAdded(properties: properties) {
+            if let store = chatStoreAccessor?(clawdmeterID) {
+                store.appendSDKMessages([chatMessage])
+                logger.debug("opencode message.added: appended \(chatMessage.kind.rawValue, privacy: .public) id=\(chatMessage.id, privacy: .public)")
+            } else {
+                logger.debug("opencode message.added: no chat-store accessor wired — emitting snapshot only")
+            }
+        }
+        // Always emit the snapshot signal too so downstream consumers
+        // (per-session refresh nudges, badge counters) update even when
+        // we couldn't extract a parseable ChatMessage from the payload.
         AgentEventStream.recordEvent(
             sessionId: clawdmeterID,
             kind: .snapshot,
             payload: ["opencodeSessionID": opencodeID]
         )
+    }
+
+    /// Convert an opencode `message.added` event into a `ChatMessage`
+    /// the SessionChatStore staging pipeline accepts. opencode's wire
+    /// shape varies across minor versions; we accept several known
+    /// patterns and fall through to nil for anything unrecognized.
+    ///
+    /// Known shapes (captured 2026-05-23 against opencode v1.15.x):
+    ///
+    ///   properties.message = {
+    ///     id: "msg_...",
+    ///     role: "assistant" | "user",
+    ///     content: [
+    ///       {type: "text", text: "..."},
+    ///       {type: "tool-call", name: "Bash", input: {...}}
+    ///     ]
+    ///   }
+    ///
+    /// For tool-call entries we emit a `.toolCall` ChatMessage with
+    /// `title=<tool-name>` and `body=<JSON-stringified-input>`. Text
+    /// entries produce a single `.userText` / `.assistantText` row
+    /// concatenating any sibling text deltas. Mixed-content messages
+    /// (text + tool calls) emit multiple ChatMessages sharing the
+    /// same `at` timestamp; the staging pipeline orders them by the
+    /// implicit "tool_use before tool_result" rule.
+    ///
+    /// Returns nil when properties.message is missing or unparseable —
+    /// the caller still emits the snapshot signal so the UI can probe
+    /// the opencode HTTP API for the full state. Internal so tests
+    /// can drive each known wire shape directly.
+    internal static func parseMessageAdded(properties: [String: Any]) -> ChatMessage? {
+        guard let msg = properties["message"] as? [String: Any] else { return nil }
+        let role = (msg["role"] as? String) ?? "assistant"
+        let kind: ChatMessage.Kind = (role == "user") ? .userText : .assistantText
+        let messageId = (msg["id"] as? String) ?? UUID().uuidString
+        let now = Date()
+        // content may be a string OR an array of typed parts.
+        if let plain = msg["content"] as? String {
+            return ChatMessage(
+                id: messageId,
+                kind: kind,
+                title: role.capitalized,
+                body: plain,
+                at: now
+            )
+        }
+        if let parts = msg["content"] as? [[String: Any]] {
+            // Concatenate text fragments; keep the first tool-call/result
+            // as a fallback. The v0.23.2 pass emits one ChatMessage per
+            // message.added event — future PR can decompose mixed-content
+            // into multiple rows if a real opencode session demonstrates
+            // text + tool fan-out in the same delta (uncommon today).
+            var textBuffer: [String] = []
+            for part in parts {
+                if let type = part["type"] as? String {
+                    switch type {
+                    case "text":
+                        if let t = part["text"] as? String { textBuffer.append(t) }
+                    case "tool-call", "tool_use":
+                        let name = (part["name"] as? String) ?? "tool"
+                        let inputDesc: String = {
+                            if let input = part["input"] {
+                                if let data = try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys]),
+                                   let s = String(data: data, encoding: .utf8) {
+                                    return s
+                                }
+                                return String(describing: input)
+                            }
+                            return ""
+                        }()
+                        return ChatMessage(
+                            id: messageId,
+                            kind: .toolCall,
+                            title: name,
+                            body: inputDesc,
+                            at: now
+                        )
+                    case "tool-result", "tool_result":
+                        let body = (part["output"] as? String)
+                            ?? (part["text"] as? String)
+                            ?? ""
+                        let isError = (part["isError"] as? Bool) ?? false
+                        return ChatMessage(
+                            id: messageId,
+                            kind: .toolResult,
+                            title: "Result",
+                            body: body,
+                            at: now,
+                            isError: isError
+                        )
+                    default:
+                        break
+                    }
+                }
+            }
+            let joined = textBuffer.joined(separator: "\n")
+            guard !joined.isEmpty else { return nil }
+            return ChatMessage(
+                id: messageId,
+                kind: kind,
+                title: role.capitalized,
+                body: joined,
+                at: now
+            )
+        }
+        return nil
     }
 
     /// Handle an opencode `usage` event by mapping it to a UsageRecord
