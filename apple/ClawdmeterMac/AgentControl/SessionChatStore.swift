@@ -430,13 +430,28 @@ public final class SessionChatStore: ObservableObject {
                 //                    `.streaming` so the indicator
                 //                    stays on through the round trip.)
                 if let type = json["type"] as? String {
+                    // Interactive Claude CLI's natural end-of-turn marker
+                    // is `type: "assistant"` with `message.stop_reason ==
+                    // "end_turn"` (or other terminal reasons). The
+                    // headless `claude -p` mode uses `type: "result"`.
+                    // `stop_reason: "tool_use"` is NOT terminal — the
+                    // assistant pauses mid-turn for a tool call and
+                    // continues after the tool result.
+                    let stopReason = (json["message"] as? [String: Any])?["stop_reason"] as? String
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         guard self.parseGeneration == generation else { return }
                         switch type {
                         case "result":
                             self.setCurrentTurnState(.completed)
-                        case "assistant", "user":
+                        case "assistant":
+                            switch stopReason {
+                            case "end_turn", "stop_sequence", "max_tokens", "refusal":
+                                self.setCurrentTurnState(.completed)
+                            default:
+                                self.setCurrentTurnState(.streaming)
+                            }
+                        case "user":
                             self.setCurrentTurnState(.streaming)
                         default:
                             break
