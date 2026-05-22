@@ -27,3 +27,7 @@ apple/**/*.xcuserstate
 # Mac DMG build artifacts (tools/build-mac-dmg.sh)
 dist/
 .build/
+
+# v0.23.0 bundled opencode binary (~50MB arm64). Downloaded on demand by
+# tools/download-bundled-opencode.sh; gitignored to keep the repo lean.
+apple/ClawdmeterMac/Resources/Vendor/opencode/opencode
