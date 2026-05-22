@@ -160,10 +160,24 @@ public struct TahoeCodeRecent: Identifiable, Hashable, Sendable {
     public var provider: TahoeProvider
     public var live: Bool
     public var ago: String
+    /// PR #35: the real `AgentSession.id` when this row represents an
+    /// archived session that can be re-opened. Nil for demo fixture
+    /// rows (the JSX-derived `TahoeBindings.codeDemo` placeholders)
+    /// where there's no backing session. UI surfaces gate the
+    /// unarchive action on this being non-nil.
+    public var sessionId: UUID?
 
-    public init(id: String, title: String, provider: TahoeProvider, live: Bool, ago: String) {
+    public init(
+        id: String,
+        title: String,
+        provider: TahoeProvider,
+        live: Bool,
+        ago: String,
+        sessionId: UUID? = nil
+    ) {
         self.id = id; self.title = title; self.provider = provider
         self.live = live; self.ago = ago
+        self.sessionId = sessionId
     }
 }
 

@@ -100,7 +100,8 @@ public struct IOSRootView: View {
                     onOpenDetail: { sessionId in
                         pushedScreen = .sessionDetail(sessionId)
                     },
-                    onNewSession: { newSessionPresented = true }
+                    onNewSession: { newSessionPresented = true },
+                    agentClient: agentClient
                 )
                 .refreshable {
                     await agentClient.refreshAll()
