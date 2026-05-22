@@ -374,23 +374,33 @@ private struct SpendChart: View {
     private let lines = 4
     private let chartHeight: CGFloat = 170
 
+    // v0.22.24: track which bar is hovered for the tooltip overlay.
+    // -1 means no hover (we don't use Int? because compiler complains
+    // about ambiguity inside the GeometryReader closure).
+    @State private var hoverIndex: Int = -1
+
     var body: some View {
-        // v0.22.8: include opencode in the maxTotal so the y-axis
-        // covers all four providers' stacked bar height.
-        let maxTotal = (series.map { $0.c + $0.x + $0.g + $0.o }.max() ?? 1) * 1.08
+        // v0.22.24: round to a "nice" Y-axis max instead of `rawMax * 1.08`
+        // (which produced labels like $876 / $584 / $292). Tick stride
+        // is in {1, 2, 2.5, 5} × 10^n so each gridline lands on a clean
+        // dollar number (e.g. $0 / $250 / $500 / $750 with stride 250).
+        let rawMax = series.map { $0.c + $0.x + $0.g + $0.o }.max() ?? 1
+        let (maxTotal, stride) = Self.niceAxisMax(rawMax: rawMax, ticks: lines)
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
-                // Y axis labels
+                // Y axis labels — each is `(lines - 1 - i) * stride` so
+                // labels are exactly integer multiples of `stride`, not
+                // arbitrary `rawMax * fraction` values.
                 VStack(alignment: .trailing) {
                     ForEach(0..<lines, id: \.self) { i in
-                        let v = maxTotal * (1 - Double(i) / Double(lines - 1))
-                        Text(v < 10 ? String(format: "$%.1f", v) : String(format: "$%d", Int(v)))
+                        let v = stride * Double(lines - 1 - i)
+                        Text(Self.formatAxisLabel(v))
                             .font(TahoeFont.mono(10))
                             .foregroundStyle(t.fg4)
                         if i < lines - 1 { Spacer() }
                     }
                 }
-                .frame(width: 28, height: chartHeight, alignment: .topTrailing)
+                .frame(width: 36, height: chartHeight, alignment: .topTrailing)
 
                 ZStack(alignment: .bottom) {
                     // gridlines
@@ -408,19 +418,49 @@ private struct SpendChart: View {
                         let barCount = max(series.count, 1)
                         let barW = max((geo.size.width - barSpacing * CGFloat(barCount - 1)) / CGFloat(barCount) * 0.78, 4)
                         HStack(alignment: .bottom, spacing: barSpacing) {
-                            ForEach(Array(series.enumerated()), id: \.offset) { _, d in
-                                stackedBar(d: d, max: maxTotal, w: barW)
+                            ForEach(Array(series.enumerated()), id: \.offset) { idx, d in
+                                stackedBar(d: d, max: maxTotal, w: barW, isHover: idx == hoverIndex)
                                     .frame(maxWidth: .infinity)
+                                    // v0.22.24: per-bar hover for the
+                                    // breakdown tooltip. macOS-only —
+                                    // `.onHover` is no-op on iOS where
+                                    // there's no mouse, but this view
+                                    // ships Mac-only.
+                                    .onHover { hovering in
+                                        hoverIndex = hovering ? idx : (hoverIndex == idx ? -1 : hoverIndex)
+                                    }
                             }
                         }
                     }
                     .frame(height: chartHeight)
+
+                    // v0.22.24: hover tooltip overlay anchored just
+                    // above the hovered bar. Lives inside the ZStack so
+                    // it overlays the gridlines + bars without
+                    // affecting layout. Uses .allowsHitTesting(false)
+                    // so the tooltip itself doesn't steal hover events
+                    // from underlying bars when it overlaps.
+                    if hoverIndex >= 0 && hoverIndex < series.count {
+                        GeometryReader { geo in
+                            let barCount = max(series.count, 1)
+                            let slot = geo.size.width / CGFloat(barCount)
+                            let cx = slot * (CGFloat(hoverIndex) + 0.5)
+                            HoverBreakdown(
+                                day: ticks.indices.contains(hoverIndex) ? ticks[hoverIndex] : "",
+                                point: series[hoverIndex]
+                            )
+                            .fixedSize()
+                            .position(x: cx, y: 22)
+                            .allowsHitTesting(false)
+                        }
+                        .frame(height: chartHeight)
+                    }
                 }
             }
 
             // X labels
             HStack {
-                Spacer().frame(width: 36)
+                Spacer().frame(width: 44)
                 HStack {
                     ForEach(Array(ticks.enumerated()), id: \.offset) { _, tick in
                         Text(tick)
@@ -434,8 +474,7 @@ private struct SpendChart: View {
         .padding(.top, 14)
     }
 
-    private func stackedBar(d: TahoeDemo.SpendPoint, max: Double, w: CGFloat) -> some View {
-        // v0.22.8: stack opencode on top alongside the other three.
+    private func stackedBar(d: TahoeDemo.SpendPoint, max: Double, w: CGFloat, isHover: Bool) -> some View {
         let total = d.c + d.x + d.g + d.o
         let h = total > 0 ? total / max * chartHeight : 0
         return VStack(spacing: 0) {
@@ -450,8 +489,58 @@ private struct SpendChart: View {
             }
             .frame(width: w)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .shadow(color: TahoeProvider.claude.base.color(opacity: 0.18), radius: 7, x: 0, y: 0)
+            // v0.22.24: brighten the bar slightly when hovered so user
+            // gets a visual confirmation of which bar the tooltip
+            // describes.
+            .shadow(color: TahoeProvider.claude.base.color(opacity: isHover ? 0.42 : 0.18), radius: isHover ? 11 : 7, x: 0, y: 0)
+            .overlay {
+                if isHover {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(t.fg.opacity(0.35), lineWidth: 1)
+                        .frame(width: w)
+                }
+            }
         }
+    }
+
+    /// v0.22.24: pick a "nice" Y-axis maximum so labels land on round
+    /// dollar amounts (250, 500, 750, 1000...). Algorithm: pick a
+    /// per-tick stride from the {1, 2, 2.5, 5} × 10^n family that's
+    /// the smallest stride for which `(ticks-1) * stride >= rawMax`.
+    /// Returns the chosen max and the per-tick stride.
+    static func niceAxisMax(rawMax: Double, ticks: Int) -> (max: Double, stride: Double) {
+        let segments = max(1, ticks - 1)
+        guard rawMax > 0 else { return (Double(segments), 1) }
+        // Rough step that would fit rawMax exactly into `segments`,
+        // then round up to a nicer number.
+        let rough = rawMax / Double(segments)
+        let exp = floor(log10(rough))
+        let pow10 = pow(10, exp)
+        let mantissa = rough / pow10
+        let niceMantissa: Double
+        if mantissa <= 1 { niceMantissa = 1 }
+        else if mantissa <= 2 { niceMantissa = 2 }
+        else if mantissa <= 2.5 { niceMantissa = 2.5 }
+        else if mantissa <= 5 { niceMantissa = 5 }
+        else { niceMantissa = 10 }
+        let stride = niceMantissa * pow10
+        return (stride * Double(segments), stride)
+    }
+
+    /// v0.22.24: y-axis labels use compact dollar formatting. Numbers
+    /// ≥ 1000 collapse to "$1.2K" / "$2K" / "$10K" to fit the 36pt
+    /// y-axis column; smaller values show full dollar amount.
+    static func formatAxisLabel(_ v: Double) -> String {
+        if v == 0 { return "$0" }
+        if v >= 1000 {
+            let kv = v / 1000.0
+            if kv == kv.rounded() {
+                return String(format: "$%dK", Int(kv))
+            }
+            return String(format: "$%.1fK", kv)
+        }
+        if v < 10 { return String(format: "$%.1f", v) }
+        return String(format: "$%d", Int(v))
     }
 
     /// v0.22.17: switched from `[glow, base]` to `[halo, glow]` to
@@ -582,5 +671,81 @@ private struct OpencodeDollarRow: View {
         formatter.currencyCode = "USD"
         formatter.maximumFractionDigits = 2
         return formatter.string(from: value as NSDecimalNumber) ?? "$0.00"
+    }
+}
+
+// MARK: - Hover tooltip for SpendChart bars (v0.22.24)
+
+/// Compact provider breakdown shown above the hovered bar in
+/// `SpendChart`. User reported "there's no way for me to see the codex
+/// token spend — when I hover over this, show me the specific break
+/// up." Renders four rows (one per provider) with dollar amounts +
+/// total, color-coded by the provider glyph that matches the bar
+/// segments below.
+private struct HoverBreakdown: View {
+    @Environment(\.tahoe) private var t
+    var day: String
+    var point: TahoeDemo.SpendPoint
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if !day.isEmpty {
+                Text(day)
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+            }
+            row(.claude, "Claude", point.c)
+            row(.codex, "Codex", point.x)
+            row(.gemini, "Antigravity", point.g)
+            row(.opencode, "OpenCode", point.o)
+            TahoeHair().padding(.vertical, 2)
+            HStack {
+                Text("Total")
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer(minLength: 10)
+                Text(Self.format(point.c + point.x + point.g + point.o))
+                    .font(TahoeFont.mono(11, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(t.fg)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(t.glassTintHi)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(t.hairline, lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 4)
+    }
+
+    @ViewBuilder
+    private func row(_ provider: TahoeProvider, _ label: String, _ value: Double) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(provider.halo.color)
+                .frame(width: 7, height: 7)
+            Text(label)
+                .font(TahoeFont.body(10.5))
+                .foregroundStyle(t.fg2)
+            Spacer(minLength: 10)
+            Text(Self.format(value))
+                .font(TahoeFont.mono(10.5))
+                .monospacedDigit()
+                .foregroundStyle(value > 0 ? t.fg : t.fg4)
+        }
+    }
+
+    private static func format(_ v: Double) -> String {
+        if v == 0 { return "$0" }
+        if v < 1 { return String(format: "$%.3f", v) }
+        if v < 10 { return String(format: "$%.2f", v) }
+        if v < 1000 { return String(format: "$%.2f", v) }
+        if v < 10_000 { return String(format: "$%.0f", v) }
+        return String(format: "$%.1fK", v / 1000.0)
     }
 }

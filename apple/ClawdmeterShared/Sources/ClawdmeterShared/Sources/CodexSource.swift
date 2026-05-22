@@ -240,7 +240,15 @@ public final class CodexSource: AISource {
         var weeklyWinner: BucketView?
         var reachedAny: String?
         for raw in buckets {
-            if let reached = raw["rate_limit_reached_type"] as? String, !reached.isEmpty {
+            // v0.22.24: accept both `rate_limit_reached_type` (snake_case,
+            // older clients) and `rateLimitReachedType` (camelCase, current
+            // v2 serde shape). Missing this key meant the status was
+            // wrongly stuck at .allowed when the user actually hit the
+            // limit, which downstream UI uses to flip into the limited
+            // pill.
+            if let reached = (raw["rateLimitReachedType"] as? String)
+                ?? (raw["rate_limit_reached_type"] as? String),
+                !reached.isEmpty {
                 reachedAny = reached
             }
             if let primary = BucketView(rawBucket: raw["primary"]) {
@@ -339,30 +347,68 @@ public final class CodexSource: AISource {
     }
 
 
-    /// Tolerant decoder for a `{used_percent, window_minutes?, resets_at}`
-    /// bucket — handles both camelCase (`usedPercent`/`resetsAt`) and
-    /// snake_case (`used_percent`/`resets_at`) keys.
+    /// Tolerant decoder for a `{usedPercent, windowDurationMins?, resetsAt}`
+    /// bucket — handles every key spelling Codex has shipped:
+    ///
+    ///   v1 (rust 2024-ish):  `used_percent` (Double), `window_minutes`, `resets_at`
+    ///   v2 (rust 2026):      `used_percent` (i32),    `window_duration_mins`, `resets_at`
+    ///   v2 + camelCase serde: `usedPercent` (i32), `windowDurationMins`, `resetsAt`
+    ///
+    /// v0.22.24: the live `/wham/usage` endpoint now ships v2 + camelCase
+    /// (per openai/codex `codex-rs/app-server-protocol/.../v2/account.rs`
+    /// which marks `RateLimitWindow` with `#[serde(rename_all =
+    /// "camelCase")]`). Symptom before the fix: every poll logged
+    /// "decoded to no usable buckets" because the parser was reading
+    /// `window_minutes` (gone) and casting `usedPercent` as Double (now i32).
     private struct BucketView {
         let usedPercent: Double
         let resetsAt: Int
-        /// v0.22.10: surfaces `window_minutes` so the parser can match
-        /// buckets to the 5h-class vs weekly-class regardless of which
+        /// Surfaces the window length so the parser can classify
+        /// buckets as 5h-class vs weekly-class regardless of which
         /// limit_id Codex grouped them under.
         let windowMinutes: Int?
 
         init?(rawBucket: Any?) {
             guard let dict = rawBucket as? [String: Any] else { return nil }
-            let pct = (dict["used_percent"] as? Double)
-                ?? (dict["usedPercent"] as? Double)
-                ?? Double(dict["used_percent"] as? Int ?? 0)
-            let resets = (dict["resets_at"] as? Int)
-                ?? (dict["resetsAt"] as? Int)
-                ?? Int(dict["resets_at"] as? Double ?? 0)
+            // used_percent / usedPercent — try Int (current v2 shape) and
+            // Double (older shape). NSNumber.doubleValue path catches
+            // JSONSerialization's NSNumber bridging when the value lands
+            // as NSNumber rather than a concrete Swift type.
+            let pct: Double
+            if let v = dict["usedPercent"] as? Double { pct = v }
+            else if let v = dict["usedPercent"] as? Int { pct = Double(v) }
+            else if let v = dict["used_percent"] as? Double { pct = v }
+            else if let v = dict["used_percent"] as? Int { pct = Double(v) }
+            else if let v = dict["usedPercent"] as? NSNumber { pct = v.doubleValue }
+            else if let v = dict["used_percent"] as? NSNumber { pct = v.doubleValue }
+            else { pct = 0 }
+
+            // resets_at / resetsAt — Option<i64> in protocol, so might
+            // arrive as null/missing.
+            let resets: Int
+            if let v = dict["resetsAt"] as? Int { resets = v }
+            else if let v = dict["resets_at"] as? Int { resets = v }
+            else if let v = dict["resetsAt"] as? Double { resets = Int(v) }
+            else if let v = dict["resets_at"] as? Double { resets = Int(v) }
+            else { resets = 0 }
+            // We only need resets to be plausible (positive). A future
+            // bucket reset epoch is required for the gauge "resets in"
+            // string. If absent, drop the bucket — the parser's
+            // sessionWinner-fallback will pick another if available.
             guard resets > 0 else { return nil }
             self.usedPercent = pct
             self.resetsAt = resets
-            self.windowMinutes = (dict["window_minutes"] as? Int)
-                ?? (dict["windowMinutes"] as? Int)
+
+            // window — v2 renamed `window_minutes` → `window_duration_mins`,
+            // and camelCase serde further renames the field to
+            // `windowDurationMins`. Accept all 4 spellings so the parser
+            // works against every Codex CLI version we might see in the
+            // wild.
+            if let v = dict["windowDurationMins"] as? Int { self.windowMinutes = v }
+            else if let v = dict["window_duration_mins"] as? Int { self.windowMinutes = v }
+            else if let v = dict["windowMinutes"] as? Int { self.windowMinutes = v }
+            else if let v = dict["window_minutes"] as? Int { self.windowMinutes = v }
+            else { self.windowMinutes = nil }
         }
     }
 
