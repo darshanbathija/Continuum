@@ -32,15 +32,32 @@ public struct IOSRootView: View {
     public var body: some View {
         let live = usageModel.tahoeLive
         let code = agentClient.tahoeCode
+        // v0.22.5: unpaired banner stays visible across every tab so
+        // first-launch users always have an actionable path to
+        // pairing. Was: only LiveGaugesHeader (inside Analytics tab)
+        // surfaced a CTA — Chat/Code/Design tabs left users staring
+        // at a blank "not connected" screen with no flow forward.
+        let isUnpaired = !agentClient.isConfigured
+        // Extra bottom clearance when banner is visible so content
+        // doesn't slide under it.
+        let bottomClearance: CGFloat = isUnpaired ? 168 : 92
         return ZStack {
             TahoeWallpaperView()
             contentView(live: live, code: code)
-                .padding(.bottom, 92) // floating tab bar clearance
+                .padding(.bottom, bottomClearance)
             if pushedScreen == nil {
-                IOSTabBar(tab: $tab)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 24)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
+                VStack(spacing: 12) {
+                    if isUnpaired {
+                        IOSUnpairedBanner(
+                            onPair: { pushedScreen = .pairing }
+                        )
+                        .padding(.horizontal, 16)
+                    }
+                    IOSTabBar(tab: $tab)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 24)
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom)
             }
         }
         .ignoresSafeArea(.container, edges: .bottom)
@@ -229,5 +246,60 @@ public struct IOSRoundIconBtn: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Unpaired banner (v0.22.5)
+
+/// Glass card pinned above the floating tab bar whenever the
+/// AgentControlClient hasn't received a pairing token yet. Solves the
+/// "Chat/Code/Design tabs are blank with no flow forward" feedback —
+/// every tab now has a visible "Pair iPhone" CTA the user can act on
+/// without hunting through Settings or the Analytics tab's
+/// LiveGaugesHeader (which is where the only previous CTA lived).
+public struct IOSUnpairedBanner: View {
+    @Environment(\.tahoe) private var t
+    var onPair: () -> Void
+
+    public init(onPair: @escaping () -> Void) {
+        self.onPair = onPair
+    }
+
+    public var body: some View {
+        TahoeGlass(radius: 18, tone: .raised) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(t.accentAlpha(0.18))
+                    TahoeIcon("qr", size: 18).foregroundStyle(t.accent)
+                }
+                .frame(width: 36, height: 36)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Not paired to a Mac")
+                        .font(TahoeFont.body(13.5, weight: .bold))
+                        .foregroundStyle(t.fg)
+                    Text("Tahoe surfaces fall back to demo data until you pair.")
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button(action: onPair) {
+                    Text("Pair iPhone")
+                        .font(TahoeFont.body(12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background {
+                            Capsule().fill(LinearGradient(
+                                colors: [t.accent, t.accentDeepC],
+                                startPoint: .top, endPoint: .bottom
+                            ))
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Pair iPhone with your Mac")
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+        }
     }
 }

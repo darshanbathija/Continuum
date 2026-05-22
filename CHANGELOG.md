@@ -117,6 +117,64 @@ sidecar (~80MB of vendored runtime artifacts).
   bridge minted token → daemon imported folder → project visible in
   subsequent `/api/projects`.
 
+## [0.22.5 build 87] - 2026-05-22 — Fix: iOS chat UX + always-visible pairing CTA
+
+User-reported (consecutive feedback notes):
+1. "Chat data on iPhone app is slop. New session button doesn't work,
+   there's no view to look at all the chats. Attach button doesn't
+   work. Model selector doesn't work. No keyboard collapse on scroll."
+2. "There's no connect CTA or tailscale status — blank with nothing
+   actionable. iPhone shows 'not connected' with no flow or button
+   to connect."
+
+### Always-visible pairing banner (v0.22.5)
+
+- New `IOSUnpairedBanner` view rendered above the floating tab bar
+  whenever `agentClient.isConfigured == false`. Visible across
+  every tab (Chat / Analytics / Code / Design), not just buried
+  inside `LiveGaugesHeader` (the previous only-CTA location).
+- Banner CTA "Pair iPhone" pushes the existing `IOSPairingView`
+  (Scan QR + Paste URL — wired in PR #28).
+- Bottom clearance auto-adjusts (92 → 168) so content doesn't
+  slide under the banner.
+
+### iOS chat surface fixes
+
+- **"+" header button** — was decorative `IOSRoundIconBtn("plus")`
+  with no action. Now calls `composerController.reset()` so the
+  user starts fresh; the next first-send creates a new chat
+  session via `.chatCreate`.
+- **"archive" header button** — was decorative. Now opens the new
+  `IOSChatHistorySheet` listing all `agentClient.chatSessions`
+  (filtered to `kind == .chat`, sorted by recency). Solves the
+  "no view to look at all the chats" gap.
+- **Model selector** — composer's leading "+" attach icon
+  (decorative; file/image attach was never wired) replaced by a
+  real SwiftUI `Menu` agent picker. Tap to switch between Claude /
+  Codex / Antigravity / OpenCode. Picked agent is bound via a new
+  `pickedAgent: AgentKind` `@State` on `IOSChatView`; first-send
+  routes through the picked provider (was hardcoded to `.claude`).
+- **Keyboard dismiss on scroll** — added
+  `.scrollDismissesKeyboard(.interactively)` to the chat scroll
+  view. Drag-down to dismiss the keyboard while reading.
+- **Decorative mic icon retired** — system keyboard already exposes
+  dictation via the globe key.
+
+### Known gaps (still v1.2 product surfaces)
+
+- Chat thread still renders `TahoeDemo.chatThread` fixture data
+  (full iOS broadcast UI pivots to real `chatStore` data — same
+  surface as `MacChatDataAdapter` does for Mac)
+- Real file/image attach (composer "+" was never plumbed to a
+  backend upload RPC)
+- Tapping a row in the history sheet just dismisses (deep-link to
+  the open thread needs the chat view to pivot to real data first)
+
+### Tests
+
+- 620/620 shared tests pass; 104/104 Mac tests pass
+- Mac + iOS + Watch all build clean
+
 ## [0.22.4 build 86] - 2026-05-22 — Fix: menu-bar popover showed demo data instead of real Claude/Codex/Antigravity usage
 
 User-reported bug: opening any menu-bar status item's popover showed

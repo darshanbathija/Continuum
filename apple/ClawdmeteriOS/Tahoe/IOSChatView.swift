@@ -15,6 +15,14 @@ public struct IOSChatView: View {
     @Environment(\.tahoe) private var t
     @State private var activeByTurn: [Int: TahoeProvider] = [:]
     @State private var broadcast: Bool = true
+    /// v0.22.5 chat-UX fixes: persist the user's picked send-agent so
+    /// the composer chip + first-send route through it. Stored locally
+    /// (per-launch); future polish promotes to UserDefaults.
+    @State private var pickedAgent: AgentKind = .claude
+    /// v0.22.5: drives the chat-history sheet that the "archive" /
+    /// "+" header buttons present. Lists `agentClient.chatSessions`
+    /// so the user can actually find their past chats.
+    @State private var historySheetPresented: Bool = false
     /// Optional agent client passed down by IOSRootView when paired.
     /// Nil in Previews / unpaired — composer disables itself.
     var agentClient: AgentControlClient?
@@ -30,8 +38,20 @@ public struct IOSChatView: View {
         VStack(spacing: 0) {
             IOSLargeTitle(title: "Chat", subtitle: "Clawdmeter") {
                 HStack(spacing: 10) {
-                    IOSRoundIconBtn("archive")
-                    IOSRoundIconBtn("plus")
+                    // v0.22.5: "archive" header icon → opens the chat
+                    // history sheet (lists all chat sessions). Was a
+                    // decorative no-op icon. The same sheet doubles
+                    // as the "all chats" view the user couldn't reach.
+                    IOSRoundIconBtn("archive", action: {
+                        historySheetPresented = true
+                    })
+                    // v0.22.5: "+" header icon → start a fresh chat by
+                    // resetting the composer (clears the open thread).
+                    // First-send then creates a new session via the
+                    // ComposerSendController's .chatCreate path.
+                    IOSRoundIconBtn("plus", action: {
+                        composerController.reset()
+                    })
                 }
             }
 
@@ -80,6 +100,11 @@ public struct IOSChatView: View {
                 .padding(.horizontal, 16).padding(.top, 12)
             }
             .frame(maxHeight: .infinity)
+            // v0.22.5: drag-down to dismiss the keyboard while
+            // scrolling — was missing entirely, so users had no way
+            // to put away the keyboard without tapping outside the
+            // textfield (and nothing outside was tappable).
+            .scrollDismissesKeyboard(.interactively)
 
             // Floating composer above the tab bar — JSX positions this at
             // bottom: 92 inside the iPhone frame; in our SwiftUI shell we
@@ -88,10 +113,20 @@ public struct IOSChatView: View {
             IOSChatComposer(
                 controller: composerController,
                 broadcastMode: broadcast,
-                isReachable: agentClient != nil
+                isReachable: agentClient != nil,
+                pickedAgent: $pickedAgent
             )
             .padding(.horizontal, 16)
             .padding(.bottom, 6)
+        }
+        // v0.22.5: chat history sheet — lists real client.chatSessions
+        // so the user can find/resume past chats. The "archive" + "+"
+        // header buttons present this; tapping a row should select it.
+        .sheet(isPresented: $historySheetPresented) {
+            IOSChatHistorySheet(
+                sessions: agentClient?.chatSessions ?? [],
+                onDismiss: { historySheetPresented = false }
+            )
         }
     }
 
@@ -335,54 +370,204 @@ private struct IOSChatComposer: View {
     @ObservedObject var controller: ComposerSendController
     var broadcastMode: Bool
     var isReachable: Bool
+    /// v0.22.5: which agent the first-send routes to. Wired to a
+    /// real `Menu` chip so the user can switch between
+    /// Claude / Codex / Gemini / OpenCode without leaving the chat.
+    @Binding var pickedAgent: AgentKind
 
     private var placeholder: String {
         if !isReachable { return "Pair to Mac to start a chat…" }
         if broadcastMode { return "Ask all three…" }
-        return "Ask one model…"
+        return "Ask \(displayName(for: pickedAgent))…"
     }
 
     var body: some View {
         TahoeGlass(radius: 26, tone: .raised) {
-            HStack(spacing: 8) {
-                TahoeIcon("plus", size: 18).foregroundStyle(t.fg3)
-                TextField(placeholder, text: $controller.text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(TahoeFont.body(14))
-                    .foregroundStyle(t.fg)
-                    .lineLimit(1...4)
-                    .disabled(!isReachable || controller.sending)
-                    .submitLabel(.send)
-                    .onSubmit { Task { await sendNow() } }
-                Spacer(minLength: 4)
-                TahoeIcon("mic", size: 16).foregroundStyle(t.fg3)
-                Button(action: { Task { await sendNow() } }) {
-                    ZStack {
-                        Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
-                                                     startPoint: .top, endPoint: .bottom))
-                        if controller.sending {
-                            ProgressView().controlSize(.small).tint(.white)
-                        } else {
-                            TahoeIcon("arrowU", size: 14, weight: .bold).foregroundStyle(.white)
+            VStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    // v0.22.5: agent picker Menu replaces the dead
+                    // "+" attach icon (file/image attach is a v1.x
+                    // backend feature — was never wired). Tap to
+                    // switch which provider gets the first turn.
+                    agentPickerMenu
+                    TextField(placeholder, text: $controller.text, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(TahoeFont.body(14))
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1...4)
+                        .disabled(!isReachable || controller.sending)
+                        .submitLabel(.send)
+                        .onSubmit { Task { await sendNow() } }
+                    Spacer(minLength: 4)
+                    // Dictation removed (was decorative icon, not a real
+                    // mic button — system keyboard already exposes
+                    // dictation via the globe key).
+                    Button(action: { Task { await sendNow() } }) {
+                        ZStack {
+                            Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
+                                                         startPoint: .top, endPoint: .bottom))
+                            if controller.sending {
+                                ProgressView().controlSize(.small).tint(.white)
+                            } else {
+                                TahoeIcon("arrowU", size: 14, weight: .bold).foregroundStyle(.white)
+                            }
                         }
+                        .frame(width: 32, height: 32)
+                        .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
+                        .opacity(controller.canSend && isReachable ? 1.0 : 0.45)
                     }
-                    .frame(width: 32, height: 32)
-                    .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
-                    .opacity(controller.canSend && isReachable ? 1.0 : 0.45)
+                    .buttonStyle(.plain)
+                    .disabled(!controller.canSend || !isReachable)
                 }
-                .buttonStyle(.plain)
-                .disabled(!controller.canSend || !isReachable)
             }
             .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 8)
         }
         .frame(maxWidth: .infinity)
     }
 
+    /// v0.22.5: SwiftUI Menu wrapping the agent picker. Replaces the
+    /// previously-decorative `TahoeIcon("plus")` attach icon. Tap
+    /// opens a native iOS popup with the 4 provider options.
+    @ViewBuilder
+    private var agentPickerMenu: some View {
+        Menu {
+            ForEach(AgentKind.allCases, id: \.self) { kind in
+                Button {
+                    pickedAgent = kind
+                } label: {
+                    HStack {
+                        Text(displayName(for: kind))
+                        if pickedAgent == kind {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                TahoeIcon(iconName(for: pickedAgent), size: 14)
+                    .foregroundStyle(t.accent)
+                TahoeIcon("chevD", size: 8).foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background {
+                Capsule().fill(t.accentAlpha(0.12))
+            }
+            .overlay {
+                Capsule().stroke(t.accentAlpha(0.35), lineWidth: 0.5)
+            }
+        }
+        .disabled(!isReachable || controller.sending)
+        .help("Pick which model handles the next message")
+    }
+
+    private func displayName(for kind: AgentKind) -> String {
+        switch kind {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .gemini: return "Antigravity"
+        case .opencode: return "OpenCode"
+        case .unknown: return "Other"
+        }
+    }
+
+    private func iconName(for kind: AgentKind) -> String {
+        switch kind {
+        case .claude: return "sparkles"
+        case .codex, .gemini, .opencode, .unknown: return "sparkles"
+        }
+    }
+
     private func sendNow() async {
         guard isReachable else { return }
-        // First send → create a chat session for the chosen provider.
-        // Solo for now (broadcast streaming UI lands v1.x). AgentKind
-        // (.claude/.codex/.gemini) is what `createChatSession` expects.
-        await controller.send(via: .chatCreate(provider: AgentKind.claude, mode: .solo))
+        // v0.22.5: route the first send through the user-picked agent
+        // (was hardcoded to .claude before). AgentKind value comes from
+        // the in-composer Menu chip's binding.
+        await controller.send(via: .chatCreate(provider: pickedAgent, mode: .solo))
+    }
+}
+
+// MARK: - Chat history sheet (v0.22.5)
+
+/// iOS chat history surface — presented from the "archive" + "+"
+/// header buttons in `IOSChatView`. Lists every `AgentSession`
+/// where `kind == .chat`, sorted by most-recent first. The previous
+/// build had no view for "show me all my chats" — users could only
+/// see whichever single thread the demo data rendered.
+///
+/// v0.22.5 cut: shows the list + a Done button. Tapping a row
+/// dismisses (deep-link to "open this chat in the main view" needs
+/// the chat view to actually pivot to real session data, which is
+/// queued as part of the iOS broadcast UI work in v1.2).
+private struct IOSChatHistorySheet: View {
+    @Environment(\.tahoe) private var t
+    var sessions: [AgentSession]
+    var onDismiss: () -> Void
+
+    private var sortedChatSessions: [AgentSession] {
+        sessions
+            .filter { $0.kind == .chat && $0.archivedAt == nil }
+            .sorted { $0.lastEventAt > $1.lastEventAt }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if sortedChatSessions.isEmpty {
+                    VStack(spacing: 10) {
+                        TahoeIcon("chat", size: 24).foregroundStyle(t.fg4)
+                        Text("No chats yet")
+                            .font(TahoeFont.body(14, weight: .semibold))
+                            .foregroundStyle(t.fg2)
+                        Text("New chats appear here once you send your first message.")
+                            .font(TahoeFont.body(12))
+                            .foregroundStyle(t.fg3)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 280)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List(sortedChatSessions, id: \.id) { session in
+                        Button(action: onDismiss) {
+                            HStack(spacing: 12) {
+                                TahoeProviderGlyph(
+                                    provider: tahoeProvider(for: session.agent),
+                                    size: 24
+                                )
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(session.displayLabel)
+                                        .font(TahoeFont.body(14, weight: .semibold))
+                                        .foregroundStyle(t.fg)
+                                        .lineLimit(1)
+                                    Text(session.model ?? "—")
+                                        .font(TahoeFont.body(11))
+                                        .foregroundStyle(t.fg3)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .navigationTitle("Chats")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done", action: onDismiss)
+                }
+            }
+        }
+    }
+
+    private func tahoeProvider(for agent: AgentKind) -> TahoeProvider {
+        switch agent {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .gemini: return .gemini
+        case .opencode: return .opencode
+        case .unknown: return .claude
+        }
     }
 }
