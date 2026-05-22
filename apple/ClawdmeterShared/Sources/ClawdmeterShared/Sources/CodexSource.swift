@@ -363,6 +363,19 @@ public final class CodexSource: AISource {
 
         guard let session = sessionWinner else { return nil }
 
+        // v0.22.28 diagnostic: when sessionWinner has no resets_at, log
+        // the actual primary_window keys so we can identify the real
+        // field name. User reported "resets in 5h" was wrong — that's
+        // my v0.22.25 fallback firing because no expected reset-time
+        // key was found in primary_window.
+        if session.resetsAt == 0, let first = buckets.first {
+            let primaryDict = first["primary_window"] ?? first["primaryWindow"] ?? first["primary"]
+            if let primary = primaryDict as? [String: Any] {
+                let keys = primary.keys.sorted().joined(separator: ", ")
+                logger.warning("Codex live usage: primary_window has no recognized reset field — primary_window.keys=[\(keys, privacy: .public)]")
+            }
+        }
+
         let now = Date()
         let nowEpoch = Int(now.timeIntervalSince1970)
         // v0.22.25: when resets_at is null/missing, default to 5h
@@ -464,14 +477,30 @@ public final class CodexSource: AISource {
             else if let v = dict["used_percent"] as? NSNumber { pct = v.doubleValue }
             else { pct = 0 }
 
-            // resets_at / resetsAt — Option<i64> in protocol, so might
-            // arrive as null/missing.
-            let resets: Int
-            if let v = dict["resetsAt"] as? Int { resets = v }
-            else if let v = dict["resets_at"] as? Int { resets = v }
-            else if let v = dict["resetsAt"] as? Double { resets = Int(v) }
-            else if let v = dict["resets_at"] as? Double { resets = Int(v) }
-            else { resets = 0 }
+            // v0.22.28 diagnostic revealed the ACTUAL server response
+            // uses `reset_at` (SINGULAR, snake_case) inside primary_window
+            // and secondary_window. Plus `reset_after_seconds` as a
+            // relative-time form. Try every spelling we've seen in the
+            // wild — absolute epoch first (more precise), then relative
+            // "seconds from now" forms as fallback.
+            let nowEpoch = Int(Date().timeIntervalSince1970)
+            var resets: Int = 0
+            // Absolute epoch fields (preferred when both forms present).
+            // `reset_at`/`resetAt` is the current server's primary field.
+            // `resets_at`/`resetsAt` were the v2 protocol's spec name.
+            for key in ["reset_at", "resetAt", "resets_at", "resetsAt", "expiresAt", "expires_at", "nextRefresh", "next_refresh"] {
+                if let v = dict[key] as? Int, v > 0 { resets = v; break }
+                if let v = dict[key] as? Double, v > 0 { resets = Int(v); break }
+            }
+            // Relative-seconds fields (convert to absolute).
+            // `reset_after_seconds` is the current server's relative
+            // form (paired with `limit_window_seconds`).
+            if resets == 0 {
+                for key in ["reset_after_seconds", "resetAfterSeconds", "resets_in_seconds", "resetsInSeconds", "secondsUntilReset", "seconds_until_reset", "remainingSeconds", "remaining_seconds"] {
+                    if let v = dict[key] as? Int, v > 0 { resets = nowEpoch + v; break }
+                    if let v = dict[key] as? Double, v > 0 { resets = nowEpoch + Int(v); break }
+                }
+            }
             // v0.22.25: don't require resets > 0. The Codex v2 schema
             // marks `resets_at` as Option<i64> — an active rate-limit
             // bucket can have a usedPercent but no scheduled reset
@@ -486,15 +515,18 @@ public final class CodexSource: AISource {
             self.usedPercent = pct
             self.resetsAt = resets
 
-            // window — v2 renamed `window_minutes` → `window_duration_mins`,
-            // and camelCase serde further renames the field to
-            // `windowDurationMins`. Accept all 4 spellings so the parser
-            // works against every Codex CLI version we might see in the
-            // wild.
+            // window — v0.22.28 server uses `limit_window_seconds`
+            // (seconds, not minutes!). Earlier shapes used
+            // `window_minutes` / `windowDurationMins`. Accept all,
+            // converting seconds→minutes when needed.
             if let v = dict["windowDurationMins"] as? Int { self.windowMinutes = v }
             else if let v = dict["window_duration_mins"] as? Int { self.windowMinutes = v }
             else if let v = dict["windowMinutes"] as? Int { self.windowMinutes = v }
             else if let v = dict["window_minutes"] as? Int { self.windowMinutes = v }
+            else if let v = dict["limit_window_seconds"] as? Int { self.windowMinutes = v / 60 }
+            else if let v = dict["limitWindowSeconds"] as? Int { self.windowMinutes = v / 60 }
+            else if let v = dict["limit_window_seconds"] as? Double { self.windowMinutes = Int(v) / 60 }
+            else if let v = dict["limitWindowSeconds"] as? Double { self.windowMinutes = Int(v) / 60 }
             else { self.windowMinutes = nil }
         }
     }
