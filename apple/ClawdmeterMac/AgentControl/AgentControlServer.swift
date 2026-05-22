@@ -1302,6 +1302,24 @@ public final class AgentControlServer {
             await sendChatSDKPrompt(session: session, prompt: req.text, connection: connection)
             return
         }
+        // Audit P1 fix: OpenCode sessions have no tmux pane and no send
+        // branch implemented. Previously they fell through to the
+        // pane-id guard and returned a generic 500, which the iOS app
+        // surfaced as an opaque "something went wrong". Return a
+        // structured 501 so the UI can render a clear "OpenCode send
+        // is not yet supported" state and the user understands the
+        // limitation instead of being told the server crashed.
+        if session.agent == .opencode {
+            serverLogger.notice(
+                "send-prompt: opencode session=\(uuid.uuidString, privacy: .public) — send not yet implemented (audit P1-04)"
+            )
+            sendResponse(HTTPResponse(
+                status: 501, reason: "Not Implemented",
+                contentType: "application/json",
+                body: Data(#"{"error":"opencode_send_not_implemented","detail":"OpenCode sessions are read-only in this build. POST /sessions/:id/send for opencode lands in a follow-up."}"#.utf8)
+            ), on: connection)
+            return
+        }
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
             sendResponse(.internalError, on: connection); return
         }
