@@ -130,6 +130,8 @@ struct ChatWorkspaceView: View {
         case .claude: return "Claude"
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
+        case .opencode: return "OpenCode"
+        case .unknown: return "Other agent"
         }
     }
 

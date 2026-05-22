@@ -2,7 +2,7 @@ import XCTest
 @testable import ClawdmeterShared
 
 /// Exercises the wire v10 → v11 bump (v0.9 — chat-via-agentapi):
-///   - AgentControlWireVersion.current = 11
+///   - AgentControlWireVersion.current bumped to 12 (X3 unknown hardening)
 ///   - antigravityChatMinimum stays at 11 (now reachable: daemon ships
 ///     handlePostGeminiChatSession lifting the v0.8 501 stub)
 ///   - All v0.8 + v0.8.1 minimums unchanged (composeDraftMinimum,
@@ -15,8 +15,16 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsEleven() {
-        XCTAssertEqual(AgentControlWireVersion.current, 11)
+    func test_currentWireVersionIsThirteen() {
+        // v13 (2026-05-22, D11/D12 — OpenCode adapter): adds
+        // `AgentKind.opencode` + `UsageRecord.Provider.opencode`.
+        // v12 clients decode the new raw as `.unknown` (X3 fallback);
+        // v13+ clients decode as `.opencode` natively.
+        XCTAssertEqual(AgentControlWireVersion.current, 13)
+    }
+
+    func test_opencodeMinimumIsThirteen() {
+        XCTAssertEqual(AgentControlWireVersion.opencodeMinimum, 13)
     }
 
     func test_antigravityChatMinimumIsEleven() {

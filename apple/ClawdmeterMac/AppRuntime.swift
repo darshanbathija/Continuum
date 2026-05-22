@@ -210,6 +210,32 @@ final class AppRuntime: ObservableObject {
         // hand back live in-memory snapshots from its first connection.
         self.usageQueryService = UsageQueryService(runtime: self)
 
+        // D4 (v0.17, wire v12): wire the iOS-side auto-revive RPC into
+        // the matching AppModel. The server's handler dispatches on
+        // AgentKind; we fan out to the per-provider model here. Capture
+        // weak so the daemon's long-lived closure doesn't pin AppRuntime
+        // beyond its natural lifetime.
+        self.agentControlServer.setAutoReviveCallback = { [weak self] kind, enabled in
+            guard let self else { return }
+            switch kind {
+            case .claude: self.claudeModel.setAutoReviveEnabled(enabled)
+            case .codex:  self.codexModel.setAutoReviveEnabled(enabled)
+            case .gemini: self.geminiModel.setAutoReviveEnabled(enabled)
+            case .opencode:
+                // PR #29: OpenCode doesn't run a 5h-window quota poller,
+                // so the auto-revive concept doesn't apply. The iOS
+                // surface hides the toggle for opencode (the toggle UI
+                // gates on AppModel availability). If a stale client
+                // still posts here, silently ignore — no AutoReviver
+                // to drive.
+                break
+            case .unknown:
+                // X3: forward-compat unknown — never user-toggleable.
+                // The handler returns 400 before reaching here.
+                break
+            }
+        }
+
         let sessionsEnabled = UserDefaults.standard.object(forKey: "clawdmeter.sessions.enabled") as? Bool ?? true
         if sessionsEnabled {
             self.tmuxSupervisor.start()
@@ -311,7 +337,15 @@ final class AppRuntime: ObservableObject {
         // sessionsRefreshTask is @MainActor-isolated; cancellation needs
         // to hop. Best-effort.
         let task = sessionsRefreshTask
-        Task { @MainActor in task?.cancel() }
+        Task { @MainActor in
+            task?.cancel()
+            // PR #30: clean shutdown of the OpenCode singleton. The
+            // process manager + SSE adapter aren't owned here, but
+            // their lifecycle tracks the app's so we tear them down
+            // when AppRuntime goes away.
+            OpencodeProcessManager.shared.stop()
+            OpencodeSSEAdapter.shared.stop()
+        }
         runtimeLogger.warning("AppRuntime.deinit")
     }
 }

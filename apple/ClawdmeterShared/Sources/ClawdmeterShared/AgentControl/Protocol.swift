@@ -74,7 +74,26 @@ public enum AgentControlWireVersion {
     /// 501 stub). `AgentSession` gains optional `antigravityProjectId:
     /// String?` (additive — decoder-tolerant, no formal schema bump).
     /// `antigravityChatMinimum = 11` is now reachable.
-    public static let current: Int = 11
+    /// v12 (2026-05-22, X3 hardening for PR #28 OpenCode): `AgentKind`
+    /// gains a `.unknown` sentinel + the decoder folds unknown raws
+    /// into it instead of `.claude`. Older v11 clients reading a v13
+    /// (OpenCode) payload still drop into the silently-mislabeled
+    /// `.claude` path — they get the audit-flagged bug. v12+ clients
+    /// reading v13 payloads render the new kind as "Other agent" via
+    /// the UI fallback rather than misclassifying.
+    /// v13 (2026-05-22, D11/D12 — OpenCode adapter): adds
+    /// `AgentKind.opencode` + `UsageRecord.Provider.opencode`. v12
+    /// clients decode the new raw as `.unknown` (the X3 fallback);
+    /// v13+ clients decode as `.opencode` natively. Schema migration
+    /// audited across `AnalyticsDailyChart` + every `byProvider:`
+    /// consumer.
+    public static let current: Int = 13
+    /// Minimum wire version that exposes `AgentKind.opencode` natively.
+    /// Clients with `serverWireVersion < this` decode opencode sessions
+    /// as `.unknown` (X3 fallback) and render as "Other agent". This is
+    /// the gate the Mac uses to suppress OpenCode-related controls when
+    /// the paired iPhone is too old to render them correctly.
+    public static let opencodeMinimum: Int = 13
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
@@ -649,23 +668,43 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
     case claude
     case codex
     /// Gemini Code Assist via Google's `gemini` CLI. Added in wire v6
-    /// (2026-05-19). v5 clients fall through `init(from:)` and drop sessions
-    /// tagged with `.gemini` silently instead of erroring the envelope —
-    /// the host's `?? .claude` fallback is a safety net for cases where the
-    /// containing decoder can't tolerate nil. Callers that need to filter
-    /// unknown-agent sessions must compare against `AgentKind.allCases`.
+    /// (2026-05-19).
     case gemini
+    /// OpenCode adapter (D11/D12, v1.1 — wire v13). The Mac spawns a
+    /// shared `opencode serve` process (P1 singleton) and registers
+    /// per-Clawdmeter-session SSE clients against it. Underlying model
+    /// is provider-of-the-user's-choice (Anthropic, OpenAI, Google);
+    /// analytics tag the spend under `.opencode` regardless.
+    case opencode
+    /// Forward-compat sentinel for unknown agent kinds (X3, v0.17, wire
+    /// v12). Older v12 clients connecting to a v13 Mac decode the
+    /// `.opencode` raw into `.unknown` instead of `.claude` —
+    /// preventing the silent mislabeling Codex flagged in the
+    /// eng-review. UI sites render `.unknown` as a neutral
+    /// "Other agent" tile.
+    ///
+    /// `.unknown` is intentionally NOT user-selectable (`allCases`
+    /// excludes it via the custom override below); it only appears on
+    /// the read path when decoding payloads we don't recognize.
+    case unknown = "__unknown__"
 
-    /// Lenient decoder (X3-D + Codex P1(5) fix). Forward-compat readers
-    /// keep parsing payloads from newer Macs whose `agent` field carries a
-    /// value this binary doesn't recognize. Unknown raws fold to `.claude`
-    /// rather than throwing the whole AgentSession Codable round-trip.
-    /// Tests assert all known raws (`claude`/`codex`/`gemini`) round-trip
-    /// and an unknown raw (`"future-runtime"`) safely falls back.
+    /// Filter `.unknown` out of `allCases` so pickers and provider
+    /// segmented controls don't accidentally render it as a choice.
+    /// `.opencode` is included — v13 clients render it as a real
+    /// picker option.
+    public static var allCases: [AgentKind] {
+        [.claude, .codex, .gemini, .opencode]
+    }
+
+    /// Lenient decoder (X3 — wire v12). Forward-compat readers keep
+    /// parsing payloads from newer Macs whose `agent` field carries a
+    /// value this binary doesn't recognize. Unknown raws fold to
+    /// `.unknown` so UI surfaces show "Other agent" instead of
+    /// silently mislabeling as Claude.
     public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         let raw = try c.decode(String.self)
-        self = AgentKind(rawValue: raw) ?? .claude
+        self = AgentKind(rawValue: raw) ?? .unknown
     }
 }
 
@@ -1331,6 +1370,17 @@ public struct UploadAttachmentResponse: Codable, Sendable {
 /// writes an audit log entry. Per E7: enabling adds 15-min inactivity
 /// timeout + per-repo trust list + red banner across surfaces.
 public struct AutopilotRequest: Codable, Sendable {
+    public let enabled: Bool
+
+    public init(enabled: Bool) {
+        self.enabled = enabled
+    }
+}
+
+/// `POST /providers/:id/auto-revive` body. D4 (v0.17, wire v12). iOS
+/// Live tab fans the per-provider auto-revive toggle through here; the
+/// Mac daemon dispatches to the matching AppModel.setAutoReviveEnabled.
+public struct SetAutoReviveRequest: Codable, Sendable {
     public let enabled: Bool
 
     public init(enabled: Bool) {

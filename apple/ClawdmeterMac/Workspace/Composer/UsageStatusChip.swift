@@ -162,6 +162,8 @@ struct ModelEffortPopover: View {
         case .claude: return catalog.claude
         case .codex:  return catalog.codex
         case .gemini: return catalog.gemini
+        case .opencode: return []  // PR #29: model resolved via opencode auth
+        case .unknown: return []  // X3: no catalog slice for unknown
         }
     }
 

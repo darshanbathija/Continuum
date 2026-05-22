@@ -129,6 +129,12 @@ extension AppRuntime {
         case .claude: return .claude
         case .codex:  return .codex
         case .gemini: return .gemini
+        case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
+        case .unknown:
+            // X3: visual fallback. Semantic correctness lives on
+            // AgentKind itself — UI degrades to Claude styling for
+            // forward-compat unknowns.
+            return .claude
         }
     }
 

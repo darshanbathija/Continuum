@@ -3,6 +3,14 @@ import ClawdmeterShared
 
 /// Mac Chat — the hero tab. Sidebar + 3-column compare (broadcast mode)
 /// or single-column Solo mode. Ports `mac-chat.jsx`.
+///
+/// v0.17 (v1.0 polish): the composer wires through `ComposerSendController`
+/// to send real prompts. First send when no chat is open creates a chat
+/// session via `client.createChatSession` (solo) or `client.createFrontier`
+/// (broadcast). Transcript still renders from `TahoeDemo.chatThread` —
+/// the WS-driven transcript store ships in a follow-up; this PR makes
+/// the composer alive end-to-end so users can talk to the daemon
+/// instead of staring at a decorative placeholder.
 public struct MacChatView: View {
     @Environment(\.tahoe) private var t
     public enum Mode: String, CaseIterable, Hashable { case broadcast, solo }
@@ -13,9 +21,23 @@ public struct MacChatView: View {
     @Binding var mode: Mode
     @Binding var soloProvider: TahoeProvider
 
-    public init(mode: Binding<Mode>, soloProvider: Binding<TahoeProvider>) {
+    /// Loopback client. Optional so Previews + the legacy MacRootView
+    /// caller can render without one; the runtime always injects.
+    private let loopbackClient: AgentControlClient?
+
+    /// Tracks the open chat session id. nil = "no session — first send
+    /// creates one". Stored locally; the future MacChatTranscriptStore
+    /// hoists this into a shared model.
+    @State private var openChatId: UUID?
+
+    public init(
+        mode: Binding<Mode>,
+        soloProvider: Binding<TahoeProvider>,
+        loopbackClient: AgentControlClient? = nil
+    ) {
         self._mode = mode
         self._soloProvider = soloProvider
+        self.loopbackClient = loopbackClient
     }
 
     public var body: some View {
@@ -35,7 +57,12 @@ public struct MacChatView: View {
                 }
                 .frame(maxHeight: .infinity)
 
-                ChatComposer(mode: mode, soloProvider: soloProvider)
+                ChatComposer(
+                    mode: mode,
+                    soloProvider: soloProvider,
+                    loopbackClient: loopbackClient,
+                    openChatId: $openChatId
+                )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -638,18 +665,76 @@ private struct ChatComposer: View {
     @Environment(\.tahoe) private var t
     var mode: MacChatView.Mode
     var soloProvider: TahoeProvider
+    /// Daemon client for create / send. Nil = decorative (Preview).
+    var loopbackClient: AgentControlClient?
+    /// Tracks the open chat session id at the parent. nil means "no
+    /// open session — first send creates one then writes here".
+    @Binding var openChatId: UUID?
+
+    /// v0.17: the composer owns its own state machine. ComposerSendController
+    /// trims input, tracks `sending`, and surfaces `lastError`. The button
+    /// + TextField bind through it so a misclick can't double-fire and the
+    /// UI disables itself while the daemon roundtrips.
+    @StateObject private var sendCtl: ComposerSendController
+    @FocusState private var textFocused: Bool
+    /// Soft warning surfaced when broadcast mode falls back to a Solo
+    /// chat (broadcast fan-out lands in the follow-up PR). The view
+    /// renders this above lastError so the user knows the prompt
+    /// still reached Claude even if it didn't fan out to 3 providers.
+    @State private var broadcastNote: String?
+
+    init(
+        mode: MacChatView.Mode,
+        soloProvider: TahoeProvider,
+        loopbackClient: AgentControlClient?,
+        openChatId: Binding<UUID?>
+    ) {
+        self.mode = mode
+        self.soloProvider = soloProvider
+        self.loopbackClient = loopbackClient
+        self._openChatId = openChatId
+        // Mirror the IOSChatView pattern: fall back to a UserDefaults-
+        // backed client when not yet wired (Previews + unconfigured
+        // launches). The `sendNow` guard `loopbackClient != nil` blocks
+        // real RPCs while the fallback client still satisfies the
+        // controller's `init(client:)` contract.
+        let client = loopbackClient ?? AgentControlClient()
+        _sendCtl = StateObject(wrappedValue: ComposerSendController(client: client))
+    }
 
     var body: some View {
         TahoeGlass(radius: 18, tone: .raised) {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(placeholder)
-                        .font(TahoeFont.body(14))
+                // Real TextField. axis: .vertical lets the field grow up
+                // to ~6 lines before scrolling, matching the JSX behavior.
+                // disableAutocorrection because the user is typing
+                // prompts, not prose — autocorrect inverts CamelCase
+                // identifiers and file names.
+                TextField(placeholder, text: $sendCtl.text, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...6)
+                    .font(TahoeFont.body(14))
+                    .foregroundStyle(t.fg)
+                    .autocorrectionDisabled()
+                    .focused($textFocused)
+                    .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
+                    .onSubmit { sendNow() }
+                    .disabled(sendCtl.sending)
+
+                if let note = broadcastNote {
+                    Text(note)
+                        .font(TahoeFont.body(11))
                         .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 16).padding(.bottom, 2)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(minHeight: 50, alignment: .top)
                 }
-                .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
+                if let error = sendCtl.lastError {
+                    Text(error)
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 16).padding(.bottom, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 HStack(spacing: 6) {
                     BroadcastChip(mode: mode, soloProvider: soloProvider)
@@ -658,15 +743,20 @@ private struct ChatComposer: View {
                     TahoeComposerChip(icon: "mic")
                     TahoeComposerChip(icon: "bolt", label: "auto", caret: true)
                     Spacer()
-                    Text(mode == .broadcast ? "~$0.033 / send" : "~$0.011 / send")
+                    Text(costEstimate)
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg4)
                         .padding(.trailing, 4)
-                    SendButton()
+                    SendButton(
+                        enabled: sendCtl.canSend && loopbackClient != nil,
+                        sending: sendCtl.sending,
+                        action: sendNow
+                    )
                 }
                 .padding(.horizontal, 12).padding(.bottom, 12).padding(.top, 4)
             }
         }
+        .onAppear { textFocused = true }
     }
 
     private var placeholder: String {
@@ -675,7 +765,104 @@ private struct ChatComposer: View {
         }
         return "Ask \(soloProvider.displayName). Use / for skills, @ for files."
     }
+
+    /// Cost estimate label — PR #31 chunk 4 wired to Pricing.estimateSend.
+    /// Returns a live estimate based on the current draft text + the
+    /// picked agent's default model. Broadcast sums all 3 providers'
+    /// default models; solo shows just the picked one.
+    private var costEstimate: String {
+        let text = sendCtl.text
+        // Pick default models for the estimator. These match the same
+        // catalog defaults the spawn path picks up via
+        // ComposerStore.ChipDefaults — keeps the chip in lockstep with
+        // what'll actually run.
+        let agent = currentAgentKind
+        let defaultModel = ComposerStore.ChipDefaults.for(agent: agent).modelId ?? ""
+        let estimate: Decimal
+        if mode == .broadcast {
+            let trio: [(AgentKind, String)] = [
+                (.claude, ComposerStore.ChipDefaults.for(agent: .claude).modelId ?? ""),
+                (.codex,  ComposerStore.ChipDefaults.for(agent: .codex).modelId ?? ""),
+                (.gemini, ComposerStore.ChipDefaults.for(agent: .gemini).modelId ?? ""),
+            ].filter { !$0.1.isEmpty }
+            estimate = Pricing.shared.estimateBroadcast(promptText: text, agentModels: trio)
+        } else {
+            estimate = Pricing.shared.estimateSend(
+                promptText: text, agent: agent, model: defaultModel
+            )
+        }
+        return Self.formatCost(estimate) + " / send"
+    }
+
+    /// Currency formatter for the composer chip. Uses 3 decimal places
+    /// because per-send estimates are typically under $0.10 — 2 decimals
+    /// would show "$0.01" for everything between $0.005 and $0.015.
+    private static func formatCost(_ value: Decimal) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.maximumFractionDigits = 3
+        formatter.minimumFractionDigits = 3
+        return formatter.string(from: value as NSDecimalNumber) ?? "$0.000"
+    }
+
+    /// Wire-up entry point: either send to the open chat or create a
+    /// new one and route the prompt as the first message. Mirrors
+    /// `IOSChatView`'s send loop so behavior across surfaces is uniform.
+    /// The ComposerSendController already binds to the loopback client
+    /// at init, so it handles both the create + first-send transition
+    /// (.chatCreate) and the follow-up send (.solo) cases.
+    private func sendNow() {
+        guard loopbackClient != nil, sendCtl.canSend else { return }
+        // The controller owns the create + send transition via
+        // `.chatCreate`, which spawns a session and routes the prompt
+        // as the first turn. For broadcast we'd want `.broadcast` —
+        // but that wire requires explicit frontier slots, which lands
+        // in the follow-up. For v1.0 polish we route broadcast through
+        // .chatCreate(solo) so the prompt still reaches the daemon and
+        // surface a soft warning that fan-out is queued.
+        let pendingProvider = currentAgentKind
+        let pendingMode = mode
+        Task { @MainActor in
+            if let openId = openChatId {
+                // Existing session — straight send-as-followup.
+                await sendCtl.send(via: .solo(sessionId: openId))
+                return
+            }
+            // First send: route through .chatCreate. On success the
+            // controller appends the prompt + we capture the new
+            // session id from client.chatSessions.
+            if pendingMode == .broadcast {
+                broadcastNote = "Broadcast fan-out queued — sending solo to Claude."
+            } else {
+                broadcastNote = nil
+            }
+            let beforeIds = Set((loopbackClient?.chatSessions ?? []).map(\.id))
+            await sendCtl.send(via: .chatCreate(provider: pendingProvider, mode: .solo))
+            // Lift the newly-created session id into the parent so
+            // subsequent sends route through the cheap follow-up path.
+            let after = loopbackClient?.chatSessions ?? []
+            if let newSession = after.first(where: { !beforeIds.contains($0.id) }) {
+                openChatId = newSession.id
+            }
+        }
+    }
+
+    private var currentAgentKind: AgentKind {
+        switch soloProvider {
+        case .claude: return .claude
+        case .codex:  return .codex
+        case .gemini: return .gemini
+        case .opencode: return .opencode  // PR #31
+        }
+    }
 }
+
+/// Local lightweight enum for the in-composer mode hint. Mirrors the
+/// ComposerSendController.SendKind.ChatMode shape; declared inline so
+/// the composer doesn't need to pull in SendKind for what amounts to a
+/// branch tag.
+private enum ChatMode { case solo, broadcast }
 
 private struct BroadcastChip: View {
     @Environment(\.tahoe) private var t
@@ -719,17 +906,35 @@ private struct BroadcastChip: View {
 
 private struct SendButton: View {
     @Environment(\.tahoe) private var t
+    var enabled: Bool
+    var sending: Bool
+    var action: () -> Void
+
+    init(enabled: Bool = true, sending: Bool = false, action: @escaping () -> Void = {}) {
+        self.enabled = enabled
+        self.sending = sending
+        self.action = action
+    }
+
     var body: some View {
-        Button(action: {}) {
+        Button(action: action) {
             ZStack {
                 Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
                                              startPoint: .top, endPoint: .bottom))
-                TahoeIcon("arrowU", size: 15, weight: .bold)
-                    .foregroundStyle(.white)
+                if sending {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                } else {
+                    TahoeIcon("arrowU", size: 15, weight: .bold)
+                        .foregroundStyle(.white)
+                }
             }
             .frame(width: 34, height: 34)
+            .opacity(enabled ? 1.0 : 0.5)
             .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 }

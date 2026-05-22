@@ -68,6 +68,11 @@ extension AgentControlClient {
             case .claude: return .claude
             case .codex:  return .codex
             case .gemini: return .gemini
+            case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
+            case .unknown:
+                // X3: visual fallback for raws this client doesn't
+                // recognize. Degrades to Claude styling.
+                return .claude
             }
         }()
         let status: TahoeCodeSession.Status = {

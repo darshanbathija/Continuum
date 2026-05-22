@@ -171,6 +171,13 @@ public final class AgentControlServer {
         chatStoreRegistry.snapshotStore(for: session)
     }
 
+    /// D4 (v0.17, wire v12): callback that fans the iOS-side per-provider
+    /// auto-revive toggle out to the matching AppModel.setAutoReviveEnabled.
+    /// AppRuntime injects this at startup; the server just dispatches.
+    /// Nil means D4 isn't wired (test-time / Previews) and the endpoint
+    /// returns 503.
+    public var setAutoReviveCallback: (@MainActor (AgentKind, Bool) -> Void)?
+
     public init(
         pairingTokens: PairingTokenStore = .shared,
         repoIndex: RepoIndex,
@@ -1022,6 +1029,16 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
             await self?.handleRegisterPushToken(request: req, connection: conn)
         }
+        // D4 (v0.17): per-provider auto-revive toggle. iOS Live tab
+        // fans the per-provider switch through here; the daemon dispatches
+        // to the right AppModel.setAutoReviveEnabled. Wire v12.
+        t.register(method: "POST", pattern: "/providers/:id/auto-revive") { [weak self] req, conn, params in
+            await self?.handleSetAutoRevive(
+                providerId: params["id"] ?? "",
+                request: req,
+                connection: conn
+            )
+        }
         t.register(method: "POST", pattern: "/devices/ack-notifications") { [weak self] req, conn, _ in
             await self?.handleAckNotifications(request: req, connection: conn)
         }
@@ -1576,6 +1593,19 @@ public final class AgentControlServer {
             // No interactive Gemini CLI yet — fall through to the
             // missing-binary surface so the request returns a 4xx
             // instead of silently spawning an empty process.
+            argv = []
+        case .opencode:
+            // PR #29: OpenCode sessions don't spawn through tmux argv;
+            // they're SSE clients of the shared `opencode serve`
+            // process. The handler routes opencode spawns to
+            // OpencodeProcessManager + OpencodeSSEAdapter instead;
+            // dropping into the 503 branch here is unreachable in
+            // production but kept for exhaustiveness + safety.
+            argv = []
+        case .unknown:
+            // X3: forward-compat unknown agent — no argv builder. Fall
+            // through to the 503 below so the iOS caller sees a clean
+            // failure instead of an empty spawn.
             argv = []
         }
         guard !argv.isEmpty else {
@@ -2312,6 +2342,173 @@ public final class AgentControlServer {
         }
     }
 
+    // MARK: - PR #30: OpenCode session dispatch (wire v13)
+
+    /// Spawn an OpenCode-backed AgentSession. Diverges from the
+    /// tmux argv path because opencode sessions are SSE clients of the
+    /// shared `opencode serve` process (P1 singleton). Flow:
+    ///   1. Ensure `opencode serve` is running (boots on first request).
+    ///   2. POST to the server's `/session` endpoint to mint an
+    ///      opencode session id.
+    ///   3. Register the (clawdmeterID ↔ opencodeID) mapping in
+    ///      OpencodeSSEAdapter so subsequent message.added events
+    ///      route to the right Clawdmeter session.
+    ///   4. Create a placeholder AgentSession in the registry so the
+    ///      session shows up in the iOS Code tab + Mac sidebar.
+    ///   5. Return the AgentSession JSON.
+    ///
+    /// Failure surfaces:
+    ///   - opencode binary not installed → 503 with install hint.
+    ///   - opencode serve spawn failed → 503 with detail.
+    ///   - /session POST failed → 502.
+    private func handleSpawnOpencodeSession(req: NewSessionRequest, connection: NWConnection) async {
+        // Step 1: ensure the singleton server is running.
+        guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
+            let state = OpencodeProcessManager.shared.state
+            let body: String
+            switch state {
+            case .notInstalled:
+                body = #"{"error":"opencode_not_installed","hint":"run: brew install opencode"}"#
+            case .failed(let detail):
+                body = #"{"error":"opencode_serve_failed","detail":"\#(detail)"}"#
+            default:
+                body = #"{"error":"opencode_not_running"}"#
+            }
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json", body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+
+        // Make sure the SSE adapter is consuming events. start() is
+        // idempotent — safe to call on every spawn even if already
+        // running.
+        OpencodeSSEAdapter.shared.start()
+
+        // Step 2: mint an opencode session id via the server's
+        // `/session` POST. Body is minimal — title is optional but
+        // surfaces in the OpenCode TUI's session list (which the
+        // user can still drive from a terminal if they want).
+        guard var sessionReq = OpencodeProcessManager.shared.makeAuthorizedRequest(path: "/session") else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sessionReq.httpMethod = "POST"
+        sessionReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let titleSource = req.goal?.trimmingCharacters(in: .whitespaces).isEmpty == false
+            ? req.goal!
+            : (req.repoKey as NSString).lastPathComponent
+        let postBody: [String: Any] = ["title": String(titleSource.prefix(60))]
+        sessionReq.httpBody = try? JSONSerialization.data(withJSONObject: postBody)
+
+        let opencodeID: String
+        do {
+            let session = URLSession(configuration: .ephemeral)
+            let (data, resp) = try await session.data(for: sessionReq)
+            guard let http = resp as? HTTPURLResponse, http.statusCode < 400 else {
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                serverLogger.error("opencode /session POST returned \(status, privacy: .public)")
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = obj["id"] as? String else {
+                serverLogger.error("opencode /session POST returned malformed body")
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            opencodeID = id
+        } catch {
+            serverLogger.error("opencode /session POST failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+            return
+        }
+
+        // Step 3: create the Clawdmeter-side AgentSession + register
+        // the bidirectional id mapping. opencode sessions don't carry
+        // a tmux pane or a worktree (the underlying provider drives
+        // its own cwd via opencode's tool calls).
+        let session = registry.create(
+            repoKey: req.repoKey,
+            repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+            agent: .opencode,
+            model: req.model,
+            goal: req.goal,
+            worktreePath: nil,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false  // opencode handles plan/approval internally
+        )
+        OpencodeSSEAdapter.shared.register(clawdmeterID: session.id, opencodeID: opencodeID)
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["repo": req.repoKey, "agent": "opencode", "opencodeID": opencodeID]
+        )
+
+        // Step 4: return the session JSON.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(session) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    // MARK: - D4: per-provider auto-revive RPC (wire v12)
+
+    /// POST body for `/providers/:id/auto-revive`. The `:id` path
+    /// component carries the AgentKind raw value (`claude`/`codex`/`gemini`);
+    /// body carries `{"enabled": Bool}`. Forward-compat: an unknown id
+    /// returns 400 (X3 unknown kinds aren't user-toggleable).
+    private struct SetAutoReviveBody: Codable {
+        let enabled: Bool
+    }
+
+    /// D4 (v0.17): handle `POST /providers/:id/auto-revive`. iOS Live tab
+    /// sends a per-provider toggle here; the daemon dispatches to the
+    /// matching AppModel.setAutoReviveEnabled via `setAutoReviveCallback`.
+    /// Returns 200 with `{"ok": true}` on success, 400 on unknown
+    /// provider, 503 if the callback isn't wired (test/Preview paths).
+    private func handleSetAutoRevive(
+        providerId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        // X3 / D4: only known AgentKind raws are accepted. `.unknown`
+        // sessions never reach here from the iOS UI (the toggle isn't
+        // rendered for unknown providers), and an arbitrary path id
+        // should 400 rather than silently fall through to `.unknown`.
+        guard let kind = AgentKind(rawValue: providerId),
+              kind != .unknown else {
+            sendResponse(
+                .badRequest,
+                on: connection
+            )
+            return
+        }
+        guard let body = try? JSONDecoder().decode(SetAutoReviveBody.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        guard let callback = setAutoReviveCallback else {
+            // No AppRuntime wired (test harness / Preview) — surface a
+            // 503 so the caller knows the daemon isn't ready instead of
+            // pretending success.
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        await MainActor.run {
+            callback(kind, body.enabled)
+        }
+        serverLogger.info("auto-revive toggle: \(providerId, privacy: .public) → \(body.enabled, privacy: .public)")
+        sendResponse(
+            .ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)),
+            on: connection
+        )
+    }
+
     // MARK: - Phase 10: ActivityKit push-token registration
 
     private struct RegisterPushTokenBody: Codable {
@@ -2553,6 +2750,15 @@ public final class AgentControlServer {
         decoder.dateDecodingStrategy = .iso8601
         guard let req = try? decoder.decode(NewSessionRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection)
+            return
+        }
+
+        // PR #30: route OpenCode sessions through the singleton
+        // OpencodeProcessManager + SSEAdapter instead of the tmux argv
+        // path. This branch exits the handler early on the opencode
+        // dispatch path; everything below is for tmux-backed kinds.
+        if req.agent == .opencode {
+            await handleSpawnOpencodeSession(req: req, connection: connection)
             return
         }
 
@@ -3287,6 +3493,15 @@ public final class AgentControlServer {
                 try? ChatCwdManager.remove(for: session.id)
                 throw SpawnFailure.message("agentapi_new_conversation_failed: \(error.localizedDescription)")
             }
+        case .opencode:
+            // PR #29: OpenCode in a frontier broadcast slot would
+            // require OpencodeProcessManager+SSE plumbing here. Defer
+            // to a follow-up; surfaces as a slot failure.
+            throw SpawnFailure.message("opencode_frontier_not_implemented")
+        case .unknown:
+            // X3: forward-compat unknown agent — no frontier-child spawn
+            // path. Surfaces as a slot failure to the broadcast caller.
+            throw SpawnFailure.message("unknown_agent_kind")
         }
     }
 
@@ -3499,6 +3714,16 @@ public final class AgentControlServer {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
         case .gemini:
+            break
+        case .opencode:
+            // PR #29: opencode sessions never enter the tmux warmup
+            // choreography — they're SSE clients of `opencode serve`,
+            // which OpencodeProcessManager + OpencodeSSEAdapter handle
+            // out-of-band.
+            break
+        case .unknown:
+            // X3: forward-compat unknown agent — no warmup choreography
+            // plumbed.
             break
         }
     }
@@ -3756,6 +3981,16 @@ public final class AgentControlServer {
         case .gemini:
             // approve-plan from Gemini is unsupported in v6 — there's no
             // gemini CLI to respawn. Surfaces as 500 below.
+            argv = nil
+        case .opencode:
+            // PR #29: opencode has no plan-mode → respawn-with-write
+            // flow; OpenCode handles its own tool-call approval inside
+            // `opencode serve`. Surfaces as 500 here so a misrouted
+            // approve-plan from a stale UI doesn't pretend to succeed.
+            argv = nil
+        case .unknown:
+            // X3: forward-compat unknown agent — no respawn path.
+            // Surfaces as 500 below.
             argv = nil
         }
         guard let replacementArgv = argv else {

@@ -20,6 +20,15 @@ public struct UsageRecord: Sendable, Equatable {
         case claude
         case codex
         case gemini
+        /// OpenCode (D11/D12, v1.1 — wire v13). Adds a 4th analytics
+        /// column + menu-bar dollar gauge. Cost mapping: the
+        /// `OpencodeUsageMapper` resolves the *underlying model* the
+        /// OpenCode server invoked (Anthropic, OpenAI, Google) and
+        /// looks up that model's rate card via `Pricing.cost(for:tokens:)`.
+        /// OpenCode itself is the orchestrator; analytics tag the slice
+        /// under `.opencode` so users see how much they spent through
+        /// the OpenCode pipeline regardless of the underlying provider.
+        case opencode
     }
 
     public let provider: Provider

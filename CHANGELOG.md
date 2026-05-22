@@ -4,6 +4,338 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.20.0 build 80] - 2026-05-22 — OpenCode polish + v1.0 chat finish (PR #31)
+
+PR #31 ships four chunks bundled as the v1.1 polish + v1.0 chat
+finish — opencode becomes visually first-class everywhere, settings
+surfaces install/auth status, the menu-bar dollar gauge ingests live
+cost, and the chat composer's "~$X / send" chip pulls from the real
+Pricing rate card.
+
+### Chunk 1 — TahoeProvider.opencode (4th visual lane)
+
+- TahoeProvider gains `.opencode` with violet OKLCH palette (h≈295),
+  brand name "OpenCode", template-tinted silhouette asset slot.
+- TahoeLiveBindings: 4th `opencode: TahoeLiveRow` stored property +
+  row(for:) handler.
+- AgentKind → TahoeProvider mappers (MacTahoeAdapter, IOSTahoeAdapter)
+  now return .opencode natively (was: .codex fallback).
+- ~5 cascading switches updated (Mac usage column, code IDE filter,
+  chat agent kind, iOS Live, iOS Analytics).
+
+### Chunk 2 — Settings → Providers panel
+
+- New SettingsCard "Providers" below "Quota & sync".
+- OpencodeProviderRow surfaces OpencodeProcessManager state + auth
+  list with color-coded state pill (notInstalled / Idle / Starting /
+  Running / Failed) and "Open docs" button linking to opencode.ai/docs/auth.
+- Refreshes auth on `.task` so signed-in providers appear without a
+  manual reload.
+
+### Chunk 3 — OpencodeUsageMapper + dollar gauge (A2)
+
+- New ClawdmeterShared/Analytics/OpencodeUsageMapper.swift (~100 LOC):
+  pure mapper from opencode `usage` SSE event → UsageRecord. Lenient
+  numeric reader handles Int/Double/NSNumber bridging. Unknown models
+  still emit records (attribute to unpriced bucket); all-zero token
+  events drop.
+- OpencodeSSEAdapter `usage` branch now maps + posts
+  `.opencodeUsageRecorded` Notification with the UsageRecord.
+- UsageHistoryStore: new `opencodeLiveRecords` @Published bag,
+  observer that folds notification payloads in (FIFO-bounded at 5000),
+  `opencodeTodayCostUSD` + `opencodeWeekCostUSD` getters.
+- MacUsageView: new OpencodeDollarRow strip below the 3 ProviderColumns.
+  Shows `$X today` + `$Y this week` per A2 (no rolling 5h window —
+  pay-as-you-go).
+
+### Chunk 4 — Pricing.estimateSend + composer chip
+
+- New ClawdmeterShared/Analytics/Pricing+EstimateSend.swift:
+  `estimateSend(promptText:agent:model:)` + `estimateBroadcast(...)`.
+  char/4 input estimate + 256 notional output tokens for an
+  order-of-magnitude chip read.
+- MacChatView composer chip now renders live `$X.XXX / send` from
+  Pricing.shared. Broadcast mode sums Claude + Codex + Gemini.
+
+### Tests
+
+- 620/620 shared tests pass (up from 613 → +7 PricingEstimateSendTests
+  + 9 OpencodeUsageMapperTests landed on PR #30; net +7 here).
+- 89/89 Mac tests pass.
+- Mac + iOS + Watch all build clean.
+
+### Known gaps (queued for follow-up)
+
+- Repo plumbing on opencode usage events — `handleUsage` currently
+  passes `repo: nil`; future polish: stash repo at session.created
+  time + look up via sessionMap.
+- Mac chat broadcast multi-pane fan-out — pivot from TahoeDemo to
+  real `chatStore(for:)` is still scaffolded for solo only; full
+  3-pane stream + pick-winner UI is a follow-up.
+- Menu-bar status item dollar variant (A2 sole-provider case) —
+  lives in AppDelegate.ProviderStatusController; queued.
+- Tahoe-art for the OpenCode brand mark (`tahoe-opencode-mark`) —
+  AgentKindUI fallback to `OpencodeLogo` ships meanwhile.
+
+## [0.19.0 build 79] - 2026-05-22 — OpenCode runtime: ProcessManager + SSE adapter (D11/D12, P1)
+
+PR #30 lands the runtime that PR #29's wire foundation was designed
+for: a singleton `opencode serve` process + an SSE event adapter,
+hooked into AgentControlServer so opencode-kind sessions actually
+spawn and stream events end-to-end.
+
+### Added
+
+- **OpencodeProcessManager** (`apple/ClawdmeterMac/AgentControl/OpencodeProcessManager.swift`,
+  ~300 LOC): P1 singleton per the eng-review decision. Responsibilities:
+  - Binary discovery: `/opt/homebrew/bin/opencode`, `/usr/local/bin/opencode`,
+    then `$PATH` walk. Surfaces `State.notInstalled` with install hint
+    when missing.
+  - Free-port allocation via transient `NWListener`.
+  - Spawns `opencode serve --port <p> --hostname 127.0.0.1` with a
+    per-launch `OPENCODE_SERVER_PASSWORD` token.
+  - Healthcheck via `GET /` until 200 lands or 10s deadline.
+  - Auth probe via `opencode auth list` (lenient parser handles
+    blanks, comments, decorative separators, headers).
+  - Restart-on-crash supervisor with exponential backoff
+    (1s → 2s → 4s → 8s → 16s), capped at 5 restarts before giving up
+    (prevents crash loops eating CPU).
+  - Clean shutdown via `stop()`; idempotent.
+  - State exposed as `@Published` for the Settings → Providers UI
+    (lands in PR #31).
+- **OpencodeSSEAdapter** (`apple/ClawdmeterMac/AgentControl/OpencodeSSEAdapter.swift`,
+  ~260 LOC): consumes `GET /event` SSE stream + translates events to
+  the AgentEventStream shape. Bidirectional UUID map (Clawdmeter ↔
+  opencode session ids) + reconnect-with-backoff + Last-Event-ID
+  resume. Event handlers:
+  - `session.created` → registry hook (synthesis surface logged for now)
+  - `message.added` → `.snapshot` event nudge
+  - `session.error` → `.statusChanged` with degraded payload
+  - `usage` → logged; forwarded to OpencodeUsageMapper in PR #31
+  - unknown / empty types → logged + ignored (forward-compat)
+- **AgentControlServer.handleSpawnOpencodeSession**: routes opencode
+  POST /sessions through the manager + SSE adapter instead of the
+  tmux argv path. Mints an opencode session id via the server's
+  `/session` POST, registers the bidirectional mapping, creates the
+  Clawdmeter-side AgentSession, returns the session JSON. Failure
+  surfaces with structured 503 bodies (install hint, spawn detail).
+- **AppRuntime.deinit**: tears down ProcessManager + SSE adapter on
+  app shutdown.
+
+### Tests
+
+- **OpencodeProcessManagerTests** (11 tests): parseAuthList table-
+  driven coverage (single, multiple, blanks, comments, separators,
+  headers, malformed lines, colon-in-value), initial state, stop
+  idempotency, binary discovery, ensureRunning notInstalled branch.
+- **OpencodeSSEAdapterTests** (12 tests): BidirectionalMap round-
+  trip + overwrite + removeAll, dispatchEvent robustness (malformed
+  JSON, empty, unknown types, missing fields), per-event-type
+  handler routing (message.added + session.error registered/unknown
+  paths), register idempotency, stop clears map.
+- **89/89 Mac tests pass** (up from 66 → +23 opencode tests).
+- 604/604 shared tests pass (no regressions).
+- Mac + iOS + Watch all build clean.
+
+### Known gaps (queued for PR #31)
+
+- OpencodeUsageMapper + menu-bar dollar gauge (A2)
+- Settings → Providers panel UI
+- TahoeProvider 4th case + Mac/iOS UI surfaces
+- Mac broadcast pipeline + MacChatTranscriptStore (v1.0 chat finish)
+
+## [0.18.0 build 78] - 2026-05-22 — OpenCode adapter foundation (D11/D12 — wire v13)
+
+PR #29 lays the wire + enum foundation for the OpenCode adapter (D11/D12).
+This ships the schema migration + cross-version tests so subsequent
+follow-up PRs can layer in the runtime (process manager, SSE adapter,
+usage mapper, settings panel) against a stable wire.
+
+### Added
+
+- **AgentKind.opencode** (wire v13): new 4th provider case. v12 clients
+  fall back to `.unknown` (X3 hardening from PR #28) and render as
+  "Other agent"; v13+ clients decode natively.
+- **UsageRecord.Provider.opencode**: analytics layer's parallel
+  enum. Wired through `AgentKindUI` + `AnalyticsTotalsGrid` +
+  `AnalyticsDailyChart` for display name, asset, template flag, and
+  cost rollup.
+- **AgentControlWireVersion.opencodeMinimum = 13**: new minimum-version
+  gate for clients that want to surface OpenCode UI without falling
+  back to "Other agent".
+- **OpenCode brand styling**: violet accent (`#6B5DD3`) + silhouette
+  template asset across both AgentKindUI surfaces (Mac + iOS).
+- **Tests**: 2 new tests (native `.opencode` decode + opencodeMinimum
+  gate) on top of the updated X3 regression coverage.
+
+### Changed
+
+- `AgentControlWireVersion.current`: 12 → 13.
+- `AgentKind.allCases`: now 4 entries (claude/codex/gemini/opencode).
+  Pickers + segmented controls render the 4th option natively.
+- All ~14 switches on AgentKind across Mac + iOS + Shared get an
+  explicit `.opencode` case with the right semantic fallback (no argv
+  builder, no JSONL transcript, no warmup choreography — opencode
+  sessions route through `OpencodeProcessManager` + SSE adapter when
+  those land; the switch fallbacks document the boundary cleanly).
+- `IOSAnalyticsView`'s `MergedRepoRow` aggregation skips `.opencode`
+  with an explicit comment — the 4th-column UI rewrite is queued for
+  the OpenCode analytics polish PR.
+
+### Known gaps (queued for follow-up PRs)
+
+- **OpencodeProcessManager**: P1 singleton (`opencode serve` per-app
+  process, binary discovery, port pick, restart-on-crash) not yet
+  implemented. Mac dispatcher returns 503 for opencode spawns until
+  it lands.
+- **OpencodeSSEAdapter**: SSE subscription + event → SessionEventEnvelope
+  mapping not yet implemented.
+- **OpencodeUsageMapper + menu-bar dollar gauge (A2)**: not yet
+  implemented.
+- **Settings → Providers row**: install/auth status surfacing not
+  yet wired.
+- **TahoeProvider**: still 3-case (claude/codex/gemini). Mac +
+  iOS visually map opencode → codex as a least-bad fallback; the
+  4th-case TahoeProvider refactor is a wider change deferred to a
+  dedicated UI PR.
+
+### Tests
+
+- 604/604 shared tests pass (up from 602 → +2 new tests for v13
+  opencode decode + opencodeMinimum gate; 3 X3 tests updated for
+  the new "future raw" pattern).
+- Mac + iOS + Watch all build clean.
+
+## [0.17.0 build 77] - 2026-05-22 — v1.0 polish: X3 + D3 + D4 + Mac chat composer (`feat/v1-polish`)
+
+Closes out the v1.0 polish punch list deferred from PR #26.
+
+### Added
+
+- **X3 forward-compat (wire v12)**: new `AgentKind.unknown` sentinel.
+  The lenient decoder folds raws this binary doesn't recognize into
+  `.unknown` instead of `.claude` — protects older clients from
+  silently mislabeling future kinds (e.g. OpenCode in PR #28). UI
+  surfaces render `.unknown` as a neutral "Other agent" tile.
+  `allCases` excludes `.unknown` so pickers + segmented controls stay
+  clean. `AgentControlWireVersion.current` bumps to 12.
+  - 10 regression tests in `AgentKindUnknownTests` cover the decoder
+    contract, allCases hygiene, UI fallbacks, and the cross-version
+    (v12 client + v13 Mac) regression.
+- **D3 IOSPairingView**: replaces the legacy `PairingFlow` surface.
+  Buttons now wire to `AgentControlClient.setPairing(...)` — Scan QR
+  presents `PairingScannerView` as a sheet, Paste URL presents a
+  paste sheet that parses the clawdmeter:// URL via
+  `PairingScannerView.parse(urlString:)`. Both paths land on
+  `applyChallenge` (byte-for-byte identical to PairingFlow's wire).
+  `NewSessionSheet` extracted to its own file. PairingFlow.swift
+  deleted.
+- **D4 setAutoRevive RPC (wire v12)**: new
+  `POST /providers/:id/auto-revive` endpoint on AgentControlServer +
+  `AgentControlClient.setAutoRevive(provider:enabled:)` method.
+  AppRuntime wires the callback to fan out to the matching
+  `AppModel.setAutoReviveEnabled`. iOS Live tab's auto-revive toggle
+  now drives the real RPC with optimistic UI (flip local state, fire
+  the RPC, don't await).
+  - Unknown provider raws + the X3 sentinel return 400 (X3 unknowns
+    are never user-toggleable).
+  - 4 `SetAutoReviveRequestTests` covering encode/decode/round-trip +
+    defensive rejection of malformed body.
+- **Mac chat composer wire**: `ChatComposer` rewritten with a real
+  `TextField` + `@StateObject ComposerSendController`. First send
+  routes through `.chatCreate` (creates session + appends prompt as
+  first turn); subsequent sends route through `.solo` for the
+  cheaper follow-up path. `SendButton` now takes `enabled`/`sending`/
+  `action` so the daemon roundtrip disables the button + spins a
+  ProgressView. Broadcast mode degrades to solo-Claude with a soft
+  warning until the frontier fan-out wire lands.
+
+### Changed
+
+- `AgentKind.allCases` overrides the auto-synthesized CaseIterable
+  conformance to exclude `.unknown`.
+- `AgentControlWireVersion.current`: 11 → 12.
+- `AgentControlServer.setAutoReviveCallback`: new injection point
+  for D4 fan-out.
+- `IOSLiveView`: now takes `agentClient: AgentControlClient?` (was
+  decorative-only). Auto-revive toggle's setter calls
+  `agentClient.setAutoRevive(...)` with optimistic UI.
+- `MacChatView`: now takes `loopbackClient: AgentControlClient?` +
+  tracks `openChatId: UUID?` for follow-up sends.
+- `PairingCTAButtons`: both side-by-side buttons present the same
+  IOSPairingView sheet (segmented mode picker removed; new view
+  exposes Scan + Paste from one screen).
+- All ~20 switches on AgentKind across Mac + iOS + Shared get an
+  explicit `.unknown` case with a sensible semantic fallback.
+
+### Removed
+
+- `apple/ClawdmeteriOS/PairingFlow.swift` — replaced by IOSPairingView.
+  `NewSessionSheet` (which lived in the same file) extracted to its
+  own file at `apple/ClawdmeteriOS/NewSessionSheet.swift`.
+
+### Migration
+
+- Wire version mismatch UX: any v11-or-earlier iOS client paired to a
+  v12 Mac sees `WireVersionMismatchBanner` ("Mac is running a different
+  version. Update the Mac app."); the banner is non-blocking, the
+  app still works.
+- `AgentKind.unknown` is intentionally not added to TahoeProvider —
+  the iOS Live tab keeps its 3-provider segmented control. Unknown
+  AgentKinds map to `.claude` visually as a graceful degradation
+  (semantic correctness lives at the AgentKind layer; X3 prevents
+  silent mislabeling at the wire decoder).
+
+### Tests
+
+- 602/602 shared tests pass (up from 588 → +14 tests for X3 + D4).
+- Mac + iOS + Watch all build clean.
+
+### Known limitations (queued for follow-up)
+
+- Mac ChatStream still renders TahoeDemo.chatThread — the WS-driven
+  MacChatTranscriptStore ships in a follow-up PR. The composer
+  reaches the daemon today; the assistant's reply stream doesn't
+  yet render in the Mac surface (it does on iOS).
+- Broadcast chat fan-out degrades to solo-Claude; the full frontier
+  slot list wire lands with the transcript store.
+
+## [0.16.0 build 76] - 2026-05-22 — iOS session search + Mac titlebar truth (`feat/wiring-polish` partial)
+
+PR #26 partial — D5 (iOS session search) and D6 (Mac titlebar
+wiring). D3 (IOSPairingView replace), D4 (setAutoRevive RPC), and X3
+(AgentKind.unknown forward-compat) deferred to a v1.0 follow-up
+branch.
+
+### Added
+
+- **iOS session search (D5)**: real `TextField` in `IOSCodeView`'s
+  search row, filters repos + sessions by case-insensitive contains
+  on title and repo name. Clear button (×) appears when query
+  non-empty. Empty query is regression-safe (identical to today).
+- **Mac titlebar truth (D6)**: replaced the lying `"Updated 14s ago"`
+  label with a live "N repos tracked" pill. "Sync with iPhone" / "iPhone
+  paired" chips now reflect real pairing state from
+  `PairingTokenStore.shared.hasAnyPaired` (new public property —
+  true when a token's been issued and not revoked). Usage-tab chip
+  is now a Button (target: QR popover in a v1.0 follow-up).
+
+### Changed
+
+- `PairingTokenStore.hasAnyPaired: Bool` — new public accessor for
+  the titlebar (and any future "paired devices" UI).
+
+### Deferred to v1.0 follow-up
+
+- **D3** — `IOSPairingView` rewrite + `PairingFlow.swift` retirement.
+- **D4** — `setAutoRevive(provider:enabled:)` daemon RPC + iOS toggle wire.
+- **X3** — `AgentKind.unknown` forward-compat for PR #27 safety. **Required
+  before PR #27 lands** to avoid mislabeling OpenCode sessions on
+  v0.16 clients.
+- Mac titlebar "Sync with iPhone" tap → QR popover (currently no-op).
+
+Builds clean on Mac + iOS + Watch.
+
 ## [0.15.0 build 75] - 2026-05-22 — iOS chat composer wired + reply icons cleaned up (`feat/chat-pipeline`)
 
 PR #25 partial — D1 (chat pipeline) iOS half + D7 (reply icons

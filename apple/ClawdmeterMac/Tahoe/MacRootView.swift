@@ -88,20 +88,26 @@ struct MacRootView: View {
                     theme: theme,
                     chatMode: $chatMode,
                     chatSoloProvider: $chatSoloProvider,
-                    openDesignDaemon: runtime.openDesignDaemon
+                    runtime: runtime
                 )
                     .padding(.horizontal, 10)
                     .padding(.top, 10)
 
                 Group {
                     switch tab {
-                    case .chat:     MacChatView(mode: $chatMode, soloProvider: $chatSoloProvider)
+                    case .chat:
+                        MacChatView(
+                            mode: $chatMode,
+                            soloProvider: $chatSoloProvider,
+                            loopbackClient: runtime.loopbackClient
+                        )
                     case .usage:
                         MacUsageView(
                             data: live,
                             claudeModel: claudeModel,
                             codexModel: codexModel,
-                            geminiModel: geminiModel
+                            geminiModel: geminiModel,
+                            usageHistoryStore: runtime.usageHistoryStore
                         )
                     case .code:
                         MacCodeView(
@@ -193,7 +199,12 @@ struct MacTitlebar: View {
     var theme: TahoeThemeStore
     @Binding var chatMode: MacChatView.Mode
     @Binding var chatSoloProvider: TahoeProvider
-    @ObservedObject var openDesignDaemon: OpenDesignDaemonManager
+    /// PR #26 D6: runtime for the secondary-right chips (repo count,
+    /// pairing state, sync popover trigger). Nil falls back to static
+    /// text for Previews.
+    /// v0.21.0 (Design tab): also drives the .design chip via
+    /// runtime?.openDesignDaemon.
+    var runtime: AppRuntime?
 
     init(
         active: MacRootView.Tab,
@@ -201,14 +212,47 @@ struct MacTitlebar: View {
         theme: TahoeThemeStore,
         chatMode: Binding<MacChatView.Mode>,
         chatSoloProvider: Binding<TahoeProvider>,
-        openDesignDaemon: OpenDesignDaemonManager
+        runtime: AppRuntime? = nil
     ) {
         self.active = active
         self.onTab = onTab
         self.theme = theme
         self._chatMode = chatMode
         self._chatSoloProvider = chatSoloProvider
-        self.openDesignDaemon = openDesignDaemon
+        self.runtime = runtime
+    }
+
+    /// Repo count for the Usage-tab status label.
+    private var repoCountLabel: String {
+        let count = runtime?.sessionsModel.repos.count ?? 0
+        if count == 0 { return "0 repos" }
+        if count == 1 { return "1 repo" }
+        return "\(count) repos"
+    }
+
+    /// Real pairing state for the sync chips. True when any iPhone is
+    /// currently paired via the agentControlServer's pairingTokens.
+    /// Nil runtime (Previews) returns false.
+    private var isIPhonePaired: Bool {
+        guard let runtime else { return false }
+        return PairingTokenStore.shared.hasAnyPaired
+    }
+
+    @ViewBuilder
+    private var syncChipUsage: some View {
+        Button(action: { /* TODO PR #26b: present QR popover */ }) {
+            TahoeSyncChip(
+                icon: "qr",
+                text: isIPhonePaired ? "iPhone paired" : "Sync with iPhone"
+            )
+        }
+        .buttonStyle(.plain)
+        .help(isIPhonePaired ? "Manage paired devices" : "Pair an iPhone")
+    }
+
+    @ViewBuilder
+    private var syncChipCode: some View {
+        TahoeSyncChip(text: isIPhonePaired ? "iPhone paired" : "No iPhone paired")
     }
 
     var body: some View {
@@ -244,29 +288,41 @@ struct MacTitlebar: View {
             ChatModeToggle(mode: $chatMode, soloProvider: $chatSoloProvider)
         case .usage:
             HStack(spacing: 8) {
+                // PR #26 D6: removed the hardcoded "Updated 14s ago"
+                // label (was lying to users). Replaced with a quick
+                // status pill showing live repo count.
                 Label {
-                    Text("Updated 14s ago")
+                    Text("\(repoCountLabel) tracked")
                         .font(TahoeFont.body(12))
                 } icon: {
-                    TahoeIcon("refresh", size: 11)
+                    TahoeIcon("folder", size: 11)
                 }
                 .foregroundStyle(t.fg2)
                 TahoeHair(vertical: true).frame(height: 14)
-                TahoeSyncChip(icon: "qr", text: "Sync with iPhone")
+                // PR #26 D6: sync chip becomes a button — opens a popover
+                // with the pairing QR when no iPhone is paired, otherwise
+                // shows paired state.
+                syncChipUsage
             }
         case .code:
-            TahoeSyncChip(text: "iPhone paired")
+            syncChipCode
         case .design:
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(designHealthColor)
-                    .frame(width: 8, height: 8)
-                Text(designChipText)
-                    .font(TahoeFont.body(12))
-                    .foregroundStyle(t.fg2)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 200, alignment: .leading)
+            // v0.21.0: health-dot + active project name from the daemon.
+            // Nil-runtime (Previews) falls back to a neutral placeholder.
+            if let daemon = runtime?.openDesignDaemon {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(designHealthColor(for: daemon))
+                        .frame(width: 8, height: 8)
+                    Text(designChipText(for: daemon))
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 200, alignment: .leading)
+                }
+            } else {
+                Text("Design").font(TahoeFont.body(12)).foregroundStyle(t.fg3)
             }
         case .settings:
             Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1") · synced")
@@ -275,8 +331,8 @@ struct MacTitlebar: View {
         }
     }
 
-    private var designHealthColor: Color {
-        switch openDesignDaemon.lifecycle {
+    private func designHealthColor(for daemon: OpenDesignDaemonManager) -> Color {
+        switch daemon.lifecycle {
         case .ready:                                 return .green
         case .starting, .loading, .restarting:       return .orange
         case .crashed, .failed:                      return .red
@@ -284,11 +340,11 @@ struct MacTitlebar: View {
         }
     }
 
-    private var designChipText: String {
-        if let name = openDesignDaemon.activeProjectName, !name.isEmpty {
+    private func designChipText(for daemon: OpenDesignDaemonManager) -> String {
+        if let name = daemon.activeProjectName, !name.isEmpty {
             return name
         }
-        switch openDesignDaemon.lifecycle {
+        switch daemon.lifecycle {
         case .ready:    return "No project open"
         case .starting: return "Starting…"
         case .loading:  return "Loading…"

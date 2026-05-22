@@ -18,17 +18,22 @@ public struct MacUsageView: View {
     var claudeModel: AppModel?
     var codexModel: AppModel?
     var geminiModel: AppModel?
+    /// PR #31 chunk 3 (A2): the live usage store the OpenCode dollar
+    /// row reads from. Optional so Previews work without a runtime.
+    var usageHistoryStore: UsageHistoryStore?
 
     public init(
         data: TahoeLiveBindings = .demo,
         claudeModel: AppModel? = nil,
         codexModel: AppModel? = nil,
-        geminiModel: AppModel? = nil
+        geminiModel: AppModel? = nil,
+        usageHistoryStore: UsageHistoryStore? = nil
     ) {
         self.data = data
         self.claudeModel = claudeModel
         self.codexModel = codexModel
         self.geminiModel = geminiModel
+        self.usageHistoryStore = usageHistoryStore
     }
 
     public var body: some View {
@@ -39,7 +44,16 @@ public struct MacUsageView: View {
                     ProviderColumn(provider: .codex,  row: data.codex,  model: codexModel)
                     ProviderColumn(provider: .gemini, row: data.gemini, model: geminiModel)
                 }
-                .padding(.horizontal, 6).padding(.bottom, 18)
+                .padding(.horizontal, 6).padding(.bottom, 14)
+
+                // PR #31 chunk 3 (A2): OpenCode dollar-cost row.
+                // Renders as a single full-width strip beneath the 3
+                // provider columns because OpenCode doesn't have a 5h
+                // rolling quota — only dollar totals. The dedicated
+                // column avoids cramping the existing 3-column layout
+                // at the 1280pt min window width.
+                OpencodeDollarRow(usageHistory: usageHistoryStore)
+                    .padding(.horizontal, 6).padding(.bottom, 18)
 
                 TahoeHair()
 
@@ -71,6 +85,7 @@ private struct ProviderColumn: View {
             case .claude: return "claude"
             case .codex:  return "codex"
             case .gemini: return "gemini"
+            case .opencode: return "opencode"  // PR #31
             }
         }()
         return "clawdmeter.\(id).menuBarShown"
@@ -460,5 +475,71 @@ private struct RepoList: View {
 
     private func grad(_ p: TahoeProvider) -> LinearGradient {
         LinearGradient(colors: [p.glow.color, p.base.color], startPoint: .top, endPoint: .bottom)
+    }
+}
+
+// MARK: - OpencodeDollarRow (PR #31 chunk 3, A2)
+
+/// OpenCode usage row — dollar-cost gauge variant per A2.
+/// Renders as a single full-width strip beneath the 3 provider columns.
+/// Shows `$X today` + `$Y this week` (no rolling 5h quota — OpenCode
+/// is pay-as-you-go through whichever underlying provider the user
+/// signed in with).
+private struct OpencodeDollarRow: View {
+    @Environment(\.tahoe) private var t
+    @ObservedObject var usageHistory: UsageHistoryStore
+
+    init(usageHistory: UsageHistoryStore?) {
+        // Bind to whichever store the parent injected; for Previews
+        // we instantiate a fresh one so the view doesn't crash on the
+        // @ObservedObject requirement.
+        self.usageHistory = usageHistory ?? UsageHistoryStore()
+    }
+
+    var body: some View {
+        TahoeGlass(radius: 20, tone: .panel) {
+            HStack(spacing: 18) {
+                TahoeProviderGlyph(provider: .opencode, size: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("OpenCode")
+                        .font(TahoeFont.body(15, weight: .bold))
+                        .foregroundStyle(t.fg)
+                    Text("Pay-as-you-go via your authenticated provider")
+                        .font(TahoeFont.body(11.5))
+                        .foregroundStyle(t.fg3)
+                }
+                Spacer()
+                metric(label: "Today", value: format(usageHistory.opencodeTodayCostUSD))
+                metric(label: "This week", value: format(usageHistory.opencodeWeekCostUSD))
+            }
+            .padding(.horizontal, 18).padding(.vertical, 16)
+        }
+    }
+
+    @ViewBuilder
+    private func metric(label: String, value: String) -> some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            Text(label.uppercased())
+                .font(TahoeFont.body(10, weight: .bold))
+                .tracking(0.4)
+                .foregroundStyle(t.fg4)
+            Text(value)
+                .font(TahoeFont.rounded(22, weight: .heavy))
+                .monospacedDigit()
+                .tracking(-0.4)
+                .foregroundStyle(t.fg)
+        }
+        .padding(.leading, 18)
+    }
+
+    /// Currency formatter for the dollar gauge. Mac users see USD by
+    /// default — locale formatting matches what AnalyticsTotalsGrid
+    /// uses elsewhere in the app.
+    private func format(_ value: Decimal) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: value as NSDecimalNumber) ?? "$0.00"
     }
 }
