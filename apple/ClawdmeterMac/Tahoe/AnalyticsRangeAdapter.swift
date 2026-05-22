@@ -8,46 +8,55 @@ import ClawdmeterShared
 /// $17.42 etc.) regardless of actual usage — see the user's screenshot
 /// reporting "the data here is completely wrong".
 ///
-/// The chart's bucketing matches the existing TahoeDemo demo data:
-///   - "24h" → 6 four-hour buckets, ticks `["00","04","08","12","16","20"]`
-///   - "7d"  → 7 daily buckets, ticks Mon–Sun ordered ending today
-///   - "30d" → 4 weekly buckets, ticks `["W1","W2","W3","W4"]`
-///   - "90d" → 12 weekly buckets, ticks W1..W12 ending most recent
-///   - "all" → 12 monthly buckets ending current month (or fewer if less history)
+/// The chart's bucketing matches ccusage's daily model:
+///   - "today" → today only (single bar)
+///   - "7d"    → 7 daily buckets, ticks Mon–Sun ordered ending today
+///   - "30d"   → 4 weekly buckets, ticks `["W1","W2","W3","W4"]`
+///   - "90d"   → 12 weekly buckets, ticks W1..W12 ending most recent
+///   - "all"   → 12 monthly buckets ending current month (or fewer if less history)
 ///
 /// Per-bucket per-provider dollar splits come from the snapshot's
 /// `byProvider[p].byDay` slot. Repos come from `byProvider[p].past*.byRepo`
 /// (PR #27 added opencode). The result is the same shape the Tahoe view
 /// already knows how to render — just with truthful numbers.
+///
+/// v0.22.17: replaced the "24h" range with "today". The previous
+/// "past 24h" view split today's total across 6 equally-weighted
+/// four-hour buckets — pure smoke-and-mirrors since
+/// UsageHistoryLoader stores data at day-resolution. ccusage uses
+/// per-day buckets too; "today" tells the truth.
 enum AnalyticsRangeAdapter {
 
     static func rangeData(snapshot: UsageHistorySnapshot, range: String) -> TahoeDemo.RangeData {
         switch range {
-        case "24h": return self.hourly24(snapshot)
-        case "7d":  return self.daily7(snapshot)
-        case "30d": return self.weekly4(snapshot)
-        case "90d": return self.weekly12(snapshot)
-        case "all": return self.allTime(snapshot)
-        default:    return self.daily7(snapshot)
+        case "today": return self.today(snapshot)
+        // Back-compat with persisted user state from v0.22.16 and
+        // earlier — fall through to the new "today" implementation
+        // rather than re-rendering the misleading 6-bar split.
+        case "24h":   return self.today(snapshot)
+        case "7d":    return self.daily7(snapshot)
+        case "30d":   return self.weekly4(snapshot)
+        case "90d":   return self.weekly12(snapshot)
+        case "all":   return self.allTime(snapshot)
+        default:      return self.daily7(snapshot)
         }
     }
 
-    // MARK: - 24h: 6 buckets of 4 hours each
+    // MARK: - Today: a single bar showing today's per-provider spend
 
-    private static func hourly24(_ snapshot: UsageHistorySnapshot) -> TahoeDemo.RangeData {
-        // The snapshot is bucketed at day-resolution, so "past 24h" is
-        // approximated as today's totals split across 6 four-hour
-        // buckets weighted equally. Improving this requires sub-day
-        // bucketing in UsageHistoryLoader — punted for v0.22.8.
-        let today = Calendar.current.startOfDay(for: Date())
-        let series = (0..<6).map { _ in
-            self.spendPoint(snapshot, day: today, scale: 1.0 / 6.0)
-        }
-        let totals = self.totalsFor(snapshot, range: .today, label: "24h")
+    private static func today(_ snapshot: UsageHistorySnapshot) -> TahoeDemo.RangeData {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        // Single bar — full magnitude (no scale) so the height
+        // accurately reflects what we billed today.
+        let series = [self.spendPoint(snapshot, day: today, scale: 1.0)]
+        // Day-of-week label on the X axis so the user knows which
+        // day this bar represents (matches the 7d view's tick style).
+        let totals = self.totalsFor(snapshot, range: .today, label: "today")
         let repos = self.reposFor(snapshot, range: .today)
         return TahoeDemo.RangeData(
-            label: "24h",
-            ticks: ["00", "04", "08", "12", "16", "20"],
+            label: "today",
+            ticks: [Self.weekdayLabel(for: today)],
             series: series,
             total: totals,
             repos: repos
