@@ -89,6 +89,13 @@ public final class SessionChatStore: ObservableObject {
         /// View code uses this for `.onChange` triggers instead of
         /// `items.last?.id`, which would change object identity per render.
         public let updateCounter: UInt64
+        /// v0.23 (Chat V2): explicit per-turn lifecycle. Updated by the
+        /// daemon's ingestors (JSONLTail for Claude `result`,
+        /// CodexSDKEventIngestor for `turn.completed`, AntigravityChatIngestor
+        /// for `chunk_done`). Drives the V2 status strip's stopwatch
+        /// clamp + Stop↔Send transition. Defaults to `.idle` on
+        /// legacy snapshots.
+        public let currentTurnState: TurnState
 
         public init(
             items: [ChatItem],
@@ -107,7 +114,8 @@ public final class SessionChatStore: ObservableObject {
             lastCacheReadTokens: Int = 0,
             modelHint: String? = nil,
             lastEventAt: Date? = nil,
-            updateCounter: UInt64
+            updateCounter: UInt64,
+            currentTurnState: TurnState = .idle
         ) {
             self.items = items
             self.messages = messages
@@ -126,6 +134,7 @@ public final class SessionChatStore: ObservableObject {
             self.modelHint = modelHint
             self.lastEventAt = lastEventAt
             self.updateCounter = updateCounter
+            self.currentTurnState = currentTurnState
         }
 
         public static let empty = ChatSnapshot(items: [], updateCounter: 0)
@@ -187,6 +196,23 @@ public final class SessionChatStore: ObservableObject {
     /// caller).
     public func setCodexTodos(_ todos: [CodexTodoItem]) {
         Task { [staging] in await staging.setCodexTodos(todos) }
+    }
+
+    /// v0.23 (Chat V2): transition the session's per-turn lifecycle.
+    /// Called from each provider's ingestor:
+    ///   - JSONLTail (Claude) → `.streaming` on first assistant content,
+    ///     `.completed` on the JSONL `result` line, `.interrupted` on the
+    ///     SessionInterruptDispatcher's tmux ESC dispatch.
+    ///   - CodexSDKEventIngestor → `.streaming` on first SDK event of a
+    ///     turn, `.completed` on `turn.completed`, `.interrupted` on
+    ///     AbortController.abort().
+    ///   - AntigravityChatIngestor → `.streaming` on first agentapi chunk,
+    ///     `.completed` on `chunk_done` / terminal frame, `.interrupted`
+    ///     on the `/cancel` endpoint.
+    /// The transition is idempotent: re-setting the same state is a
+    /// no-op and does NOT bump the snapshot counter.
+    public func setCurrentTurnState(_ state: TurnState) {
+        Task { [staging] in await staging.setCurrentTurnState(state) }
     }
 
     /// v0.7.4: ingest Codex SDK stream events into the same staging pipeline
@@ -384,6 +410,54 @@ public final class SessionChatStore: ObservableObject {
             // `stop()` can cancel it; the closure-level generation check
             // also drops late ingests from a prior parse generation.
             let tail = JSONLTail(fileURL: sessionFileURL) { [weak self] json in
+                // v0.23 T4: per-turn lifecycle dispatch BEFORE the
+                // typed parse. Claude's JSONL line shape carries the
+                // turn-state hint in the top-level "type" field:
+                //   - "assistant"  → first content of a new turn (or
+                //                    continuation); transition into
+                //                    `.streaming`. Idempotent on the
+                //                    store side so re-firing on every
+                //                    assistant line is cheap.
+                //   - "result"     → Claude's end-of-turn marker.
+                //                    Transition into `.completed` —
+                //                    the V2 status strip clamps the
+                //                    stopwatch + flips Stop→Send.
+                //   - "user"       → starts a fresh turn; reset to
+                //                    `.streaming` because the
+                //                    assistant's response is about to
+                //                    begin. (`.idle` would briefly
+                //                    flicker the UI off; leave it as
+                //                    `.streaming` so the indicator
+                //                    stays on through the round trip.)
+                if let type = json["type"] as? String {
+                    // Interactive Claude CLI's natural end-of-turn marker
+                    // is `type: "assistant"` with `message.stop_reason ==
+                    // "end_turn"` (or other terminal reasons). The
+                    // headless `claude -p` mode uses `type: "result"`.
+                    // `stop_reason: "tool_use"` is NOT terminal — the
+                    // assistant pauses mid-turn for a tool call and
+                    // continues after the tool result.
+                    let stopReason = (json["message"] as? [String: Any])?["stop_reason"] as? String
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        guard self.parseGeneration == generation else { return }
+                        switch type {
+                        case "result":
+                            self.setCurrentTurnState(.completed)
+                        case "assistant":
+                            switch stopReason {
+                            case "end_turn", "stop_sequence", "max_tokens", "refusal":
+                                self.setCurrentTurnState(.completed)
+                            default:
+                                self.setCurrentTurnState(.streaming)
+                            }
+                        case "user":
+                            self.setCurrentTurnState(.streaming)
+                        default:
+                            break
+                        }
+                    }
+                }
                 guard let parsed = ParsedLine.from(json: json) else { return }
                 let task = Task { [weak self] in
                     guard let self else { return }
@@ -606,6 +680,13 @@ public final class SessionChatStore: ObservableObject {
             if let url = dict["url"] as? String { return url }
         case "WebSearch":
             if let q = dict["query"] as? String { return q }
+        // v0.23 T12: Codex SDK + Antigravity emit `web_search` /
+        // `web_fetch` instead of CamelCase. Same field shape.
+        case "web_search":
+            if let q = dict["query"] as? String { return q }
+            if let q = dict["q"] as? String { return q }
+        case "web_fetch":
+            if let url = dict["url"] as? String { return url }
         case "Task":
             if let desc = dict["description"] as? String { return desc }
         default:
@@ -1010,6 +1091,18 @@ actor StagingParser {
     /// `setCodexTodos(_:)`, surfaced in ChatSnapshot for the CodexPlanPane
     /// (Mac), iOSCodexPlanView (iOS), and CodexTaskComplication (Watch).
     private var codexTodos: [CodexTodoItem] = []
+    /// v0.23 (Chat V2): explicit per-turn lifecycle. Each provider's
+    /// ingestor (JSONLTail for Claude, CodexSDKEventIngestor for Codex
+    /// SDK, AntigravityChatIngestor for Gemini) transitions this
+    /// via `setCurrentTurnState(_:)` on natural turn boundaries:
+    ///   - `.streaming` on first content of a new turn
+    ///   - `.completed` on the provider's terminal event
+    ///   - `.interrupted` on cancel
+    ///   - `.idle` on next user prompt
+    /// Surfaced in `ChatSnapshot.currentTurnState` so the V2 status
+    /// strip can drive the stopwatch + Stop↔Send transitions
+    /// deterministically.
+    private var currentTurnState: TurnState = .idle
     /// Accumulated tokens for the session metadata strip — split into
     /// the four billable categories so the cost estimator can apply
     /// the right rate per category. Pulled from `message.usage` on
@@ -1156,6 +1249,15 @@ actor StagingParser {
         updateCounter &+= 1
     }
 
+    /// v0.23 (Chat V2): per-turn lifecycle transition. Idempotent on
+    /// no-op transitions so ingestors can call freely without bumping
+    /// the snapshot counter on every line.
+    func setCurrentTurnState(_ state: TurnState) {
+        guard currentTurnState != state else { return }
+        currentTurnState = state
+        updateCounter &+= 1
+    }
+
     /// Hardening: clear all accumulated state without re-instantiating
     /// the actor. Called by `SessionChatStore.start()` when re-entering
     /// after a prior `stop()` so untracked in-flight ingests can't bleed
@@ -1181,6 +1283,7 @@ actor StagingParser {
         lastUsageAt = nil
         modelHint = nil
         lastEventAt = nil
+        currentTurnState = .idle
         cachedSnapshot = .empty
         cachedCounter = 0
         updateCounter = 0
@@ -1262,7 +1365,8 @@ actor StagingParser {
             lastCacheReadTokens: lastCacheReadTokens,
             modelHint: modelHint,
             lastEventAt: lastEventAt,
-            updateCounter: updateCounter
+            updateCounter: updateCounter,
+            currentTurnState: currentTurnState
         )
         cachedCounter = updateCounter
         lastSnapshotRebuildNS = nowNS
@@ -1298,7 +1402,14 @@ actor StagingParser {
                 }
             case "Glob", "Grep":
                 fileCounts[trimmed, default: 0] += 1
-            case "WebFetch", "WebSearch":
+            // v0.23 (Chat V2 — T12): provider-specific tool names for
+            // web search. Claude CLI emits `WebFetch` / `WebSearch`
+            // (CamelCase); Codex SDK emits `web_search` (snake_case)
+            // through the SDK event stream; Antigravity agentapi emits
+            // `web_search` too. Map all variants to urlCounts so the V2
+            // Deep Research trace's citations footer pulls URLs out of
+            // every provider's tool results uniformly.
+            case "WebFetch", "WebSearch", "web_search", "WebFetchTool", "WebSearchTool":
                 urlCounts[trimmed, default: 0] += 1
             default:
                 break

@@ -192,6 +192,14 @@ async function streamThread(codex, cmd, subscriptionId, signal) {
     modelReasoningEffort: cmd.modelReasoningEffort,
     approvalPolicy: cmd.approvalPolicy,
     additionalDirectories: cmd.additionalDirectories,
+    // v0.23 (Chat V2 — T7 Deep Research): the Swift relay sets
+    // `tools: ["web_search"]` when the session has deepResearch=true so
+    // the Codex SDK enables web search alongside the thread's other
+    // capabilities. The SDK reads this off the threadOptions object;
+    // we just pass it through. Undefined / empty arrays are filtered
+    // out below so existing chat behavior is unchanged for non-DR
+    // sessions.
+    tools: cmd.tools,
   };
   // Drop undefined keys so we don't override CLI defaults.
   for (const k of Object.keys(threadOptions)) {
@@ -202,7 +210,17 @@ async function streamThread(codex, cmd, subscriptionId, signal) {
     ? codex.resumeThread(cmd.threadId, threadOptions)
     : codex.startThread(threadOptions);
 
-  const prompt = safePrompt(cmd.prompt);
+  // PR #69 audit P1: validate prompt shape + cap size before the SDK
+  // sees it (defense-in-depth against runaway callers).
+  // v0.23 (Chat V2 T7) Deep Research: prepend the contract header to
+  // the user prompt because the Codex SDK has no separate
+  // system-instruction field. The header is injected as the front of
+  // the first user turn — the SDK retains it in conversation memory,
+  // so subsequent turns of the same thread don't re-prepend.
+  const safeCore = safePrompt(cmd.prompt);
+  const prompt = cmd.deepResearchHeader
+    ? `${cmd.deepResearchHeader}\n\nUSER QUESTION:\n${safeCore}`
+    : safeCore;
   const turn = await thread.runStreamed(prompt, { signal });
   for await (const event of turn.events) {
     emit({

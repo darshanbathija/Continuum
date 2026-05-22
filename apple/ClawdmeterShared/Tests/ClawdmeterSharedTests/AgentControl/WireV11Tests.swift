@@ -15,12 +15,14 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsThirteen() {
-        // v13 (2026-05-22, D11/D12 — OpenCode adapter): adds
-        // `AgentKind.opencode` + `UsageRecord.Provider.opencode`.
-        // v12 clients decode the new raw as `.unknown` (X3 fallback);
-        // v13+ clients decode as `.opencode` natively.
-        XCTAssertEqual(AgentControlWireVersion.current, 13)
+    func test_currentWireVersionIsFourteen() {
+        // v14 (2026-05-23, Chat V2): explicit per-turn lifecycle on the
+        // snapshot wire (`WireChatSnapshot.currentTurnState: TurnState`),
+        // deepResearch toggle on chat requests + AgentSession, and the
+        // new `GET /chat-sessions/search?q=` endpoint. All additive +
+        // decodeIfPresent — v13 clients still decode v14 payloads
+        // cleanly with default values.
+        XCTAssertEqual(AgentControlWireVersion.current, 14)
     }
 
     func test_opencodeMinimumIsThirteen() {

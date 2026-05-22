@@ -4,6 +4,12 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.6 build 121] - 2026-05-23 — Chat V2 — function-first rebuild (Mac + iOS) (`feat/chat-v2`)
+
+Rebuilds the Chat tab from scratch as `MacChatV2View` + `IOSChatV2View` with live snapshot-bound surfaces. Wire v14 schema adds `TurnState` + `currentTurnState` + `deepResearch`. Per-backend Stop dispatch (tmux ESC / Codex AbortController / Gemini agentapi `/cancel`). Honest Deep Research across all three providers gated by `tools/verify-deep-research.sh`. Plan-approval store rollover fix (audit P0 #4) + `AgentControlClient` force-unwrap fix. Lifts `PermissionPromptCard` to Shared with `PermissionResponder` protocol. T16 cuts 8 legacy chat surfaces. T15 adds wire-v14 + ChatV2Store + DR argv tests. Smoke-tested round-trip green for Claude (3-4s) and Codex (15s) solo with `currentTurnState` lifecycle propagating cleanly through wire to client.
+
+Bumps `MARKETING_VERSION` 0.23.5 → 0.23.6, `CURRENT_PROJECT_VERSION` 120 → 121.
+
 ## [0.23.5 build 120] - 2026-05-23 — OpenCode auth.json sandbox-home hotfix (`fix/opencode-auth-real-home`)
 
 v0.23.4 saved API keys to `~/Library/Containers/com.clawdmeter.mac/Data/.local/share/opencode/auth.json` instead of the real `~/.local/share/opencode/auth.json` because `NSHomeDirectory()` resolves to the App Group container path even when the sandbox entitlement is `false`. opencode reads from the real `~`, so saved keys never took effect — the row stayed in the un-authed state with no error surfaced.

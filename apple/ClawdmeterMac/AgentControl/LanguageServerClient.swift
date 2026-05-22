@@ -124,7 +124,28 @@ public final class LanguageServerClient: NSObject {
     /// `AntigravityInstall.locateLanguageServer(in:)` at construction.
     /// Nil only when Antigravity isn't installed; methods that need it
     /// throw `.binaryNotFound`.
-    public let languageServerURL: URL?
+    ///
+    /// v0.23.5 chat-v2 fix: previously cached at init time, but the
+    /// init occasionally raced with the OS bundle-content readability
+    /// in fresh `/Applications/Antigravity.app` installs — locate
+    /// returned nil at init, then succeeded a moment later in
+    /// `AntigravityInstall.preflight()`. The instance kept the nil
+    /// forever → every Gemini chat 500'd with binaryNotFound even
+    /// though preflight reported .ready. Recompute on each access so
+    /// any transient nil heals on the next call (~50µs per recompute,
+    /// dominated by 4 stat() syscalls; negligible vs the agentapi RPC).
+    public var languageServerURL: URL? {
+        if let override = languageServerURLOverride {
+            return override
+        }
+        #if os(macOS)
+        let appBundle = URL(fileURLWithPath: "/Applications/Antigravity.app", isDirectory: true)
+        return AntigravityInstall.locateLanguageServer(in: appBundle)
+        #else
+        return nil
+        #endif
+    }
+    private let languageServerURLOverride: URL?
 
     /// Override for tests. Production wraps real `pgrep`, `ps`, `lsof`.
     private let processProbe: ProcessProbe
@@ -133,16 +154,7 @@ public final class LanguageServerClient: NSObject {
         languageServerURL: URL? = nil,
         processProbe: ProcessProbe = .systemProbe
     ) {
-        if let url = languageServerURL {
-            self.languageServerURL = url
-        } else {
-            #if os(macOS)
-            let appBundle = URL(fileURLWithPath: "/Applications/Antigravity.app", isDirectory: true)
-            self.languageServerURL = AntigravityInstall.locateLanguageServer(in: appBundle)
-            #else
-            self.languageServerURL = nil
-            #endif
-        }
+        self.languageServerURLOverride = languageServerURL
         self.processProbe = processProbe
         super.init()
     }

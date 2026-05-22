@@ -778,13 +778,15 @@ public final class AgentControlClient: ObservableObject {
         provider: AgentKind,
         model: String? = nil,
         codexBackend: CodexChatBackend? = nil,
-        effort: ReasoningEffort? = nil
+        effort: ReasoningEffort? = nil,
+        deepResearch: Bool = false
     ) async -> AgentSession? {
         let req = CreateChatSessionRequest(
             provider: provider,
             model: model,
             effort: effort,
-            codexChatBackend: codexBackend
+            codexChatBackend: codexBackend,
+            deepResearch: deepResearch
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -841,6 +843,39 @@ public final class AgentControlClient: ObservableObject {
     /// by the Chat tab sidebar; the Code tab uses the inverse filter.
     public var chatSessions: [AgentSession] {
         sessions.filter { $0.kind == .chat && $0.archivedAt == nil }
+    }
+
+    /// v0.23 (Chat V2 wire v14): `GET /chat-sessions/search?q=<query>`
+    /// — full-history substring scan across the daemon's known chat
+    /// JSONLs. Bounded by a 200ms hard timeout + 50-result cap server-
+    /// side; the client just passes through. Used by the V2 sidebar's
+    /// search-as-you-type to find chats the local in-memory cache
+    /// doesn't hold (iOS LRU-2 / Mac cap 20).
+    ///
+    /// Returns nil only on transport / decode error. An empty-query or
+    /// no-match scenario returns an empty matches array (`truncated:
+    /// false`). Callers SHOULD debounce input by 200ms to avoid
+    /// keypress-storm-ing the daemon — the loop already self-throttles
+    /// via the deadline but a debounce on the typing side keeps the
+    /// daemon's load proportional to user intent.
+    @MainActor
+    public func searchChatHistory(query: String, limit: Int = 50) async -> ChatSessionSearchResponse? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return ChatSessionSearchResponse(matches: [], truncated: false)
+        }
+        let escaped = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
+        let path = "/chat-sessions/search?q=\(escaped)&limit=\(limit)"
+        guard let request = makeRequest(path: path, method: "GET") else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(ChatSessionSearchResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
     }
 
     // MARK: - v0.9.x Frontier compare
@@ -1196,11 +1231,29 @@ public final class AgentControlClient: ObservableObject {
     /// pipeline `SessionChatStore` uses live, so the rendered messages
     /// match what the Mac shows.
     public func fetchTranscript(path: String, limit: Int = 500) async -> TranscriptEnvelope? {
+        await fetchTranscript(path: path, beforeId: nil, limit: limit)
+    }
+
+    /// v0.23 (Chat V2 — T13): paginated transcript fetch. When
+    /// `beforeId` is non-nil, returns the `limit` messages immediately
+    /// before that id; used by the V2 transcript's scroll-up-past-the-
+    /// top trigger to lazy-load older history beyond the in-memory
+    /// 1000-row window. When `beforeId` is nil, returns the tail
+    /// window (existing behavior — back-compat with v0.5.3 clients).
+    public func fetchTranscript(
+        path: String,
+        beforeId: String?,
+        limit: Int = 500
+    ) async -> TranscriptEnvelope? {
         guard var components = URLComponents(string: "/transcript") else { return nil }
-        components.queryItems = [
+        var items = [
             URLQueryItem(name: "path", value: path),
             URLQueryItem(name: "limit", value: "\(limit)"),
         ]
+        if let beforeId, !beforeId.isEmpty {
+            items.append(URLQueryItem(name: "beforeId", value: beforeId))
+        }
+        components.queryItems = items
         guard let query = components.url?.absoluteString,
               let request = makeRequest(path: query)
         else { return nil }

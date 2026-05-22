@@ -196,7 +196,8 @@ public final class CodexSubscriptionRelay {
                 model: model,
                 sandboxMode: sandboxMode,
                 modelReasoningEffort: modelReasoningEffort,
-                skipGitRepoCheck: skipGitRepoCheck
+                skipGitRepoCheck: skipGitRepoCheck,
+                deepResearch: session.deepResearch
             )
             // Hand back the existing async stream — events from the new
             // op flow through the same continuation.
@@ -278,7 +279,8 @@ public final class CodexSubscriptionRelay {
             model: model,
             sandboxMode: sandboxMode,
             modelReasoningEffort: modelReasoningEffort,
-            skipGitRepoCheck: skipGitRepoCheck
+            skipGitRepoCheck: skipGitRepoCheck,
+            deepResearch: session.deepResearch
         )
 
         // Track the sidecar so subsequent prompts can reuse it.
@@ -333,7 +335,8 @@ public final class CodexSubscriptionRelay {
         workingDirectory: String,
         prompt: String,
         threadId: String? = nil,
-        skipGitRepoCheck: Bool = false
+        skipGitRepoCheck: Bool = false,
+        deepResearch: Bool = false
     ) throws {
         guard let handle = active[sessionId] else {
             throw RelayError.notSubscribed
@@ -347,7 +350,8 @@ public final class CodexSubscriptionRelay {
             model: nil,
             sandboxMode: nil,
             modelReasoningEffort: nil,
-            skipGitRepoCheck: skipGitRepoCheck
+            skipGitRepoCheck: skipGitRepoCheck,
+            deepResearch: deepResearch
         )
     }
 
@@ -412,7 +416,8 @@ public final class CodexSubscriptionRelay {
         model: String?,
         sandboxMode: String?,
         modelReasoningEffort: String?,
-        skipGitRepoCheck: Bool = false
+        skipGitRepoCheck: Bool = false,
+        deepResearch: Bool = false
     ) throws {
         var payload: [String: Any] = [
             "op": op,
@@ -424,6 +429,20 @@ public final class CodexSubscriptionRelay {
         if let sandboxMode { payload["sandboxMode"] = sandboxMode }
         if let modelReasoningEffort { payload["modelReasoningEffort"] = modelReasoningEffort }
         if skipGitRepoCheck { payload["skipGitRepoCheck"] = true }
+        // v0.23 (Chat V2 — T7 Deep Research): when the session has
+        // deepResearch=true, the relay enables the SDK's `web_search`
+        // tool AND prepends the deep-research contract header to the
+        // first user turn. The sidecar's main.mjs:130 reads `cmd.tools`
+        // straight into threadOptions and uses `cmd.deepResearchHeader`
+        // to front-load the user prompt. Codex SDK has no separate
+        // system-instruction field, so the header lives inside the
+        // first user turn — the SDK retains it in conversation memory.
+        if deepResearch {
+            payload["tools"] = ["web_search"]
+            if let header = AgentSpawner.loadDeepResearchPrompt() {
+                payload["deepResearchHeader"] = header
+            }
+        }
         try writeLine(to: handle.stdinPipe, payload)
     }
 

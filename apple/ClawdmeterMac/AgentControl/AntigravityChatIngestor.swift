@@ -83,7 +83,8 @@ public actor AntigravityChatIngestor {
                 ingestorLogger.warning("agentapi DB never appeared for conv=\(conversationIdLocal.uuidString, privacy: .public) — giving up")
                 return
             }
-            // (1) backfill history
+            // (1) backfill history. We don't flip the turn state during
+            // backfill — these are historical rows, not a live turn.
             do {
                 let initial = try await openedDB.allSteps()
                 for step in initial {
@@ -99,15 +100,31 @@ public actor AntigravityChatIngestor {
             } catch {
                 ingestorLogger.warning("agentapi allSteps backfill failed: \(error.localizedDescription, privacy: .public)")
             }
-            // (2) tail incremental
+            // (2) tail incremental. v0.23 T4: each newly-received step
+            // means a live turn is in flight — flip the session into
+            // `.streaming`. The setter is idempotent on the store
+            // side so re-firing on every step costs only a counter
+            // bump when the state actually changes.
+            //
+            // The stream completes when the agentapi closes the
+            // subscription (turn finished AND no more pending tool
+            // calls) OR when stop() is called. Both end this for-await
+            // loop. If we exit cleanly (not cancelled), the turn ran
+            // to completion → emit `.completed`. If we exit via
+            // cancellation, the SessionInterruptDispatcher already
+            // flipped us to `.interrupted` so don't override.
             let stream = await openedDB.subscribe()
             for await step in stream {
                 if Task.isCancelled { break }
+                await Self.flipToStreaming(store: storeLocal)
                 await Self.forwardStep(
                     step,
                     conversationId: conversationIdLocal,
                     store: storeLocal
                 )
+            }
+            if !Task.isCancelled {
+                await Self.flipToCompleted(store: storeLocal)
             }
         }
     }
@@ -117,6 +134,21 @@ public actor AntigravityChatIngestor {
     public func stop() {
         subscriptionTask?.cancel()
         subscriptionTask = nil
+    }
+
+    /// MainActor hop helpers — `SessionChatStore.setCurrentTurnState`
+    /// is `@MainActor`-isolated and the subscribe loop runs on the
+    /// ingestor actor. Pulled out as `static` so the @MainActor
+    /// annotation closes cleanly without crossing the actor boundary
+    /// in the call site.
+    @MainActor
+    private static func flipToStreaming(store: SessionChatStore) {
+        store.setCurrentTurnState(.streaming)
+    }
+
+    @MainActor
+    private static func flipToCompleted(store: SessionChatStore) {
+        store.setCurrentTurnState(.completed)
     }
 
     private func setLastSeenIdx(_ idx: Int) {

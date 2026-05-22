@@ -1148,6 +1148,14 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/pick-winner") { [weak self] req, conn, params in
             await self?.handlePickFrontierWinner(request: req, connection: conn, groupId: params["groupId"] ?? "")
         }
+        // v0.23 (Chat V2 wire v14): full-history search across JSONLs
+        // on disk. Walks the chat sessions the registry knows about
+        // and substring-scans their JSONL files for the query. Bounded
+        // by a 200ms hard timeout + 50-result cap so the sidebar
+        // search-as-you-type stays responsive.
+        t.register(method: "GET", pattern: "/chat-sessions/search") { [weak self] req, conn, _ in
+            await self?.handleChatSessionSearch(request: req, connection: conn)
+        }
 
         return t
     }()
@@ -1460,6 +1468,7 @@ public final class AgentControlServer {
     private func handlePostGeminiChatSession(
         model: String?,
         effort: ReasoningEffort?,
+        deepResearch: Bool = false,
         connection: NWConnection
     ) async {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -1507,11 +1516,22 @@ public final class AgentControlServer {
             projectId = resolvedProjectId
         }
 
+        // v0.23 (Chat V2 — T7 Gemini Deep Research): when DR is on,
+        // pin the model to gemini-3-pro (max thinking) per the eng-
+        // review D3 decision. Antigravity already enables WebSearch
+        // by default in plan mode; the deep-research system prompt
+        // we prepend to the first turn (below) drives the structured
+        // research trace [research-step] convention. The user-picked
+        // model is overridden because the trade is intentional:
+        // Deep Research needs the heaviest reasoning, not whatever
+        // model the user had selected for fast iteration.
+        let effectiveModel = deepResearch ? "gemini-3-pro" : model
         let session = registry.createChat(
             provider: .gemini,
-            model: model,
+            model: effectiveModel,
             chatCwd: "",
-            effort: effort
+            effort: effort,
+            deepResearch: deepResearch
         )
         let chatCwd: String
         do {
@@ -1527,11 +1547,24 @@ public final class AgentControlServer {
             tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
         )
 
-        let modelTier = AgentapiModelTier.from(modelCatalogId: model)
+        let modelTier = AgentapiModelTier.from(modelCatalogId: effectiveModel)
+        // v0.23 T7 Gemini DR: prepend the deep-research contract as
+        // the conversation's seed prompt so the agentapi initial-turn
+        // ingests it before any user input. The bundled
+        // deep-research-prompt.txt is the same contract Claude /
+        // Codex SDK use — the `[research-step] N. ...` convention is
+        // what the V2 UI's trace extractor reads.
+        let seedPrompt: String = {
+            guard deepResearch,
+                  let header = AgentSpawner.loadDeepResearchPrompt() else {
+                return "(starting new chat)"
+            }
+            return "\(header)\n\nYou are now ready to receive the user's research question."
+        }()
         do {
             let conversationIdString = try await lsClient.newConversation(
                 modelTier: modelTier,
-                prompt: "(starting new chat)",
+                prompt: seedPrompt,
                 projectId: projectId
             )
             guard let conversationId = UUID(uuidString: conversationIdString) else {
@@ -1803,15 +1836,135 @@ public final class AgentControlServer {
         }
     }
 
+    /// v0.23 (Chat V2): full-history search across chat-session JSONLs.
+    /// Walks `registry.sessions.filter { $0.kind == .chat }`, resolves
+    /// each to its JSONL via `chatFileResolver`, and substring-scans
+    /// the file's last 500 lines for the query. Bounded by 200ms hard
+    /// timeout + 50-result cap so the V2 sidebar's search-as-you-type
+    /// stays responsive even on machines with hundreds of chats.
+    ///
+    /// Why this exists: the in-memory `DaemonChatStoreRegistry` caps
+    /// resident stores at 20 (iOS LRU-2). Searching ONLY the cache
+    /// misses most history — Codex outside-voice review P1 #8 flagged
+    /// the V2 sidebar's "Searchable" field as fake without daemon-side
+    /// indexing. This endpoint is that indexing path.
+    ///
+    /// Match snippet: ≤120 chars, query centered with `…` on either
+    /// side when truncated. We don't run a full text-rank algorithm
+    /// here — order is `lastEventAt` descending so the most recent
+    /// match leads. Future iterations can add term frequency / BM25;
+    /// the wire shape accommodates it (`matches: [...]`, opaque order).
+    private func handleChatSessionSearch(request: HTTPRequest, connection: NWConnection) async {
+        guard let comps = URLComponents(string: request.path),
+              let query = comps.queryItems?.first(where: { $0.name == "q" })?.value,
+              !query.isEmpty else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        let limit = min(
+            Int(comps.queryItems?.first(where: { $0.name == "limit" })?.value ?? "") ?? 50,
+            200
+        )
+        let normalized = query.lowercased()
+        // Hard timeout — search-as-you-type can't block.
+        let deadline = Date().addingTimeInterval(0.2)
+
+        // Pull the chat-kind sessions ahead of any I/O so we don't hold
+        // the registry actor across the scan.
+        let chatSessions = registry.sessions
+            .filter { $0.kind == .chat && $0.archivedAt == nil }
+            .sorted { $0.lastEventAt > $1.lastEventAt }
+
+        var matches: [ChatSessionSearchMatch] = []
+        var truncated = false
+        let resolver = chatFileResolver
+        let fm = FileManager.default
+
+        for session in chatSessions {
+            if Date() >= deadline { truncated = true; break }
+            if matches.count >= limit { truncated = true; break }
+            guard let url = resolver.resolve(session: session) else { continue }
+            guard fm.fileExists(atPath: url.path) else { continue }
+            // Tail the last ~256KB so very-large JSONLs don't dominate
+            // the timeout budget. JSONL is one-message-per-line, so
+            // the last 256KB covers ~500 messages on the long tail.
+            guard let snippet = findSnippet(in: url, lowercaseQuery: normalized, tailBytes: 256 * 1024) else {
+                continue
+            }
+            let mtime: Date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? session.lastEventAt
+            matches.append(ChatSessionSearchMatch(
+                sessionId: session.id,
+                jsonlPath: url.path,
+                snippet: snippet,
+                lastEventAt: mtime
+            ))
+        }
+
+        let response = ChatSessionSearchResponse(matches: matches, truncated: truncated)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let body = (try? encoder.encode(response)) ?? Data("{\"matches\":[],\"truncated\":false}".utf8)
+        sendResponse(HTTPResponse(status: 200, reason: "OK", contentType: "application/json", body: body), on: connection)
+    }
+
+    /// Read the tail of a JSONL file and look for `lowercaseQuery` (case-
+    /// insensitive substring). Returns a ≤120-char snippet centered on
+    /// the match, with `…` on either side when truncated. Nil when no
+    /// match in the tail window.
+    private func findSnippet(in url: URL, lowercaseQuery: String, tailBytes: Int) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return nil }
+        let offset = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+        try? handle.seek(toOffset: offset)
+        guard let data = try? handle.readToEnd(),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        // Scan line-by-line; pick the first match line.
+        for line in text.components(separatedBy: "\n") {
+            let lowered = line.lowercased()
+            guard let range = lowered.range(of: lowercaseQuery) else { continue }
+            let matchOffset = lowered.distance(from: lowered.startIndex, to: range.lowerBound)
+            let radius = 60
+            let startIdx = max(0, matchOffset - radius)
+            let endIdx = min(line.count, matchOffset + lowercaseQuery.count + radius)
+            let startStr = line.index(line.startIndex, offsetBy: startIdx)
+            let endStr = line.index(line.startIndex, offsetBy: endIdx)
+            var snippet = String(line[startStr..<endStr])
+            if startIdx > 0 { snippet = "…" + snippet }
+            if endIdx < line.count { snippet = snippet + "…" }
+            // Strip JSON noise common in JSONL lines so the snippet
+            // reads like prose rather than `","content":"..."`.
+            snippet = snippet
+                .replacingOccurrences(of: "\\n", with: " ")
+                .replacingOccurrences(of: "\\\"", with: "\"")
+            return snippet
+        }
+        return nil
+    }
+
     private func handleInterrupt(sessionId: String, connection: NWConnection) async {
-        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid),
-              let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+        guard let uuid = UUID(uuidString: sessionId) else {
             sendResponse(.notFound, on: connection); return
         }
-        do {
-            try await tmux.sendKeys(paneId: paneId, bytes: Data([0x1b]))  // ESC
+        // v0.23 (Chat V2 — audit P0 #2): route through
+        // SessionInterruptDispatcher so Stop works for Codex SDK and
+        // Gemini agentapi sessions too, not just tmux-backed ones.
+        // The dispatcher flips currentTurnState to .interrupted up
+        // front so the V2 UI's stopwatch + Send button restore
+        // immediately, then dispatches the per-backend cancel.
+        let dispatcher = SessionInterruptDispatcher(
+            registry: registry,
+            codexRelay: CodexSubscriptionRelay.shared,
+            tmux: tmux,
+            chatStoreRegistry: chatStoreRegistry
+        )
+        let result = await dispatcher.interrupt(sessionId: uuid)
+        switch result {
+        case .interrupted:
             sendJSON(["ok": true], on: connection)
-        } catch {
+        case .sessionNotFound:
+            sendResponse(.notFound, on: connection)
+        case .tmuxFailed:
             sendResponse(.internalError, on: connection)
         }
     }
@@ -2461,7 +2614,12 @@ public final class AgentControlServer {
             totalInputTokens: 0,
             totalOutputTokens: 0,
             lastEventAt: snapshotLastEventAt,
-            updateCounter: snapshotCounter
+            updateCounter: snapshotCounter,
+            // v14: surface the store's lifecycle so V2 clients can drive
+            // the Stop↔Send button + stopwatch clamp without polling
+            // for "last item arrived in last N seconds" heuristics.
+            // `.idle` fallback when there's no registry store (cold path).
+            currentTurnState: registryStore?.snapshot.currentTurnState ?? .idle
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -2907,6 +3065,15 @@ public final class AgentControlServer {
         let query = String(queryPath[queryPath.index(after: queryStart)...])
         var jsonlPath: String?
         var maxMessages = 500
+        // v0.23 (Chat V2 — T13): `beforeId` paginates older messages.
+        // The V2 transcript renders the most-recent 1000 in memory;
+        // when the user scrolls past the top edge it calls
+        // `/transcript?path=&beforeId=<oldestRenderedId>&limit=500`
+        // and prepends the returned window. Older Macs that don't
+        // understand the param just return the tail as before — V2
+        // clients detect "no older content" by comparing the returned
+        // messages' ids to what they already hold.
+        var beforeId: String?
         for pair in query.split(separator: "&") {
             let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
             guard kv.count == 2 else { continue }
@@ -2914,6 +3081,7 @@ public final class AgentControlServer {
             switch kv[0] {
             case "path": jsonlPath = value
             case "limit": maxMessages = max(1, min(2000, Int(value) ?? 500))
+            case "beforeId": beforeId = value.isEmpty ? nil : value
             default: break
             }
         }
@@ -2939,20 +3107,40 @@ public final class AgentControlServer {
         // warms up in the background and subsequent requests within
         // the 5-minute idle window hit the cache.
         let registryStore = chatStoreRegistry.snapshotStore(forJSONLPath: url)
-        let messages: [ChatMessage]
+        let rawMessages: [ChatMessage]
         if let store = registryStore, !store.snapshot.messages.isEmpty {
-            // Cap to the requested maxMessages, taking the tail so the
-            // most recent messages are surfaced — matches what
-            // TranscriptLoader.load(maxMessages:) does today.
-            let all = store.snapshot.messages
-            messages = all.suffix(maxMessages).map { $0 }
+            rawMessages = store.snapshot.messages
         } else {
-            messages = TranscriptLoader.load(from: url, maxMessages: maxMessages)
+            // Cold-load — fall back to disk parse for the FULL file so
+            // pagination has something to slice. The page slice happens
+            // below.
+            rawMessages = TranscriptLoader.load(from: url, maxMessages: 5000)
+        }
+        let messages: [ChatMessage]
+        let truncated: Bool
+        if let beforeId {
+            // Pagination: return the maxMessages messages immediately
+            // before the client's oldest-rendered id. Indexed lookup
+            // because parsed message ids are stable across calls.
+            if let cutIdx = rawMessages.firstIndex(where: { $0.id == beforeId }) {
+                let start = max(0, cutIdx - maxMessages)
+                messages = Array(rawMessages[start..<cutIdx])
+                truncated = start > 0
+            } else {
+                // beforeId not found — return empty (the cursor is from
+                // a different transcript or already at head). Honest.
+                messages = []
+                truncated = false
+            }
+        } else {
+            // Tail window — default behavior, unchanged.
+            messages = rawMessages.suffix(maxMessages).map { $0 }
+            truncated = rawMessages.count > maxMessages
         }
         let envelope = TranscriptEnvelope(
             path: jsonlPath,
             messages: messages,
-            truncated: messages.count >= maxMessages
+            truncated: truncated
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -3171,6 +3359,7 @@ public final class AgentControlServer {
             await handlePostGeminiChatSession(
                 model: req.model,
                 effort: req.effort,
+                deepResearch: req.deepResearch,
                 connection: connection
             )
             return
@@ -3184,13 +3373,16 @@ public final class AgentControlServer {
             return req.codexChatBackend ?? .sdk
         }()
         // Create the session record first (assigns a UUID we can use to
-        // name the chat-cwd).
+        // name the chat-cwd). v0.23 (Chat V2): persist deepResearch on
+        // the session so respawn/restore preserves it (Codex outside-
+        // voice review P1 #6).
         let session = registry.createChat(
             provider: req.provider,
             model: req.model,
             chatCwd: "",  // placeholder; we'll patch it post-cwd-creation
             codexChatBackend: codexBackend,
-            effort: req.effort
+            effort: req.effort,
+            deepResearch: req.deepResearch
         )
         let chatCwd: String
         do {
@@ -3485,7 +3677,8 @@ public final class AgentControlServer {
                         workingDirectory: cwd,
                         prompt: text,
                         threadId: session.codexChatThreadId,
-                        skipGitRepoCheck: true
+                        skipGitRepoCheck: true,
+                        deepResearch: session.deepResearch
                     )
                 } else {
                     _ = try CodexSubscriptionRelay.shared.start(
@@ -3951,7 +4144,8 @@ public final class AgentControlServer {
                     workingDirectory: chatCwd,
                     prompt: prompt,
                     threadId: session.codexChatThreadId,
-                    skipGitRepoCheck: true
+                    skipGitRepoCheck: true,
+                    deepResearch: session.deepResearch
                 )
             } else {
                 // First prompt — spawn the relay + ingestor. The ingestor

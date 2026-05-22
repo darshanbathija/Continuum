@@ -121,7 +121,8 @@ public final class AgentSessionRegistry: ObservableObject {
         antigravityConversationId: UUID? = nil,
         antigravityProjectId: String? = nil,
         frontierGroupId: UUID? = nil,
-        frontierChildIndex: Int? = nil
+        frontierChildIndex: Int? = nil,
+        deepResearch: Bool = false
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -158,7 +159,8 @@ public final class AgentSessionRegistry: ObservableObject {
             codexChatBackend: codexChatBackend,
             geminiBackend: geminiBackend,
             antigravityConversationId: antigravityConversationId,
-            antigravityProjectId: antigravityProjectId
+            antigravityProjectId: antigravityProjectId,
+            deepResearch: deepResearch
         )
         sessions.append(session)
         save()

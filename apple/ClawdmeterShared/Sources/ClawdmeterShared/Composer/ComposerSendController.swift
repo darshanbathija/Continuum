@@ -101,6 +101,31 @@ public final class ComposerSendController: ObservableObject {
                 // until callers wire the slot list.
                 lastError = "Broadcast chat requires explicit model slots — call client.createFrontier(slots:) directly."
             }
+
+        // v0.23 (Chat V2 — T10): first-send path that picks up the
+        // V2 composer's model + effort + deepResearch state. Mirrors
+        // .chatCreate(.solo) but threads the additional fields
+        // through createChatSession. Used by MacChatV2View and the
+        // upcoming IOSChatV2View when no conversation is open and
+        // the user hits Send.
+        case .chatCreateV2(let provider, let model, let effort, let deepResearch, let codexBackend):
+            let session = await client.createChatSession(
+                provider: provider,
+                model: model,
+                codexBackend: codexBackend,
+                effort: effort,
+                deepResearch: deepResearch
+            )
+            if let session {
+                await client.sendPrompt(sessionId: session.id, text: trimmed, asFollowUp: false)
+                if !errorChanged(from: preSendClientError) {
+                    text = ""
+                } else {
+                    lastError = client.lastError
+                }
+            } else {
+                lastError = client.lastError ?? "Couldn't create chat session."
+            }
         }
     }
 
@@ -154,6 +179,20 @@ public enum SendKind: Sendable {
     /// the user's text as the first turn. Solo creates one session;
     /// Broadcast requires slot list (see controller body).
     case chatCreate(provider: AgentKind, mode: ChatMode)
+
+    /// v0.23 (Chat V2 — T10): V2 first-send case that carries the
+    /// composer's full picker state (model, effort, deepResearch,
+    /// codexBackend) into the create call. The legacy `.chatCreate`
+    /// kept these implicit (CLI default model / no DR / SDK backend);
+    /// V2 makes them explicit so the V2 composer pickers actually
+    /// affect spawn behavior without going through `sendCustom`.
+    case chatCreateV2(
+        provider: AgentKind,
+        model: String?,
+        effort: ReasoningEffort?,
+        deepResearch: Bool,
+        codexBackend: CodexChatBackend?
+    )
 
     public enum ChatMode: Sendable {
         case solo

@@ -68,9 +68,16 @@ public final class CodexSDKEventIngestor {
         let raw = event.rawDict()
         switch event.kind {
         case .item:
+            // v0.23 T4: first item content of a turn flips us into
+            // `.streaming`. The transition is idempotent on the store
+            // side, so re-firing on every item is cheap.
+            store.setCurrentTurnState(.streaming)
             handleItem(raw: raw, at: event.receivedAt, store: store)
         case .turnCompleted:
             handleTurnCompleted(raw: raw, at: event.receivedAt, store: store)
+            // v0.23 T4: provider's natural end-of-turn marker — flips
+            // the V2 status strip stopwatch + restores the Send button.
+            store.setCurrentTurnState(.completed)
         case .turnFailed:
             let body = (raw["error"] as? [String: Any])?["message"] as? String
                 ?? "Turn failed"
@@ -80,6 +87,11 @@ public final class CodexSDKEventIngestor {
                        body: body,
                        at: event.receivedAt,
                        isError: true)
+            // v0.23 T4: failed turn still terminates the lifecycle.
+            // Treat as `.completed` for UI purposes (Stop→Send flips,
+            // stopwatch clamps); the appended meta row makes the
+            // failure visible.
+            store.setCurrentTurnState(.completed)
         case .error:
             let body = raw["message"] as? String ?? "Stream error"
             appendMeta(store: store,
@@ -88,6 +100,9 @@ public final class CodexSDKEventIngestor {
                        body: body,
                        at: event.receivedAt,
                        isError: true)
+            // v0.23 T4: same logic as turnFailed — terminate so the UI
+            // doesn't spin forever waiting for a turn that errored out.
+            store.setCurrentTurnState(.completed)
         case .threadStarted:
             // v0.8 Phase 4.5: surface the threadId to the SDK chat session
             // record so resume-after-evict knows which thread to reconnect.
@@ -95,10 +110,14 @@ public final class CodexSDKEventIngestor {
                 threadStartedFired = true
                 onThreadStarted?(threadId)
             }
-        case .turnStarted,
-             .streamStarted, .streamDone, .streamError,
+        case .turnStarted:
+            // v0.23 T4: SDK explicit turn-start marker. Earlier than
+            // the first `.item` event, so it's the most accurate
+            // transition into `.streaming`.
+            store.setCurrentTurnState(.streaming)
+        case .streamStarted, .streamDone, .streamError,
              .observerReady, .unknown:
-            // Lifecycle markers — don't surface as chat.
+            // Other lifecycle markers — don't surface as chat.
             break
         }
     }
