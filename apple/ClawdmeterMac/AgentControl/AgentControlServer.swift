@@ -3508,7 +3508,8 @@ public final class AgentControlServer {
                         workingDirectory: cwd,
                         prompt: text,
                         threadId: session.codexChatThreadId,
-                        skipGitRepoCheck: true
+                        skipGitRepoCheck: true,
+                        deepResearch: session.deepResearch
                     )
                 } else {
                     _ = try CodexSubscriptionRelay.shared.start(
@@ -3855,7 +3856,8 @@ public final class AgentControlServer {
                     workingDirectory: chatCwd,
                     prompt: prompt,
                     threadId: session.codexChatThreadId,
-                    skipGitRepoCheck: true
+                    skipGitRepoCheck: true,
+                    deepResearch: session.deepResearch
                 )
             } else {
                 // First prompt — spawn the relay + ingestor. The ingestor
