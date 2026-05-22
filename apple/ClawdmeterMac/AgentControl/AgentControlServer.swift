@@ -2942,6 +2942,15 @@ public final class AgentControlServer {
         let query = String(queryPath[queryPath.index(after: queryStart)...])
         var jsonlPath: String?
         var maxMessages = 500
+        // v0.23 (Chat V2 — T13): `beforeId` paginates older messages.
+        // The V2 transcript renders the most-recent 1000 in memory;
+        // when the user scrolls past the top edge it calls
+        // `/transcript?path=&beforeId=<oldestRenderedId>&limit=500`
+        // and prepends the returned window. Older Macs that don't
+        // understand the param just return the tail as before — V2
+        // clients detect "no older content" by comparing the returned
+        // messages' ids to what they already hold.
+        var beforeId: String?
         for pair in query.split(separator: "&") {
             let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
             guard kv.count == 2 else { continue }
@@ -2949,6 +2958,7 @@ public final class AgentControlServer {
             switch kv[0] {
             case "path": jsonlPath = value
             case "limit": maxMessages = max(1, min(2000, Int(value) ?? 500))
+            case "beforeId": beforeId = value.isEmpty ? nil : value
             default: break
             }
         }
@@ -2974,20 +2984,40 @@ public final class AgentControlServer {
         // warms up in the background and subsequent requests within
         // the 5-minute idle window hit the cache.
         let registryStore = chatStoreRegistry.snapshotStore(forJSONLPath: url)
-        let messages: [ChatMessage]
+        let rawMessages: [ChatMessage]
         if let store = registryStore, !store.snapshot.messages.isEmpty {
-            // Cap to the requested maxMessages, taking the tail so the
-            // most recent messages are surfaced — matches what
-            // TranscriptLoader.load(maxMessages:) does today.
-            let all = store.snapshot.messages
-            messages = all.suffix(maxMessages).map { $0 }
+            rawMessages = store.snapshot.messages
         } else {
-            messages = TranscriptLoader.load(from: url, maxMessages: maxMessages)
+            // Cold-load — fall back to disk parse for the FULL file so
+            // pagination has something to slice. The page slice happens
+            // below.
+            rawMessages = TranscriptLoader.load(from: url, maxMessages: 5000)
+        }
+        let messages: [ChatMessage]
+        let truncated: Bool
+        if let beforeId {
+            // Pagination: return the maxMessages messages immediately
+            // before the client's oldest-rendered id. Indexed lookup
+            // because parsed message ids are stable across calls.
+            if let cutIdx = rawMessages.firstIndex(where: { $0.id == beforeId }) {
+                let start = max(0, cutIdx - maxMessages)
+                messages = Array(rawMessages[start..<cutIdx])
+                truncated = start > 0
+            } else {
+                // beforeId not found — return empty (the cursor is from
+                // a different transcript or already at head). Honest.
+                messages = []
+                truncated = false
+            }
+        } else {
+            // Tail window — default behavior, unchanged.
+            messages = rawMessages.suffix(maxMessages).map { $0 }
+            truncated = rawMessages.count > maxMessages
         }
         let envelope = TranscriptEnvelope(
             path: jsonlPath,
             messages: messages,
-            truncated: messages.count >= maxMessages
+            truncated: truncated
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

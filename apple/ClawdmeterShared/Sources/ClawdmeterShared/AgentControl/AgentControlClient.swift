@@ -1223,11 +1223,29 @@ public final class AgentControlClient: ObservableObject {
     /// pipeline `SessionChatStore` uses live, so the rendered messages
     /// match what the Mac shows.
     public func fetchTranscript(path: String, limit: Int = 500) async -> TranscriptEnvelope? {
+        await fetchTranscript(path: path, beforeId: nil, limit: limit)
+    }
+
+    /// v0.23 (Chat V2 — T13): paginated transcript fetch. When
+    /// `beforeId` is non-nil, returns the `limit` messages immediately
+    /// before that id; used by the V2 transcript's scroll-up-past-the-
+    /// top trigger to lazy-load older history beyond the in-memory
+    /// 1000-row window. When `beforeId` is nil, returns the tail
+    /// window (existing behavior — back-compat with v0.5.3 clients).
+    public func fetchTranscript(
+        path: String,
+        beforeId: String?,
+        limit: Int = 500
+    ) async -> TranscriptEnvelope? {
         guard var components = URLComponents(string: "/transcript") else { return nil }
-        components.queryItems = [
+        var items = [
             URLQueryItem(name: "path", value: path),
             URLQueryItem(name: "limit", value: "\(limit)"),
         ]
+        if let beforeId, !beforeId.isEmpty {
+            items.append(URLQueryItem(name: "beforeId", value: beforeId))
+        }
+        components.queryItems = items
         guard let query = components.url?.absoluteString,
               let request = makeRequest(path: query)
         else { return nil }
