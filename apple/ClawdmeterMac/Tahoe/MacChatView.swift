@@ -121,8 +121,8 @@ public struct MacChatView: View {
                 .frame(maxHeight: .infinity)
 
                 ChatComposer(
-                    mode: mode,
-                    soloProvider: soloProvider,
+                    mode: $mode,
+                    soloProvider: $soloProvider,
                     loopbackClient: loopbackClient,
                     openChatId: $openChatId
                 )
@@ -877,8 +877,8 @@ private struct PickWinnerMenu: View {
 
 private struct ChatComposer: View {
     @Environment(\.tahoe) private var t
-    var mode: MacChatView.Mode
-    var soloProvider: TahoeProvider
+    @Binding var mode: MacChatView.Mode
+    @Binding var soloProvider: TahoeProvider
     /// Daemon client for create / send. Nil = decorative (Preview).
     var loopbackClient: AgentControlClient?
     /// Tracks the open chat session id at the parent. nil means "no
@@ -898,13 +898,13 @@ private struct ChatComposer: View {
     @State private var broadcastNote: String?
 
     init(
-        mode: MacChatView.Mode,
-        soloProvider: TahoeProvider,
+        mode: Binding<MacChatView.Mode>,
+        soloProvider: Binding<TahoeProvider>,
         loopbackClient: AgentControlClient?,
         openChatId: Binding<UUID?>
     ) {
-        self.mode = mode
-        self.soloProvider = soloProvider
+        self._mode = mode
+        self._soloProvider = soloProvider
         self.loopbackClient = loopbackClient
         self._openChatId = openChatId
         // Mirror the IOSChatView pattern: fall back to a UserDefaults-
@@ -951,11 +951,26 @@ private struct ChatComposer: View {
                 }
 
                 HStack(spacing: 6) {
-                    BroadcastChip(mode: mode, soloProvider: soloProvider)
-                    TahoeComposerChip(icon: "paperclip")
-                    TahoeComposerChip(icon: "code")
-                    TahoeComposerChip(icon: "mic")
-                    TahoeComposerChip(icon: "bolt", label: "auto", caret: true)
+                    // v0.22.9: multi-select model picker replaces the
+                    // titlebar "MODE [Broadcast] [Solo]" toggle. Click
+                    // the chip → toggle providers; 1 = solo, >1 = broadcast.
+                    BroadcastChip(mode: $mode, soloProvider: $soloProvider)
+                    TahoeComposerChip(icon: "paperclip", action: { Self.attachFile(into: $sendCtl.text) })
+                    TahoeComposerChip(icon: "code", action: { Self.insertCodeBlock(into: $sendCtl.text) })
+                    TahoeComposerChip(icon: "mic", action: { Self.openDictation() })
+                    Menu {
+                        Text("Autopilot")
+                            .foregroundStyle(.secondary)
+                        Divider()
+                        Text("Plan-mode toggle is a Code tab feature")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    } label: {
+                        TahoeComposerChip(icon: "bolt", label: "auto", caret: true)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
                     Spacer()
                     Text(costEstimate)
                         .font(TahoeFont.mono(11))
@@ -978,6 +993,46 @@ private struct ChatComposer: View {
             return "Ask all three. Use / for skills, @ for files. Press ⏎ to send to Claude · Codex · Antigravity."
         }
         return "Ask \(soloProvider.displayName). Use / for skills, @ for files."
+    }
+
+    // MARK: - v0.22.9: composer chip helpers (mirrors MacCodeView)
+
+    /// Open NSOpenPanel and append `@/absolute/path` mentions to the
+    /// composer text. Multi-select. The agent's prompt parser handles
+    /// the `@path` token convention.
+    fileprivate static func attachFile(into composerText: Binding<String>) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.canResolveUbiquitousConflicts = true
+        panel.title = "Attach files"
+        panel.prompt = "Attach"
+        if panel.runModal() == .OK {
+            let mentions = panel.urls
+                .map { "@\($0.path)" }
+                .joined(separator: " ")
+            if composerText.wrappedValue.isEmpty {
+                composerText.wrappedValue = "\(mentions) "
+            } else if composerText.wrappedValue.hasSuffix(" ") {
+                composerText.wrappedValue += "\(mentions) "
+            } else {
+                composerText.wrappedValue += " \(mentions) "
+            }
+        }
+    }
+
+    fileprivate static func insertCodeBlock(into composerText: Binding<String>) {
+        let stub = composerText.wrappedValue.isEmpty
+            ? "```\n\n```\n"
+            : "\n\n```\n\n```\n"
+        composerText.wrappedValue += stub
+    }
+
+    fileprivate static func openDictation() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Dictation") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// Cost estimate label — PR #31 chunk 4 wired to Pricing.estimateSend.
@@ -1113,19 +1168,64 @@ private struct ChatComposer: View {
 /// branch tag.
 private enum ChatMode { case solo, broadcast }
 
+/// v0.22.9: was `BroadcastChip` (static label). Now a Menu-bound chip
+/// that lets the user multi-select which providers receive the prompt.
+/// Replaces the titlebar "MODE [Broadcast] [Solo]" toggle entirely —
+/// selection count drives mode automatically:
+///   - 1 selected → solo mode, that provider
+///   - >1 selected → broadcast mode
+/// Selecting zero providers re-checks the last one (we always have at
+/// least one recipient).
 private struct BroadcastChip: View {
     @Environment(\.tahoe) private var t
-    var mode: MacChatView.Mode
-    var soloProvider: TahoeProvider
+    @Binding var mode: MacChatView.Mode
+    @Binding var soloProvider: TahoeProvider
 
-    var providers: [TahoeProvider] {
-        mode == .solo ? [soloProvider] : [.claude, .codex, .gemini]
+    /// Currently-selected providers. Derived from `mode` + `soloProvider`
+    /// so the menu opens reflecting the live state and persisting back
+    /// re-maps the set into mode/soloProvider.
+    private var selectedSet: Set<TahoeProvider> {
+        switch mode {
+        case .broadcast: return [.claude, .codex, .gemini]
+        case .solo:      return [soloProvider]
+        }
+    }
+
+    private var displayProviders: [TahoeProvider] {
+        TahoeProvider.allCases.filter { selectedSet.contains($0) }
+    }
+
+    private var label: String {
+        let count = selectedSet.count
+        if count == 1, let only = selectedSet.first {
+            return only.displayName
+        }
+        return "\(count) models"
     }
 
     var body: some View {
+        Menu {
+            ForEach([TahoeProvider.claude, .codex, .gemini], id: \.self) { p in
+                let on = selectedSet.contains(p)
+                Button {
+                    toggle(p)
+                } label: {
+                    Label(p.displayName, systemImage: on ? "checkmark.circle.fill" : "circle")
+                }
+            }
+        } label: {
+            chipLabel
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    @ViewBuilder
+    private var chipLabel: some View {
         HStack(spacing: 6) {
             HStack(spacing: -5) {
-                ForEach(providers) { p in
+                ForEach(displayProviders) { p in
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(LinearGradient(colors: [p.glow.color, p.base.color],
                                              startPoint: .topLeading, endPoint: .bottomTrailing))
@@ -1136,7 +1236,7 @@ private struct BroadcastChip: View {
                         }
                 }
             }
-            Text(mode == .broadcast ? "Broadcast · 3 models" : "Solo · \(soloProvider.displayName)")
+            Text(label)
                 .font(TahoeFont.body(11.5, weight: .semibold))
             TahoeIcon("chevD", size: 9).opacity(0.7)
         }
@@ -1149,6 +1249,25 @@ private struct BroadcastChip: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(t.accentAlpha(0.45), lineWidth: 0.5)
+        }
+    }
+
+    /// Toggle a provider in the selection. Maps the resulting set back
+    /// to `mode` + `soloProvider`. Refuses to drop the last selection
+    /// (the composer needs at least one recipient).
+    private func toggle(_ p: TahoeProvider) {
+        var next = selectedSet
+        if next.contains(p) {
+            if next.count <= 1 { return }   // refuse to clear the last one
+            next.remove(p)
+        } else {
+            next.insert(p)
+        }
+        if next.count == 1, let only = next.first {
+            mode = .solo
+            soloProvider = only
+        } else {
+            mode = .broadcast
         }
     }
 }

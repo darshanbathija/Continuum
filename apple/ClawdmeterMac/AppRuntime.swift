@@ -175,8 +175,12 @@ final class AppRuntime: ObservableObject {
             registry: self.agentSessionRegistry
         )
         self.notificationDispatcher = NotificationDispatcher()
-        // Design tab daemon manager (lazy — first ensureRunning() comes
-        // from MacDesignView.onAppear, not from app launch).
+        // v0.22.9: Design tab daemon manager. Previously lazy — first
+        // ensureRunning() came from MacDesignView.onAppear, so the user
+        // saw "Waking up Design… Starting Open Design daemon…" the
+        // first time they hit the tab. We now eager-start it during
+        // app launch so the daemon is warm by the time the user picks
+        // the Design tab.
         self.openDesignDaemon = OpenDesignDaemonManager()
         self.agentControlServer = AgentControlServer(
             repoIndex: self.repoIndex,
@@ -263,6 +267,12 @@ final class AppRuntime: ObservableObject {
             }
             self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
             self.sessionScheduler.start()
+            // v0.22.9: eager-start the Open Design daemon at app launch
+            // so the Design tab is warm-ready the first time the user
+            // opens it (no more "Waking up Design…" splash). Lazy
+            // ensureRunning() in MacDesignView.onAppear is now a
+            // safety-net; the supervisor is idempotent.
+            self.openDesignDaemon.ensureRunning()
             // Phase 10: APNS Live Activity push trigger.
             // Subscribe to registry deltas; whenever a session status,
             // planText, or active-set changes, hand a fresh wire-shape

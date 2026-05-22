@@ -96,15 +96,14 @@ private struct ProviderColumn: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     TahoeProviderGlyph(provider: provider, size: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(provider.displayName)
-                            .font(TahoeFont.body(16, weight: .bold))
-                            .tracking(-0.2)
-                            .foregroundStyle(t.fg)
-                        Text(row.modelName)
-                            .font(TahoeFont.body(11.5))
-                            .foregroundStyle(t.fg3)
-                    }
+                    // v0.22.9: dropped the per-model subtitle
+                    // (`Sonnet 4.5 / gpt-5 / antigravity-pro`). Brand-
+                    // only label is cleaner — the model is exposed in
+                    // the chat composer's model picker chip anyway.
+                    Text(provider.displayName)
+                        .font(TahoeFont.body(16, weight: .bold))
+                        .tracking(-0.2)
+                        .foregroundStyle(t.fg)
                     Spacer()
                     MenuBarCheckbox(on: $menuBar)
                 }

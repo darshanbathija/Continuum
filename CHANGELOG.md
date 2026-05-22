@@ -4,6 +4,69 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.9 build 91] - 2026-05-22 — Fix: keyboard shortcuts + Settings consolidation + composer wiring + multi-select model picker + eager Design daemon (`fix/v0228-followups`)
+
+Nine-issue follow-up after the user reported:
+1. Cmd+1..Cmd+5 should switch tabs
+2. Design tab "Waking up…" splash on every launch — make it always-on
+3. OpenCode "Open docs" button opens a broken URL
+4. Codex SDK settings sheet has a lone toggle with no context
+5. Cmd+, opens a separate light/dark-broken modal window — collapse everything into the in-app Settings tab
+6. Composer chips (paperclip / code / mic / autopilot / model) are all decorative — wire them
+7. Drop Broadcast/Solo MODE toggle in favor of a multi-select model picker in the composer
+8. Remove the per-model subtitle on the provider hero cards — brand-only is cleaner
+9. Code IDE sidebar JSONL rows are disabled — make them actionable
+
+### Changed
+
+**Keyboard shortcuts — `ClawdmeterMacApp.swift` + `MacRootView.swift`**
+- `.commands { CommandGroup(replacing: .appSettings) }` intercepts Cmd+, and posts a `.clawdmeterSwitchTab` notification → MacRootView flips `tab` to `.settings` (no more separate Settings modal).
+- New `CommandMenu("View")` with Cmd+1..Cmd+5 mapped to Chat / Usage / Code / Design / Settings. Replaces the previous hidden-button keyboardShortcut hack that silently dropped when any TextField had focus.
+- New `.clawdmeterSwitchTab` notification name in `ClawdmeterMacApp.swift`.
+
+**Settings consolidation — `ClawdmeterMacApp.swift` + `MacSettingsView.swift`**
+- Dropped the entire `Settings { TabView { … } }` scene that opened a separate light/dark-broken modal window.
+- `MacSettingsView` now embeds the previously-modal sub-views inline as cards: Codex SDK, Antigravity SDK, Live Activities, Pairing, Diagnostics. All settings live in one comprehensive page in the in-app Settings tab.
+- `MacSettingsView.init` threaded `runtime: AppRuntime?` so `PairingSettingsView` can read the live daemon state. Init dropped to `internal` because `AppRuntime` is internal to the Mac target.
+
+**OpenCode docs URL — `MacSettingsView.swift`**
+- `https://opencode.ai/docs/auth` 404s. Changed to `https://opencode.ai/docs/` (carries install + auth instructions).
+
+**Provider hero cards — `MacUsageView.swift`**
+- Dropped the per-model subtitle ("Sonnet 4.5 / gpt-5 / antigravity-pro") under each provider's brand name. Brand-only label is cleaner; the active model is exposed in the composer's model chip anyway.
+
+**Composer chips wiring — `MacCodeView.swift` + `MacChatView.swift`**
+- Wired all five chips that were previously static labels:
+  - "Sonnet 4.5" → `Menu` showing the active model (model-swap RPC follows in v0.23)
+  - "autopilot" → `Menu` toggling autopilot ↔ plan-mode (drives the existing `onCycle`)
+  - paperclip → `NSOpenPanel` file picker; selected paths append as `@/abs/path` mentions in the composer text
+  - code → inserts a fenced-code block stub (` ```...``` `) into the composer
+  - mic → opens System Settings → Keyboard → Dictation so the user can verify dictation is enabled
+- Chat composer's "auto" lightning chip wrapped in a `Menu` for parity (mode toggle is Code-tab-specific so the menu surfaces a brief note).
+
+**Multi-select model picker — `MacChatView.swift` + `MacRootView.swift`**
+- `BroadcastChip` was a static label ("Broadcast · 3 models"). It's now a `Menu` with toggleable rows for Claude / Codex / Antigravity. Selection count drives `mode`:
+  - 1 selected → `solo`, that provider
+  - >1 selected → `broadcast`
+- Refuses to clear the last selection (the composer needs at least one recipient).
+- Dropped the titlebar `ChatModeToggle` ("MODE [Broadcast] [Solo]") entirely — the chip is now the single source of truth.
+
+**Eager Open Design daemon — `AppRuntime.swift`**
+- `openDesignDaemon.ensureRunning()` is invoked during app launch (right after `sessionScheduler.start()`) so the Design tab is warm-ready the first time the user opens it. The lazy `ensureRunning()` in `MacDesignView.onAppear` is now a safety-net; the supervisor is idempotent.
+
+**Code IDE sidebar — `MacCodeView.swift` + `MacTahoeAdapter.swift` + `TahoeBindings.swift`**
+- `TahoeCodeRecent` gains a `jsonlPath: String?` field.
+- `MacTahoeAdapter` populates it for JSONL-sourced recents.
+- `RecentRow.restore()` now branches: for archived sessions, the existing unarchive RPC fires; for JSONL-only rows, the file is revealed in Finder via `NSWorkspace.activateFileViewerSelecting`. The row is no longer `.disabled` for JSONL paths. (Full in-app transcript preview lands in v0.23.)
+
+### Notes
+
+- Cmd+, no longer opens a window. It now lives in the standard `Clawdmeter → Settings…` menu item.
+- Cmd+1..Cmd+5 show up in the new `View` menu so users can discover the shortcuts.
+- The legacy `PreferencesView` struct in `ClawdmeterMacApp.swift` is now orphan code (no caller); kept for now to make the diff smaller.
+
+Bumps `MARKETING_VERSION` 0.22.8 → 0.22.9, `CURRENT_PROJECT_VERSION` 90 → 91.
+
 ## [0.22.8 build 90] - 2026-05-22 — Fix: menu-bar popover container + provider switching + Antigravity demo bleed + real analytics + OpenCode (`fix/menubar-popover-and-ccusage`)
 
 Four-issue follow-up after the user reported:

@@ -768,8 +768,18 @@ private struct RecentRow: View {
 
     @State private var isRestoring: Bool = false
 
-    private var actionable: Bool {
+    private var canUnarchive: Bool {
         recent.sessionId != nil && loopbackClient != nil
+    }
+
+    /// v0.22.9: a recent row is always tappable now — `canUnarchive`
+    /// drives the unarchive flow, otherwise we reveal the JSONL on
+    /// disk so the user can inspect the transcript externally until
+    /// the in-app preview lands in v0.23. Previously JSONL-only rows
+    /// were `.disabled(true)` and the user reported "the left side is
+    /// not clickable".
+    private var tappable: Bool {
+        canUnarchive || recent.jsonlPath != nil
     }
 
     var body: some View {
@@ -795,36 +805,41 @@ private struct RecentRow: View {
                 Spacer()
                 if isRestoring {
                     ProgressView().controlSize(.mini)
-                } else if actionable {
-                    // PR #35: chevron hints the row is tappable (its
-                    // action restores the archived session).
+                } else if tappable {
+                    // chevron hints the row is tappable (its action
+                    // restores the archived session or — for JSONL-only
+                    // rows — reveals the file on disk).
                     TahoeIcon("chevR", size: 9).foregroundStyle(t.fg4)
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .opacity(actionable ? 0.95 : 0.65)
+            .opacity(tappable ? 0.95 : 0.65)
         }
         .buttonStyle(.plain)
-        .disabled(!actionable || isRestoring)
-        .help(actionable ? "Re-open this archived session" : "Read-only history entry")
+        .disabled(!tappable || isRestoring)
+        .help(canUnarchive
+            ? "Re-open this archived session"
+            : (recent.jsonlPath != nil ? "Show this transcript in Finder" : "Read-only history entry"))
     }
 
-    /// PR #35: unarchive flow. Calls the daemon's
-    /// `POST /sessions/:id/unarchive`; on success the registry's
-    /// `archivedAt` flips to nil and the session reappears in the
-    /// live sessions list (adapter rebuilds the bindings). The
-    /// `onOpenRestored` callback flips MacCodeView's `openSessionId`
-    /// to the restored session so the right column focuses it
-    /// immediately.
+    /// Restore: for a real archived session, calls the daemon's
+    /// `POST /sessions/:id/unarchive`. For a JSONL-only row, reveals
+    /// the file in Finder so the user can inspect the raw transcript.
     private func restore() {
-        guard let client = loopbackClient,
-              let sessionId = recent.sessionId else { return }
-        isRestoring = true
-        Task { @MainActor in
-            await client.unarchiveSession(id: sessionId)
-            await client.refreshSessions()
-            isRestoring = false
-            onOpenRestored?(sessionId)
+        if let client = loopbackClient,
+           let sessionId = recent.sessionId {
+            isRestoring = true
+            Task { @MainActor in
+                await client.unarchiveSession(id: sessionId)
+                await client.refreshSessions()
+                isRestoring = false
+                onOpenRestored?(sessionId)
+            }
+            return
+        }
+        if let path = recent.jsonlPath {
+            let url = URL(fileURLWithPath: path)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
         }
     }
 }
@@ -1225,11 +1240,48 @@ private struct ComposerBar: View {
                     .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
 
                     HStack(spacing: 6) {
-                        TahoeComposerChip(icon: "sparkles", label: "Sonnet 4.5", caret: true)
-                        TahoeComposerChip(icon: "bolt", label: planMode ? "plan" : "autopilot", caret: true, tinted: !planMode)
-                        TahoeComposerChip(icon: "paperclip")
-                        TahoeComposerChip(icon: "code")
-                        TahoeComposerChip(icon: "mic")
+                        // v0.22.9: chips are now actually clickable.
+                        // The model + autopilot chips host SwiftUI
+                        // Menus; paperclip/code/mic open NSOpenPanel /
+                        // insert a fenced-code snippet / start macOS
+                        // dictation respectively. Previously every chip
+                        // was a static label with no action — the user
+                        // reported "all of them are broken".
+                        Menu {
+                            Section("Active model") {
+                                Text("Sonnet 4.5").foregroundStyle(.secondary)
+                            }
+                            // Model swap RPC is plan-tracked v0.23; for
+                            // now the menu surfaces the current model
+                            // so the chip stops being a dead label.
+                            Divider()
+                            Text("Model swap is coming in v0.23")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        } label: {
+                            TahoeComposerChip(icon: "sparkles", label: "Sonnet 4.5", caret: true)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+
+                        Menu {
+                            Button(action: { if planMode { onCycle() } }) {
+                                Label("Autopilot", systemImage: planMode ? "circle" : "checkmark.circle.fill")
+                            }
+                            Button(action: { if !planMode { onCycle() } }) {
+                                Label("Plan mode", systemImage: planMode ? "checkmark.circle.fill" : "circle")
+                            }
+                        } label: {
+                            TahoeComposerChip(icon: "bolt", label: planMode ? "plan" : "autopilot", caret: true, tinted: !planMode)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+
+                        TahoeComposerChip(icon: "paperclip", action: { Self.attachFile(into: composerText) })
+                        TahoeComposerChip(icon: "code", action: { Self.insertCodeBlock(into: composerText) })
+                        TahoeComposerChip(icon: "mic", action: { Self.openDictation() })
                         Spacer()
                         if running {
                             // PR #24a: LiveTicker stop now calls real
@@ -1261,6 +1313,55 @@ private struct ComposerBar: View {
             .animation(.easeInOut(duration: 0.25), value: state)
         }
         .padding(.horizontal, 18).padding(.bottom, 18)
+    }
+
+    // MARK: - v0.22.9: composer chip helpers
+
+    /// Open NSOpenPanel and insert `@/absolute/path` into the composer
+    /// text. Mirrors the iOS attach behavior + the existing `@path`
+    /// token convention the agent's prompt parser handles.
+    private static func attachFile(into composerText: Binding<String>?) {
+        guard let composerText else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.canResolveUbiquitousConflicts = true
+        panel.title = "Attach files"
+        panel.prompt = "Attach"
+        if panel.runModal() == .OK {
+            let mentions = panel.urls
+                .map { "@\($0.path)" }
+                .joined(separator: " ")
+            if composerText.wrappedValue.isEmpty {
+                composerText.wrappedValue = "\(mentions) "
+            } else if composerText.wrappedValue.hasSuffix(" ") {
+                composerText.wrappedValue += "\(mentions) "
+            } else {
+                composerText.wrappedValue += " \(mentions) "
+            }
+        }
+    }
+
+    /// Append a fenced code-block template to the composer so the user
+    /// can paste a snippet without remembering the backtick fences.
+    private static func insertCodeBlock(into composerText: Binding<String>?) {
+        guard let composerText else { return }
+        let stub = composerText.wrappedValue.isEmpty
+            ? "```\n\n```\n"
+            : "\n\n```\n\n```\n"
+        composerText.wrappedValue += stub
+    }
+
+    /// macOS dictation isn't directly toggleable from a sandboxed-app
+    /// API, but Keyboard preferences carries the user's enable +
+    /// shortcut config. Open that pane so the user can verify dictation
+    /// is on + see the trigger keystroke. (Future: integrate
+    /// `SFSpeechRecognizer` for in-app dictation.)
+    private static func openDictation() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Dictation") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private func placeholder(running: Bool, plan: Bool) -> String {
