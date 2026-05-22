@@ -2416,7 +2416,11 @@ public final class AgentControlServer {
             tmuxPaneId: nil,
             planMode: false  // opencode handles plan/approval internally
         )
-        OpencodeSSEAdapter.shared.register(clawdmeterID: session.id, opencodeID: opencodeID)
+        // PR #32: stash repo too so opencode `usage` events tag
+        // analytics records with the right cwd instead of "(unknown)".
+        OpencodeSSEAdapter.shared.register(
+            clawdmeterID: session.id, opencodeID: opencodeID, repo: req.repoKey
+        )
         AgentEventStream.recordEvent(
             sessionId: session.id, kind: .sessionCreated,
             payload: ["repo": req.repoKey, "agent": "opencode", "opencodeID": opencodeID]
