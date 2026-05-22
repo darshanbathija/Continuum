@@ -410,7 +410,10 @@ final class ProviderStatusController: NSObject {
                 },
                 claudeModel: runtime.claudeModel,
                 codexModel: runtime.codexModel,
-                geminiModel: runtime.geminiModel
+                geminiModel: runtime.geminiModel,
+                // v0.22.30: thread the usage history store so the
+                // OpenCode tab renders Today + This-week dollar tiles.
+                usageHistoryStore: runtime.usageHistoryStore
             )
         } else {
             // Test / preview safety net — no live runtime, no live data.

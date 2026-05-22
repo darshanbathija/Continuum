@@ -75,6 +75,11 @@ struct NewSessionSheet: View {
                         Text("Claude").tag(AgentKind.claude)
                         Text("Codex").tag(AgentKind.codex)
                         Text("Gemini").tag(AgentKind.gemini)
+                        // v0.22.30: surface OpenCode in iOS new-session
+                        // picker too. Live spawn happens on the paired
+                        // Mac via OpencodeProcessManager/SSEAdapter, so
+                        // the iOS side just emits the kind in the RPC.
+                        Text("OpenCode").tag(AgentKind.opencode)
                     }
                     .pickerStyle(.segmented)
 
