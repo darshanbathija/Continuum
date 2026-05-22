@@ -341,16 +341,13 @@ private struct ChatSidebar: View {
                             openSections: $openSections
                         )
                     } else {
-                        // Empty-state preview: render the demo history
-                        // sections so the sidebar isn't blank when the
-                        // user hasn't created any chats yet. These rows
-                        // are visually identifiable as demo (the
-                        // "Pinned" / "Today" / "Earlier" labels match
-                        // the JSX mockup). Tapping is a no-op because
-                        // there's no session behind them.
-                        HistorySection(label: "Pinned",  rows: [TahoeDemo.chatHistory[5]],                                openSections: $openSections)
-                        HistorySection(label: "Today",   rows: Array(TahoeDemo.chatHistory.prefix(2)),                    openSections: $openSections)
-                        HistorySection(label: "Earlier", rows: Array(TahoeDemo.chatHistory[2..<5]) + Array(TahoeDemo.chatHistory[6...]), openSections: $openSections)
+                        // PR #36 audit-retro: empty-state informational
+                        // view replaces the legacy demo history rows
+                        // (which had no-op clicks). Honest copy beats
+                        // a fake-looking sidebar full of unclickable
+                        // rows that the user might mistake for real
+                        // sessions.
+                        ChatSidebarEmptyState()
                     }
                 }
                 .padding(.horizontal, 8).padding(.vertical, 8)
@@ -428,80 +425,35 @@ private struct ActiveSessionsSection: View {
     }
 }
 
-private struct HistorySection: View {
+/// PR #36 audit-retro: honest empty-state for the chat sidebar.
+/// Replaces the legacy demo HistoryRow placeholders (Pinned / Today /
+/// Earlier) that had no-op clicks. The user sees clear copy explaining
+/// where chats will appear once they create one.
+private struct ChatSidebarEmptyState: View {
     @Environment(\.tahoe) private var t
-    var label: String
-    var rows: [TahoeDemo.ChatHistory]
-    @Binding var openSections: Set<String>
 
     var body: some View {
-        let open = openSections.contains(label)
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                if open { openSections.remove(label) } else { openSections.insert(label) }
-            } label: {
-                HStack(spacing: 6) {
-                    TahoeIcon(open ? "chevD" : "chevR", size: 9).foregroundStyle(t.fg4)
-                    Text(label.uppercased())
-                        .font(TahoeFont.body(10, weight: .bold))
-                        .tracking(0.6)
-                        .foregroundStyle(t.fg4)
-                    Spacer()
-                    Text("\(rows.count)")
-                        .font(TahoeFont.mono(10, weight: .semibold))
-                        .foregroundStyle(t.fg4)
-                }
-                .padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 4)
-            }
-            .buttonStyle(.plain)
-
-            if open {
-                ForEach(rows) { row in
-                    HistoryRow(row: row)
-                }
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            TahoeIcon("chat", size: 18).foregroundStyle(t.fg3)
+                .padding(.bottom, 2)
+            Text("No chats yet")
+                .font(TahoeFont.body(12.5, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text("Tap **New chat** above to start a conversation. Active and archived chats will appear here.")
+                .font(TahoeFont.body(11))
+                .foregroundStyle(t.fg3)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.horizontal, 8).padding(.vertical, 14)
     }
 }
 
-private struct HistoryRow: View {
-    @Environment(\.tahoe) private var t
-    var row: TahoeDemo.ChatHistory
-
-    var body: some View {
-        Button(action: {}) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(row.title)
-                    .font(TahoeFont.body(12.5, weight: row.active ? .semibold : .medium))
-                    .foregroundStyle(t.fg)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    HStack(spacing: -6) {
-                        ForEach(Array(row.winners.prefix(3).enumerated()), id: \.offset) { _, w in
-                            TahoeProviderGlyph(provider: w, size: 14)
-                        }
-                    }
-                    Text("\(row.turns) turn\(row.turns == 1 ? "" : "s")")
-                        .font(TahoeFont.mono(10.5))
-                        .foregroundStyle(t.fg3)
-                    Spacer()
-                    Text(row.ago)
-                        .font(TahoeFont.body(10.5))
-                        .foregroundStyle(t.fg4)
-                }
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                if row.active {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.06) : Color(.sRGB, white: 15.0/255, opacity: 0.05))
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-}
+// PR #36 audit-retro: `HistorySection` + `HistoryRow` retired.
+// Both were demo-only: `HistoryRow`'s click was an empty `action: {}`
+// and the rows rendered fixture `TahoeDemo.chatHistory` entries that
+// didn't correspond to any real chat session. Replaced by the
+// `ChatSidebarEmptyState` informational view above (when no real
+// sessions exist) and `ActiveSessionsSection` (when they do).
 
 // MARK: - Column headers
 

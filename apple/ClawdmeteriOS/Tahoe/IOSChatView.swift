@@ -290,7 +290,14 @@ private struct IOSReplyCard: View {
                         }.joined(separator: "\n\n")
                         UIPasteboard.general.string = combined
                     })
-                    PickWinnerButton(starred: reply.starred)
+                    // PR #36 audit-retro: PickWinnerButton was always
+                    // decorative — iOS chat doesn't construct frontier
+                    // sessions yet (single-column UI). Removed from the
+                    // reply card here; comes back as part of the v1.2
+                    // iOS broadcast UI (with real groupId + childIndex
+                    // threaded through) when that surface is built.
+                    // See `docs/button-wiring-audit.md` for the v1.2
+                    // scope description.
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
             }
@@ -315,29 +322,11 @@ private struct IOSReplyAction: View {
     }
 }
 
-private struct PickWinnerButton: View {
-    @Environment(\.tahoe) private var t
-    var starred: Bool
-    var body: some View {
-        Button(action: {}) {
-            HStack(spacing: 4) {
-                Image(systemName: starred ? "star.fill" : "star")
-                    .font(.system(size: 11, weight: .bold))
-                Text(starred ? "Winner" : "Pick")
-            }
-            .font(TahoeFont.body(11, weight: .bold))
-            .foregroundStyle(starred ? t.accent : t.fg2)
-            .padding(.horizontal, 10)
-            .frame(height: 26)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(starred ? t.accentAlpha(t.dark ? 0.22 : 0.14)
-                                  : (t.dark ? Color(.sRGB, white: 1, opacity: 0.06) : Color(.sRGB, white: 15.0/255, opacity: 0.05)))
-            }
-        }
-        .buttonStyle(.plain)
-    }
-}
+// PR #36 audit-retro: `PickWinnerButton` removed. It was always
+// decorative (empty action handler) — iOS chat doesn't construct
+// frontier (broadcast) sessions yet, so there was no groupId or
+// childIndex to fire against. The button comes back as part of the
+// v1.2 iOS broadcast UI surface with proper wiring threaded through.
 
 // MARK: - Composer
 
