@@ -97,6 +97,16 @@ public final class DaemonChatStoreRegistry {
     /// `release(sessionId:)` on disconnect.
     public func acquire(for session: AgentSession) -> SessionChatStore? {
         startSweepIfNeeded()
+        // Audit P0 #4 (plan-approval rollover): pre-fix, this path
+        // returned the cached store WITHOUT checking whether the
+        // tailed JSONL is still the right one. After a Codex plan
+        // approval, the rollout flips from the read-only one to a
+        // workspace-write one — long-lived WS subscribers (chat-
+        // subscribe) kept tailing the old file and the chat froze on
+        // the plan. Run the same file-swap logic the one-shot
+        // snapshotStore() path uses so WS and HTTP paths converge on
+        // the live rollout.
+        rolloverChatJSONLIfNeeded(session: session)
         if var entry = entries[session.id] {
             entry.subscriberCount += 1
             entry.lastTouchedAt = Date()
@@ -121,67 +131,7 @@ public final class DaemonChatStoreRegistry {
     /// a burst of HTTP polls in a row reuses parsed state.
     public func snapshotStore(for session: AgentSession) -> SessionChatStore? {
         startSweepIfNeeded()
-        // v0.8 QA: for chat-mode Codex CLI, the rollout JSONL the store
-        // is tailing may be older than the CLI's current rollout. Codex
-        // CLI writes a NEW rollout per turn under ~/.codex/sessions/, so
-        // a session created at T0 picks up rollout-T0 at first cache,
-        // then when the user sends a prompt at T1 the CLI creates
-        // rollout-T1 and the daemon's store keeps tailing T0 — the new
-        // turn never reaches the snapshot. If we detect a newer rollout
-        // since the entry was opened, swap the store to the new file.
-        // v0.8 QA: chat-mode CLI sessions may need a JSONL swap on each
-        // snapshot read:
-        // - Codex CLI rotates rollouts per turn (~/.codex/sessions/...).
-        // - Claude CLI writes its JSONL on first turn — the file doesn't
-        //   exist at session create, so createStore fell back to sdkOnly;
-        //   we need to upgrade to a real JSONL-backed store once the file
-        //   appears.
-        //
-        // CRITICAL: switch the file IN PLACE on the existing store
-        // (switchTailedFile) — don't construct a fresh store. A fresh
-        // store invalidates the Mac UI's @ObservedObject reference and
-        // the chat thread freezes on the previous turn's snapshot.
-        if let entry = entries[session.id],
-           session.kind == .chat {
-            let desiredURL: URL?
-            if session.agent == .codex, session.codexChatBackend == .cli {
-                // F1: bind to THIS session's rollout by matching
-                // session_meta.cwd against effectiveCwd, gated by
-                // session.createdAt so prior rollouts are excluded.
-                // Falls back to nil (no swap) when no matching rollout
-                // exists yet, instead of grabbing an unrelated one.
-                desiredURL = Self.newestCodexJSONLMatching(
-                    cwd: session.effectiveCwd,
-                    after: session.createdAt
-                )
-            } else if session.agent == .claude {
-                desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
-            } else {
-                desiredURL = nil
-            }
-            if let desired = desiredURL, entry.store.currentFileURL != desired {
-                // F1 follow-up: if the existing entry is an sdkOnly
-                // fallback (e.g. Codex CLI chat created before its first
-                // rollout existed), switchTailedFile is a no-op. Drop
-                // the entry and let createStore rebuild — this is the
-                // one place where @ObservedObject invalidation is
-                // acceptable because the user hasn't started interacting
-                // with the chat yet (no rollout = no turns).
-                if entry.store.isSDKOnly {
-                    entry.store.stop()
-                    entries.removeValue(forKey: session.id)
-                    // Fall through to the "no entry" path which calls
-                    // createStore — which now finds the matching rollout.
-                } else {
-                    entry.store.switchTailedFile(to: desired)
-                    var refreshed = entry
-                    refreshed.lastTouchedAt = Date()
-                    entries[session.id] = refreshed
-                    registryLogger.info("snapshot-cache file-swap session=\(session.id.uuidString, privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
-                    return entry.store
-                }
-            }
-        }
+        rolloverChatJSONLIfNeeded(session: session)
         if var entry = entries[session.id] {
             entry.lastTouchedAt = Date()
             entries[session.id] = entry
@@ -197,6 +147,60 @@ public final class DaemonChatStoreRegistry {
         enforceMaxResidentStores()
         registryLogger.info("snapshot-cache session=\(session.id.uuidString, privacy: .public) resident=\(self.entries.count)")
         return store
+    }
+
+    /// v0.23 (Chat V2): audit P0 #4 fix — the per-snapshot file-swap
+    /// logic that v0.8 originally inlined into `snapshotStore(for:)`
+    /// only. Hoisted into a private helper so the long-lived
+    /// `acquire(for:)` path runs the same check; otherwise a WS
+    /// `chat-subscribe` subscriber attached before a Codex plan
+    /// approval keeps tailing the read-only rollout forever and the
+    /// chat freezes on the plan.
+    ///
+    /// What it covers:
+    /// - **Codex CLI**: rotates a new rollout under `~/.codex/sessions/`
+    ///   per turn AND after plan-approval (workspace-write respawn).
+    ///   `newestCodexJSONLMatching(cwd:after:)` finds the latest
+    ///   rollout whose `session_meta.cwd` matches our session's cwd
+    ///   and was created after the session.
+    /// - **Claude**: writes its JSONL on the first turn — the file
+    ///   doesn't exist at session create, so `createStore` fell back
+    ///   to sdkOnly. Upgrade to a real JSONL-backed store once the
+    ///   file appears.
+    ///
+    /// CRITICAL: switches the file IN PLACE on the existing store
+    /// (`switchTailedFile`) so the Mac UI's `@ObservedObject` doesn't
+    /// invalidate — the chat thread would otherwise freeze on the
+    /// previous turn's snapshot.
+    private func rolloverChatJSONLIfNeeded(session: AgentSession) {
+        guard let entry = entries[session.id], session.kind == .chat else { return }
+        let desiredURL: URL?
+        if session.agent == .codex, session.codexChatBackend == .cli {
+            desiredURL = Self.newestCodexJSONLMatching(
+                cwd: session.effectiveCwd,
+                after: session.createdAt
+            )
+        } else if session.agent == .claude {
+            desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
+        } else {
+            desiredURL = nil
+        }
+        guard let desired = desiredURL, entry.store.currentFileURL != desired else { return }
+        if entry.store.isSDKOnly {
+            // The existing entry is an sdkOnly fallback (e.g. Codex CLI
+            // chat created before its first rollout existed); switchTailedFile
+            // is a no-op there. Drop the entry and let createStore rebuild.
+            // This is the one place where @ObservedObject invalidation is
+            // acceptable: no real chat content has streamed yet.
+            entry.store.stop()
+            entries.removeValue(forKey: session.id)
+            return
+        }
+        entry.store.switchTailedFile(to: desired)
+        var refreshed = entry
+        refreshed.lastTouchedAt = Date()
+        entries[session.id] = refreshed
+        registryLogger.info("chat-jsonl rollover session=\(session.id.uuidString, privacy: .public) → \(desired.lastPathComponent, privacy: .public)")
     }
 
     /// Decrement the subscriber count for a long-lived subscriber. Idempotent
