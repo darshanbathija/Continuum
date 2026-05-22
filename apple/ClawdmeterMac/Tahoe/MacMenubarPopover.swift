@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import ClawdmeterShared
 
 /// Replacement for `PopoverView`. Provider segmented + stacked meters.
@@ -10,15 +11,39 @@ import ClawdmeterShared
 /// wires them to `AppDelegate.showDashboard()` and a popover hosting
 /// `PairingQRPopoverContent` respectively. Defaults are `{}` so the
 /// view remains preview-friendly.
+///
+/// v0.22.4 (audit): the previous wiring passed a value-typed
+/// `TahoeLiveBindings` snapshot in. NSPopover hosts the SwiftUI
+/// content via an NSHostingController that captures the struct ONCE
+/// at construction time, so the popover never picked up subsequent
+/// poller updates — meters showed whatever the AppModels had when
+/// the user first clicked any status item (often `.demo`, since the
+/// item is built eagerly at app launch before pollers complete).
+/// The fix: take per-provider AppModels as `@ObservedObject` so the
+/// SwiftUI dependency tracker fires `body` on every `usage` change.
+/// Live `TahoeLiveBindings` is rebuilt in-body from current model
+/// state.
 public struct MacMenubarPopover: View {
     @Environment(\.tahoe) private var t
     @State private var selected: TahoeProvider
+    /// Demo fallback used by Previews + the convenience init that
+    /// doesn't take live AppModels. The live init below overrides
+    /// this with a fresh `liveData` computed in-body.
     public var data: TahoeLiveBindings
     var onOpenDashboard: () -> Void
     var onSyncIPhone: () -> Void
+    /// v0.22.4: when non-nil, observe the live per-provider models so
+    /// meters reflect the latest poll instead of the snapshot captured
+    /// at status-item creation time. The observable wrapper carries
+    /// the three AppModels together (SwiftUI needs them as a single
+    /// observable for `body` to re-fire correctly on any of their
+    /// `@Published.usage` changes).
+    @ObservedObject private var liveSource: MenuBarLiveSource
 
     private let enabled: [TahoeProvider] = [.claude, .codex, .gemini]
 
+    /// Preview / demo init — no live AppModels; uses the static
+    /// `data` snapshot.
     public init(
         data: TahoeLiveBindings = .demo,
         initialProvider: TahoeProvider = .claude,
@@ -29,10 +54,76 @@ public struct MacMenubarPopover: View {
         self._selected = State(initialValue: initialProvider)
         self.onOpenDashboard = onOpenDashboard
         self.onSyncIPhone = onSyncIPhone
+        self.liveSource = MenuBarLiveSource()  // no live models
+    }
+
+    /// Production init — wires live per-provider AppModels so meters
+    /// refresh on every poll. Used by `ProviderStatusController` in
+    /// AppDelegate.
+    public init(
+        initialProvider: TahoeProvider,
+        onOpenDashboard: @escaping () -> Void,
+        onSyncIPhone: @escaping () -> Void,
+        claudeModel: AppModel,
+        codexModel: AppModel,
+        geminiModel: AppModel
+    ) {
+        self.data = .demo  // fallback never used when liveSource is wired
+        self._selected = State(initialValue: initialProvider)
+        self.onOpenDashboard = onOpenDashboard
+        self.onSyncIPhone = onSyncIPhone
+        self.liveSource = MenuBarLiveSource(
+            claude: claudeModel, codex: codexModel, gemini: geminiModel
+        )
+    }
+
+    /// Rebuild bindings from live AppModel state on every render. The
+    /// computed property reads each model's `usage` via the
+    /// `liveSource` wrapper, which makes SwiftUI re-render this view
+    /// when any of those `@Published` values change.
+    private var liveData: TahoeLiveBindings {
+        guard let models = liveSource.models else { return data }
+        return TahoeLiveBindings(
+            claude: liveRow(model: models.claude, provider: .claude),
+            codex:  liveRow(model: models.codex,  provider: .codex),
+            gemini: liveRow(model: models.gemini, provider: .gemini)
+        )
+    }
+
+    /// Build a single TahoeLiveRow from an AppModel's current usage.
+    /// Mirrors `MacTahoeAdapter.tahoeLive` for the same provider —
+    /// duplicated here (rather than calling the adapter) to avoid
+    /// re-reading SessionsModel / agentSessionRegistry which the
+    /// popover doesn't care about.
+    private func liveRow(model: AppModel, provider: TahoeProvider) -> TahoeLiveRow {
+        guard let usage = model.usage else {
+            return .demo(provider)  // no data yet — show demo placeholder
+        }
+        let sessionResetIn = TahoeFmt.resetIn(minutes: usage.sessionResetMins)
+        let weeklyResetIn  = TahoeFmt.resetIn(minutes: usage.weeklyResetMins)
+        let modelName: String = {
+            switch provider {
+            case .claude: return "Sonnet 4.5"
+            case .codex:  return "gpt-5"
+            case .gemini: return "antigravity-pro"
+            case .opencode: return "via opencode"
+            }
+        }()
+        return TahoeLiveRow(
+            sessionPercent: Double(usage.sessionPct),
+            weeklyPercent:  Double(usage.weeklyPct),
+            sessionResetIn: sessionResetIn,
+            weeklyResetIn:  weeklyResetIn,
+            modelName:      modelName,
+            autoReviveOn:   model.autoReviver.isEnabled,
+            autoReviveAgo:  "—",
+            hasWeekly:      model.config.hasWeeklyWindow
+        )
     }
 
     public var body: some View {
-        let row = data.row(for: selected)
+        let activeData = liveData
+        let row = activeData.row(for: selected)
         TahoeGlass(radius: 18, tone: .panel) {
             VStack(alignment: .leading, spacing: 0) {
                 // Provider segmented control
@@ -126,5 +217,59 @@ public struct MenuBarItemView: View {
             .padding(.horizontal, 6).padding(.vertical, 2)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Menu-bar live source (v0.22.4)
+
+/// Per-AppModel observable wrapper that re-fires `objectWillChange`
+/// whenever any of the three providers' `usage` updates. The popover
+/// `@ObservedObject`s this so its `body` re-renders on every poll —
+/// fixing the stale-snapshot bug where the popover showed whatever
+/// data the AppModels had at `ensureStatusItem()` time (often `.demo`
+/// before pollers completed).
+///
+/// Wraps three optional refs because the Preview / demo init path
+/// doesn't have real models. When `models` is nil, the popover uses
+/// the static `data` snapshot it was constructed with.
+@MainActor
+final class MenuBarLiveSource: ObservableObject {
+    struct Models {
+        let claude: AppModel
+        let codex: AppModel
+        let gemini: AppModel
+    }
+
+    let models: Models?
+    private var cancellables: Set<AnyCancellable> = []
+
+    /// Preview / demo init: no live models, no subscriptions.
+    init() {
+        self.models = nil
+    }
+
+    /// Production init: subscribes to each model's `objectWillChange`
+    /// and re-emits via our own publisher so the popover's
+    /// `@ObservedObject` dependency tracker fires on every poll.
+    init(claude: AppModel, codex: AppModel, gemini: AppModel) {
+        self.models = Models(claude: claude, codex: codex, gemini: gemini)
+        // Forward each provider's objectWillChange to our own. The
+        // popover view subscribes to MenuBarLiveSource (this) rather
+        // than the three AppModels directly, because @ObservedObject
+        // needs a single observable to track. The forwarders fan-in
+        // updates to a single edge.
+        for model in [claude, codex, gemini] {
+            model.objectWillChange
+                .sink { [weak self] _ in
+                    // Hop one runloop tick: AppModel's @Published
+                    // properties fire objectWillChange BEFORE their
+                    // value is set, so reading on the same tick
+                    // would observe the old value.
+                    Task { @MainActor in
+                        self?.objectWillChange.send()
+                    }
+                }
+                .store(in: &cancellables)
+        }
     }
 }
