@@ -137,7 +137,15 @@ public struct MacMenubarPopover: View {
             modelName:      modelName,
             autoReviveOn:   model.autoReviver.isEnabled,
             autoReviveAgo:  "—",
-            hasWeekly:      model.config.hasWeeklyWindow
+            hasWeekly:      model.config.hasWeeklyWindow,
+            // v0.22.18: surface the source's fallback/cached state.
+            // CodexSource sets status = .unknown when it had to read
+            // the JSONL rate_limits block instead of hitting the wham
+            // endpoint; AntigravitySource sets it when serving a
+            // cached fallback after a 5xx / network blip. The popover
+            // renders a "Stale" pill so the user knows the numbers
+            // may not reflect what each provider's desktop app shows.
+            stale: usage.status == .unknown
         )
     }
 
@@ -165,9 +173,9 @@ public struct MacMenubarPopover: View {
 
             // 5h + Weekly meters
             VStack(spacing: 12) {
-                TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: selected)
+                TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: selected, stale: row.stale)
                 if row.hasWeekly {
-                    TahoeMenuBarMeter(label: "Weekly", percent: row.weeklyPercent, hint: "resets in \(row.weeklyResetIn)", provider: selected)
+                    TahoeMenuBarMeter(label: "Weekly", percent: row.weeklyPercent, hint: "resets in \(row.weeklyResetIn)", provider: selected, stale: row.stale)
                 }
             }
             .padding(.horizontal, 4)
