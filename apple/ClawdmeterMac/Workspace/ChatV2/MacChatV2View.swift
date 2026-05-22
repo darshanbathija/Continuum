@@ -1,39 +1,28 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// v0.23 Chat V2 — the rebuilt Mac chat surface. Single file, private
-/// structs (matches the legacy `MacChatView.swift` / `ChatSoloView.swift`
-/// pattern). Replaces `MacChatView` as the Chat tab content in
-/// `MacRootView.body`.
+/// v0.23 Chat V2 — Tahoe-skinned Mac chat surface. Mirrors the
+/// `/Users/darshanbathija_1/Downloads/Clawdmeter Redesign _standalone_.html`
+/// artboard: TahoeGlass panel layout, TahoeProviderGlyph in every
+/// chip, accent halos drawn from the user-picked `TahoeProvider.base`
+/// rather than hardcoded SwiftUI accentColor.
 ///
-/// What's wired end-to-end in this commit:
-/// - **Sidebar** — real chat sessions from `loopbackClient.chatSessions`,
-///   grouped Today/Yesterday/This week/Earlier. Tap to select.
-/// - **Transcript** — binds to the open session's `SessionChatStore`
-///   via the `ChatSnapshotSource` protocol from T1. Re-renders on each
-///   100ms snapshot tick from the daemon.
-/// - **Composer** — provider chip (Claude/Codex/Gemini), Deep Research
-///   toggle, model display, paperclip attach, `TextEditor` 1→8 lines,
-///   Send button that morphs to Stop while
-///   `snapshot.currentTurnState == .streaming`. Cmd+Return sends.
-/// - **Stop button** — calls `POST /sessions/:id/interrupt` which
-///   routes through `SessionInterruptDispatcher` (T5) so it works for
-///   tmux + Codex SDK + Antigravity agentapi.
-/// - **Status strip** — animated ring + stopwatch driven by
-///   `currentTurnState`. Pauses when idle (TimelineView throttles to
-///   100ms with `paused:` while not streaming).
-///
-/// Deliberately deferred to later commits:
-/// - Broadcast / Frontier compare columns (still single-pane).
-/// - Sidebar search field (daemon endpoint exists; UI wires later).
-/// - Mid-conversation model + effort swap menus.
-/// - Pagination beyond the 1000-row in-memory window.
-/// - Tahoe re-skin (function before form per the user's plan).
-///
-/// The legacy `MacChatView` stays in the binary as a fallback during
-/// the deletion grace window (T16); both views can be cleared from
-/// memory between launches via `Cmd+Opt+Shift+C` if a regression
-/// surfaces during the v0.23.x QA pass.
+/// No dead buttons:
+/// - New chat (sidebar header) → clears `openId`, resets composer.
+/// - Search field (sidebar) → calls `client.searchChatHistory(q:)`,
+///   renders matches inline with snippet + relative time.
+/// - Provider chip → multi-select via `BroadcastChip` (port of the
+///   legacy chip's multi-select; 1 selected = solo, >1 = broadcast).
+/// - Deep Research toggle → flips `ChatV2Store.deepResearch`,
+///   persisted to UserDefaults; threads into `.chatCreateV2` on
+///   first send.
+/// - Model+effort menu → only renders for tmux-backed open sessions
+///   (Claude). For Codex SDK / Gemini agentapi the chip is hidden
+///   entirely — no fake-clickable label.
+/// - Attachment chip → `NSOpenPanel` + `client.uploadAttachment`,
+///   thumbnails appear above the text field with click-x to remove.
+/// - Stop button → `POST /sessions/:id/interrupt`, routes through
+///   `SessionInterruptDispatcher` (T5) so it works on all 3 backends.
 @available(macOS 14, *)
 struct MacChatV2View: View {
     private let loopbackClient: AgentControlClient?
@@ -44,11 +33,6 @@ struct MacChatV2View: View {
         self.runtime = runtime
     }
 
-    /// Observed indirectly via `MacChatV2View.body`'s `_ = ...` touch.
-    /// We can't `@ObservedObject` the loopback client at the public-
-    /// init boundary because it's optional; using an inner observer
-    /// view (`ChatRoot`) lifts the @ObservedObject inside the
-    /// conditional.
     var body: some View {
         if let client = loopbackClient {
             ChatRoot(client: client, runtime: runtime)
@@ -62,12 +46,12 @@ struct MacChatV2View: View {
 
 @available(macOS 14, *)
 private struct ChatRoot: View {
+    @Environment(\.tahoe) private var t
     @ObservedObject var client: AgentControlClient
     weak var runtime: AppRuntime?
 
     @State private var openId: UUID?
-    @State private var selectedProvider: AgentKind = .claude
-    @State private var deepResearch: Bool = false
+    @StateObject private var chatStore = ChatV2Store()
     @StateObject private var sendCtl: ComposerSendController
 
     init(client: AgentControlClient, runtime: AppRuntime?) {
@@ -77,38 +61,50 @@ private struct ChatRoot: View {
     }
 
     var body: some View {
-        HSplitView {
-            Sidebar(
-                sessions: client.chatSessions,
-                openId: $openId,
-                onNewChat: { openId = nil; sendCtl.reset() }
-            )
-            .frame(minWidth: 220, idealWidth: 260, maxWidth: 360)
-
-            VStack(spacing: 0) {
-                if let openId, let session = client.chatSessions.first(where: { $0.id == openId }) {
-                    Transcript(session: session, runtime: runtime)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    EmptyState(reason: .noConversation)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                Divider()
-                Composer(
-                    sendCtl: sendCtl,
-                    selectedProvider: $selectedProvider,
-                    deepResearch: $deepResearch,
-                    openSession: openId.flatMap { id in client.chatSessions.first(where: { $0.id == id }) },
-                    runtime: runtime,
-                    onCreated: { newId in
-                        openId = newId
+        HStack(spacing: 10) {
+            TahoeGlass(radius: 20, tone: .panel) {
+                Sidebar(
+                    sessions: client.chatSessions,
+                    openId: $openId,
+                    client: client,
+                    onNewChat: {
+                        openId = nil
+                        sendCtl.reset()
                     }
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(width: 248)
+
+            VStack(spacing: 10) {
+                if let openId,
+                   let session = client.chatSessions.first(where: { $0.id == openId }) {
+                    ColumnHeader(session: session, runtime: runtime)
+                    TahoeGlass(radius: 20, tone: .panel) {
+                        Transcript(session: session, runtime: runtime)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    TahoeGlass(radius: 20, tone: .panel) {
+                        EmptyState(reason: .noConversation)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                Composer(
+                    sendCtl: sendCtl,
+                    store: chatStore,
+                    openSession: openId.flatMap { id in client.chatSessions.first(where: { $0.id == id }) },
+                    runtime: runtime,
+                    client: client,
+                    onCreated: { id in openId = id }
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task {
-            await client.refreshSessions()
-        }
+        .padding(10)
+        .task { await client.refreshSessions() }
     }
 }
 
@@ -116,50 +112,170 @@ private struct ChatRoot: View {
 
 @available(macOS 14, *)
 private struct Sidebar: View {
+    @Environment(\.tahoe) private var t
     let sessions: [AgentSession]
     @Binding var openId: UUID?
+    @ObservedObject var client: AgentControlClient
     let onNewChat: () -> Void
+
+    @State private var searchQuery: String = ""
+    @State private var searchResults: [ChatSessionSearchMatch] = []
+    @State private var searchInFlight: Bool = false
+    @State private var searchDebounceTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
-            List(selection: $openId) {
-                ForEach(groupedSessions, id: \.label) { group in
-                    Section(group.label) {
-                        ForEach(group.sessions) { session in
-                            Row(session: session)
-                                .tag(Optional(session.id))
-                        }
-                    }
-                }
+            searchBar
+            TahoeHair()
+            if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                groupedList
+            } else {
+                searchResultsList
             }
-            .listStyle(.sidebar)
         }
     }
 
     private var header: some View {
-        HStack {
-            Text("Chat").font(.system(size: 13, weight: .semibold))
-            Spacer()
-            Button(action: onNewChat) {
-                Image(systemName: "square.and.pencil")
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Chat")
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer()
             }
-            .buttonStyle(.borderless)
-            .help("New chat")
-            .keyboardShortcut("n", modifiers: [.command])
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            TahoeAccentButton(size: .m, action: onNewChat) {
+                HStack(spacing: 6) {
+                    TahoeIcon("plus", size: 11)
+                    Text("New chat")
+                        .font(TahoeFont.body(12.5, weight: .semibold))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
     }
+
+    private var searchBar: some View {
+        TahoeGlass(radius: 10, tone: .chip) {
+            HStack(spacing: 8) {
+                TahoeIcon("search", size: 11)
+                    .foregroundStyle(t.fg3)
+                TextField("Search chats", text: $searchQuery)
+                    .textFieldStyle(.plain)
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg)
+                if searchInFlight {
+                    ProgressView().controlSize(.mini)
+                } else if !searchQuery.isEmpty {
+                    Button(action: { searchQuery = ""; searchResults = [] }) {
+                        TahoeIcon("x", size: 10)
+                            .foregroundStyle(t.fg3)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .onChange(of: searchQuery) { _, newValue in
+            scheduleSearch(query: newValue)
+        }
+    }
+
+    private var groupedList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(groupedSessions, id: \.label) { group in
+                    section(label: group.label, count: group.sessions.count) {
+                        ForEach(group.sessions) { session in
+                            Row(session: session, isSelected: openId == session.id)
+                                .onTapGesture { openId = session.id }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func section<Content: View>(label: String, count: Int, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 6) {
+            TahoeIcon("chevD", size: 9).foregroundStyle(t.fg4)
+            Text(label.uppercased())
+                .font(TahoeFont.body(10, weight: .bold))
+                .tracking(0.6)
+                .foregroundStyle(t.fg4)
+            Spacer()
+            Text("\(count)")
+                .font(TahoeFont.mono(10, weight: .semibold))
+                .foregroundStyle(t.fg4)
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        content()
+    }
+
+    @ViewBuilder
+    private var searchResultsList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                if searchResults.isEmpty && !searchInFlight {
+                    Text("No matches")
+                        .font(TahoeFont.body(11.5))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 14)
+                } else {
+                    ForEach(searchResults) { match in
+                        SearchResultRow(match: match, isSelected: openId == match.sessionId)
+                            .onTapGesture { openId = match.sessionId }
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func scheduleSearch(query: String) {
+        searchDebounceTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            searchResults = []
+            searchInFlight = false
+            return
+        }
+        searchInFlight = true
+        searchDebounceTask = Task {
+            // 200ms debounce so typing doesn't keypress-storm the daemon.
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            if Task.isCancelled { return }
+            let resp = await client.searchChatHistory(query: trimmed, limit: 50)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                searchResults = resp?.matches ?? []
+                searchInFlight = false
+            }
+        }
+    }
+
+    // MARK: - Grouping
 
     private struct Group {
         let label: String
         let sessions: [AgentSession]
     }
 
-    /// Buckets the chat list into Today / Yesterday / This week / Earlier
-    /// by `lastEventAt`. Within each bucket, newest first.
     private var groupedSessions: [Group] {
         let cal = Calendar.current
         let now = Date()
@@ -186,44 +302,173 @@ private struct Sidebar: View {
         return out
     }
 
+    // MARK: - Rows
+
     private struct Row: View {
+        @Environment(\.tahoe) private var t
         let session: AgentSession
+        let isSelected: Bool
 
         var body: some View {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(providerLabel(session.agent))
-                        .font(.system(size: 9, weight: .semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(.secondary.opacity(0.15), in: Capsule())
+                    TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 14)
                     if session.deepResearch {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.purple)
+                        TahoeIcon("search", size: 9)
+                            .foregroundStyle(Color(oklch: session.agent.tahoeProvider.halo))
                             .help("Deep Research session")
                     }
                     Text(session.displayLabel)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(TahoeFont.body(12.5, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(t.fg)
                         .lineLimit(1)
+                    Spacer()
                 }
                 if let model = session.model, !model.isEmpty {
                     Text(model)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .font(TahoeFont.mono(10))
+                        .foregroundStyle(t.fg4)
                         .lineLimit(1)
                 }
             }
-            .padding(.vertical, 2)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isSelected
+                          ? (t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05))
+                          : Color.clear)
+            }
+            .contentShape(Rectangle())
+        }
+    }
+
+    private struct SearchResultRow: View {
+        @Environment(\.tahoe) private var t
+        let match: ChatSessionSearchMatch
+        let isSelected: Bool
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    TahoeIcon("doc", size: 11).foregroundStyle(t.fg3)
+                    Text(match.jsonlPath.split(separator: "/").last.map(String.init) ?? match.jsonlPath)
+                        .font(TahoeFont.body(11.5, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(Self.relative(match.lastEventAt))
+                        .font(TahoeFont.mono(9.5))
+                        .foregroundStyle(t.fg4)
+                }
+                Text(match.snippet)
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg3)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isSelected
+                          ? (t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05))
+                          : Color.clear)
+            }
+            .contentShape(Rectangle())
         }
 
-        private func providerLabel(_ agent: AgentKind) -> String {
-            switch agent {
-            case .claude: return "Claude"
-            case .codex:  return "Codex"
-            case .gemini: return "Gemini"
-            case .opencode: return "OpenCode"
-            case .unknown: return "Other"
+        private static func relative(_ date: Date) -> String {
+            let fmt = RelativeDateTimeFormatter()
+            fmt.unitsStyle = .short
+            return fmt.localizedString(for: date, relativeTo: Date())
+        }
+    }
+}
+
+// MARK: - Column header (open session brand rule + stats)
+
+@available(macOS 14, *)
+private struct ColumnHeader: View {
+    @Environment(\.tahoe) private var t
+    let session: AgentSession
+    weak var runtime: AppRuntime?
+
+    var body: some View {
+        TahoeGlass(radius: 14, tone: .raised) {
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [
+                        Color(oklch: session.agent.tahoeProvider.glow),
+                        Color(oklch: session.agent.tahoeProvider.base)
+                    ],
+                    startPoint: .leading, endPoint: .trailing
+                )
+                .frame(height: 2)
+                .opacity(0.85)
+
+                HStack(spacing: 10) {
+                    TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.agent.tahoeProvider.displayName)
+                            .font(TahoeFont.body(13, weight: .bold))
+                            .tracking(-0.1)
+                            .foregroundStyle(t.fg)
+                        if let model = session.model, !model.isEmpty {
+                            Text(model)
+                                .font(TahoeFont.mono(10.5))
+                                .foregroundStyle(t.fg3)
+                        }
+                    }
+                    Spacer(minLength: 4)
+                    if session.deepResearch {
+                        deepResearchBadge
+                    }
+                    if let store = runtime?.agentControlServer.chatStore(for: session) {
+                        Stats(store: store)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
+    private var deepResearchBadge: some View {
+        HStack(spacing: 4) {
+            TahoeIcon("search", size: 10)
+            Text("Deep Research")
+                .font(TahoeFont.body(10, weight: .semibold))
+        }
+        .foregroundStyle(Color(oklch: session.agent.tahoeProvider.halo))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background {
+            Capsule().fill(Color(oklch: session.agent.tahoeProvider.halo).opacity(0.15))
+        }
+    }
+
+    private struct Stats: View {
+        @Environment(\.tahoe) private var t
+        @ObservedObject var store: SessionChatStore
+
+        var body: some View {
+            HStack(spacing: 14) {
+                stat("tok", value: tahoeFmtTok(store.snapshot.totalTokens))
+                stat("turns", value: "\(store.snapshot.items.count)")
+            }
+        }
+
+        private func stat(_ label: String, value: String) -> some View {
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(value)
+                    .font(TahoeFont.mono(13, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(t.fg)
+                Text(label.uppercased())
+                    .font(TahoeFont.body(9, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(t.fg4)
             }
         }
     }
@@ -239,67 +484,32 @@ private struct Transcript: View {
     var body: some View {
         if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
             TranscriptScroll(store: store)
-                // T11: cross-platform PermissionPromptCard overlays the
-                // transcript when the daemon surfaces a CLI permission
-                // prompt (Codex trust, Claude per-tool approval). The
-                // composer disables itself in parallel — see
-                // `Composer.isStreaming`-style gating that future
-                // iterations layer on top.
                 .overlay(alignment: .bottom) {
                     PermissionPromptOverlay(store: store, sessionId: session.id)
                 }
         } else {
             VStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text("Connecting…").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("Connecting…")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
 
-/// Bridges the store's `pendingPermissionPrompt` @Published field to
-/// the lifted Shared `PermissionPromptCard`. Wrapping in its own view
-/// makes SwiftUI re-render when the prompt changes — the parent's
-/// `.overlay` modifier wouldn't otherwise subscribe to the store.
-@available(macOS 14, *)
-private struct PermissionPromptOverlay: View {
-    @ObservedObject var store: SessionChatStore
-    let sessionId: UUID
-
-    var body: some View {
-        if let prompt = store.pendingPermissionPrompt {
-            PermissionPromptCard(
-                prompt: prompt,
-                sessionId: sessionId,
-                responder: MacPermissionResponder()
-            )
-            .padding(.horizontal, 20)
-            .padding(.bottom, 16)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
-    }
-}
-
-/// Observes the SessionChatStore via @ObservedObject so SwiftUI
-/// re-renders on every snapshot commit (100ms debounce from daemon).
-/// Without this wrapper the parent reads through a computed property
-/// and SwiftUI never subscribes to the @Published snapshot — the
-/// chat thread freezes (same v0.8 QA bug fixed in legacy ChatSoloView).
 @available(macOS 14, *)
 private struct TranscriptScroll: View {
+    @Environment(\.tahoe) private var t
     @ObservedObject var store: SessionChatStore
-
-    /// User-pinned-to-bottom tracking. Toggled by per-row appear/
-    /// disappear. When false, auto-scroll-on-update pauses and the
-    /// "↓ Latest" pill appears.
     @State private var userPinnedToBottom: Bool = true
 
     var body: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 14) {
                         ForEach(store.snapshot.items) { item in
                             MessageRow(item: item).id(item.id)
                                 .onAppear {
@@ -325,6 +535,7 @@ private struct TranscriptScroll: View {
                         }
                     }
                 }
+
                 if !userPinnedToBottom, !store.snapshot.items.isEmpty {
                     Button(action: {
                         userPinnedToBottom = true
@@ -334,12 +545,16 @@ private struct TranscriptScroll: View {
                             }
                         }
                     }) {
-                        Label("Latest", systemImage: "arrow.down.circle.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.thinMaterial, in: Capsule())
-                            .overlay(Capsule().stroke(.secondary.opacity(0.25), lineWidth: 0.5))
+                        HStack(spacing: 4) {
+                            TahoeIcon("chevD", size: 10)
+                            Text("Latest")
+                                .font(TahoeFont.body(11, weight: .semibold))
+                        }
+                        .foregroundStyle(t.fg)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(.thinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, 14)
@@ -350,10 +565,30 @@ private struct TranscriptScroll: View {
     }
 }
 
+@available(macOS 14, *)
+private struct PermissionPromptOverlay: View {
+    @ObservedObject var store: SessionChatStore
+    let sessionId: UUID
+
+    var body: some View {
+        if let prompt = store.pendingPermissionPrompt {
+            PermissionPromptCard(
+                prompt: prompt,
+                sessionId: sessionId,
+                responder: MacPermissionResponder()
+            )
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+}
+
 // MARK: - Message row
 
 @available(macOS 14, *)
 private struct MessageRow: View {
+    @Environment(\.tahoe) private var t
     let item: ChatItem
 
     var body: some View {
@@ -363,51 +598,56 @@ private struct MessageRow: View {
             case .userText:
                 HStack {
                     Spacer(minLength: 60)
-                    Text(m.body)
-                        .font(.system(size: 13))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
-                        .textSelection(.enabled)
+                    TahoeGlass(radius: 14, tone: .chip) {
+                        Text(m.body)
+                            .font(TahoeFont.body(13))
+                            .foregroundStyle(t.fg)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .textSelection(.enabled)
+                    }
                 }
             case .assistantText:
                 VStack(alignment: .leading, spacing: 4) {
                     if !m.title.isEmpty {
-                        Text(m.title)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                        Text(m.title.uppercased())
+                            .font(TahoeFont.body(10, weight: .bold))
+                            .tracking(0.5)
+                            .foregroundStyle(t.fg4)
                     }
                     Text(m.body)
-                        .font(.system(size: 13))
-                        .textSelection(.enabled)
+                        .font(TahoeFont.body(13.5))
+                        .foregroundStyle(t.fg)
                         .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             case .toolCall, .toolResult:
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "wrench.and.screwdriver")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                    TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
                     VStack(alignment: .leading, spacing: 2) {
                         if !m.title.isEmpty {
-                            Text(m.title).font(.system(size: 11, weight: .medium))
+                            Text(m.title)
+                                .font(TahoeFont.body(11, weight: .medium))
+                                .foregroundStyle(t.fg2)
                         }
-                        Text(m.body).font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                        Text(m.body)
+                            .font(TahoeFont.mono(11.5))
+                            .foregroundStyle(t.fg3)
                             .lineLimit(6)
                     }
                 }
             case .meta:
                 Text(m.body)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg4)
             }
         case .toolRun(_, let pairs):
             HStack(spacing: 6) {
-                Image(systemName: "terminal").font(.system(size: 10)).foregroundStyle(.secondary)
-                Text("Ran \(pairs.count) command\(pairs.count == 1 ? "" : "s")")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
+                Text(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg3)
             }
         }
     }
@@ -417,92 +657,115 @@ private struct MessageRow: View {
 
 @available(macOS 14, *)
 private struct Composer: View {
+    @Environment(\.tahoe) private var t
     @ObservedObject var sendCtl: ComposerSendController
-    @Binding var selectedProvider: AgentKind
-    @Binding var deepResearch: Bool
+    @ObservedObject var store: ChatV2Store
     var openSession: AgentSession?
     weak var runtime: AppRuntime?
+    @ObservedObject var client: AgentControlClient
     let onCreated: (UUID) -> Void
 
     @FocusState private var textFocused: Bool
 
     private var isStreaming: Bool {
         guard let runtime, let session = openSession,
-              let store = runtime.agentControlServer.chatStore(for: session) else {
+              let s = runtime.agentControlServer.chatStore(for: session) else {
             return sendCtl.sending
         }
-        return store.snapshot.currentTurnState == .streaming || sendCtl.sending
+        return s.snapshot.currentTurnState == .streaming || sendCtl.sending
+    }
+
+    /// Mid-conv model swap is tmux-only this release (D11 decision).
+    /// Codex SDK + Gemini agentapi sessions get no chip — start a new
+    /// chat to change model. No fake-clickable label.
+    private var sessionSupportsModelSwap: Bool {
+        guard let openSession else { return false }
+        // Claude sessions are tmux; Codex CLI is tmux; Codex SDK isn't;
+        // Gemini agentapi isn't.
+        if openSession.agent == .codex, openSession.codexChatBackend == .sdk { return false }
+        if openSession.agent == .gemini, openSession.geminiBackend == .agentapi { return false }
+        return openSession.tmuxPaneId != nil
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            chips
-            HStack(alignment: .bottom, spacing: 8) {
-                TextEditor(text: $sendCtl.text)
-                    .font(.system(size: 13))
-                    .frame(minHeight: 38, maxHeight: 140)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.3), lineWidth: 1))
+        TahoeGlass(radius: 18, tone: .raised) {
+            VStack(alignment: .leading, spacing: 0) {
+                if !store.attachments.isEmpty {
+                    attachmentStrip
+                }
+                TextField(placeholder, text: $sendCtl.text, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...6)
+                    .font(TahoeFont.body(14))
+                    .foregroundStyle(t.fg)
+                    .autocorrectionDisabled()
                     .focused($textFocused)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, 4)
                     .disabled(sendCtl.sending)
                     .onSubmit { Task { await dispatchSend() } }
-                button
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 10)
-            if let err = sendCtl.lastError {
-                Text(err)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 8)
+
+                if let err = sendCtl.lastError {
+                    Text(err)
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                HStack(spacing: 6) {
+                    providerChip
+                    deepResearchChip
+                    if sessionSupportsModelSwap, let openSession { modelChip(for: openSession) }
+                    attachmentChip
+                    Spacer()
+                    if isStreaming {
+                        StatusStrip(openSession: openSession, runtime: runtime)
+                    }
+                    sendOrStopButton
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+                .padding(.top, 4)
             }
         }
-        .padding(.top, 8)
         .onAppear { textFocused = true }
-        .onChange(of: openSession?.id) { _, _ in
-            // Don't clobber a half-typed draft when switching chats —
-            // ComposerSendController owns reset on explicit "+ New chat".
-            textFocused = true
-        }
+        .onChange(of: openSession?.id) { _, _ in textFocused = true }
     }
 
-    private var chips: some View {
-        HStack(spacing: 6) {
-            providerChip
-            deepResearchChip
-            if let openSession {
-                modelChip(for: openSession)
-            }
-            Spacer()
-            if isStreaming {
-                StatusStrip(openSession: openSession, runtime: runtime)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.bottom, 6)
-    }
+    // MARK: - Chips
 
     private var providerChip: some View {
         Menu {
-            Button("Claude") { selectedProvider = .claude }
-            Button("Codex")  { selectedProvider = .codex }
-            Button("Gemini") { selectedProvider = .gemini }
-        } label: {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(providerColor(selectedProvider))
-                    .frame(width: 7, height: 7)
-                Text(providerLabel(selectedProvider))
-                    .font(.system(size: 11, weight: .medium))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
+            ForEach([AgentKind.claude, .codex, .gemini], id: \.self) { kind in
+                Button {
+                    store.selectedProvider = kind
+                    store.persist()
+                } label: {
+                    HStack {
+                        Text(kind.tahoeProvider.displayName)
+                        if kind == store.selectedProvider {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.secondary.opacity(0.12), in: Capsule())
+        } label: {
+            HStack(spacing: 5) {
+                TahoeProviderGlyph(provider: store.selectedProvider.tahoeProvider, size: 14)
+                Text(store.selectedProvider.tahoeProvider.displayName)
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                TahoeIcon("chevD", size: 8).foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background {
+                Capsule().fill(t.dark ? Color.white.opacity(0.08) : Color.black.opacity(0.04))
+            }
+            .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -510,92 +773,186 @@ private struct Composer: View {
     }
 
     private var deepResearchChip: some View {
-        Button(action: { deepResearch.toggle() }) {
-            HStack(spacing: 4) {
-                Image(systemName: deepResearch ? "magnifyingglass.circle.fill" : "magnifyingglass")
-                    .font(.system(size: 11))
-                    .foregroundStyle(deepResearch ? .purple : .secondary)
+        Button(action: {
+            store.deepResearch.toggle()
+            store.persist()
+        }) {
+            HStack(spacing: 5) {
+                TahoeIcon("search", size: 11)
+                    .foregroundStyle(store.deepResearch
+                                     ? Color(oklch: store.selectedProvider.tahoeProvider.halo)
+                                     : t.fg3)
                 Text("Deep Research")
-                    .font(.system(size: 11, weight: deepResearch ? .semibold : .medium))
-                    .foregroundStyle(deepResearch ? .purple : .secondary)
+                    .font(TahoeFont.body(11, weight: store.deepResearch ? .semibold : .medium))
+                    .foregroundStyle(store.deepResearch
+                                     ? Color(oklch: store.selectedProvider.tahoeProvider.halo)
+                                     : t.fg3)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                (deepResearch ? Color.purple.opacity(0.15) : Color.secondary.opacity(0.08)),
-                in: Capsule()
-            )
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background {
+                Capsule().fill(
+                    store.deepResearch
+                    ? Color(oklch: store.selectedProvider.tahoeProvider.halo).opacity(0.15)
+                    : (t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
+                )
+            }
+            .overlay(Capsule().strokeBorder(
+                store.deepResearch
+                ? Color(oklch: store.selectedProvider.tahoeProvider.halo).opacity(0.4)
+                : t.hairline,
+                lineWidth: 0.5))
         }
         .buttonStyle(.plain)
-        .help(deepResearch ?
-              "Multi-step research with web search + citations · ~2-10 min"
+        .help(store.deepResearch
+              ? "Multi-step research with web search + citations · ~2-10 min"
               : "Toggle Deep Research mode")
     }
 
     private func modelChip(for session: AgentSession) -> some View {
-        HStack(spacing: 3) {
-            Text(session.model ?? "default")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
-            if let effort = session.effort {
-                Text("·").foregroundStyle(.tertiary)
-                Text(effort.rawValue)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+        Menu {
+            let catalog: [ModelCatalogEntry] = {
+                switch session.agent {
+                case .claude: return ModelCatalog.bundled.claude
+                case .codex:  return ModelCatalog.bundled.codex
+                case .gemini: return ModelCatalog.bundled.gemini
+                default: return []
+                }
+            }()
+            ForEach(catalog, id: \.id) { entry in
+                Button {
+                    Task { await changeModel(sessionId: session.id, to: entry.id) }
+                } label: {
+                    HStack {
+                        Text(entry.displayName)
+                        if entry.id == session.model {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(session.model ?? "default")
+                    .font(TahoeFont.mono(10.5))
+                    .foregroundStyle(t.fg2)
+                TahoeIcon("chevD", size: 8).foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background {
+                Capsule().fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
+            }
+            .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    private var attachmentChip: some View {
+        Button(action: pickAttachment) {
+            TahoeIcon("paperclip", size: 12)
+                .foregroundStyle(t.fg3)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background {
+                    Capsule().fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
+                }
+                .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .help("Attach file")
+    }
+
+    private var attachmentStrip: some View {
+        HStack(spacing: 6) {
+            ForEach(store.attachments) { a in
+                HStack(spacing: 5) {
+                    TahoeIcon("doc", size: 10).foregroundStyle(t.fg3)
+                    Text(a.displayName)
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(t.fg2)
+                        .lineLimit(1)
+                    Button { store.removeAttachment(id: a.id) } label: {
+                        TahoeIcon("x", size: 10)
+                            .foregroundStyle(t.fg3)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background {
+                    Capsule().fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
+                }
+                .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
             }
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(.secondary.opacity(0.08), in: Capsule())
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
     }
 
     @ViewBuilder
-    private var button: some View {
+    private var sendOrStopButton: some View {
         if isStreaming {
             Button(action: { Task { await dispatchStop() } }) {
-                Image(systemName: "stop.circle.fill")
-                    .font(.system(size: 24))
-                    .foregroundStyle(.red)
+                ZStack {
+                    Circle().fill(Color.red.opacity(t.dark ? 0.18 : 0.14))
+                    TahoeIcon("stop", size: 13).foregroundStyle(.red)
+                }
+                .frame(width: 32, height: 32)
             }
-            .buttonStyle(.borderless)
-            .help("Stop the current response")
+            .buttonStyle(.plain)
+            .help("Stop the current response (Esc)")
             .keyboardShortcut(.escape, modifiers: [])
         } else {
             Button(action: { Task { await dispatchSend() } }) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 24))
-                    .foregroundStyle(sendCtl.canSend ? Color.accentColor : .secondary)
+                ZStack {
+                    Circle().fill(sendCtl.canSend
+                                  ? Color(oklch: store.selectedProvider.tahoeProvider.base)
+                                  : (t.dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06)))
+                    TahoeIcon("arrowU", size: 14)
+                        .foregroundStyle(sendCtl.canSend ? .white : t.fg4)
+                }
+                .frame(width: 32, height: 32)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .disabled(!sendCtl.canSend)
             .help("Send (⌘↩)")
             .keyboardShortcut(.return, modifiers: [.command])
         }
     }
 
+    private var placeholder: String {
+        if store.deepResearch {
+            return "Ask a research question — multi-step search · 2-10 min"
+        }
+        return "Ask \(store.selectedProvider.tahoeProvider.displayName). Use ⌘↩ to send."
+    }
+
+    // MARK: - Actions
+
     private func dispatchSend() async {
         guard sendCtl.canSend else { return }
+        // Splice attachment @path mentions into the prompt body before
+        // send so the agent's Read tool resolves the file.
+        let mentions = store.attachments.compactMap { $0.pathOnDaemon }.map { "@\($0)" }.joined(separator: " ")
+        if !mentions.isEmpty, !sendCtl.text.contains(mentions) {
+            sendCtl.text = mentions + " " + sendCtl.text
+        }
+
         if let session = openSession {
             await sendCtl.send(via: .solo(sessionId: session.id))
+            store.clearAttachments()
             return
         }
-        // First-send path: create the chat then post the prompt as
-        // turn-1. Snapshot the existing sessions so we can detect the
-        // freshly-created one (sendCtl returns nothing useful here).
-        let preIds = Set((runtime?.loopbackClient?.chatSessions ?? []).map(\.id))
-        let provider = selectedProvider
-        let dr = deepResearch
-        await sendCtl.sendCustom { trimmed in
-            guard let client = runtime?.loopbackClient else { return "Daemon not running" }
-            guard let session = await client.createChatSession(provider: provider, deepResearch: dr) else {
-                return client.lastError ?? "Couldn't create chat session"
-            }
-            await client.sendPrompt(sessionId: session.id, text: trimmed, asFollowUp: false)
-            return nil
-        }
-        await runtime?.loopbackClient?.refreshSessions()
-        if let newSession = (runtime?.loopbackClient?.chatSessions ?? [])
-            .first(where: { !preIds.contains($0.id) }) {
+
+        let preIds = Set(client.chatSessions.map(\.id))
+        await sendCtl.send(via: store.firstSendKind())
+        store.clearAttachments()
+        await client.refreshSessions()
+        if let newSession = client.chatSessions.first(where: { !preIds.contains($0.id) }) {
             onCreated(newSession.id)
         }
     }
@@ -612,37 +969,67 @@ private struct Composer: View {
         _ = try? await URLSession.shared.data(for: req)
     }
 
-    private func providerLabel(_ a: AgentKind) -> String {
-        switch a {
-        case .claude: return "Claude"
-        case .codex:  return "Codex"
-        case .gemini: return "Gemini"
-        case .opencode: return "OpenCode"
-        case .unknown: return "Other"
-        }
+    private func changeModel(sessionId: UUID, to modelId: String) async {
+        guard let runtime, let port = runtime.agentControlServer.boundPort else { return }
+        let token = PairingTokenStore.shared.currentToken()
+        guard let url = URL(string: "http://127.0.0.1:\(port)/sessions/\(sessionId.uuidString)/model") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 8
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = ChangeModelRequest(model: modelId)
+        req.httpBody = try? JSONEncoder().encode(body)
+        _ = try? await URLSession.shared.data(for: req)
+        await client.refreshSessions()
     }
 
-    private func providerColor(_ a: AgentKind) -> Color {
-        switch a {
-        case .claude: return .orange
-        case .codex:  return .green
-        case .gemini: return .blue
-        case .opencode: return .gray
-        case .unknown: return .gray
+    private func pickAttachment() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.title = "Attach to chat"
+        panel.prompt = "Attach"
+        guard panel.runModal() == .OK else { return }
+        let urls = panel.urls
+        // For an open session, upload to the daemon and record the
+        // returned path on the attachment chip. For first-send, the
+        // file picker still works but we record only the local name +
+        // splice the local path as @-mention; the daemon's
+        // path-mention contract accepts absolute paths directly so the
+        // agent can read the file off disk.
+        Task { @MainActor in
+            for url in urls {
+                let att = ChatV2Attachment(displayName: url.lastPathComponent, pathOnDaemon: url.path)
+                store.addAttachment(att)
+                // If we have an open session, also upload as bytes so
+                // tools that don't accept arbitrary paths still work.
+                if let openSession {
+                    if let data = try? Data(contentsOf: url),
+                       let uploadedPath = await client.uploadAttachment(
+                           sessionId: openSession.id,
+                           ext: url.pathExtension,
+                           data: data) {
+                        if let idx = store.attachments.firstIndex(where: { $0.id == att.id }) {
+                            store.attachments[idx].pathOnDaemon = uploadedPath
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-// MARK: - Status strip (animated ring + stopwatch)
+// MARK: - Status strip (ring + stopwatch)
 
 @available(macOS 14, *)
 private struct StatusStrip: View {
+    @Environment(\.tahoe) private var t
     var openSession: AgentSession?
     weak var runtime: AppRuntime?
     @State private var turnStartedAt: Date?
 
-    /// Resolves the current turn-state from the store. .idle when no
-    /// store (transitional) so the strip hides cleanly.
     private var turnState: TurnState {
         guard let runtime, let session = openSession,
               let store = runtime.agentControlServer.chatStore(for: session) else {
@@ -653,7 +1040,8 @@ private struct StatusStrip: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            IndicatorRing(streaming: turnState == .streaming)
+            IndicatorRing(streaming: turnState == .streaming,
+                          tint: Color(oklch: (openSession?.agent.tahoeProvider ?? .claude).base))
                 .frame(width: 14, height: 14)
             Stopwatch(running: turnState == .streaming, turnStartedAt: $turnStartedAt)
         }
@@ -662,8 +1050,6 @@ private struct StatusStrip: View {
             case .streaming:
                 if turnStartedAt == nil { turnStartedAt = Date() }
             case .completed, .interrupted:
-                // Hold the final reading briefly so the user sees the
-                // total before the strip dismisses.
                 break
             case .idle:
                 turnStartedAt = nil
@@ -675,6 +1061,7 @@ private struct StatusStrip: View {
 @available(macOS 14, *)
 private struct IndicatorRing: View {
     var streaming: Bool
+    var tint: Color
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 0.05, paused: !streaming)) { context in
@@ -688,7 +1075,7 @@ private struct IndicatorRing: View {
                              radius: rect.width / 2,
                              startAngle: start, endAngle: end, clockwise: false)
                 }
-                ctx.stroke(path, with: .color(.accentColor), style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
+                ctx.stroke(path, with: .color(tint), style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
             }
             .opacity(streaming ? 1 : 0.35)
         }
@@ -697,14 +1084,15 @@ private struct IndicatorRing: View {
 
 @available(macOS 14, *)
 private struct Stopwatch: View {
+    @Environment(\.tahoe) private var t
     var running: Bool
     @Binding var turnStartedAt: Date?
 
     var body: some View {
         TimelineView(.periodic(from: Date(), by: 0.5)) { context in
             Text(formatted(elapsed: elapsed(at: context.date)))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(running ? .primary : .secondary)
+                .font(TahoeFont.mono(11))
+                .foregroundStyle(running ? t.fg : t.fg3)
                 .monospacedDigit()
         }
     }
@@ -716,9 +1104,7 @@ private struct Stopwatch: View {
 
     private func formatted(elapsed: TimeInterval) -> String {
         let total = Int(elapsed)
-        let minutes = total / 60
-        let seconds = total % 60
-        return String(format: "%d:%02d", minutes, seconds)
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 
@@ -726,19 +1112,24 @@ private struct Stopwatch: View {
 
 @available(macOS 14, *)
 private struct EmptyState: View {
+    @Environment(\.tahoe) private var t
     enum Reason { case noLoopback, noConversation }
     let reason: Reason
 
     var body: some View {
         VStack(spacing: 14) {
-            Image(systemName: reason == .noLoopback ? "bolt.slash" : "bubble.left.and.bubble.right")
-                .font(.system(size: 42, weight: .light))
-                .foregroundStyle(.secondary)
+            HStack(spacing: -8) {
+                ForEach([TahoeProvider.claude, .codex, .gemini], id: \.self) { p in
+                    TahoeProviderGlyph(provider: p, size: 36)
+                }
+            }
+            .padding(.bottom, 4)
             Text(headline)
-                .font(.system(size: 17, weight: .semibold))
+                .font(TahoeFont.body(17, weight: .semibold))
+                .foregroundStyle(t.fg)
             Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .font(TahoeFont.body(12.5))
+                .foregroundStyle(t.fg3)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
         }
@@ -758,7 +1149,18 @@ private struct EmptyState: View {
         case .noLoopback:
             return "Restart Clawdmeter — the local daemon hasn't bound yet."
         case .noConversation:
-            return "Pick a provider, type a prompt, and press ⌘↩ to send. Toggle Deep Research for multi-step search."
+            return "Pick a provider, type a prompt, and press ⌘↩ to send. Toggle Deep Research for multi-step search with citations."
         }
+    }
+}
+
+// MARK: - Color helper
+
+/// SwiftUI Color from a Tahoe OKLCH token. The Tahoe theme stores
+/// brand swatches as OKLCH; SwiftUI consumes sRGB, so we go through
+/// the existing helper on the OKLCH struct.
+private extension Color {
+    init(oklch: OKLCH) {
+        self = oklch.color
     }
 }

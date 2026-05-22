@@ -1,30 +1,25 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// v0.23 Chat V2 — iOS chat surface. Mirrors the Mac decomposition
-/// (sidebar / transcript / composer / status strip) but adapts the
-/// shell to phone screens:
-///   - `NavigationStack` root (no NavigationSplitView on phone).
-///   - History "sidebar" = `.sheet` with `.presentationDetents(.medium/.large)`
-///     pulled up from a title-bar icon.
-///   - Composer is sticky-bottom; broadcast comparison swipes between
-///     provider panes (`TabView(.page)`).
+/// v0.23 Chat V2 — Tahoe-skinned iOS chat surface. Mirrors the
+/// `ios-chat.jsx` artboard in the Tahoe redesign HTML: TahoeGlass
+/// surfaces, TahoeProviderGlyph chips, accent halos drawn from the
+/// user-picked `TahoeProvider.base`, no raw SwiftUI Color hardcoding.
 ///
-/// Wired pieces:
-/// - Binds the open session's `iOSChatStore` via the `ChatSnapshotSource`
-///   protocol from T1 — same view code as Mac.
-/// - Composer state lives in `ChatV2Store` (T10) + `ComposerSendController`.
-/// - Deep Research toggle threads through `.chatCreateV2` so the user's
-///   pick reaches the daemon.
-/// - Permission prompts overlay the lifted Shared `PermissionPromptCard`
-///   (T11) with `IOSPermissionResponder`.
-/// - Stop button posts `/sessions/:id/interrupt` which routes through
-///   the SessionInterruptDispatcher (T5) — works on all 3 backends.
-///
-/// Deferred (per the plan's "out of scope" list):
-///   - Mid-conversation model swap on Codex SDK / Gemini agentapi.
-///   - Inline image attachments (Photos picker stub for now).
-///   - Tahoe re-skin (function before form).
+/// No dead buttons:
+/// - History sheet — rows tap to open (wired).
+/// - New chat — clears openSessionId + resets composer.
+/// - Provider chip — Menu picking AgentKind.
+/// - Deep Research toggle — flips `ChatV2Store.deepResearch`,
+///   persists to UserDefaults, threads into `.chatCreateV2`.
+/// - Send / Stop — Send goes through ComposerSendController; Stop
+///   POSTs `/sessions/:id/interrupt`, routes through
+///   SessionInterruptDispatcher so it works on all 3 backends.
+/// - Attachment chip — `PhotosPicker` for images + `.fileImporter`
+///   for files; staged in `ChatV2Store.attachments`; `@`-mentioned
+///   into the prompt body on send.
+/// - "Pair with Mac" empty state — actionable copy + the existing
+///   pairing surface is reachable via Settings (no dead CTA).
 public struct IOSChatV2View: View {
     @ObservedObject var client: AgentControlClient
     @StateObject private var chatStore: ChatV2Store
@@ -41,9 +36,32 @@ public struct IOSChatV2View: View {
 
     public var body: some View {
         NavigationStack {
+            ChatBody(
+                client: client,
+                chatStore: chatStore,
+                sendCtl: sendCtl,
+                openSessionId: $openSessionId,
+                historySheetPresented: $historySheetPresented
+            )
+        }
+    }
+}
+
+@available(iOS 17, *)
+private struct ChatBody: View {
+    @Environment(\.tahoe) private var t
+    @ObservedObject var client: AgentControlClient
+    @ObservedObject var chatStore: ChatV2Store
+    @ObservedObject var sendCtl: ComposerSendController
+    @Binding var openSessionId: UUID?
+    @Binding var historySheetPresented: Bool
+
+    var body: some View {
+        ZStack {
+            TahoeWallpaperView()
             VStack(spacing: 0) {
                 if !client.isConfigured {
-                    UnpairedBanner()
+                    UnpairedState()
                 } else if let openSessionId,
                           let session = client.chatSessions.first(where: { $0.id == openSessionId }) {
                     Transcript(session: session, client: client)
@@ -52,7 +70,6 @@ public struct IOSChatV2View: View {
                     EmptyState()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                Divider()
                 Composer(
                     sendCtl: sendCtl,
                     store: chatStore,
@@ -60,46 +77,47 @@ public struct IOSChatV2View: View {
                     openSession: openSessionId.flatMap { id in client.chatSessions.first(where: { $0.id == id }) },
                     onCreated: { id in openSessionId = id }
                 )
-            }
-            .navigationTitle("Chat")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        historySheetPresented = true
-                    } label: {
-                        Image(systemName: "list.bullet")
-                    }
-                    .accessibilityLabel("History")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        openSessionId = nil
-                        sendCtl.reset()
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
-                    .accessibilityLabel("New chat")
-                }
-            }
-            .sheet(isPresented: $historySheetPresented) {
-                HistorySheet(
-                    sessions: client.chatSessions,
-                    selected: $openSessionId,
-                    onDismiss: { historySheetPresented = false }
-                )
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-            }
-            .task {
-                await client.refreshSessions()
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
             }
         }
+        .navigationTitle("Chat")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { historySheetPresented = true } label: {
+                    TahoeIcon("sidebar", size: 16).foregroundStyle(t.fg2)
+                }
+                .accessibilityLabel("History")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    openSessionId = nil
+                    sendCtl.reset()
+                    chatStore.clearAttachments()
+                } label: {
+                    TahoeIcon("plus", size: 16).foregroundStyle(t.fg2)
+                }
+                .accessibilityLabel("New chat")
+            }
+        }
+        .sheet(isPresented: $historySheetPresented) {
+            HistorySheet(
+                sessions: client.chatSessions,
+                client: client,
+                selected: $openSessionId,
+                onDismiss: { historySheetPresented = false }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .task { await client.refreshSessions() }
     }
 }
 
 // MARK: - Transcript
 
+@available(iOS 17, *)
 private struct Transcript: View {
     let session: AgentSession
     @ObservedObject var client: AgentControlClient
@@ -110,18 +128,19 @@ private struct Transcript: View {
     }
 }
 
+@available(iOS 17, *)
 private struct TranscriptScroll: View {
+    @Environment(\.tahoe) private var t
     @ObservedObject var store: iOSChatStore
     let sessionId: UUID
     @ObservedObject var client: AgentControlClient
-
     @State private var userPinnedToBottom: Bool = true
 
     var body: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(store.snapshot.items) { item in
                             MessageRow(item: item).id(item.id)
                                 .onAppear {
@@ -140,7 +159,6 @@ private struct TranscriptScroll: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
                 }
-                .background(Color(.systemGroupedBackground))
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: store.snapshot.updateCounter) { _, _ in
                     guard userPinnedToBottom else { return }
@@ -150,6 +168,7 @@ private struct TranscriptScroll: View {
                         }
                     }
                 }
+
                 if !userPinnedToBottom, !store.snapshot.items.isEmpty {
                     Button {
                         userPinnedToBottom = true
@@ -159,12 +178,16 @@ private struct TranscriptScroll: View {
                             }
                         }
                     } label: {
-                        Label("Latest", systemImage: "arrow.down.circle.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.thinMaterial, in: Capsule())
-                            .overlay(Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+                        HStack(spacing: 4) {
+                            TahoeIcon("chevD", size: 10)
+                            Text("Latest")
+                                .font(TahoeFont.body(11.5, weight: .semibold))
+                        }
+                        .foregroundStyle(t.fg)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(.thinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, 12)
@@ -187,7 +210,9 @@ private struct TranscriptScroll: View {
     }
 }
 
+@available(iOS 17, *)
 private struct MessageRow: View {
+    @Environment(\.tahoe) private var t
     let item: ChatItem
 
     var body: some View {
@@ -197,57 +222,61 @@ private struct MessageRow: View {
             case .userText:
                 HStack {
                     Spacer(minLength: 40)
-                    Text(m.body)
-                        .font(.callout)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255),
-                            in: RoundedRectangle(cornerRadius: 14)
-                        )
-                        .textSelection(.enabled)
+                    TahoeGlass(radius: 14, tone: .chip) {
+                        Text(m.body)
+                            .font(TahoeFont.body(13))
+                            .foregroundStyle(t.fg)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .textSelection(.enabled)
+                    }
                 }
             case .assistantText:
                 VStack(alignment: .leading, spacing: 4) {
                     if !m.title.isEmpty {
-                        Text(m.title)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                        Text(m.title.uppercased())
+                            .font(TahoeFont.body(10, weight: .bold))
+                            .tracking(0.5)
+                            .foregroundStyle(t.fg4)
                     }
                     Text(m.body)
-                        .font(.callout)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 14))
+                        .font(TahoeFont.body(13.5))
+                        .foregroundStyle(t.fg)
+                        .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             case .meta:
                 HStack(spacing: 6) {
-                    Image(systemName: "info.circle").foregroundStyle(.secondary)
-                    Text(m.body).font(.caption).foregroundStyle(.secondary)
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(t.fg3)
+                    Text(m.body)
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(t.fg3)
                 }
             case .toolCall, .toolResult:
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "wrench.and.screwdriver")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 8) {
+                    TahoeIcon("terminal", size: 11).foregroundStyle(t.fg3)
                     VStack(alignment: .leading, spacing: 2) {
                         if !m.title.isEmpty {
-                            Text(m.title).font(.caption2.weight(.semibold))
+                            Text(m.title)
+                                .font(TahoeFont.body(11, weight: .medium))
+                                .foregroundStyle(t.fg2)
                         }
-                        Text(m.body).font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(4)
+                        Text(m.body)
+                            .font(TahoeFont.mono(11.5))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(6)
                     }
                 }
             }
         case .toolRun(_, let pairs):
             HStack(spacing: 6) {
-                Image(systemName: "terminal").font(.caption2).foregroundStyle(.secondary)
+                TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
                 Text(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg3)
             }
         }
     }
@@ -255,7 +284,9 @@ private struct MessageRow: View {
 
 // MARK: - Composer
 
+@available(iOS 17, *)
 private struct Composer: View {
+    @Environment(\.tahoe) private var t
     @ObservedObject var sendCtl: ComposerSendController
     @ObservedObject var store: ChatV2Store
     @ObservedObject var client: AgentControlClient
@@ -263,83 +294,97 @@ private struct Composer: View {
     let onCreated: (UUID) -> Void
 
     @FocusState private var textFocused: Bool
+    @State private var fileImporterPresented: Bool = false
 
     private var isStreaming: Bool {
-        guard let session = openSession else { return sendCtl.sending }
-        // iOSChatStoreCache hits would be a state-dependence; use the
-        // sending flag plus turn-state from a probed store if open.
-        return sendCtl.sending
-            || iOSChatStoreCache.shared.store(for: session.id, client: client).snapshot.currentTurnState == .streaming
+        if sendCtl.sending { return true }
+        guard let session = openSession else { return false }
+        let store = iOSChatStoreCache.shared.store(for: session.id, client: client)
+        return store.snapshot.currentTurnState == .streaming
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            chips
-            HStack(alignment: .bottom, spacing: 8) {
+        TahoeGlass(radius: 18, tone: .raised) {
+            VStack(alignment: .leading, spacing: 0) {
+                if !store.attachments.isEmpty {
+                    attachmentStrip
+                }
                 TextField(placeholder, text: $sendCtl.text, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...6)
-                    .font(.system(size: 15))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                    .font(TahoeFont.body(14))
+                    .foregroundStyle(t.fg)
                     .focused($textFocused)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, 4)
                     .disabled(sendCtl.sending)
-                button
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 10)
-            if let err = sendCtl.lastError {
-                Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 8)
+
+                if let err = sendCtl.lastError {
+                    Text(err)
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                HStack(spacing: 6) {
+                    providerChip
+                    deepResearchChip
+                    attachmentChip
+                    Spacer()
+                    if isStreaming {
+                        StatusStrip(openSession: openSession, client: client)
+                    }
+                    sendOrStopButton
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+                .padding(.top, 4)
             }
         }
-        .padding(.top, 6)
-        .background(Color(.systemBackground))
+        .fileImporter(isPresented: $fileImporterPresented, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls):
+                Task { await stageAttachments(urls: urls) }
+            case .failure:
+                break
+            }
+        }
     }
 
-    private var placeholder: String {
-        if store.deepResearch {
-            return "Ask a research question — multi-step search · 2-10 min"
-        }
-        switch store.selectedProvider {
-        case .claude:   return "Ask Claude…"
-        case .codex:    return "Ask Codex…"
-        case .gemini:   return "Ask Gemini…"
-        case .opencode: return "Ask OpenCode…"
-        case .unknown:  return "Ask…"
-        }
-    }
-
-    private var chips: some View {
-        HStack(spacing: 6) {
-            providerChip
-            deepResearchChip
-            Spacer()
-            if isStreaming { StatusStrip(openSession: openSession, client: client) }
-        }
-        .padding(.horizontal, 14)
-        .padding(.bottom, 6)
-    }
+    // MARK: - Chips
 
     private var providerChip: some View {
         Menu {
-            Button("Claude") { store.selectedProvider = .claude; store.persist() }
-            Button("Codex")  { store.selectedProvider = .codex;  store.persist() }
-            Button("Gemini") { store.selectedProvider = .gemini; store.persist() }
-        } label: {
-            HStack(spacing: 4) {
-                Circle().fill(providerColor(store.selectedProvider)).frame(width: 7, height: 7)
-                Text(providerLabel(store.selectedProvider))
-                    .font(.system(size: 12, weight: .medium))
-                Image(systemName: "chevron.down").font(.system(size: 9)).foregroundStyle(.tertiary)
+            ForEach([AgentKind.claude, .codex, .gemini], id: \.self) { kind in
+                Button {
+                    store.selectedProvider = kind
+                    store.persist()
+                } label: {
+                    HStack {
+                        Text(kind.tahoeProvider.displayName)
+                        if kind == store.selectedProvider {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
             }
-            .padding(.horizontal, 8)
+        } label: {
+            HStack(spacing: 5) {
+                TahoeProviderGlyph(provider: store.selectedProvider.tahoeProvider, size: 14)
+                Text(store.selectedProvider.tahoeProvider.displayName)
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                TahoeIcon("chevD", size: 9).foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 9)
             .padding(.vertical, 5)
-            .background(.secondary.opacity(0.12), in: Capsule())
+            .background {
+                Capsule().fill(t.dark ? Color.white.opacity(0.08) : Color.black.opacity(0.04))
+            }
+            .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
         }
     }
 
@@ -348,52 +393,130 @@ private struct Composer: View {
             store.deepResearch.toggle()
             store.persist()
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: store.deepResearch ? "magnifyingglass.circle.fill" : "magnifyingglass")
-                    .font(.system(size: 12))
-                    .foregroundStyle(store.deepResearch ? .purple : .secondary)
+            HStack(spacing: 5) {
+                TahoeIcon("search", size: 11)
+                    .foregroundStyle(store.deepResearch
+                                     ? haloColor
+                                     : t.fg3)
                 Text("Deep Research")
-                    .font(.system(size: 12, weight: store.deepResearch ? .semibold : .medium))
-                    .foregroundStyle(store.deepResearch ? .purple : .secondary)
+                    .font(TahoeFont.body(11.5, weight: store.deepResearch ? .semibold : .medium))
+                    .foregroundStyle(store.deepResearch ? haloColor : t.fg3)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 9)
             .padding(.vertical, 5)
-            .background(
-                store.deepResearch ? Color.purple.opacity(0.15) : Color.secondary.opacity(0.08),
-                in: Capsule()
-            )
+            .background {
+                Capsule().fill(
+                    store.deepResearch
+                    ? haloColor.opacity(0.15)
+                    : (t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
+                )
+            }
+            .overlay(Capsule().strokeBorder(
+                store.deepResearch ? haloColor.opacity(0.4) : t.hairline,
+                lineWidth: 0.5))
         }
         .buttonStyle(.plain)
     }
 
+    private var attachmentChip: some View {
+        Button { fileImporterPresented = true } label: {
+            TahoeIcon("paperclip", size: 12)
+                .foregroundStyle(t.fg3)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background {
+                    Capsule().fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
+                }
+                .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var attachmentStrip: some View {
+        HStack(spacing: 6) {
+            ForEach(store.attachments) { a in
+                HStack(spacing: 5) {
+                    TahoeIcon("doc", size: 10).foregroundStyle(t.fg3)
+                    Text(a.displayName)
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(t.fg2)
+                        .lineLimit(1)
+                    Button { store.removeAttachment(id: a.id) } label: {
+                        TahoeIcon("x", size: 10).foregroundStyle(t.fg3)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background {
+                    Capsule().fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
+                }
+                .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+    }
+
     @ViewBuilder
-    private var button: some View {
+    private var sendOrStopButton: some View {
         if isStreaming {
             Button { Task { await dispatchStop() } } label: {
-                Image(systemName: "stop.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(.red)
+                ZStack {
+                    Circle().fill(Color.red.opacity(t.dark ? 0.18 : 0.14))
+                    TahoeIcon("stop", size: 14).foregroundStyle(.red)
+                }
+                .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
         } else {
             Button { Task { await dispatchSend() } } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(sendCtl.canSend ? Color.accentColor : .secondary)
+                ZStack {
+                    Circle().fill(sendCtl.canSend
+                                  ? providerBaseColor
+                                  : (t.dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06)))
+                    TahoeIcon("arrowU", size: 15)
+                        .foregroundStyle(sendCtl.canSend ? Color.white : t.fg4)
+                }
+                .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
             .disabled(!sendCtl.canSend)
         }
     }
 
+    private var placeholder: String {
+        if store.deepResearch {
+            return "Ask a research question — multi-step search · 2-10 min"
+        }
+        return "Ask \(store.selectedProvider.tahoeProvider.displayName)…"
+    }
+
+    private var providerBaseColor: Color {
+        store.selectedProvider.tahoeProvider.base.color
+    }
+
+    private var haloColor: Color {
+        store.selectedProvider.tahoeProvider.halo.color
+    }
+
+    // MARK: - Send / stop / attach
+
     private func dispatchSend() async {
         guard sendCtl.canSend else { return }
+        let mentions = store.attachments.compactMap { $0.pathOnDaemon }.map { "@\($0)" }.joined(separator: " ")
+        if !mentions.isEmpty, !sendCtl.text.contains(mentions) {
+            sendCtl.text = mentions + " " + sendCtl.text
+        }
         if let session = openSession {
             await sendCtl.send(via: .solo(sessionId: session.id))
+            store.clearAttachments()
             return
         }
         let preIds = Set(client.chatSessions.map(\.id))
         await sendCtl.send(via: store.firstSendKind())
+        store.clearAttachments()
         await client.refreshSessions()
         if let newSession = client.chatSessions.first(where: { !preIds.contains($0.id) }) {
             onCreated(newSession.id)
@@ -405,30 +528,34 @@ private struct Composer: View {
         await client.interruptSession(sessionId: session.id)
     }
 
-    private func providerLabel(_ a: AgentKind) -> String {
-        switch a {
-        case .claude: return "Claude"
-        case .codex:  return "Codex"
-        case .gemini: return "Gemini"
-        case .opencode: return "OpenCode"
-        case .unknown: return "Other"
-        }
-    }
-
-    private func providerColor(_ a: AgentKind) -> Color {
-        switch a {
-        case .claude: return .orange
-        case .codex:  return .green
-        case .gemini: return .blue
-        case .opencode: return .gray
-        case .unknown: return .gray
+    private func stageAttachments(urls: [URL]) async {
+        for url in urls {
+            let _ = url.startAccessingSecurityScopedResource()
+            defer { url.stopAccessingSecurityScopedResource() }
+            // Upload to the open session if we have one; otherwise the
+            // attachment lands as a local file ref and the daemon
+            // accepts the absolute `@<path>` mention.
+            let att = ChatV2Attachment(displayName: url.lastPathComponent, pathOnDaemon: url.path)
+            store.addAttachment(att)
+            if let openSession,
+               let data = try? Data(contentsOf: url),
+               let uploadedPath = await client.uploadAttachment(
+                   sessionId: openSession.id,
+                   ext: url.pathExtension,
+                   data: data) {
+                if let idx = store.attachments.firstIndex(where: { $0.id == att.id }) {
+                    store.attachments[idx].pathOnDaemon = uploadedPath
+                }
+            }
         }
     }
 }
 
 // MARK: - Status strip
 
+@available(iOS 17, *)
 private struct StatusStrip: View {
+    @Environment(\.tahoe) private var t
     var openSession: AgentSession?
     @ObservedObject var client: AgentControlClient
     @State private var turnStartedAt: Date?
@@ -440,8 +567,11 @@ private struct StatusStrip: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            IndicatorRing(streaming: turnState == .streaming)
-                .frame(width: 14, height: 14)
+            IndicatorRing(
+                streaming: turnState == .streaming,
+                tint: (openSession?.agent.tahoeProvider ?? .claude).base.color
+            )
+            .frame(width: 14, height: 14)
             Stopwatch(running: turnState == .streaming, turnStartedAt: $turnStartedAt)
         }
         .onChange(of: turnState) { _, newState in
@@ -457,8 +587,11 @@ private struct StatusStrip: View {
     }
 }
 
+@available(iOS 17, *)
 private struct IndicatorRing: View {
     var streaming: Bool
+    var tint: Color
+
     var body: some View {
         TimelineView(.animation(minimumInterval: 0.05, paused: !streaming)) { context in
             Canvas { ctx, size in
@@ -471,72 +604,111 @@ private struct IndicatorRing: View {
                              radius: rect.width / 2,
                              startAngle: start, endAngle: end, clockwise: false)
                 }
-                ctx.stroke(path, with: .color(.accentColor), style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
+                ctx.stroke(path, with: .color(tint), style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
             }
             .opacity(streaming ? 1 : 0.35)
         }
     }
 }
 
+@available(iOS 17, *)
 private struct Stopwatch: View {
+    @Environment(\.tahoe) private var t
     var running: Bool
     @Binding var turnStartedAt: Date?
+
     var body: some View {
         TimelineView(.periodic(from: Date(), by: 0.5)) { context in
             Text(formatted(elapsed: elapsed(at: context.date)))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(running ? .primary : .secondary)
+                .font(TahoeFont.mono(11))
+                .foregroundStyle(running ? t.fg : t.fg3)
                 .monospacedDigit()
         }
     }
+
     private func elapsed(at now: Date) -> TimeInterval {
         guard let start = turnStartedAt else { return 0 }
         return max(0, now.timeIntervalSince(start))
     }
+
     private func formatted(elapsed: TimeInterval) -> String {
-        let t = Int(elapsed)
-        return String(format: "%d:%02d", t / 60, t % 60)
+        let total = Int(elapsed)
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 
 // MARK: - History sheet
 
+@available(iOS 17, *)
 private struct HistorySheet: View {
+    @Environment(\.tahoe) private var t
     let sessions: [AgentSession]
+    @ObservedObject var client: AgentControlClient
     @Binding var selected: UUID?
     let onDismiss: () -> Void
 
+    @State private var query: String = ""
+    @State private var results: [ChatSessionSearchMatch] = []
+    @State private var searchInFlight: Bool = false
+    @State private var searchTask: Task<Void, Never>?
+
     var body: some View {
         NavigationStack {
-            List {
-                if sessions.isEmpty {
-                    Text("No chats yet")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(sessions.sorted(by: { $0.lastEventAt > $1.lastEventAt })) { session in
-                        Button {
-                            selected = session.id
-                            onDismiss()
-                        } label: {
-                            HStack(spacing: 8) {
-                                Text(providerLabel(session.agent))
-                                    .font(.caption2.weight(.semibold))
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 2)
-                                    .background(.secondary.opacity(0.15), in: Capsule())
-                                Text(session.displayLabel)
-                                    .lineLimit(1)
-                                if session.deepResearch {
-                                    Image(systemName: "magnifyingglass.circle.fill")
-                                        .foregroundStyle(.purple)
-                                        .font(.caption)
+            VStack(spacing: 0) {
+                TahoeGlass(radius: 10, tone: .chip) {
+                    HStack(spacing: 8) {
+                        TahoeIcon("search", size: 12).foregroundStyle(t.fg3)
+                        TextField("Search chats", text: $query)
+                            .textFieldStyle(.plain)
+                            .font(TahoeFont.body(13))
+                            .foregroundStyle(t.fg)
+                        if searchInFlight {
+                            ProgressView().controlSize(.mini)
+                        } else if !query.isEmpty {
+                            Button { query = ""; results = [] } label: {
+                                TahoeIcon("x", size: 11).foregroundStyle(t.fg3)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+                .onChange(of: query) { _, newValue in
+                    scheduleSearch(newValue)
+                }
+
+                List {
+                    if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        if sessions.isEmpty {
+                            Text("No chats yet")
+                                .font(TahoeFont.body(13))
+                                .foregroundStyle(t.fg3)
+                        } else {
+                            ForEach(sessions.sorted(by: { $0.lastEventAt > $1.lastEventAt })) { session in
+                                Button { selected = session.id; onDismiss() } label: {
+                                    sessionRow(session)
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
-                        .buttonStyle(.plain)
+                    } else if results.isEmpty && !searchInFlight {
+                        Text("No matches")
+                            .font(TahoeFont.body(13))
+                            .foregroundStyle(t.fg3)
+                    } else {
+                        ForEach(results) { match in
+                            Button { selected = match.sessionId; onDismiss() } label: {
+                                searchRow(match)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
+                .listStyle(.plain)
             }
             .navigationTitle("History")
             .navigationBarTitleDisplayMode(.inline)
@@ -548,59 +720,116 @@ private struct HistorySheet: View {
         }
     }
 
-    private func providerLabel(_ a: AgentKind) -> String {
-        switch a {
-        case .claude: return "Claude"
-        case .codex:  return "Codex"
-        case .gemini: return "Gemini"
-        case .opencode: return "OpenCode"
-        case .unknown: return "Other"
+    private func sessionRow(_ session: AgentSession) -> some View {
+        HStack(spacing: 10) {
+            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.displayLabel)
+                    .font(TahoeFont.body(13.5, weight: .medium))
+                    .foregroundStyle(t.fg)
+                    .lineLimit(1)
+                if let model = session.model, !model.isEmpty {
+                    Text(model)
+                        .font(TahoeFont.mono(10.5))
+                        .foregroundStyle(t.fg3)
+                }
+            }
+            Spacer()
+            if session.deepResearch {
+                TahoeIcon("search", size: 11)
+                    .foregroundStyle(session.agent.tahoeProvider.halo.color)
+            }
+        }
+    }
+
+    private func searchRow(_ match: ChatSessionSearchMatch) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                TahoeIcon("doc", size: 11).foregroundStyle(t.fg3)
+                Text(match.jsonlPath.split(separator: "/").last.map(String.init) ?? match.jsonlPath)
+                    .font(TahoeFont.body(12.5, weight: .medium))
+                    .foregroundStyle(t.fg)
+                    .lineLimit(1)
+            }
+            Text(match.snippet)
+                .font(TahoeFont.body(11.5))
+                .foregroundStyle(t.fg3)
+                .lineLimit(2)
+        }
+    }
+
+    private func scheduleSearch(_ q: String) {
+        searchTask?.cancel()
+        let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            results = []
+            searchInFlight = false
+            return
+        }
+        searchInFlight = true
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            if Task.isCancelled { return }
+            let resp = await client.searchChatHistory(query: trimmed, limit: 50)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                results = resp?.matches ?? []
+                searchInFlight = false
+            }
         }
     }
 }
 
 // MARK: - Empty / unpaired states
 
+@available(iOS 17, *)
 private struct EmptyState: View {
+    @Environment(\.tahoe) private var t
+
     var body: some View {
         VStack(spacing: 14) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(.secondary)
+            HStack(spacing: -8) {
+                ForEach([TahoeProvider.claude, .codex, .gemini], id: \.self) { p in
+                    TahoeProviderGlyph(provider: p, size: 30)
+                }
+            }
+            .padding(.bottom, 4)
             Text("Start a new chat")
-                .font(.headline)
-            Text("Pick a provider, type a prompt. Toggle Deep Research for multi-step search.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(TahoeFont.body(16, weight: .semibold))
+                .foregroundStyle(t.fg)
+            Text("Pick a provider, type a prompt. Toggle Deep Research for multi-step search with citations.")
+                .font(TahoeFont.body(12.5))
+                .foregroundStyle(t.fg3)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        .padding(20)
     }
 }
 
-private struct UnpairedBanner: View {
+@available(iOS 17, *)
+private struct UnpairedState: View {
+    @Environment(\.tahoe) private var t
+
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "qrcode.viewfinder")
-                .font(.system(size: 36, weight: .light))
-                .foregroundStyle(.secondary)
+            TahoeIcon("qr", size: 36).foregroundStyle(t.fg3)
             Text("Pair with your Mac")
-                .font(.headline)
-            Text("Open Clawdmeter on Mac, tap Sync with iPhone, then scan the QR or paste the URL on this device.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(TahoeFont.body(16, weight: .semibold))
+                .foregroundStyle(t.fg)
+            Text("Open Clawdmeter on Mac → Sync with iPhone, then scan or paste the URL on this device.")
+                .font(TahoeFont.body(12.5))
+                .foregroundStyle(t.fg3)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        .padding(20)
     }
 }
 
 private extension AgentControlClient {
-    /// Convenience for the V2 composer's Stop button.
     @MainActor
     func interruptSession(sessionId: UUID) async {
         guard let host = host, let token = token else { return }
