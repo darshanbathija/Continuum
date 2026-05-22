@@ -4,6 +4,21 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.22.32 build 113] - 2026-05-23 — Fix: wire button controls to backend behavior (`darshanbathija/clawdmeter-button-wiring`)
+
+This pass keeps the current UI and wires visible controls to real daemon/client paths, or gates controls that cannot honestly work yet.
+
+### Fixed
+
+- **iOS Chat** — broadcast now uses Frontier create/send routes, solo mode uses chat create/send, history rows reopen real sessions/groups, and production rendering reads live chat snapshots instead of demo transcript data.
+- **Backend control routes** — adds client/server support for provider refresh, full diff hunks, persistent terminal pane rename, and immediate session refreshes after chat/frontier actions.
+- **Session detail and terminal controls** — iOS Session Detail opens the real controls sheet, removes inert plus/mic affordances, loads real transcript state, and persists terminal renames through the daemon.
+- **Capability gates** — OpenCode is hidden or disabled in unsupported chat/frontier/auto-revive actions, pairing no longer shows a stale scannable QR payload, and iOS diff rows fetch full hunks on demand.
+- **Initial attachments** — first-send Gemini/Antigravity composer paths stage attachments before spawning so the initial agentapi message keeps file references.
+- **Usage history test isolation** — the empty-directory loader test no longer reads the developer machine's real OpenCode database.
+
+Bumps `MARKETING_VERSION` 0.22.31 → 0.22.32, `CURRENT_PROJECT_VERSION` 112 → 113.
+
 ## [0.22.18 build 99] - 2026-05-22 — Fix: Antigravity usage tab no longer shows demo quota data (`darshanbathija/gemini-usage`)
 
 Antigravity usage now renders honest live-state data instead of borrowing SwiftUI preview fixture values.

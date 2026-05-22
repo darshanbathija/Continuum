@@ -168,9 +168,7 @@ public struct MacChatView: View {
             // right initial selection.
             if mode == .solo {
                 selectedProviders = [soloProvider]
-            } else if !selectedProviders.contains(.claude)
-                   && !selectedProviders.contains(.codex)
-                   && !selectedProviders.contains(.gemini) {
+            } else if selectedProviders.isDisjoint(with: [.claude, .codex, .gemini]) {
                 selectedProviders = [.claude, .codex, .gemini]
             }
         }
@@ -253,7 +251,7 @@ struct ChatModeToggle: View {
 
     private func segmentedProvider(active: TahoeProvider, onSelect: @escaping (TahoeProvider) -> Void) -> some View {
         HStack(spacing: 0) {
-            ForEach(TahoeProvider.allCases) { p in
+            ForEach([TahoeProvider.claude, .codex, .gemini]) { p in
                 let isActive = p == active
                 Button { onSelect(p) } label: {
                     HStack(spacing: 5) {
@@ -1173,9 +1171,8 @@ private struct ChatComposer: View {
             //    one chat session and posts the prompt as turn-1.
             //  - broadcast: spawn a Frontier group via createFrontier
             //    with claude/codex/gemini slots, then route the prompt
-            //    via frontierSend. The opencode case is opt-in (a
-            //    follow-up adds an "include opencode" toggle to the
-            //    chip).
+            //    via frontierSend. OpenCode is gated out here until the
+            //    daemon supports chat/frontier for it.
             if pendingMode == .broadcast {
                 guard let client = loopbackClient else { return }
                 let trimmed = sendCtl.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1194,7 +1191,7 @@ private struct ChatComposer: View {
                     case .claude:   return .claude
                     case .codex:    return .codex
                     case .gemini:   return .gemini
-                    case .opencode: return .opencode
+                    case .opencode: return nil
                     }
                 }
                 let slots: [FrontierModelSlot] = resolved.map { FrontierModelSlot(provider: $0) }
@@ -1259,7 +1256,7 @@ private struct ChatComposer: View {
         case .claude: return .claude
         case .codex:  return .codex
         case .gemini: return .gemini
-        case .opencode: return .opencode  // PR #31
+        case .opencode: return .claude
         }
     }
 }
@@ -1289,7 +1286,7 @@ private struct BroadcastChip: View {
     @Binding var selected: Set<TahoeProvider>
 
     private var displayProviders: [TahoeProvider] {
-        TahoeProvider.allCases.filter { selected.contains($0) }
+        [TahoeProvider.claude, .codex, .gemini].filter { selected.contains($0) }
     }
 
     private var label: String {

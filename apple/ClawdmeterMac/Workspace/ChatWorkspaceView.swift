@@ -73,21 +73,6 @@ struct ChatWorkspaceView: View {
                     sessionRow(session)
                         .tag(Optional(session.id))
                 }
-                Section {
-                    HStack {
-                        Image(systemName: "clock")
-                            .foregroundStyle(.tertiary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Gemini")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                            Text("Coming with Antigravity")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .opacity(0.6)
-                }
             }
             .listStyle(.sidebar)
         }

@@ -37,32 +37,28 @@ struct iOSTerminalTabsView: View {
         )) {
             TextField("Title", text: $renameDraft)
             Button("Cancel", role: .cancel) { renameTarget = nil; renameDraft = "" }
-            Button("Save") { applyRename() }
+            Button("Save") { Task { await applyRename() } }
         } message: {
-            Text("Local-only in v2.0.1 — the chip label updates here but the daemon doesn't persist it yet.")
+            Text("Saved on the Mac and kept after the session list reloads.")
         }
     }
 
-    /// Apply a local rename to the panes array. Daemon-side persistence
-    /// is a future endpoint (a `PATCH /sessions/:id/terminals/:refId`
-    /// is the natural shape); until that ships the new title lives only
-    /// for the lifetime of this view.
-    private func applyRename() {
+    private func applyRename() async {
         defer {
             renameTarget = nil
             renameDraft = ""
         }
         guard let target = renameTarget else { return }
         let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let idx = panes.firstIndex(where: { $0.id == target.id }) else { return }
-        let old = panes[idx]
-        panes[idx] = TerminalPaneRef(
-            id: old.id,
-            paneId: old.paneId,
-            title: trimmed,
-            isPrimary: old.isPrimary,
-            createdAt: old.createdAt
-        )
+        if let renamed = await client.renameTerminal(
+            sessionId: session.id,
+            terminalRefId: target.id,
+            title: trimmed
+        ), let idx = panes.firstIndex(where: { $0.id == target.id }) {
+            panes[idx] = renamed
+        } else {
+            await reload()
+        }
     }
 
     @ViewBuilder
@@ -135,11 +131,13 @@ struct iOSTerminalTabsView: View {
                     Label("Delete pane", systemImage: "trash")
                 }
             }
-            Button {
-                renameTarget = pane
-                renameDraft = pane.title
-            } label: {
-                Label("Rename…", systemImage: "pencil")
+            if !pane.isPrimary {
+                Button {
+                    renameTarget = pane
+                    renameDraft = pane.title
+                } label: {
+                    Label("Rename…", systemImage: "pencil")
+                }
             }
         }
     }

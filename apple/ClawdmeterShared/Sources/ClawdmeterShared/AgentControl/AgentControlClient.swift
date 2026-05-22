@@ -289,9 +289,16 @@ public final class AgentControlClient: ObservableObject {
     }
 
     @MainActor
-    public func sendPrompt(sessionId: UUID, text: String, asFollowUp: Bool = true) async {
-        await postBody(path: "/sessions/\(sessionId.uuidString)/send",
-                        body: SendPromptRequest(text: text, asFollowUp: asFollowUp))
+    @discardableResult
+    public func sendPrompt(sessionId: UUID, text: String, asFollowUp: Bool = true) async -> Bool {
+        let ok = await postBody(
+            path: "/sessions/\(sessionId.uuidString)/send",
+            body: SendPromptRequest(text: text, asFollowUp: asFollowUp)
+        )
+        if ok {
+            await refreshSessions()
+        }
+        return ok
     }
 
     /// v0.8 QA F5: answer a CLI permission prompt (e.g. Codex's "Trust
@@ -481,6 +488,60 @@ public final class AgentControlClient: ObservableObject {
             }
     }
 
+    /// Persist a user-facing terminal tab title on the Mac daemon and return
+    /// the updated pane ref. Empty titles are normalized server-side.
+    @MainActor
+    public func renameTerminal(sessionId: UUID, terminalRefId: UUID, title: String) async -> TerminalPaneRef? {
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: ["title": title]) else { return nil }
+        guard let request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/terminals/\(terminalRefId.uuidString)",
+            method: "PATCH",
+            body: bodyData
+        ) else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let pane = try decoder.decode(TerminalPaneRef.self, from: data)
+            await refreshSessions()
+            return pane
+        } catch {
+            self.lastError = error.localizedDescription
+            clientLogger.debug("renameTerminal failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Fetch full diff hunks for a single file. The list endpoint can return
+    /// truncated rows for compact UI; this route asks the daemon for the
+    /// selected path with explicit context.
+    @MainActor
+    public func fetchDiffFile(sessionId: UUID, path: String, context: Int = 80) async -> GitDiffFile? {
+        let encodedPath = path
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map { segment in
+                var allowed = CharacterSet.urlPathAllowed
+                allowed.remove(charactersIn: "/?#")
+                return String(segment).addingPercentEncoding(withAllowedCharacters: allowed) ?? String(segment)
+            }
+            .joined(separator: "/")
+        guard let request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/diff/\(encodedPath)?context=\(context)"
+        ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(GitDiffFile.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            clientLogger.debug("fetchDiffFile failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     public enum ArtifactError: LocalizedError {
         case notPaired
         case badStatus(Int)
@@ -599,17 +660,21 @@ public final class AgentControlClient: ObservableObject {
     }
 
     @MainActor
-    private func postBody<T: Encodable>(path: String, body: T) async {
+    @discardableResult
+    private func postBody<T: Encodable>(path: String, body: T) async -> Bool {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let bodyData = try? encoder.encode(body),
               let request = makeRequest(path: path, method: "POST", body: bodyData) else {
-            return
+            return false
         }
         do {
             _ = try await sendChecked(request)
+            self.lastError = nil
+            return true
         } catch {
             self.lastError = error.localizedDescription
+            return false
         }
     }
 
@@ -647,6 +712,7 @@ public final class AgentControlClient: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             self.sessions = try decoder.decode([AgentSession].self, from: data)
+            self.lastError = nil
             // Sessions v2 Phase 10: keep the aggregate Live Activity +
             // watch bridge in sync. These live in the iOS app target
             // (LiveActivityCoordinator, WatchPlanBridgeIOS) and can't be
@@ -678,6 +744,7 @@ public final class AgentControlClient: ObservableObject {
             decoder.dateDecodingStrategy = .iso8601
             let session = try decoder.decode(AgentSession.self, from: data)
             sessions.append(session)
+            await refreshSessions()
             return session
         } catch {
             self.lastError = error.localizedDescription
@@ -733,6 +800,22 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    /// `POST /chat-providers/refresh` — invalidate the Mac probe cache and
+    /// return the fresh provider capability matrix.
+    @MainActor
+    public func refreshChatProviders() async -> ChatProvidersResponse? {
+        guard let request = makeRequest(path: "/chat-providers/refresh", method: "POST") else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(ChatProvidersResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     /// `GET /chat-providers` — capability matrix (per provider + Codex
     /// backend sub-rows). Used by the Chat sidebar to gray disabled rows.
     @MainActor
@@ -774,7 +857,9 @@ public final class AgentControlClient: ObservableObject {
         do {
             let data = try await sendChecked(request)
             let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-            return try decoder.decode(CreateFrontierResponse.self, from: data)
+            let response = try decoder.decode(CreateFrontierResponse.self, from: data)
+            await refreshSessions()
+            return response
         } catch {
             self.lastError = error.localizedDescription
             return nil
@@ -793,6 +878,7 @@ public final class AgentControlClient: ObservableObject {
         }
         do {
             _ = try await sendChecked(request)
+            await refreshSessions()
             return true
         } catch {
             self.lastError = error.localizedDescription
@@ -813,7 +899,9 @@ public final class AgentControlClient: ObservableObject {
         do {
             let data = try await sendChecked(request)
             let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-            return try decoder.decode(AgentSession.self, from: data)
+            let session = try decoder.decode(AgentSession.self, from: data)
+            await refreshSessions()
+            return session
         } catch {
             self.lastError = error.localizedDescription
             return nil

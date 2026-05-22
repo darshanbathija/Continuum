@@ -4,17 +4,16 @@ import ClawdmeterShared
 /// iOS Chat tab — broadcast strip + per-turn model pills + active reply card.
 /// Ports `ios-chat.jsx`.
 ///
-/// v0.15 (PR #25, D1 partial): composer wired through
-/// `ComposerSendController` — first send creates a chat session via
-/// `client.createChatSession` and dispatches the user's text as the
-/// first turn. Reply-card Copy button uses UIPasteboard. Refresh /
-/// share / star icons retired per D7. The full broadcast streaming UI
-/// (WS subscription + per-provider columns) lands in a v1.x follow-up;
-/// today's TahoeDemo.chatThread fixture still drives the visual.
+/// Wiring pass: composer sends render real chat snapshots.
+/// Broadcast uses Frontier create/send; solo uses chat-create/send. Demo
+/// transcript is reserved for Previews/unpaired state only.
 public struct IOSChatView: View {
     @Environment(\.tahoe) private var t
     @State private var activeByTurn: [Int: TahoeProvider] = [:]
     @State private var broadcast: Bool = true
+    @State private var openChatId: UUID?
+    @State private var openFrontierGroupId: UUID?
+    @State private var providersResponse: ChatProvidersResponse?
     /// v0.22.5 chat-UX fixes: persist the user's picked send-agent so
     /// the composer chip + first-send route through it. Stored locally
     /// (per-launch); future polish promotes to UserDefaults.
@@ -23,14 +22,14 @@ public struct IOSChatView: View {
     /// "+" header buttons present. Lists `agentClient.chatSessions`
     /// so the user can actually find their past chats.
     @State private var historySheetPresented: Bool = false
-    /// Optional agent client passed down by IOSRootView when paired.
-    /// Nil in Previews / unpaired — composer disables itself.
-    var agentClient: AgentControlClient?
+    @ObservedObject private var client: AgentControlClient
+    private let injectedClient: Bool
     @StateObject private var composerController: ComposerSendController
 
     public init(agentClient: AgentControlClient? = nil) {
-        self.agentClient = agentClient
         let client = agentClient ?? AgentControlClient()
+        self._client = ObservedObject(wrappedValue: client)
+        self.injectedClient = agentClient != nil
         _composerController = StateObject(wrappedValue: ComposerSendController(client: client))
     }
 
@@ -50,6 +49,8 @@ public struct IOSChatView: View {
                     // First-send then creates a new session via the
                     // ComposerSendController's .chatCreate path.
                     IOSRoundIconBtn("plus", action: {
+                        openChatId = nil
+                        openFrontierGroupId = nil
                         composerController.reset()
                     })
                 }
@@ -59,7 +60,7 @@ public struct IOSChatView: View {
             TahoeGlass(radius: 14, tone: .chip) {
                 HStack(spacing: 10) {
                     HStack(spacing: -6) {
-                        ForEach(TahoeProvider.allCases) { p in
+                        ForEach(availableFrontierProviders) { p in
                             TahoeProviderGlyph(provider: p, size: 22)
                         }
                     }
@@ -80,20 +81,37 @@ public struct IOSChatView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("\(TahoeDemo.chatThread.title.uppercased()) · \(TahoeDemo.chatThread.turns.count) TURNS")
-                        .font(TahoeFont.body(10.5, weight: .bold))
-                        .tracking(0.5)
-                        .foregroundStyle(t.fg4)
-                        .padding(.horizontal, 4).padding(.top, 2).padding(.bottom, 10)
-                    ForEach(Array(TahoeDemo.chatThread.turns.enumerated()), id: \.offset) { idx, turn in
-                        IOSTurnRow(
-                            turn: turn, index: idx,
-                            activeProvider: Binding(
-                                get: { activeByTurn[idx] ?? defaultStarred(turn) ?? .claude },
-                                set: { activeByTurn[idx] = $0 }
+                    if !injectedClient {
+                        Text("\(TahoeDemo.chatThread.title.uppercased()) · \(TahoeDemo.chatThread.turns.count) TURNS")
+                            .font(TahoeFont.body(10.5, weight: .bold))
+                            .tracking(0.5)
+                            .foregroundStyle(t.fg4)
+                            .padding(.horizontal, 4).padding(.top, 2).padding(.bottom, 10)
+                        ForEach(Array(TahoeDemo.chatThread.turns.enumerated()), id: \.offset) { idx, turn in
+                            IOSTurnRow(
+                                turn: turn, index: idx,
+                                activeProvider: Binding(
+                                    get: { activeByTurn[idx] ?? defaultStarred(turn) ?? .claude },
+                                    set: { activeByTurn[idx] = $0 }
+                                )
                             )
+                            .padding(.bottom, 18)
+                        }
+                    } else if let groupId = openFrontierGroupId {
+                        IOSFrontierThread(
+                            groupId: groupId,
+                            client: client,
+                            activeSessionId: $openChatId
                         )
-                        .padding(.bottom, 18)
+                    } else if let openChatId {
+                        IOSChatSnapshotThread(
+                            sessionId: openChatId,
+                            client: client,
+                            provider: tahoeProvider(for: openSession?.agent ?? pickedAgent)
+                        )
+                        .id(openChatId)
+                    } else {
+                        emptyState
                     }
                     Spacer().frame(height: 12)
                 }
@@ -113,8 +131,12 @@ public struct IOSChatView: View {
             IOSChatComposer(
                 controller: composerController,
                 broadcastMode: broadcast,
-                isReachable: agentClient != nil,
-                pickedAgent: $pickedAgent
+                isReachable: injectedClient,
+                pickedAgent: $pickedAgent,
+                availableAgents: availableSoloAgents,
+                onSend: { text in
+                    await sendChat(text)
+                }
             )
             .padding(.horizontal, 16)
             .padding(.bottom, 6)
@@ -124,14 +146,320 @@ public struct IOSChatView: View {
         // header buttons present this; tapping a row should select it.
         .sheet(isPresented: $historySheetPresented) {
             IOSChatHistorySheet(
-                sessions: agentClient?.chatSessions ?? [],
+                sessions: client.chatSessions,
+                onSelect: { session in
+                    openChatId = session.id
+                    openFrontierGroupId = session.frontierGroupId
+                    pickedAgent = supportedAgent(session.agent) ?? pickedAgent
+                    historySheetPresented = false
+                },
                 onDismiss: { historySheetPresented = false }
             )
+        }
+        .task {
+            await client.refreshSessions()
+            providersResponse = await client.fetchChatProviders()
+            normalizePickedAgent()
         }
     }
 
     private func defaultStarred(_ turn: TahoeDemo.ChatTurn) -> TahoeProvider? {
         turn.replies.first { _, r in r.starred }?.key
+    }
+
+    private var openSession: AgentSession? {
+        guard let openChatId else { return nil }
+        return client.sessions.first { $0.id == openChatId }
+    }
+
+    private var usableProviderKinds: [AgentKind] {
+        guard let providers = providersResponse?.providers else {
+            return [.claude, .codex, .gemini]
+        }
+        let usable = providers.compactMap { entry -> AgentKind? in
+            guard entry.available, entry.authenticated, entry.capabilityProbePassed else { return nil }
+            return supportedAgent(entry.provider)
+        }
+        var seen: Set<AgentKind> = []
+        return usable.filter { seen.insert($0).inserted }
+    }
+
+    private var availableSoloAgents: [AgentKind] {
+        usableProviderKinds
+    }
+
+    private var availableFrontierAgents: [AgentKind] {
+        availableSoloAgents.filter { $0 == .claude || $0 == .codex || $0 == .gemini }
+    }
+
+    private var availableFrontierProviders: [TahoeProvider] {
+        let providers = availableFrontierAgents.map(tahoeProvider(for:))
+        return providers.isEmpty && providersResponse == nil ? [.claude, .codex, .gemini] : providers
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            TahoeIcon("chat", size: 24).foregroundStyle(t.fg4)
+            Text("New chat")
+                .font(TahoeFont.body(14, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text("Send a message to start a solo chat, or keep broadcast on to fan out through Frontier.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 300)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 80)
+    }
+
+    @MainActor
+    private func sendChat(_ text: String) async -> String? {
+        if let groupId = openFrontierGroupId {
+            return await client.frontierSend(groupId: groupId, text: text)
+                ? nil
+                : (client.lastError ?? "Couldn't send to broadcast group.")
+        }
+        if let openChatId {
+            return await client.sendPrompt(sessionId: openChatId, text: text, asFollowUp: true)
+                ? nil
+                : (client.lastError ?? "Couldn't send to chat.")
+        }
+        if broadcast {
+            let slots = availableFrontierAgents.map { FrontierModelSlot(provider: $0) }
+            guard !slots.isEmpty else { return "No supported broadcast providers are available." }
+            guard let response = await client.createFrontier(slots: slots) else {
+                return client.lastError ?? "Couldn't create broadcast group."
+            }
+            let liveSlots = response.slots.filter { $0.sessionId != nil }
+            guard !liveSlots.isEmpty else {
+                let reasons = response.slots.compactMap(\.reason).joined(separator: ", ")
+                return "All providers failed to spawn\(reasons.isEmpty ? "." : ": \(reasons)")"
+            }
+            guard await client.frontierSend(groupId: response.groupId, text: text) else {
+                return client.lastError ?? "Couldn't send to broadcast group."
+            }
+            openFrontierGroupId = response.groupId
+            openChatId = client.frontierChildren(groupId: response.groupId).first?.id ?? liveSlots.first?.sessionId
+            return nil
+        }
+        guard let agent = supportedAgent(pickedAgent) ?? availableSoloAgents.first else {
+            return "No supported chat provider is available."
+        }
+        guard let session = await client.createChatSession(provider: agent) else {
+            return client.lastError ?? "Couldn't create chat session."
+        }
+        guard await client.sendPrompt(sessionId: session.id, text: text, asFollowUp: false) else {
+            return client.lastError ?? "Couldn't send to chat."
+        }
+        openChatId = session.id
+        openFrontierGroupId = nil
+        return nil
+    }
+
+    private func normalizePickedAgent() {
+        if !availableSoloAgents.contains(pickedAgent), let first = availableSoloAgents.first {
+            pickedAgent = first
+        }
+    }
+
+    private func supportedAgent(_ kind: AgentKind) -> AgentKind? {
+        switch kind {
+        case .claude, .codex, .gemini: return kind
+        case .opencode, .unknown: return nil
+        }
+    }
+
+    private func tahoeProvider(for kind: AgentKind) -> TahoeProvider {
+        switch kind {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .gemini: return .gemini
+        case .opencode: return .opencode
+        case .unknown: return .claude
+        }
+    }
+}
+
+private struct IOSFrontierThread: View {
+    @Environment(\.tahoe) private var t
+    let groupId: UUID
+    @ObservedObject var client: AgentControlClient
+    @Binding var activeSessionId: UUID?
+
+    private var children: [AgentSession] {
+        client.frontierChildren(groupId: groupId)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                ForEach(children) { child in
+                    Button {
+                        activeSessionId = child.id
+                    } label: {
+                        HStack(spacing: 5) {
+                            TahoeProviderGlyph(provider: provider(for: child.agent), size: 18)
+                            Text(provider(for: child.agent).displayName)
+                                .font(TahoeFont.body(10.5, weight: activeSessionId == child.id ? .bold : .semibold))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(activeSessionId == child.id ? t.fg : t.fg3)
+                        .padding(.horizontal, 8).padding(.vertical, 6)
+                        .background {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(activeSessionId == child.id ? t.accentAlpha(0.14) : Color.clear)
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(activeSessionId == child.id ? t.accentAlpha(0.4) : t.hairline, lineWidth: 0.5)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            if let active = activeSessionId ?? children.first?.id {
+                IOSChatSnapshotThread(
+                    sessionId: active,
+                    client: client,
+                    provider: provider(for: children.first(where: { $0.id == active })?.agent ?? .claude)
+                )
+                .id(active)
+            } else {
+                Text("Waiting for broadcast sessions…")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 60)
+            }
+        }
+    }
+
+    private func provider(for kind: AgentKind) -> TahoeProvider {
+        switch kind {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .gemini: return .gemini
+        case .opencode: return .opencode
+        case .unknown: return .claude
+        }
+    }
+}
+
+private struct IOSChatSnapshotThread: View {
+    @Environment(\.tahoe) private var t
+    let sessionId: UUID
+    let provider: TahoeProvider
+    @StateObject private var store: iOSChatStore
+
+    init(sessionId: UUID, client: AgentControlClient, provider: TahoeProvider) {
+        self.sessionId = sessionId
+        self.provider = provider
+        _store = StateObject(wrappedValue: iOSChatStore(sessionId: sessionId, client: client))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if store.snapshot.items.isEmpty {
+                Text("Waiting for the first reply…")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 60)
+            } else {
+                ForEach(store.snapshot.items) { item in
+                    IOSChatWireItemRow(item: item, provider: provider)
+                }
+            }
+        }
+        .task(id: sessionId) {
+            await store.refresh()
+            store.start()
+        }
+        .onDisappear {
+            store.stop()
+        }
+    }
+}
+
+private struct IOSChatWireItemRow: View {
+    @Environment(\.tahoe) private var t
+    var item: ChatItem
+    var provider: TahoeProvider
+
+    var body: some View {
+        switch item {
+        case .message(let message):
+            messageRow(message)
+        case .toolRun(_, let pairs):
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(pairs) { pair in
+                    compactToolRow(pair.call)
+                    if let result = pair.result {
+                        compactToolRow(result)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func messageRow(_ message: ChatMessage) -> some View {
+        switch message.kind {
+        case .userText:
+            HStack {
+                Spacer()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(message.body)
+                        .font(TahoeFont.body(14))
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background {
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 18, bottomLeadingRadius: 18,
+                        bottomTrailingRadius: 18, topTrailingRadius: 6
+                    )
+                    .fill(LinearGradient(colors: [t.accent, t.accentDeepC],
+                                         startPoint: .top, endPoint: .bottom))
+                }
+                .frame(maxWidth: 320, alignment: .trailing)
+            }
+        case .assistantText:
+            HStack(alignment: .top, spacing: 9) {
+                TahoeProviderGlyph(provider: provider, size: 24)
+                Text(message.body)
+                    .font(TahoeFont.body(14))
+                    .foregroundStyle(t.fg)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }
+        case .toolCall, .toolResult:
+            compactToolRow(message)
+        case .meta:
+            Text(message.body)
+                .font(TahoeFont.body(11.5))
+                .foregroundStyle(t.fg3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func compactToolRow(_ message: ChatMessage) -> some View {
+        HStack(spacing: 8) {
+            TahoeIcon(message.kind == .toolCall ? "doc" : "check", size: 11).foregroundStyle(t.fg3)
+            Text(message.title)
+                .font(TahoeFont.body(11.5, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text(message.body)
+                .font(TahoeFont.mono(11))
+                .foregroundStyle(message.isError ? .red : t.fg3)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(.horizontal, 4).padding(.vertical, 4)
     }
 }
 
@@ -371,9 +699,11 @@ private struct IOSChatComposer: View {
     var broadcastMode: Bool
     var isReachable: Bool
     /// v0.22.5: which agent the first-send routes to. Wired to a
-    /// real `Menu` chip so the user can switch between
-    /// Claude / Codex / Gemini / OpenCode without leaving the chat.
+    /// real `Menu` chip so the user can switch between supported chat
+    /// providers without leaving the chat.
     @Binding var pickedAgent: AgentKind
+    var availableAgents: [AgentKind]
+    var onSend: (String) async -> String?
 
     private var placeholder: String {
         if !isReachable { return "Pair to Mac to start a chat…" }
@@ -427,11 +757,11 @@ private struct IOSChatComposer: View {
 
     /// v0.22.5: SwiftUI Menu wrapping the agent picker. Replaces the
     /// previously-decorative `TahoeIcon("plus")` attach icon. Tap
-    /// opens a native iOS popup with the 4 provider options.
+    /// opens a native iOS popup with the supported provider options.
     @ViewBuilder
     private var agentPickerMenu: some View {
         Menu {
-            ForEach(AgentKind.allCases, id: \.self) { kind in
+            ForEach(availableAgents, id: \.self) { kind in
                 Button {
                     pickedAgent = kind
                 } label: {
@@ -480,10 +810,7 @@ private struct IOSChatComposer: View {
 
     private func sendNow() async {
         guard isReachable else { return }
-        // v0.22.5: route the first send through the user-picked agent
-        // (was hardcoded to .claude before). AgentKind value comes from
-        // the in-composer Menu chip's binding.
-        await controller.send(via: .chatCreate(provider: pickedAgent, mode: .solo))
+        await controller.sendCustom(action: onSend)
     }
 }
 
@@ -495,13 +822,11 @@ private struct IOSChatComposer: View {
 /// build had no view for "show me all my chats" — users could only
 /// see whichever single thread the demo data rendered.
 ///
-/// v0.22.5 cut: shows the list + a Done button. Tapping a row
-/// dismisses (deep-link to "open this chat in the main view" needs
-/// the chat view to actually pivot to real session data, which is
-/// queued as part of the iOS broadcast UI work in v1.2).
+/// Tapping a row opens that real chat in the main view.
 private struct IOSChatHistorySheet: View {
     @Environment(\.tahoe) private var t
     var sessions: [AgentSession]
+    var onSelect: (AgentSession) -> Void
     var onDismiss: () -> Void
 
     private var sortedChatSessions: [AgentSession] {
@@ -529,7 +854,7 @@ private struct IOSChatHistorySheet: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List(sortedChatSessions, id: \.id) { session in
-                        Button(action: onDismiss) {
+                        Button(action: { onSelect(session) }) {
                             HStack(spacing: 12) {
                                 TahoeProviderGlyph(
                                     provider: tahoeProvider(for: session.agent),

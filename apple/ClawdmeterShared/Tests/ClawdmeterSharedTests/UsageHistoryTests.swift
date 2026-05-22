@@ -376,6 +376,7 @@ final class UsageHistoryTests: XCTestCase {
             claudeDir: claudeDir,
             codexDir: codexDir,
             geminiDir: geminiDir,
+            opencodeDBURL: temp.appendingPathComponent("missing-opencode.db"),
             cacheURL: cacheURL
         )
         let snapshot = await loader.loadAll()

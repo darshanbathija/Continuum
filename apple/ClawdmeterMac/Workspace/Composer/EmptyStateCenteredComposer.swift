@@ -151,8 +151,17 @@ struct EmptyStateCenteredComposer: View {
             // v0.8.1 agy-migration: stage attachments BEFORE spawn so
             // Antigravity 2's `agentapi new-conversation` receives the
             // user's actual full prompt (incl. attachment refs), not the
-            // 80-char `goal` slice. Codex P1.2 fix.
+            // 80-char `goal` slice. tmux-based sessions restage below into
+            // the final per-session/worktree directory before /send.
             var stagedPaths: [URL] = []
+            if let dir = AttachmentStaging.emptyStateStagingDir {
+                for att in store.attachments {
+                    if let staged = try? AttachmentStaging.stage(source: att.sourceURL, into: dir, attachmentId: att.id) {
+                        stagedPaths.append(staged)
+                    }
+                }
+            }
+            let initialBody = store.renderPromptBody(attachmentPaths: stagedPaths)
             let session = try await model.spawnSession(
                 repoPath: repoKey,
                 agent: store.agent,
@@ -162,7 +171,7 @@ struct EmptyStateCenteredComposer: View {
                 tmux: runtime.tmuxClient,
                 acceptEdits: store.permissionMode == .acceptEdits,
                 autopilot: bypassPicked,
-                initialMessage: prompt.isEmpty ? nil : store.renderPromptBody(attachmentPaths: [])
+                initialMessage: initialBody.isEmpty ? nil : initialBody
             )
             // Record the empty-state composer's mode pick on the session
             // so the chip in the bound view reflects it without needing
@@ -183,6 +192,7 @@ struct EmptyStateCenteredComposer: View {
             if !isAgentapiSpawn, store.canSend, let port = runtime.agentControlServer.boundPort {
                 let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
                 // Stage attachments under the new session's dir.
+                stagedPaths.removeAll()
                 if let dir = AttachmentStaging.stagingDir(for: session) {
                     for att in store.attachments {
                         if let staged = try? AttachmentStaging.stage(source: att.sourceURL, into: dir, attachmentId: att.id) {
