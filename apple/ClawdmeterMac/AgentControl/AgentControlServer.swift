@@ -1744,14 +1744,28 @@ public final class AgentControlServer {
     }
 
     private func handleInterrupt(sessionId: String, connection: NWConnection) async {
-        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid),
-              let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
+        guard let uuid = UUID(uuidString: sessionId) else {
             sendResponse(.notFound, on: connection); return
         }
-        do {
-            try await tmux.sendKeys(paneId: paneId, bytes: Data([0x1b]))  // ESC
+        // v0.23 (Chat V2 — audit P0 #2): route through
+        // SessionInterruptDispatcher so Stop works for Codex SDK and
+        // Gemini agentapi sessions too, not just tmux-backed ones.
+        // The dispatcher flips currentTurnState to .interrupted up
+        // front so the V2 UI's stopwatch + Send button restore
+        // immediately, then dispatches the per-backend cancel.
+        let dispatcher = SessionInterruptDispatcher(
+            registry: registry,
+            codexRelay: CodexSubscriptionRelay.shared,
+            tmux: tmux,
+            chatStoreRegistry: chatStoreRegistry
+        )
+        let result = await dispatcher.interrupt(sessionId: uuid)
+        switch result {
+        case .interrupted:
             sendJSON(["ok": true], on: connection)
-        } catch {
+        case .sessionNotFound:
+            sendResponse(.notFound, on: connection)
+        case .tmuxFailed:
             sendResponse(.internalError, on: connection)
         }
     }
