@@ -87,7 +87,18 @@ public enum AgentControlWireVersion {
     /// v13+ clients decode as `.opencode` natively. Schema migration
     /// audited across `AnalyticsDailyChart` + every `byProvider:`
     /// consumer.
-    public static let current: Int = 13
+    /// v14 (2026-05-23, Chat V2): explicit per-turn lifecycle on the
+    /// snapshot wire (`WireChatSnapshot.currentTurnState: TurnState`)
+    /// emitted from each provider's natural end-marker (Claude's
+    /// `result` line, Codex SDK's `turn.completed`, Antigravity's
+    /// `chunk_done`). New Deep Research toggle on
+    /// `CreateChatSessionRequest`, `FrontierModelSlot`, and the
+    /// `AgentSession` registry record (so the bool survives respawn
+    /// / restore / retry). New `GET /chat-sessions/search?q=` history
+    /// search endpoint walking JSONL on disk. All additive +
+    /// decodeIfPresent: older Macs/clients see decode-default values
+    /// without crashing.
+    public static let current: Int = 14
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -154,6 +165,28 @@ public enum AgentControlWireVersion {
     /// surface a "v0.9 required" CTA instead of letting users try a
     /// POST that returns 501.
     public static let antigravityChatMinimum: Int = 11
+
+    /// Minimum wire version that exposes the per-turn lifecycle field
+    /// `WireChatSnapshot.currentTurnState`. Older daemons send snapshots
+    /// without the field; lenient decoder defaults to `.idle` so iOS
+    /// keeps working but the Stopwatch + Stop→Send transitions
+    /// fall back to a heuristic (no new event in 2s = done). Used by
+    /// the ChatV2 status strip to detect whether the heuristic
+    /// fallback is needed.
+    public static let turnLifecycleMinimum: Int = 14
+
+    /// Minimum wire version that honors the `deepResearch` field on
+    /// `CreateChatSessionRequest` / `FrontierModelSlot`. Older Macs
+    /// decode the field as `false` (decodeIfPresent default) so the
+    /// session lands as a regular send. iOS surfaces a warning when
+    /// the user enables Deep Research against a too-old paired Mac.
+    public static let deepResearchMinimum: Int = 14
+
+    /// Minimum wire version that supports `GET /chat-sessions/search?q=`.
+    /// Older Macs 404; clients fall back to grepping the local LRU cache
+    /// (which only covers the most-recent 2 conversations on iOS, 20 on
+    /// Mac) and label results "Recent only".
+    public static let chatSearchMinimum: Int = 14
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -234,6 +267,72 @@ public enum AgentControlWireVersion {
     public static func supportsAntigravityChat(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= antigravityChatMinimum
+    }
+
+    /// Whether the paired Mac is wire v14+ and therefore emits per-turn
+    /// lifecycle transitions on `WireChatSnapshot.currentTurnState`. iOS
+    /// ChatV2 reads this to know whether to trust the field (vs falling
+    /// back to a heartbeat heuristic).
+    public static func supportsTurnLifecycle(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= turnLifecycleMinimum
+    }
+
+    /// Whether the paired Mac honors the `deepResearch` field on chat
+    /// create requests. Older Macs decode it but ignore it; the V2
+    /// composer surfaces a banner instead of letting Deep Research
+    /// silently degrade.
+    public static func supportsDeepResearch(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= deepResearchMinimum
+    }
+
+    /// Whether the paired Mac exposes the `GET /chat-sessions/search`
+    /// endpoint. The V2 sidebar uses this for full-history search;
+    /// when false, the sidebar reverts to grepping the local LRU cache
+    /// and labels the result "Recent only".
+    public static func supportsChatSearch(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= chatSearchMinimum
+    }
+}
+
+// MARK: - Per-turn lifecycle (Chat V2, wire v14)
+
+/// Explicit lifecycle state for the most-recent turn on a chat session.
+/// Emitted by the daemon's per-provider ingestors when they see each
+/// provider's natural end-of-turn marker. The Chat V2 status strip
+/// drives its stopwatch + Stop↔Send transition off this field; without
+/// it the UI has to guess via a 2-second heartbeat heuristic that
+/// flickers on slow tool calls. `.idle` is the decode-default so older
+/// Macs (wire v13) round-trip through V2 clients without crashing.
+///
+/// Transition contract:
+///   - `.idle` → `.streaming` when the user sends a prompt and the
+///     first assistant token (or first tool_use) lands in the JSONL /
+///     sidecar event stream.
+///   - `.streaming` → `.completed` on the provider's natural turn end
+///     (Claude: `result` line in JSONL; Codex SDK: `turn.completed`
+///     event; Antigravity: `chunk_done` / agentapi terminal frame).
+///   - `.streaming` → `.interrupted` when SessionInterruptDispatcher
+///     dispatches the cancel for that session (tmux ESC / SDK
+///     AbortController.abort() / agentapi /cancel POST).
+///   - Any state → `.idle` when the next user prompt arrives (clears
+///     the previous turn's state so the stopwatch resets).
+public enum TurnState: String, Codable, Hashable, Sendable, CaseIterable {
+    case idle
+    case streaming
+    case completed
+    case interrupted
+
+    /// Lenient decoder so a future-wire-version daemon that adds a
+    /// new state doesn't crash older clients. Unknown raws fall back
+    /// to `.streaming` (the safest default — UI keeps showing the
+    /// indicator instead of pretending the turn is done).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = TurnState(rawValue: raw) ?? .streaming
     }
 }
 
@@ -1005,6 +1104,25 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// `AntigravityProjectResolver.resolve(forRepoKey:)` for those.
     public let antigravityProjectId: String?
 
+    // MARK: - Schema v7 additions (v0.23 Chat V2)
+    //
+    // Persists the Deep Research toggle on the session record so respawn/
+    // restore/retry preserves the flag. Without this the bool only lives
+    // on the create-request and is lost as soon as the daemon writes the
+    // session to disk — meaning a Deep Research chat that respawns after
+    // a daemon restart silently downgrades to a regular send (Codex
+    // bug-audit P1 #6).
+    //
+    // Optional + decoder-tolerant: any v0.8.x / v0.9 sessions.json files
+    // decode cleanly with this as `false`.
+
+    /// When true, this chat session was spawned with Deep Research argv
+    /// (Claude `--allowedTools WebSearch,WebFetch,... --append-system-prompt`,
+    /// Codex SDK `tools: ["web_search"] + modelReasoningEffort: "xhigh"`,
+    /// or Gemini agentapi `gemini-3-pro` + deep-research system instruction).
+    /// Defaults to false on older sessions.
+    public let deepResearch: Bool
+
     public init(
         id: UUID,
         repoKey: String?,
@@ -1036,7 +1154,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         codexChatThreadId: String? = nil,
         geminiBackend: GeminiBackend? = nil,
         antigravityConversationId: UUID? = nil,
-        antigravityProjectId: String? = nil
+        antigravityProjectId: String? = nil,
+        deepResearch: Bool = false
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -1069,6 +1188,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.geminiBackend = geminiBackend
         self.antigravityConversationId = antigravityConversationId
         self.antigravityProjectId = antigravityProjectId
+        self.deepResearch = deepResearch
     }
 
     public init(from decoder: Decoder) throws {
@@ -1128,6 +1248,10 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         // decoder-tolerant: any v0.8.1 sessions.json decodes cleanly with
         // this nil; sendAntigravityMessage falls back to the repoKey path.
         self.antigravityProjectId = (try? c.decodeIfPresent(String.self, forKey: .antigravityProjectId)) ?? nil
+        // v0.23 schema v7 addition: deepResearch. Persisted so respawn/
+        // restore/retry preserves the flag. Older sessions.json files
+        // decode this as false.
+        self.deepResearch = (try? c.decodeIfPresent(Bool.self, forKey: .deepResearch)) ?? false
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -1168,7 +1292,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              // v0.8.1 schema v6 (agy-migration).
              geminiBackend, antigravityConversationId,
              // v0.9 schema addition (chat-via-agentapi).
-             antigravityProjectId
+             antigravityProjectId,
+             // v0.23 schema v7 (Chat V2 Deep Research).
+             deepResearch
     }
 }
 
@@ -1604,6 +1730,12 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
     public let cacheCreationTokens: Int
     public let lastEventAt: Date?
     public let updateCounter: UInt64
+    /// v14 (Chat V2): explicit lifecycle state for the most-recent turn.
+    /// Drives the V2 status strip (stopwatch clamp, Stop↔Send transition,
+    /// indicator ring pause). `.idle` is the decode-default so older Macs
+    /// (wire ≤ v13) round-trip without crashing; V2 clients fall back to
+    /// a 2-second heartbeat heuristic when the paired Mac is too old.
+    public let currentTurnState: TurnState
 
     public init(
         sessionId: UUID,
@@ -1618,7 +1750,8 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         cacheReadTokens: Int = 0,
         cacheCreationTokens: Int = 0,
         lastEventAt: Date?,
-        updateCounter: UInt64
+        updateCounter: UInt64,
+        currentTurnState: TurnState = .idle
     ) {
         self.sessionId = sessionId
         self.items = items
@@ -1633,6 +1766,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         self.cacheCreationTokens = cacheCreationTokens
         self.lastEventAt = lastEventAt
         self.updateCounter = updateCounter
+        self.currentTurnState = currentTurnState
     }
 
     // v0.7.8: custom decoder so older paired Macs (pre-codexTodos)
@@ -1643,6 +1777,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         case pendingPermissionPrompt
         case totalInputTokens, totalOutputTokens, cacheReadTokens, cacheCreationTokens
         case lastEventAt, updateCounter
+        case currentTurnState
     }
 
     public init(from decoder: Decoder) throws {
@@ -1660,6 +1795,7 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         self.cacheCreationTokens = try c.decodeIfPresent(Int.self, forKey: .cacheCreationTokens) ?? 0
         self.lastEventAt = try c.decodeIfPresent(Date.self, forKey: .lastEventAt)
         self.updateCounter = try c.decode(UInt64.self, forKey: .updateCounter)
+        self.currentTurnState = try c.decodeIfPresent(TurnState.self, forKey: .currentTurnState) ?? .idle
     }
 }
 
@@ -2307,17 +2443,40 @@ public struct CreateChatSessionRequest: Codable, Sendable {
     public let model: String?
     public let effort: ReasoningEffort?
     public let codexChatBackend: CodexChatBackend?
+    /// v14 (Chat V2): when true, the daemon spawns the chat with deep-
+    /// research argv (Claude: `--allowedTools WebSearch,WebFetch,...` +
+    /// `--append-system-prompt deep-research-prompt.txt` + `--effort max`).
+    /// For Codex SDK chats, the relay payload gets `tools: ["web_search"]`
+    /// and `modelReasoningEffort: "xhigh"`. For Gemini, the agentapi
+    /// session-init picks `gemini-3-pro` + deep-research system
+    /// instruction. Defaults to false on older clients (decodeIfPresent).
+    public let deepResearch: Bool
 
     public init(
         provider: AgentKind,
         model: String? = nil,
         effort: ReasoningEffort? = nil,
-        codexChatBackend: CodexChatBackend? = nil
+        codexChatBackend: CodexChatBackend? = nil,
+        deepResearch: Bool = false
     ) {
         self.provider = provider
         self.model = model
         self.effort = effort
         self.codexChatBackend = codexChatBackend
+        self.deepResearch = deepResearch
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, model, effort, codexChatBackend, deepResearch
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.provider = try c.decode(AgentKind.self, forKey: .provider)
+        self.model = try c.decodeIfPresent(String.self, forKey: .model)
+        self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
+        self.codexChatBackend = try c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)
+        self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
     }
 }
 
@@ -2342,15 +2501,33 @@ public struct FrontierModelSlot: Codable, Sendable {
     public let provider: AgentKind
     public let model: String?
     public let codexChatBackend: CodexChatBackend?
+    /// v14 (Chat V2): per-slot Deep Research toggle. Each broadcast pane
+    /// can independently run with deep-research argv. Defaults to false
+    /// on older clients (decodeIfPresent).
+    public let deepResearch: Bool
 
     public init(
         provider: AgentKind,
         model: String? = nil,
-        codexChatBackend: CodexChatBackend? = nil
+        codexChatBackend: CodexChatBackend? = nil,
+        deepResearch: Bool = false
     ) {
         self.provider = provider
         self.model = model
         self.codexChatBackend = codexChatBackend
+        self.deepResearch = deepResearch
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, model, codexChatBackend, deepResearch
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.provider = try c.decode(AgentKind.self, forKey: .provider)
+        self.model = try c.decodeIfPresent(String.self, forKey: .model)
+        self.codexChatBackend = try c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)
+        self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
     }
 }
 
