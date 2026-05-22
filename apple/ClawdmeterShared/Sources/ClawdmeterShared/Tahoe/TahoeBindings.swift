@@ -54,6 +54,11 @@ public struct TahoeLiveRow: Equatable, Sendable {
                 case .claude: return "Sonnet 4.5"
                 case .codex:  return "gpt-5"
                 case .gemini: return "antigravity-pro"
+                // PR #31: OpenCode's underlying model varies by user
+                // auth (whichever provider they ran `opencode auth login`
+                // for). Demo defaults to anthropic so the chip reads
+                // meaningfully in Previews.
+                case .opencode: return "via opencode"
                 }
             }(),
             autoReviveOn: d.reviveOn, autoReviveAgo: d.reviveAgo,
@@ -62,19 +67,22 @@ public struct TahoeLiveRow: Equatable, Sendable {
     }
 }
 
-/// All three providers, in one bag. Drives MacUsageView + MacMenubarPopover +
-/// IOSLiveView.
+/// All four providers, in one bag. Drives MacUsageView + MacMenubarPopover +
+/// IOSLiveView. PR #31 added `opencode` as the 4th lane.
 public struct TahoeLiveBindings: Equatable, Sendable {
     public var claude: TahoeLiveRow
     public var codex:  TahoeLiveRow
     public var gemini: TahoeLiveRow
+    public var opencode: TahoeLiveRow
 
     public init(
         claude: TahoeLiveRow = .demo(.claude),
         codex:  TahoeLiveRow = .demo(.codex),
-        gemini: TahoeLiveRow = .demo(.gemini)
+        gemini: TahoeLiveRow = .demo(.gemini),
+        opencode: TahoeLiveRow = .demo(.opencode)
     ) {
         self.claude = claude; self.codex = codex; self.gemini = gemini
+        self.opencode = opencode
     }
 
     public func row(for provider: TahoeProvider) -> TahoeLiveRow {
@@ -82,6 +90,7 @@ public struct TahoeLiveBindings: Equatable, Sendable {
         case .claude: return claude
         case .codex:  return codex
         case .gemini: return gemini
+        case .opencode: return opencode
         }
     }
 

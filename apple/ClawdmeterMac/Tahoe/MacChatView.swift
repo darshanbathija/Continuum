@@ -766,12 +766,44 @@ private struct ChatComposer: View {
         return "Ask \(soloProvider.displayName). Use / for skills, @ for files."
     }
 
-    /// Cost estimate label. Uses a static heuristic until the Pricing.
-    /// estimateSend helper lands (PR #25 Step 3 follow-up). Broadcast
-    /// sums 3 providers; solo shows one.
+    /// Cost estimate label — PR #31 chunk 4 wired to Pricing.estimateSend.
+    /// Returns a live estimate based on the current draft text + the
+    /// picked agent's default model. Broadcast sums all 3 providers'
+    /// default models; solo shows just the picked one.
     private var costEstimate: String {
-        if mode == .broadcast { return "~$0.033 / send" }
-        return "~$0.011 / send"
+        let text = sendCtl.text
+        // Pick default models for the estimator. These match the same
+        // catalog defaults the spawn path picks up via
+        // ComposerStore.ChipDefaults — keeps the chip in lockstep with
+        // what'll actually run.
+        let agent = currentAgentKind
+        let defaultModel = ComposerStore.ChipDefaults.for(agent: agent).modelId ?? ""
+        let estimate: Decimal
+        if mode == .broadcast {
+            let trio: [(AgentKind, String)] = [
+                (.claude, ComposerStore.ChipDefaults.for(agent: .claude).modelId ?? ""),
+                (.codex,  ComposerStore.ChipDefaults.for(agent: .codex).modelId ?? ""),
+                (.gemini, ComposerStore.ChipDefaults.for(agent: .gemini).modelId ?? ""),
+            ].filter { !$0.1.isEmpty }
+            estimate = Pricing.shared.estimateBroadcast(promptText: text, agentModels: trio)
+        } else {
+            estimate = Pricing.shared.estimateSend(
+                promptText: text, agent: agent, model: defaultModel
+            )
+        }
+        return Self.formatCost(estimate) + " / send"
+    }
+
+    /// Currency formatter for the composer chip. Uses 3 decimal places
+    /// because per-send estimates are typically under $0.10 — 2 decimals
+    /// would show "$0.01" for everything between $0.005 and $0.015.
+    private static func formatCost(_ value: Decimal) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.maximumFractionDigits = 3
+        formatter.minimumFractionDigits = 3
+        return formatter.string(from: value as NSDecimalNumber) ?? "$0.000"
     }
 
     /// Wire-up entry point: either send to the open chat or create a
@@ -821,6 +853,7 @@ private struct ChatComposer: View {
         case .claude: return .claude
         case .codex:  return .codex
         case .gemini: return .gemini
+        case .opencode: return .opencode  // PR #31
         }
     }
 }

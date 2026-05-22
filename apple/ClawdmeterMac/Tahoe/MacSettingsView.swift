@@ -121,6 +121,17 @@ public struct MacSettingsView: View {
                         TahoeToggleView(on: $notifyAt90)
                     }
                 }
+
+                // PR #31 chunk 2: Providers card surfaces install + auth
+                // state for adapters that run external CLIs (currently
+                // OpenCode). The OpenCode row binds to
+                // `OpencodeProcessManager.shared.state` so spawn-time
+                // failures + auth-list refreshes surface here without a
+                // restart.
+                SettingsCard(title: "Providers",
+                             sub: "External agent runtimes Clawdmeter can drive. Listed providers must be installed and signed in to spawn sessions.") {
+                    OpencodeProviderRow()
+                }
             }
             .frame(maxWidth: 920)
             .frame(maxWidth: .infinity)
@@ -373,5 +384,127 @@ private struct AccentPicker: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+// MARK: - Providers (PR #31 chunk 2)
+
+/// OpenCode provider row — install + auth status surfaced from
+/// OpencodeProcessManager.shared. Re-runs `opencode auth list` on
+/// appear so signed-in providers reflect within ~50ms of the user
+/// switching to the Settings tab. The "Open docs" affordance points
+/// at opencode.ai/docs/auth which covers both first-time install and
+/// the per-provider `opencode auth login` flow.
+private struct OpencodeProviderRow: View {
+    @Environment(\.tahoe) private var t
+    @State private var managerState: OpencodeProcessManager.State = .stopped
+    @State private var authStatus: [String: String]? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                TahoeProviderGlyph(provider: .opencode, size: 32)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("OpenCode")
+                            .font(TahoeFont.body(14, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                        statePill
+                    }
+                    Text(detailLine)
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let authStatus, !authStatus.isEmpty {
+                        Text(authLine(authStatus))
+                            .font(TahoeFont.mono(11))
+                            .foregroundStyle(t.fg2)
+                    }
+                }
+                Spacer()
+                Button {
+                    if let url = URL(string: "https://opencode.ai/docs/auth") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Text("Open docs")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .task {
+            // Snapshot current state + kick off an auth probe. The
+            // manager exposes @Published state for live updates; we
+            // also poll once on appear to catch the cold-launch case.
+            managerState = OpencodeProcessManager.shared.state
+            authStatus = OpencodeProcessManager.shared.authStatus
+            await OpencodeProcessManager.shared.refreshAuthStatus()
+            authStatus = OpencodeProcessManager.shared.authStatus
+        }
+    }
+
+    /// Compact pill rendering whichever state the manager is in.
+    @ViewBuilder
+    private var statePill: some View {
+        let (label, color): (String, Color) = {
+            switch managerState {
+            case .notInstalled:
+                return ("Not installed", Color.orange)
+            case .stopped:
+                return ("Idle", t.fg4)
+            case .starting:
+                return ("Starting…", Color.blue)
+            case .running:
+                return ("Running", Color.green)
+            case .failed:
+                return ("Failed", Color.red)
+            }
+        }()
+        Text(label)
+            .font(TahoeFont.body(10, weight: .bold))
+            .tracking(0.3)
+            .foregroundStyle(color)
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background {
+                Capsule().fill(color.opacity(0.15))
+            }
+            .overlay {
+                Capsule().stroke(color.opacity(0.35), lineWidth: 0.5)
+            }
+    }
+
+    /// Human-readable status detail. Uses the manager's binaryPath +
+    /// lastError when available so the user sees exactly what
+    /// happened.
+    private var detailLine: String {
+        switch managerState {
+        case .notInstalled:
+            return "Not installed. Run `brew install opencode` (or download from opencode.ai) to enable OpenCode-backed sessions."
+        case .stopped:
+            if let path = OpencodeProcessManager.shared.binaryPath {
+                return "Installed at \(path). Starts on demand when you spawn an OpenCode session."
+            }
+            return "Starts on demand when you spawn an OpenCode session."
+        case .starting:
+            return "Spinning up the shared `opencode serve` process…"
+        case .running(let port):
+            let path = OpencodeProcessManager.shared.binaryPath ?? "<discovered>"
+            return "Running on 127.0.0.1:\(port) — shared process for every OpenCode session.  Binary: \(path)"
+        case .failed(let detail):
+            return "Failed: \(detail)"
+        }
+    }
+
+    /// Joined "provider: model" lines from `opencode auth list`. Empty
+    /// dict surfaces as "No providers signed in" so the user knows
+    /// what's missing.
+    private func authLine(_ status: [String: String]) -> String {
+        let pairs = status
+            .map { "\($0.key): \($0.value)" }
+            .sorted()
+            .joined(separator: " · ")
+        return "Signed in: \(pairs)"
     }
 }

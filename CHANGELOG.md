@@ -4,6 +4,79 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.20.0 build 80] - 2026-05-22 — OpenCode polish + v1.0 chat finish (PR #31)
+
+PR #31 ships four chunks bundled as the v1.1 polish + v1.0 chat
+finish — opencode becomes visually first-class everywhere, settings
+surfaces install/auth status, the menu-bar dollar gauge ingests live
+cost, and the chat composer's "~$X / send" chip pulls from the real
+Pricing rate card.
+
+### Chunk 1 — TahoeProvider.opencode (4th visual lane)
+
+- TahoeProvider gains `.opencode` with violet OKLCH palette (h≈295),
+  brand name "OpenCode", template-tinted silhouette asset slot.
+- TahoeLiveBindings: 4th `opencode: TahoeLiveRow` stored property +
+  row(for:) handler.
+- AgentKind → TahoeProvider mappers (MacTahoeAdapter, IOSTahoeAdapter)
+  now return .opencode natively (was: .codex fallback).
+- ~5 cascading switches updated (Mac usage column, code IDE filter,
+  chat agent kind, iOS Live, iOS Analytics).
+
+### Chunk 2 — Settings → Providers panel
+
+- New SettingsCard "Providers" below "Quota & sync".
+- OpencodeProviderRow surfaces OpencodeProcessManager state + auth
+  list with color-coded state pill (notInstalled / Idle / Starting /
+  Running / Failed) and "Open docs" button linking to opencode.ai/docs/auth.
+- Refreshes auth on `.task` so signed-in providers appear without a
+  manual reload.
+
+### Chunk 3 — OpencodeUsageMapper + dollar gauge (A2)
+
+- New ClawdmeterShared/Analytics/OpencodeUsageMapper.swift (~100 LOC):
+  pure mapper from opencode `usage` SSE event → UsageRecord. Lenient
+  numeric reader handles Int/Double/NSNumber bridging. Unknown models
+  still emit records (attribute to unpriced bucket); all-zero token
+  events drop.
+- OpencodeSSEAdapter `usage` branch now maps + posts
+  `.opencodeUsageRecorded` Notification with the UsageRecord.
+- UsageHistoryStore: new `opencodeLiveRecords` @Published bag,
+  observer that folds notification payloads in (FIFO-bounded at 5000),
+  `opencodeTodayCostUSD` + `opencodeWeekCostUSD` getters.
+- MacUsageView: new OpencodeDollarRow strip below the 3 ProviderColumns.
+  Shows `$X today` + `$Y this week` per A2 (no rolling 5h window —
+  pay-as-you-go).
+
+### Chunk 4 — Pricing.estimateSend + composer chip
+
+- New ClawdmeterShared/Analytics/Pricing+EstimateSend.swift:
+  `estimateSend(promptText:agent:model:)` + `estimateBroadcast(...)`.
+  char/4 input estimate + 256 notional output tokens for an
+  order-of-magnitude chip read.
+- MacChatView composer chip now renders live `$X.XXX / send` from
+  Pricing.shared. Broadcast mode sums Claude + Codex + Gemini.
+
+### Tests
+
+- 620/620 shared tests pass (up from 613 → +7 PricingEstimateSendTests
+  + 9 OpencodeUsageMapperTests landed on PR #30; net +7 here).
+- 89/89 Mac tests pass.
+- Mac + iOS + Watch all build clean.
+
+### Known gaps (queued for follow-up)
+
+- Repo plumbing on opencode usage events — `handleUsage` currently
+  passes `repo: nil`; future polish: stash repo at session.created
+  time + look up via sessionMap.
+- Mac chat broadcast multi-pane fan-out — pivot from TahoeDemo to
+  real `chatStore(for:)` is still scaffolded for solo only; full
+  3-pane stream + pick-winner UI is a follow-up.
+- Menu-bar status item dollar variant (A2 sole-provider case) —
+  lives in AppDelegate.ProviderStatusController; queued.
+- Tahoe-art for the OpenCode brand mark (`tahoe-opencode-mark`) —
+  AgentKindUI fallback to `OpencodeLogo` ships meanwhile.
+
 ## [0.19.0 build 79] - 2026-05-22 — OpenCode runtime: ProcessManager + SSE adapter (D11/D12, P1)
 
 PR #30 lands the runtime that PR #29's wire foundation was designed

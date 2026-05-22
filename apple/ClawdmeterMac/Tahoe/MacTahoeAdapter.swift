@@ -129,14 +129,7 @@ extension AppRuntime {
         case .claude: return .claude
         case .codex:  return .codex
         case .gemini: return .gemini
-        case .opencode:
-            // PR #29: TahoeProvider stays 3-case (claude/codex/gemini)
-            // through v1.1 — the broader TahoeProvider extension is a
-            // wider design refactor. For now, map opencode to .codex
-            // (its closest visual cousin: both are silhouette + dark
-            // accent). AgentKindUI is the source of truth for the
-            // OpenCode brand color / label everywhere else.
-            return .codex
+        case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
         case .unknown:
             // X3: visual fallback. Semantic correctness lives on
             // AgentKind itself — UI degrades to Claude styling for
