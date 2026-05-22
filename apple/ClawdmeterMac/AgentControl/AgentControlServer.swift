@@ -1408,6 +1408,7 @@ public final class AgentControlServer {
     private func handlePostGeminiChatSession(
         model: String?,
         effort: ReasoningEffort?,
+        deepResearch: Bool = false,
         connection: NWConnection
     ) async {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -1455,11 +1456,22 @@ public final class AgentControlServer {
             projectId = resolvedProjectId
         }
 
+        // v0.23 (Chat V2 — T7 Gemini Deep Research): when DR is on,
+        // pin the model to gemini-3-pro (max thinking) per the eng-
+        // review D3 decision. Antigravity already enables WebSearch
+        // by default in plan mode; the deep-research system prompt
+        // we prepend to the first turn (below) drives the structured
+        // research trace [research-step] convention. The user-picked
+        // model is overridden because the trade is intentional:
+        // Deep Research needs the heaviest reasoning, not whatever
+        // model the user had selected for fast iteration.
+        let effectiveModel = deepResearch ? "gemini-3-pro" : model
         let session = registry.createChat(
             provider: .gemini,
-            model: model,
+            model: effectiveModel,
             chatCwd: "",
-            effort: effort
+            effort: effort,
+            deepResearch: deepResearch
         )
         let chatCwd: String
         do {
@@ -1475,11 +1487,24 @@ public final class AgentControlServer {
             tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
         )
 
-        let modelTier = AgentapiModelTier.from(modelCatalogId: model)
+        let modelTier = AgentapiModelTier.from(modelCatalogId: effectiveModel)
+        // v0.23 T7 Gemini DR: prepend the deep-research contract as
+        // the conversation's seed prompt so the agentapi initial-turn
+        // ingests it before any user input. The bundled
+        // deep-research-prompt.txt is the same contract Claude /
+        // Codex SDK use — the `[research-step] N. ...` convention is
+        // what the V2 UI's trace extractor reads.
+        let seedPrompt: String = {
+            guard deepResearch,
+                  let header = AgentSpawner.loadDeepResearchPrompt() else {
+                return "(starting new chat)"
+            }
+            return "\(header)\n\nYou are now ready to receive the user's research question."
+        }()
         do {
             let conversationIdString = try await lsClient.newConversation(
                 modelTier: modelTier,
-                prompt: "(starting new chat)",
+                prompt: seedPrompt,
                 projectId: projectId
             )
             guard let conversationId = UUID(uuidString: conversationIdString) else {
@@ -3221,6 +3246,7 @@ public final class AgentControlServer {
             await handlePostGeminiChatSession(
                 model: req.model,
                 effort: req.effort,
+                deepResearch: req.deepResearch,
                 connection: connection
             )
             return
