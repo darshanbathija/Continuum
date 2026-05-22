@@ -4,10 +4,8 @@ import ClawdmeterShared
 /// iOS git diff viewer — file list with `+/-` line counts, tap a file to
 /// see syntax-highlighted hunks. Sessions v2 Phase 4 / T15.
 ///
-/// Wire: `GET /sessions/:id/diff` returns `[GitDiffFile]`. Each file's
-/// `hunks` array carries the actual diff content; very large diffs come
-/// back with `truncated == true` and an empty hunks array (tap to fetch
-/// full content via a future `/sessions/:id/diff/:path` endpoint).
+/// Wire: `GET /sessions/:id/diff` returns `[GitDiffFile]`. Truncated file
+/// rows lazy-fetch full hunks through `GET /sessions/:id/diff/:path`.
 struct iOSDiffView: View {
     let session: AgentSession
     @ObservedObject var client: AgentControlClient
@@ -43,7 +41,7 @@ struct iOSDiffView: View {
     private var fileList: some View {
         List(files) { file in
             NavigationLink {
-                iOSDiffFileView(file: file)
+                iOSDiffFileView(session: session, client: client, initialFile: file)
             } label: {
                 HStack {
                     statusGlyph(file.status)
@@ -115,29 +113,63 @@ struct iOSDiffView: View {
 
 /// File-level diff view with per-hunk paginated rendering for large diffs.
 struct iOSDiffFileView: View {
-    let file: GitDiffFile
+    let session: AgentSession
+    @ObservedObject var client: AgentControlClient
+    let initialFile: GitDiffFile
+
+    @State private var loadedFile: GitDiffFile?
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    private var file: GitDiffFile { loadedFile ?? initialFile }
 
     var body: some View {
-        if file.truncated || file.hunks.isEmpty {
-            ContentUnavailableView {
-                Label("Diff too large for inline preview", systemImage: "doc.text.magnifyingglass")
-            } description: {
-                Text("Tap to open in Mac, or run `git diff \(file.path)` locally.")
-            }
-            .navigationTitle(file.path)
-        } else {
-            // T15 lazy rendering — LazyVStack with each hunk as its own block.
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(file.hunks.enumerated()), id: \.offset) { _, hunk in
-                        hunkView(hunk)
-                    }
+        Group {
+            if isLoading {
+                ProgressView("Loading hunks…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let errorMessage {
+                ContentUnavailableView {
+                    Label("Could not load hunks", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(errorMessage)
                 }
-                .padding()
+            } else if file.hunks.isEmpty {
+                ContentUnavailableView {
+                    Label("No hunks", systemImage: "doc.text.magnifyingglass")
+                } description: {
+                    Text("The file may only have mode changes or the diff is no longer current.")
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(file.hunks.enumerated()), id: \.offset) { _, hunk in
+                            hunkView(hunk)
+                        }
+                    }
+                    .padding()
+                }
             }
-            .navigationTitle(file.path)
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .navigationTitle(file.path)
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: initialFile.path) {
+            if initialFile.truncated || initialFile.hunks.isEmpty {
+                await loadFullFile()
+            }
+        }
+    }
+
+    @MainActor
+    private func loadFullFile() async {
+        isLoading = true
+        errorMessage = nil
+        if let fetched = await client.fetchDiffFile(sessionId: session.id, path: initialFile.path) {
+            loadedFile = fetched
+        } else {
+            errorMessage = client.lastError ?? "The Mac did not return this file's hunks."
+        }
+        isLoading = false
     }
 
     @ViewBuilder
@@ -178,7 +210,7 @@ extension AgentControlClient {
     @MainActor
     public func fetchDiff(sessionId: UUID) async -> [GitDiffFile]? {
         guard let host, let token else { return nil }
-        guard let url = URL(string: "http://\(host):\(httpPort)/sessions/\(sessionId.uuidString)/diff") else { return nil }
+        guard let url = URL(string: "http://\(Self.urlHostLiteral(host)):\(httpPort)/sessions/\(sessionId.uuidString)/diff") else { return nil }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 10
@@ -189,4 +221,5 @@ extension AgentControlClient {
             return nil
         }
     }
+
 }

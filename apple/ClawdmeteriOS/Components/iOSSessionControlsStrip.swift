@@ -33,8 +33,8 @@ struct iOSSessionControlsStrip: View {
                 }
                 chip(
                     session.mode == .worktree ? "Worktree" : "Local",
-                    accessibilityLabel: "Mode: \(session.mode == .worktree ? "worktree" : "local")"
-                ) { /* mode toggle handled by picker UI later */ }
+                    accessibilityLabel: "Mode: \(session.mode == .worktree ? "worktree" : "local"). Double-tap to change."
+                ) { Task { await toggleExecutionMode() } }
                 Spacer()
             }
 
@@ -215,5 +215,13 @@ struct iOSSessionControlsStrip: View {
     private func togglePlanMode() async {
         let newPlan = !(session.status == .planning)
         _ = await client.changeMode(sessionId: session.id, mode: session.mode, planMode: newPlan)
+    }
+
+    @MainActor
+    private func toggleExecutionMode() async {
+        let newMode: SessionMode = session.mode == .worktree ? .local : .worktree
+        pendingSwapBanner = "Switching to \(newMode == .worktree ? "worktree" : "local")…"
+        _ = await client.changeMode(sessionId: session.id, mode: newMode)
+        pendingSwapBanner = nil
     }
 }

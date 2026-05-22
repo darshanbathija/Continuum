@@ -151,32 +151,45 @@ public struct IOSLiveView: View {
                             Text("Keep 5h timer ticking")
                                 .font(TahoeFont.body(14, weight: .bold))
                                 .foregroundStyle(t.fg)
-                            Text("Auto-revive · " + (autoRevive[provider] ?? false ? "last fired \(row.autoReviveAgo)" : "off"))
+                            Text(provider == .opencode
+                                 ? "Auto-revive unavailable for OpenCode"
+                                 : "Auto-revive · " + (autoRevive[provider] ?? false ? "last fired \(row.autoReviveAgo)" : "off"))
                                 .font(TahoeFont.body(11.5))
                                 .foregroundStyle(t.fg3)
                         }
                         Spacer()
-                        TahoeToggleView(on: Binding(
-                            get: { autoRevive[provider] ?? false },
-                            set: { newValue in
-                                // Optimistic UI: flip the local state
-                                // immediately, then fire the RPC. The
-                                // Mac's AutoReviver runs the toggle on
-                                // its own AppModel; we don't await the
-                                // response here because the UI hint is
-                                // the latest user intent.
-                                autoRevive[provider] = newValue
-                                if let agentClient {
-                                    let kind = agentKind(for: provider)
-                                    Task { @MainActor in
-                                        await agentClient.setAutoRevive(
-                                            provider: kind,
-                                            enabled: newValue
-                                        )
+                        if provider == .opencode {
+                            Text("Unavailable")
+                                .font(TahoeFont.body(11, weight: .bold))
+                                .foregroundStyle(t.fg3)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background {
+                                    Capsule().fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05))
+                                }
+                        } else {
+                            TahoeToggleView(on: Binding(
+                                get: { autoRevive[provider] ?? false },
+                                set: { newValue in
+                                    // Optimistic UI: flip the local state
+                                    // immediately, then fire the RPC. The
+                                    // Mac's AutoReviver runs the toggle on
+                                    // its own AppModel; we don't await the
+                                    // response here because the UI hint is
+                                    // the latest user intent.
+                                    autoRevive[provider] = newValue
+                                    if let agentClient {
+                                        let kind = agentKind(for: provider)
+                                        Task { @MainActor in
+                                            await agentClient.setAutoRevive(
+                                                provider: kind,
+                                                enabled: newValue
+                                            )
+                                        }
                                     }
                                 }
-                            }
-                        ))
+                            ))
+                        }
                     }
                     .padding(.horizontal, 16).padding(.vertical, 14)
                 }

@@ -102,6 +102,24 @@ public final class ComposerSendController: ObservableObject {
         }
     }
 
+    /// Dispatch a caller-owned send action while preserving the shared
+    /// composer state machine. Used by surfaces whose first-send flow has
+    /// to create/select a session or Frontier group before posting text.
+    public func sendCustom(action: (String) async -> String?) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard !sending else { return }
+        sending = true
+        defer { sending = false }
+        lastError = nil
+
+        if let error = await action(trimmed) {
+            lastError = error
+        } else {
+            text = ""
+        }
+    }
+
     /// Resets composer state. Used when the open session changes (we
     /// don't want a half-typed draft to flow into a different session).
     public func reset() {

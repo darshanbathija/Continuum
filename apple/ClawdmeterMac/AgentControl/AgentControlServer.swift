@@ -922,6 +922,9 @@ public final class AgentControlServer {
         t.register(method: "GET", pattern: "/sessions/:id/diff") { [weak self] _, conn, params in
             await self?.handleGetDiff(sessionId: params["id"] ?? "", connection: conn)
         }
+        t.register(method: "GET", pattern: "/sessions/:id/diff/*") { [weak self] req, conn, params in
+            await self?.handleGetDiffFile(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
         t.register(method: "GET", pattern: "/sessions/:id/pr") { [weak self] _, conn, params in
             await self?.handleGetPR(sessionId: params["id"] ?? "", connection: conn)
         }
@@ -1046,6 +1049,16 @@ public final class AgentControlServer {
             await self?.handleUnregisterPushToken(request: req, connection: conn)
         }
 
+        // --- PATCHes ---
+        t.register(method: "PATCH", pattern: "/sessions/:id/terminals/:paneId") { [weak self] req, conn, params in
+            self?.handleRenameTerminal(
+                sessionId: params["id"] ?? "",
+                paneId: params["paneId"] ?? "",
+                request: req,
+                connection: conn
+            )
+        }
+
         // --- DELETEs ---
         // Specific delete first so /sessions/:id/terminals/:paneId beats /sessions/:id.
         t.register(method: "DELETE", pattern: "/sessions/:id/terminals/:paneId") { [weak self] _, conn, params in
@@ -1065,6 +1078,9 @@ public final class AgentControlServer {
         }
         t.register(method: "GET", pattern: "/chat-providers") { [weak self] _, conn, _ in
             await self?.handleGetChatProviders(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/chat-providers/refresh") { [weak self] _, conn, _ in
+            await self?.handleRefreshChatProviders(connection: conn)
         }
         // v0.9 — Frontier endpoints. v0.8 shipped them as 501 stubs;
         // v0.9 lights them up alongside the chat-via-agentapi Gemini

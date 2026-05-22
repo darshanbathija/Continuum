@@ -57,8 +57,18 @@ public struct IOSPairingView: View {
                     .blur(radius: 10).padding(-30).allowsHitTesting(false)
 
                 TahoeGlass(radius: 28, tone: .raised) {
-                    QRView(content: "clwd://100.42.7.18:7019/v1/pair")
-                        .padding(28)
+                    VStack(spacing: 10) {
+                        TahoeIcon("qr", size: 54).foregroundStyle(t.fg4)
+                        Text("Mac QR only")
+                            .font(TahoeFont.body(14, weight: .bold))
+                            .foregroundStyle(t.fg2)
+                        Text("Scan the live code shown by Clawdmeter on your Mac.")
+                            .font(TahoeFont.body(11.5))
+                            .foregroundStyle(t.fg3)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 170)
+                    }
+                    .padding(28)
                 }
                 .frame(width: 280, height: 280)
 
@@ -92,7 +102,7 @@ public struct IOSPairingView: View {
                     TahoeGlass(radius: 14, tone: .chip) {
                         HStack(spacing: 10) {
                             TahoeIcon("link", size: 15).foregroundStyle(t.fg3)
-                            Text("clwd://100.42\u{2026}")
+                            Text("clwd://pairing-url")
                                 .font(TahoeFont.mono(13))
                                 .foregroundStyle(t.fg3)
                                 .lineLimit(1)

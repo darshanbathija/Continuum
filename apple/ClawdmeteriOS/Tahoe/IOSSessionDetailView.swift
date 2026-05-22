@@ -21,6 +21,8 @@ public struct IOSSessionDetailView: View {
     @State private var refineAlertShown: Bool = false
     @State private var refineText: String = ""
     @State private var lastError: String?
+    @State private var configSheetPresented: Bool = false
+    @StateObject private var chatStore: iOSChatStore
 
     public init(
         agentClient: AgentControlClient,
@@ -32,6 +34,7 @@ public struct IOSSessionDetailView: View {
         self.sessionId = sessionId
         self.data = data
         self.onBack = onBack
+        _chatStore = StateObject(wrappedValue: iOSChatStore(sessionId: sessionId, client: agentClient))
     }
 
     /// Find the session this screen represents. Returns nil if it was
@@ -59,6 +62,10 @@ public struct IOSSessionDetailView: View {
     private var hasRealPlan: Bool {
         guard let raw = session?.runtimePlanText else { return false }
         return !raw.isEmpty && session?.status == .planning
+    }
+
+    private var realAgentSession: AgentSession? {
+        agentClient.sessions.first { $0.id == sessionId }
     }
 
     public var body: some View {
@@ -96,10 +103,6 @@ public struct IOSSessionDetailView: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                // Sliders button presents the session-config sheet (model
-                // picker + effort dial). Sheet ships in a follow-up — for
-                // now the button is hidden when there's no real session so
-                // it doesn't dangle.
                 if session != nil && !data.isDemo {
                     IOSRoundIconBtn("sliders", action: openConfigSheet)
                 } else if data.isDemo {
@@ -128,15 +131,23 @@ public struct IOSSessionDetailView: View {
                             title: "Session unavailable",
                             body: "This session may have been archived on your Mac. Go back to see what's still running."
                         )
-                    } else {
-                        // Production: the live message stream isn't piped
-                        // through to iOS yet. Show a placeholder until the
-                        // bridge lands, and render the plan halo only when
-                        // a real plan text is present.
+                    } else if chatStore.snapshot.items.isEmpty {
                         emptyState(
-                            title: "Live transcript coming soon",
-                            body: "Open this session on your Mac to see the full thread. Plan steps will appear here as the agent prepares them."
+                            title: "No transcript yet",
+                            body: "Messages appear here after the Mac publishes this session's chat snapshot."
                         )
+                        if !planSteps.isEmpty {
+                            IOSPlanHaloMini(
+                                steps: planSteps,
+                                canApprove: hasRealPlan,
+                                onRefine: { refineAlertShown = true },
+                                onApprove: { Task { await approvePlan() } }
+                            )
+                        }
+                    } else {
+                        ForEach(chatStore.snapshot.items) { item in
+                            IOSWireChatItemRow(item: item, provider: session?.agent ?? .claude)
+                        }
                         if !planSteps.isEmpty {
                             IOSPlanHaloMini(
                                 steps: planSteps,
@@ -160,7 +171,6 @@ public struct IOSSessionDetailView: View {
             // the send call is short-circuited (no real session).
             TahoeGlass(radius: 22, tone: .raised) {
                 HStack(spacing: 8) {
-                    TahoeIcon("plus", size: 18).foregroundStyle(t.fg3)
                     TextField(composerPlaceholder, text: $composerText, axis: .vertical)
                         .font(TahoeFont.body(14))
                         .foregroundStyle(t.fg)
@@ -169,7 +179,6 @@ public struct IOSSessionDetailView: View {
                         .submitLabel(.send)
                         .disabled(session == nil && !data.isDemo)
                     Spacer(minLength: 4)
-                    TahoeIcon("mic", size: 16).foregroundStyle(t.fg3)
                     Button(action: { Task { await sendComposer() } }) {
                         ZStack {
                             Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
@@ -209,6 +218,25 @@ public struct IOSSessionDetailView: View {
                ),
                actions: { Button("OK", role: .cancel) { lastError = nil } },
                message: { Text(lastError ?? "") })
+        .sheet(isPresented: $configSheetPresented) {
+            NavigationStack {
+                if let realAgentSession {
+                    iOSSessionControlsStrip(session: realAgentSession, client: agentClient)
+                        .navigationTitle("Session controls")
+                        .navigationBarTitleDisplayMode(.inline)
+                } else {
+                    ContentUnavailableView("Session unavailable", systemImage: "exclamationmark.triangle")
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .task(id: sessionId) {
+            await chatStore.refresh()
+            chatStore.start()
+        }
+        .onDisappear {
+            chatStore.stop()
+        }
     }
 
     // MARK: - Computed UX state
@@ -262,9 +290,7 @@ public struct IOSSessionDetailView: View {
     }
 
     private func openConfigSheet() {
-        // Session-config sheet (model picker + effort dial + mode toggle)
-        // ships in the next pass. For now, the gesture is wired so the
-        // button isn't a silent no-op — the sheet body is the follow-up.
+        configSheetPresented = true
     }
 
     private func statusColor(_ s: TahoeCodeSession.Status) -> Color {
@@ -293,6 +319,81 @@ public struct IOSSessionDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 60)
+    }
+}
+
+private struct IOSWireChatItemRow: View {
+    @Environment(\.tahoe) private var t
+    var item: ChatItem
+    var provider: TahoeProvider
+
+    var body: some View {
+        switch item {
+        case .message(let message):
+            messageRow(message)
+        case .toolRun(_, let pairs):
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(pairs) { pair in
+                    HStack(spacing: 8) {
+                        TahoeIcon("doc", size: 11).foregroundStyle(t.fg3)
+                        Text(pair.call.title)
+                            .font(TahoeFont.body(11.5, weight: .semibold))
+                            .foregroundStyle(t.fg2)
+                        Text(pair.call.body)
+                            .font(TahoeFont.mono(11))
+                            .foregroundStyle(pair.call.isError ? .red : t.fg3)
+                            .lineLimit(2)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 4).padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func messageRow(_ message: ChatMessage) -> some View {
+        switch message.kind {
+        case .userText:
+            HStack {
+                Spacer()
+                TahoeGlass(radius: 20, tone: .raised) {
+                    Text(message.body)
+                        .font(TahoeFont.body(13))
+                        .foregroundStyle(t.fg)
+                        .padding(.horizontal, 15).padding(.vertical, 11)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: 320, alignment: .trailing)
+            }
+        case .assistantText:
+            HStack(alignment: .top, spacing: 9) {
+                TahoeProviderGlyph(provider: provider, size: 24)
+                Text(message.body)
+                    .font(TahoeFont.body(14))
+                    .foregroundStyle(t.fg)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }
+        case .toolCall, .toolResult:
+            HStack(spacing: 8) {
+                TahoeIcon(message.kind == .toolCall ? "doc" : "check", size: 11).foregroundStyle(t.fg3)
+                Text(message.title)
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                Text(message.body)
+                    .font(TahoeFont.mono(11))
+                    .foregroundStyle(message.isError ? .red : t.fg3)
+                    .lineLimit(2)
+                Spacer()
+            }
+            .padding(.horizontal, 4).padding(.vertical, 4)
+        case .meta:
+            Text(message.body)
+                .font(TahoeFont.body(11.5))
+                .foregroundStyle(t.fg3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
