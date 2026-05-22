@@ -57,6 +57,13 @@ public final class OpencodeSSEAdapter {
     /// session-id over the prompt POST.
     public private(set) var sessionMap: BidirectionalMap = .init()
 
+    /// PR #32: per-session repo lookup. The opencode `usage` event
+    /// doesn't carry the cwd, but the Clawdmeter-side session was
+    /// created against a specific repo path; we stash that here at
+    /// register time so `handleUsage` can tag the UsageRecord with
+    /// the right repo for analytics bucketing.
+    private var repoBySessionID: [String: String] = [:]
+
     /// Reconnect attempt counter; resets on a successful event read.
     private var reconnectCount: Int = 0
     private static let maxReconnects = 10
@@ -89,6 +96,7 @@ public final class OpencodeSSEAdapter {
         reconnectCount = 0
         lastEventId = nil
         sessionMap.removeAll()
+        repoBySessionID.removeAll()
         logger.info("opencode SSE adapter stopped")
     }
 
@@ -97,8 +105,17 @@ public final class OpencodeSSEAdapter {
     /// AgentSession; the SSE stream will already have observed the
     /// `session.created` event but the registry needs both ids
     /// known before subsequent prompts can route correctly.
-    public func register(clawdmeterID: UUID, opencodeID: String) {
+    ///
+    /// PR #32: the `repo` parameter is optional and gets stashed in
+    /// `repoBySessionID` so subsequent `usage` events tag the
+    /// UsageRecord with the right cwd for per-repo analytics
+    /// bucketing. Nil repos still register the id mapping but tag
+    /// usage records as "(unknown)" downstream.
+    public func register(clawdmeterID: UUID, opencodeID: String, repo: String? = nil) {
         sessionMap.set(clawdmeterID: clawdmeterID, opencodeID: opencodeID)
+        if let repo {
+            repoBySessionID[opencodeID] = repo
+        }
     }
 
     // MARK: - Stream loop
@@ -266,13 +283,16 @@ public final class OpencodeSSEAdapter {
     /// singleton) keeps the SSE adapter loosely coupled — the store is
     /// owned by AppRuntime and not globally addressable.
     private func handleUsage(properties: [String: Any]) {
-        // Resolve the repo from the session map's cousin store — we
-        // don't carry the cwd on the SSE event itself. The Mac's
-        // registry knows it via the AgentSession; for now we pass nil
-        // (analytics buckets under "(unknown)" until repo plumbing
-        // lands on the spawn path). Future polish: tag the repo at
-        // session.created time + retrieve it here from the registry.
-        let repo: String? = nil
+        // PR #32: the opencode `usage` SSE event carries `sessionID`
+        // (the opencode-side id), which we map back to the repo we
+        // stashed at register() time. Falls back to nil when the
+        // mapping is missing — out-of-band sessions started via
+        // `opencode` CLI directly won't have a Clawdmeter-side repo
+        // record. Analytics buckets nil under "(unknown)".
+        let repo: String? = {
+            guard let opencodeID = properties["sessionID"] as? String else { return nil }
+            return repoBySessionID[opencodeID]
+        }()
         guard let record = OpencodeUsageMapper.mapEvent(
             properties: properties,
             repo: repo

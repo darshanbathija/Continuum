@@ -142,6 +142,17 @@ public enum TahoeDemo {
         public var time: Double
         public var starred: Bool
         public var blocks: [ChatBlock]
+        /// PR #32 chunk 4: public init so MacChatDataAdapter can build
+        /// real ChatReply values from live chat data (the auto-synth
+        /// init is internal; cross-target adapters need public).
+        public init(model: String, tokens: Int, cost: Double, time: Double, starred: Bool, blocks: [ChatBlock]) {
+            self.model = model
+            self.tokens = tokens
+            self.cost = cost
+            self.time = time
+            self.starred = starred
+            self.blocks = blocks
+        }
     }
     public enum ChatBlock: Hashable, Sendable {
         case paragraph(String)
@@ -152,14 +163,30 @@ public enum TahoeDemo {
         public var user: String
         public var attached: [Attached]
         public var replies: [TahoeProvider: ChatReply]
+        /// PR #32 chunk 4: public init for cross-target adapters.
+        public init(id: UUID = UUID(), user: String, attached: [Attached], replies: [TahoeProvider: ChatReply]) {
+            self.id = id
+            self.user = user
+            self.attached = attached
+            self.replies = replies
+        }
     }
     public struct Attached: Hashable, Sendable {
         public var name: String
         public var range: String
+        public init(name: String, range: String) {
+            self.name = name
+            self.range = range
+        }
     }
     public struct ChatThread: Hashable, Sendable {
         public var title: String
         public var turns: [ChatTurn]
+        /// PR #32 chunk 4: public init for cross-target adapters.
+        public init(title: String, turns: [ChatTurn]) {
+            self.title = title
+            self.turns = turns
+        }
     }
 
     public static let chatThread = ChatThread(
