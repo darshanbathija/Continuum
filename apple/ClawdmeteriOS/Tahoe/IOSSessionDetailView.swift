@@ -266,18 +266,23 @@ public struct IOSSessionDetailView: View {
         }
         sending = true
         defer { sending = false }
-        await agentClient.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
-        composerText = ""
+        // Audit P2 fix: previously the composer text was cleared
+        // unconditionally on every send. If the Mac was offline / the
+        // token expired / the daemon rejected the request, the user's
+        // typed-out prompt was just gone. Clear only on success; on
+        // failure keep the text so the user can retry.
+        let ok = await agentClient.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
+        if ok { composerText = "" }
     }
 
     @MainActor
     private func sendRefine() async {
         let trimmed = refineText.trimmingCharacters(in: .whitespacesAndNewlines)
-        refineText = ""
         guard !trimmed.isEmpty, session != nil, !data.isDemo else { return }
         sending = true
         defer { sending = false }
-        await agentClient.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
+        let ok = await agentClient.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
+        if ok { refineText = "" }
     }
 
     @MainActor

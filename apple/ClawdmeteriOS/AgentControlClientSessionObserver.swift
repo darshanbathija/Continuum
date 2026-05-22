@@ -32,9 +32,14 @@ final class AgentControlClientSessionObserver {
             guard let sessions = note.userInfo?["sessions"] as? [AgentSession] else { return }
             Task { @MainActor in
                 LiveActivityCoordinator.shared.refresh(from: sessions)
+                // Audit P1 fix: require non-empty `planText` for Codex too
+                // — the old filter marked every Codex session as waiting
+                // (even mid-generation ones with no plan yet), which
+                // overstates the Watch complication count and trains
+                // users to ignore real approvals.
                 let waiting = sessions.filter {
                     $0.status == .planning
-                        && ($0.planText?.isEmpty == false || $0.agent == .codex)
+                        && ($0.planText?.isEmpty == false)
                 }
                 let latest = waiting.max(by: { $0.lastEventAt < $1.lastEventAt })
                 WatchPlanBridgeIOS.shared.updateContext(
