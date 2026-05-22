@@ -150,17 +150,45 @@ public final class DaemonChatStoreRegistry {
         // store invalidates the Mac UI's @ObservedObject reference and
         // the chat thread freezes on the previous turn's snapshot.
         //
-        // Audit P1 fix: previously this branch was gated on
-        // `session.kind == .chat`. That left .code (Codex plan-mode)
-        // sessions stuck on their pre-approve rollout file after the
-        // user clicked "Approve Plan" — the spawned execution JSONL is
-        // a brand-new file and the registry's cache hit returned the
-        // stale store. Drop the kind gate and resolve the desired URL
-        // via `resolveURL` (which already knows the per-agent rules
-        // and lineage tracking from SessionFileResolver) so .code
-        // sessions get the file-swap they need too.
+        // Audit P1 fix: extend the file-swap check to .code sessions
+        // (previously gated to .chat only). Codex plan-mode approve-plan
+        // writes a brand-new rollout JSONL; without this, the registry
+        // kept tailing the stale plan-mode file and iOS chat-subscribe
+        // WS clients saw no execution turns.
+        //
+        // Resolution rules MUST differ by kind:
+        //   - .chat sessions: use the chat-specific selectors
+        //     (`newestCodexJSONLMatching` is scoped to this session's
+        //     cwd + createdAt; `chatCwdClaudeJSONL` is the chat-mode
+        //     Claude JSONL). The /review pass caught that just calling
+        //     `resolveURL` here would silently downgrade Codex chat to
+        //     `newestCodexJSONL()` (global newest), which can pick up
+        //     a concurrent Codex run on the same machine.
+        //   - .code sessions: use the injected `resolveURL` closure
+        //     (delegates to `SessionFileResolver` in production for
+        //     respawn-lineage tracking).
         if let entry = entries[session.id] {
-            let desiredURL: URL? = resolveURL(session.id, session)
+            let desiredURL: URL?
+            switch session.kind {
+            case .chat:
+                if session.agent == .codex, session.codexChatBackend == .cli {
+                    // Codex chat: scope to this session's rollout to
+                    // avoid grabbing another concurrent run's transcript.
+                    desiredURL = Self.newestCodexJSONLMatching(
+                        cwd: session.effectiveCwd,
+                        after: session.createdAt
+                    )
+                } else if session.agent == .claude {
+                    desiredURL = Self.chatCwdClaudeJSONL(chatCwd: session.effectiveCwd)
+                } else {
+                    desiredURL = nil
+                }
+            case .code:
+                // Plan-mode rollout swap on approve-plan. resolveURL
+                // delegates to SessionFileResolver which tracks Codex
+                // respawn lineage via record(sessionId:rolloutURL:).
+                desiredURL = resolveURL(session.id, session)
+            }
             if let desired = desiredURL, entry.store.currentFileURL != desired {
                 if entry.store.isSDKOnly {
                     // sdkOnly fallback: drop and let createStore() rebuild
