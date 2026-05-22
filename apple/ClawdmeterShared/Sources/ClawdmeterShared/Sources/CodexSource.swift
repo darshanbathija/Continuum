@@ -211,24 +211,45 @@ public final class CodexSource: AISource {
             return nil
         }
 
-        // Collect candidate bucket payloads. Some responses nest under
-        // top-level `rateLimitsByLimitId` (camelCase per ts), others
-        // under `rate_limits_by_limit_id` (snake_case per rust).
+        // Collect candidate bucket payloads. The /wham/usage endpoint
+        // returns several variants depending on Codex CLI version:
+        //
+        //   1. v0.22.24 protocol (`codex-rs/.../v2/account.rs`):
+        //      - `rateLimits` (snake→camel: rate_limits)
+        //      - `rateLimitsByLimitId` — map of buckets
+        //   2. v0.22.25 actual server (observed via diagnostic log):
+        //      - `rate_limit` (SINGULAR snake_case!) — main bucket
+        //      - `additional_rate_limits` — map of side buckets
+        //      - `code_review_rate_limit` — a third class of bucket
+        //
+        // Accept all spellings so we survive future renames.
         var buckets: [[String: Any]] = []
-        for key in ["rateLimitsByLimitId", "rate_limits_by_limit_id"] {
+        // Multi-bucket maps.
+        for key in ["rateLimitsByLimitId", "rate_limits_by_limit_id", "additional_rate_limits", "additionalRateLimits"] {
             if let map = root[key] as? [String: [String: Any]] {
                 buckets.append(contentsOf: map.values)
             } else if let map = root[key] as? [String: Any] {
-                // Some servers return it as [String: Any] when only one bucket
-                // is present.
                 for (_, v) in map { if let v = v as? [String: Any] { buckets.append(v) } }
             }
         }
-        // Single-bucket legacy field.
-        for key in ["rateLimits", "rate_limits"] {
+        // Single-bucket fields. `rate_limit` (singular) is the current
+        // server's primary field; `rate_limits`/`rateLimits` were
+        // documented in the v2 protocol; `code_review_rate_limit` is a
+        // separate code-review bucket the new server exposes.
+        for key in ["rate_limit", "rateLimit", "rate_limits", "rateLimits", "code_review_rate_limit", "codeReviewRateLimit"] {
             if let single = root[key] as? [String: Any] {
                 buckets.append(single)
             }
+        }
+
+        // Top-level rate_limit_reached_type — current server puts the
+        // reached signal at root level rather than inside each bucket.
+        var reachedTopLevel: String?
+        if let reached = (root["rateLimitReachedType"] as? String)
+            ?? (root["rate_limit_reached_type"] as? String),
+           !reached.isEmpty,
+           reached.lowercased() != "none" {
+            reachedTopLevel = reached
         }
 
         // v0.22.25 diagnostic: when no buckets surfaced, dump the
@@ -261,7 +282,12 @@ public final class CodexSource: AISource {
                 !reached.isEmpty {
                 reachedAny = reached
             }
-            if let primary = BucketView(rawBucket: raw["primary"]) {
+            // v0.22.25: current Codex server uses `primary_window` /
+            // `secondary_window` keys, not `primary` / `secondary`.
+            // Accept both spellings so we survive future renames.
+            let primaryDict = raw["primary_window"] ?? raw["primaryWindow"] ?? raw["primary"]
+            let secondaryDict = raw["secondary_window"] ?? raw["secondaryWindow"] ?? raw["secondary"]
+            if let primary = BucketView(rawBucket: primaryDict) {
                 if Self.isSessionWindow(primary.windowMinutes) {
                     if sessionWinner == nil || primary.usedPercent > sessionWinner!.usedPercent {
                         sessionWinner = primary
@@ -272,7 +298,7 @@ public final class CodexSource: AISource {
                     }
                 }
             }
-            if let secondary = BucketView(rawBucket: raw["secondary"]) {
+            if let secondary = BucketView(rawBucket: secondaryDict) {
                 if Self.isSessionWindow(secondary.windowMinutes) {
                     if sessionWinner == nil || secondary.usedPercent > sessionWinner!.usedPercent {
                         sessionWinner = secondary
@@ -285,15 +311,32 @@ public final class CodexSource: AISource {
             }
         }
 
-        // If no session bucket was identifiable but at least one bucket
-        // had a primary, fall back to the highest-primary across all
-        // (preserves prior behavior for endpoints that don't expose
-        // `window_minutes` — e.g. mocked test fixtures).
+        // If window_duration_mins is missing on every bucket (current
+        // /wham/usage response shape strips it from `primary_window`
+        // and `secondary_window`), the loop above won't classify
+        // anything. Fall back to positional reading: primary_window is
+        // the 5h session, secondary_window is the weekly. This matches
+        // every Codex CLI variant we've seen.
         if sessionWinner == nil {
             for raw in buckets {
-                if let primary = BucketView(rawBucket: raw["primary"]) {
+                let primaryDict = raw["primary_window"] ?? raw["primaryWindow"] ?? raw["primary"]
+                if let primary = BucketView(rawBucket: primaryDict) {
                     if sessionWinner == nil || primary.usedPercent > sessionWinner!.usedPercent {
                         sessionWinner = primary
+                    }
+                }
+            }
+        }
+        // v0.22.25: same positional fallback for the weekly bucket
+        // when window_duration_mins is missing — secondary_window is
+        // conventionally the weekly. Only fires when the
+        // window-class match in the main loop didn't pick a winner.
+        if weeklyWinner == nil {
+            for raw in buckets {
+                let secondaryDict = raw["secondary_window"] ?? raw["secondaryWindow"] ?? raw["secondary"]
+                if let secondary = BucketView(rawBucket: secondaryDict) {
+                    if weeklyWinner == nil || secondary.usedPercent > weeklyWinner!.usedPercent {
+                        weeklyWinner = secondary
                     }
                 }
             }
@@ -307,9 +350,10 @@ public final class CodexSource: AISource {
         if sessionWinner == nil, let first = buckets.first {
             let bucketKeys = first.keys.sorted().joined(separator: ", ")
             let primaryKeys: String
-            if let primary = first["primary"] as? [String: Any] {
+            let primaryDict = first["primary_window"] ?? first["primaryWindow"] ?? first["primary"]
+            if let primary = primaryDict as? [String: Any] {
                 primaryKeys = primary.keys.sorted().joined(separator: ", ")
-            } else if let primaryNS = first["primary"] {
+            } else if let primaryNS = primaryDict {
                 primaryKeys = "<not-dict: \(type(of: primaryNS))>"
             } else {
                 primaryKeys = "<missing>"
@@ -321,24 +365,32 @@ public final class CodexSource: AISource {
 
         let now = Date()
         let nowEpoch = Int(now.timeIntervalSince1970)
-        let sessionMins = max(0, (session.resetsAt - nowEpoch + 59) / 60)
+        // v0.22.25: when resets_at is null/missing, default to 5h
+        // ahead so the "resets in" line stays plausible. Better to
+        // show "resets in 5h" than "resets in 0m" or a stale value.
+        let sessionResetEpoch = session.resetsAt > 0 ? session.resetsAt : nowEpoch + 5 * 3600
+        let sessionMins = max(0, (sessionResetEpoch - nowEpoch + 59) / 60)
 
         let weeklyPct: Int
         let weeklyEpoch: Int
         let weeklyMins: Int
         if let weekly = weeklyWinner {
             weeklyPct = Int(weekly.usedPercent.rounded())
-            weeklyEpoch = weekly.resetsAt
-            weeklyMins = max(0, (weekly.resetsAt - nowEpoch + 59) / 60)
+            // Same fallback for weekly resetsAt: 7d ahead when null.
+            weeklyEpoch = weekly.resetsAt > 0 ? weekly.resetsAt : nowEpoch + 7 * 24 * 3600
+            weeklyMins = max(0, (weeklyEpoch - nowEpoch + 59) / 60)
         } else {
             weeklyPct = 0
             weeklyEpoch = nowEpoch + 7 * 24 * 3600
             weeklyMins = 7 * 24 * 60
         }
 
-        let resetIsPast = session.resetsAt <= nowEpoch
+        // v0.22.25: also honor a top-level `rate_limit_reached_type`
+        // (current server puts the reached signal at the root, not
+        // inside each bucket).
+        let resetIsPast = session.resetsAt > 0 && session.resetsAt <= nowEpoch
         let status: UsageData.Status
-        if reachedAny != nil {
+        if reachedAny != nil || reachedTopLevel != nil {
             status = .limited
         } else if resetIsPast {
             status = .notStarted
@@ -352,7 +404,7 @@ public final class CodexSource: AISource {
         return UsageData(
             sessionPct: Int(session.usedPercent.rounded()),
             sessionResetMins: sessionMins,
-            sessionEpoch: session.resetsAt,
+            sessionEpoch: sessionResetEpoch,
             weeklyPct: weeklyPct,
             weeklyResetMins: weeklyMins,
             weeklyEpoch: weeklyEpoch,
