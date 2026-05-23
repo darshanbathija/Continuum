@@ -121,19 +121,20 @@ public final class LanguageServerClient: NSObject {
     private let logger = Logger(subsystem: "com.clawdmeter.mac", category: "LanguageServerClient")
 
     /// Path to the `language_server` Mach-O binary. Resolved via
-    /// `AntigravityInstall.locateLanguageServer(in:)` at construction.
-    /// Nil only when Antigravity isn't installed; methods that need it
-    /// throw `.binaryNotFound`.
+    /// `AntigravityInstall.locateLanguageServer(in:)` lazily on each
+    /// access. Nil only when Antigravity isn't installed; methods that
+    /// need it throw `.binaryNotFound`.
     ///
-    /// v0.23.5 chat-v2 fix: previously cached at init time, but the
-    /// init occasionally raced with the OS bundle-content readability
-    /// in fresh `/Applications/Antigravity.app` installs — locate
-    /// returned nil at init, then succeeded a moment later in
-    /// `AntigravityInstall.preflight()`. The instance kept the nil
-    /// forever → every Gemini chat 500'd with binaryNotFound even
-    /// though preflight reported .ready. Recompute on each access so
-    /// any transient nil heals on the next call (~50µs per recompute,
-    /// dominated by 4 stat() syscalls; negligible vs the agentapi RPC).
+    /// History note: a prior v0.23.5 attempt hypothesized an init-time
+    /// race against bundle-content readability and switched this from
+    /// a `let` to a lazy computed `var`. That diagnosis was wrong —
+    /// the real Chat-V2 Gemini-500 was an `agentapi` response-envelope
+    /// mismatch surfacing as `.malformedResponse` (NSError code 3),
+    /// which Swift's payload-first case-ordering for Error→NSError made
+    /// look like `.binaryNotFound` (also visually labelled "error 3").
+    /// The lazy form is kept because re-probing 4 paths on each call is
+    /// cheap (~50µs of stat() syscalls vs the agentapi RPC dominating)
+    /// and lets a transient nil heal on the next attempt.
     public var languageServerURL: URL? {
         if let override = languageServerURLOverride {
             return override
@@ -233,28 +234,37 @@ public final class LanguageServerClient: NSObject {
             projectId: projectId,
             args: ["new-conversation", "--model=\(modelTier.rawValue)", prompt]
         )
-        // Phase 0 runtime notes captured the actual successful response as a
-        // top-level `{conversationId, prompt}` payload. Earlier drafts of
-        // this decoder assumed a `{response: {conversationId}}` envelope
-        // and threw .malformedResponse on every real success. Accept BOTH
-        // shapes so future agentapi versions that wrap (or unwrap) the
-        // envelope keep working — fall back to nested only when top-level
-        // is missing. The `error` field is checked first regardless.
+        // agentapi (Antigravity 2.0.6) returns:
+        //   { "response": { "newConversation": { "prompt": "...",
+        //                                        "conversationId": "<uuid>" } } }
+        // Phase 0 runtime notes mis-captured this as either top-level
+        // `{conversationId,prompt}` or `{response:{conversationId}}`; both
+        // shapes decoded to all-nil against real stdout, surfacing as
+        // `.malformedResponse` (NSError code 3 — which by Swift's
+        // payload-first case ordering also happened to be reported as
+        // "error 3" and was repeatedly misread as `.binaryNotFound`).
+        // Accept all three shapes so any forward/back drift in the
+        // envelope keeps working; `error` is checked first regardless.
         struct NewConversationResponse: Decodable {
-            struct Inner: Decodable {
+            struct ResponseEnvelope: Decodable {
+                struct NewConversationPayload: Decodable {
+                    let conversationId: String?
+                }
                 let conversationId: String?
+                let newConversation: NewConversationPayload?
             }
             let conversationId: String?
-            let response: Inner?
+            let response: ResponseEnvelope?
             let error: String?
         }
         let decoded = try decodeAgentapiResponse(NewConversationResponse.self, from: stdout)
         if let err = decoded.error { throw LanguageServerClientError.rpcError(err) }
         if let id = decoded.conversationId { return id }
         if let id = decoded.response?.conversationId { return id }
-        let preview = String(data: stdout, encoding: .utf8)?.prefix(200) ?? ""
+        if let id = decoded.response?.newConversation?.conversationId { return id }
+        let preview = String(data: stdout, encoding: .utf8)?.prefix(400) ?? ""
         throw LanguageServerClientError.malformedResponse(
-            "newConversation: conversationId absent (top-level + response both nil) — stdout=\(preview)"
+            "newConversation: conversationId absent in any known envelope shape — stdout=\(preview)"
         )
     }
 

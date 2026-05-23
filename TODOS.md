@@ -618,3 +618,27 @@ deferred items the CEO review identified.
   swap paths.
 - **Effort**: ~1hr CC. Wire `JSONLSessionId.extract(...)` into the
   swap path using the chat store's pinned JSONL URL.
+
+### v0.23.7 follow-up — Antigravity 2.0.6 smoke prompt gap
+
+- **What**: `tools/smoke-chat-v2.sh gemini` reaches `currentTurnState=completed`
+  (turn-end watchdog landed in v0.23.7) but its assistant-text criterion
+  still fails for short prompts. Antigravity 2.0.6's agentapi is
+  agent-only — `"say hi in one short sentence"` triggers an agentic
+  loop (list_dir → view_file) instead of emitting a prose
+  `[Message] sender=<agent-uuid>` block.
+- **Where**: `tools/smoke-chat-v2.sh` + product decision on what the
+  Gemini smoke should exercise.
+- **Why**: The `[Message]` extraction path that landed in v0.23.7 is
+  verified — it works against 15 production conversation DBs that DO
+  contain agent prose for substantive prompts (review/summary turns).
+  The current smoke prompt just never exercises that path. Three
+  resolutions on the table:
+  1. Change `SMOKE_PROMPT` to one that elicits a Gemini agent prose
+     summary (e.g., "Read CLAUDE.md and write a 1-paragraph summary").
+  2. Add an alternate agentapi RPC channel that fetches assistant
+     text directly (e.g., `language_server agentapi get-conversation-messages`).
+  3. Rework the smoke to validate tool activity for the Gemini
+     provider instead of prose.
+- **Effort**: ~30min for option 1 (recommended), ~2-3hrs for option 2,
+  ~1hr for option 3.

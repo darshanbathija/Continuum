@@ -312,4 +312,94 @@ final class ConversationProtoParserTests: XCTestCase {
         XCTAssertEqual(decoded.toolCallId, "igigay6r")
         XCTAssertTrue(decoded.parseClean)
     }
+
+    // MARK: - [Message] block scrape (2.0.6 chat-reply extraction)
+
+    func test_messageBlock_extractsAgentReplyFromStepType101() {
+        // Synthesized payload mimicking the shape Antigravity 2.0.6
+        // step_type=101 rows actually carry: arbitrary proto-header bytes,
+        // the ASCII `[Message] ` marker, structured fields up to
+        // `content=…`, then a protobuf tag/length boundary (low byte) that
+        // terminates the string. The scraper should ignore the binary
+        // surround and pull out the four structured fields.
+        let prefix = Data([0x08, 0x65, 0x20, 0x03, 0x2A, 0x7B])
+        let messageText = "[Message] timestamp=2026-05-23T01:00:00Z sender=64d4fe97-f999-4078-8a44-5b776543c90d priority=MESSAGE_PRIORITY_HIGH content=# Summary\nA binary search tree keeps left < node < right at every node."
+        let body = Data(messageText.utf8)
+        let suffix = Data([0x12, 0x04, 0x68, 0x69])  // proto tag terminating
+        let payload = prefix + body + suffix
+
+        let blocks = ConversationProtoParser.scrapeMessageBlocks(payload)
+        XCTAssertEqual(blocks.count, 1)
+        XCTAssertEqual(blocks.first?.sender, "64d4fe97-f999-4078-8a44-5b776543c90d")
+        XCTAssertEqual(blocks.first?.timestamp, "2026-05-23T01:00:00Z")
+        XCTAssertEqual(blocks.first?.priority, "MESSAGE_PRIORITY_HIGH")
+        XCTAssertEqual(blocks.first?.content,
+                       "# Summary\nA binary search tree keeps left < node < right at every node.")
+        if case .agent(let id) = blocks.first?.senderKind {
+            XCTAssertEqual(id, "64d4fe97-f999-4078-8a44-5b776543c90d")
+        } else {
+            XCTFail("bare-UUID sender should classify as .agent")
+        }
+    }
+
+    func test_messageBlock_classifiesSystemSenderAsUserPromptEcho() {
+        let text = "[Message] timestamp=2026-05-23T01:00:00Z sender=system priority=MESSAGE_PRIORITY_HIGH content=Say hi in one short sentence."
+        let payload = Data([0x2A, 0x7F]) + Data(text.utf8) + Data([0x12, 0x00])
+        let blocks = ConversationProtoParser.scrapeMessageBlocks(payload)
+        XCTAssertEqual(blocks.count, 1)
+        XCTAssertEqual(blocks.first?.senderKind, .system)
+    }
+
+    func test_messageBlock_classifiesTaskCompletionSender() {
+        let text = "[Message] timestamp=2026-05-23T01:00:00Z sender=2a8342b1-af24-4f15-8209-fb65a36c4d93/task-23 priority=MESSAGE_PRIORITY_HIGH content=Task id \"2a8342b1.../task-23\" finished with result: ok"
+        let payload = Data([0x2A, 0x80, 0x01]) + Data(text.utf8) + Data([0x12, 0x00])
+        let blocks = ConversationProtoParser.scrapeMessageBlocks(payload)
+        XCTAssertEqual(blocks.count, 1)
+        if case .taskCompletion(let taskId) = blocks.first?.senderKind {
+            XCTAssertEqual(taskId, "task-23")
+        } else {
+            XCTFail("sender with `/task-N` suffix should classify as .taskCompletion")
+        }
+    }
+
+    func test_messageBlock_extractsMultipleBlocksInSinglePayload() {
+        // Larger conversations can pack the user prompt + an agent
+        // summary + a task signal into the same step_type=101 row. All
+        // three should round-trip out, in document order.
+        let m1 = "[Message] timestamp=2026-05-23T01:00:00Z sender=system priority=P1 content=hello"
+        let m2 = "[Message] timestamp=2026-05-23T01:00:05Z sender=aaa-bbb-ccc priority=P2 content=hi back"
+        let payload =
+            Data([0x2A, 0x40]) + Data(m1.utf8) +
+            Data([0x12, 0x00, 0x2A, 0x40]) + Data(m2.utf8) +
+            Data([0x12, 0x00])
+        let blocks = ConversationProtoParser.scrapeMessageBlocks(payload)
+        XCTAssertEqual(blocks.count, 2)
+        XCTAssertEqual(blocks[0].senderKind, .system)
+        if case .agent(let id) = blocks[1].senderKind {
+            XCTAssertEqual(id, "aaa-bbb-ccc")
+        } else {
+            XCTFail("second block should be agent")
+        }
+    }
+
+    func test_messageBlock_rejectsMalformedShape() {
+        // A payload containing the `[Message] ` marker but missing one
+        // of the required fields (no `priority=`) should be discarded —
+        // defends against the marker appearing inside an unrelated
+        // tool-arg string.
+        let bad = "[Message] timestamp=ts sender=who content=text"
+        let payload = Data([0x2A, 0x40]) + Data(bad.utf8) + Data([0x12, 0x00])
+        XCTAssertEqual(ConversationProtoParser.scrapeMessageBlocks(payload).count, 0)
+    }
+
+    func test_decode_populatesMessagesFromStepPayload() {
+        // End-to-end: decode() should expose the scraped messages on
+        // the returned DecodedStep so the chat ingestor doesn't have to
+        // call the scraper separately.
+        let text = "[Message] timestamp=2026-05-23T01:00:00Z sender=zzz-zzz priority=P content=hi"
+        let payload = Data([0x08, 0x65, 0x20, 0x03, 0x2A, 0x60]) + Data(text.utf8) + Data([0x12, 0x00])
+        let decoded = ConversationProtoParser.decode(payload)
+        XCTAssertEqual(decoded.messages.count, 1)
+        XCTAssertEqual(decoded.messages.first?.content, "hi")
+    }
 }

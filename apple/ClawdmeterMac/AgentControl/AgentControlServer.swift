@@ -1604,7 +1604,15 @@ public final class AgentControlServer {
                 body: Data(#"{"error":"antigravity_not_running","cta":"Open Antigravity 2 to continue this session"}"#.utf8)
             ), on: connection)
         } catch {
-            serverLogger.error("agentapi new-conversation failed: \(error.localizedDescription, privacy: .public)")
+            // `error.localizedDescription` on a bare Swift Error enum returns
+            // "(Module.Type error N.)" with a CASE INDEX, not the case name —
+            // and Swift's NSError bridging orders payload-carrying cases
+            // BEFORE payload-less ones, so reading the index against the
+            // enum's source-order is misleading (e.g. "error 3" looks like
+            // `binaryNotFound` but is actually `malformedResponse(String)`).
+            // Render via `String(describing:)` so the associated payload
+            // (stdout preview, stderr, exit code) shows up in /tmp/clawd.log.
+            serverLogger.error("agentapi new-conversation failed: \(String(describing: error), privacy: .public)")
             registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
             sendResponse(.internalError, on: connection)
