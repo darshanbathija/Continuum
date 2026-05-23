@@ -271,4 +271,46 @@ final class LanguageServerClientRewriteTests: XCTestCase {
         XCTAssertEqual(decoded.error, "language_server unreachable")
         XCTAssertNil(decoded.conversationId)
     }
+
+    /// Real Antigravity 2.0.6 `agentapi new-conversation` stdout, captured
+    /// from a live `/applications/Antigravity.app/Contents/Resources/bin/language_server`
+    /// run via `tools/smoke-chat-v2.sh` (2026-05-23):
+    ///
+    ///   {"response":{"newConversation":{"prompt":"…","conversationId":"<uuid>"}}}
+    ///
+    /// The pre-fix decoder only looked at top-level `conversationId` and
+    /// `response.conversationId`; both nil here, so production threw
+    /// `.malformedResponse` which the bridged NSError surfaced as
+    /// "error 3" — visually indistinguishable from `.binaryNotFound`
+    /// because Swift's NSError bridging orders payload-carrying cases
+    /// before payload-less ones. Lock the actual envelope in.
+    func test_newConversationDecoder_acceptsNewConversationNestedShape() throws {
+        let json = #"""
+        {
+          "response": {
+            "newConversation": {
+              "prompt": "(starting new chat)",
+              "conversationId": "240dd184-5737-4d02-bb70-69ac40af9452"
+            }
+          }
+        }
+        """#.data(using: .utf8)!
+        struct NewConversationResponse: Decodable {
+            struct ResponseEnvelope: Decodable {
+                struct NewConversationPayload: Decodable { let conversationId: String? }
+                let conversationId: String?
+                let newConversation: NewConversationPayload?
+            }
+            let conversationId: String?
+            let response: ResponseEnvelope?
+            let error: String?
+        }
+        let decoded = try JSONDecoder().decode(NewConversationResponse.self, from: json)
+        XCTAssertNil(decoded.error)
+        XCTAssertNil(decoded.conversationId)
+        XCTAssertNil(decoded.response?.conversationId)
+        XCTAssertEqual(decoded.response?.newConversation?.conversationId,
+                       "240dd184-5737-4d02-bb70-69ac40af9452",
+                       "real Antigravity 2.0.6 stdout nests conversationId at response.newConversation.conversationId — regression guard for the Chat-V2 'binaryNotFound' misdiagnosis")
+    }
 }

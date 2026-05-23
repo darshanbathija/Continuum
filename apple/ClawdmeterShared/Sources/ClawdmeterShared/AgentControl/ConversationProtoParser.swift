@@ -238,6 +238,16 @@ public enum ConversationProtoParser {
         /// Human-readable tool name like `list_dir`, `view_file`,
         /// `apply_patch`. Same nesting as toolCallId.
         public let toolName: String?
+        /// Any `[Message]` blocks scraped out of the payload. Antigravity
+        /// 2.0.6 step_type=101 rows embed user prompts, agent prose
+        /// replies, and task-completion signals as ASCII `[Message]
+        /// timestamp=… sender=… priority=… content=…` records inside the
+        /// step payload. `sender` discriminates: bare-UUID = a Gemini
+        /// agent prose reply, "system" = user prompt being routed in,
+        /// "<conv>/task-N" = tool-completion signal. The chat ingestor
+        /// uses this to surface assistant text without a full proto
+        /// decode of the nested envelope.
+        public let messages: [MessageBlock]
         /// True iff the outer wrapper parsed without short-reads or
         /// malformed varints. False indicates a partial decode — the
         /// fields above may still be set but cannot be trusted.
@@ -248,13 +258,56 @@ public enum ConversationProtoParser {
             stepStatus: UInt64? = nil,
             toolCallId: String? = nil,
             toolName: String? = nil,
+            messages: [MessageBlock] = [],
             parseClean: Bool = true
         ) {
             self.stepType = stepType
             self.stepStatus = stepStatus
             self.toolCallId = toolCallId
             self.toolName = toolName
+            self.messages = messages
             self.parseClean = parseClean
+        }
+    }
+
+    /// One `[Message]` record scraped from a step payload. See
+    /// `DecodedStep.messages` for context.
+    public struct MessageBlock: Equatable, Sendable {
+        public let timestamp: String
+        public let sender: String
+        public let priority: String
+        public let content: String
+
+        /// Classification of the sender string. Drives whether the chat
+        /// ingestor renders the message as `.assistantText`, swallows it
+        /// as a user echo, or surfaces it as a tool-completion meta row.
+        public enum SenderKind: Equatable, Sendable {
+            /// `sender=system` — the user's prompt being routed into the
+            /// agent loop. The user-side composer already echoed it, so
+            /// the ingestor swallows these.
+            case system
+            /// `sender=<conv-uuid>/task-N` — an internal task-completion
+            /// signal. Useful for triage, not chat-worthy.
+            case taskCompletion(taskId: String)
+            /// `sender=<bare-uuid>` (any UUID that isn't a task id) —
+            /// this is Gemini's natural-language assistant reply. The
+            /// agent posts these as it finishes thinking.
+            case agent(senderId: String)
+        }
+
+        public var senderKind: SenderKind {
+            if sender == "system" { return .system }
+            if let slash = sender.firstIndex(of: "/") {
+                return .taskCompletion(taskId: String(sender[sender.index(after: slash)...]))
+            }
+            return .agent(senderId: sender)
+        }
+
+        public init(timestamp: String, sender: String, priority: String, content: String) {
+            self.timestamp = timestamp
+            self.sender = sender
+            self.priority = priority
+            self.content = content
         }
     }
 
@@ -297,12 +350,86 @@ public enum ConversationProtoParser {
         }
 
         if !reader.isClean { clean = false }
+        let messages = scrapeMessageBlocks(data)
         return DecodedStep(
             stepType: stepType,
             stepStatus: stepStatus,
             toolCallId: toolCallId,
             toolName: toolName,
+            messages: messages,
             parseClean: clean
+        )
+    }
+
+    /// Find every `[Message] timestamp=… sender=… priority=… content=…`
+    /// record embedded in `data` and return them. Antigravity wraps these
+    /// records in a protobuf string field at a deeper nesting than the
+    /// toolcall submessage; rather than decoding the whole envelope, we
+    /// scan for the ASCII marker `[Message] ` and read forward until the
+    /// next protobuf wire boundary (any byte < 0x20 that isn't tab/LF/CR).
+    /// Protobuf field tags use values 1-127 with bit pattern (field<<3)|wire,
+    /// so legitimate prose bytes never look like the truncation sentinel.
+    /// This survives the proto schema changing — Antigravity has rev'd
+    /// the surrounding envelope twice across 2.0.0→2.0.6 without
+    /// touching the `[Message]` text format.
+    static func scrapeMessageBlocks(_ data: Data) -> [MessageBlock] {
+        let marker: [UInt8] = Array("[Message] ".utf8)
+        var results: [MessageBlock] = []
+        var i = 0
+        let bytes = [UInt8](data)
+        while i + marker.count <= bytes.count {
+            // Find next "[Message] " occurrence.
+            if !bytes[i..<(i + marker.count)].elementsEqual(marker) {
+                i += 1
+                continue
+            }
+            // Read forward until a control byte (< 0x20) that isn't \n
+            // or \r or \t. Protobuf tags + length varints land here.
+            var end = i + marker.count
+            while end < bytes.count {
+                let b = bytes[end]
+                if b < 0x20 && b != 0x09 && b != 0x0A && b != 0x0D {
+                    break
+                }
+                end += 1
+            }
+            let slice = Data(bytes[i..<end])
+            if let text = String(data: slice, encoding: .utf8),
+               let block = parseMessageBlock(text) {
+                results.append(block)
+            }
+            i = end
+        }
+        return results
+    }
+
+    /// Parse a single `[Message] timestamp=… sender=… priority=… content=…`
+    /// line into structured fields. Returns nil if the shape doesn't
+    /// match — that means the marker hit was inside a tool argument
+    /// (e.g. a code snippet quoting `[Message]`) rather than a real
+    /// agent message.
+    static func parseMessageBlock(_ s: String) -> MessageBlock? {
+        guard s.hasPrefix("[Message] ") else { return nil }
+        // Find the four fixed keys in order. `content=` is the trailing
+        // capture and absorbs everything after — agent replies are often
+        // multi-line, with embedded `=` signs.
+        guard let tsRange = s.range(of: "timestamp="),
+              let senderRange = s.range(of: " sender=", range: tsRange.upperBound..<s.endIndex),
+              let priRange = s.range(of: " priority=", range: senderRange.upperBound..<s.endIndex),
+              let contentRange = s.range(of: " content=", range: priRange.upperBound..<s.endIndex)
+        else { return nil }
+        let timestamp = String(s[tsRange.upperBound..<senderRange.lowerBound])
+        let sender = String(s[senderRange.upperBound..<priRange.lowerBound])
+        let priority = String(s[priRange.upperBound..<contentRange.lowerBound])
+        let content = String(s[contentRange.upperBound...])
+        // Reject obviously-malformed shapes — defends against the
+        // `[Message]` substring appearing inside a tool-arg JSON.
+        guard !timestamp.isEmpty, !sender.isEmpty, !content.isEmpty else { return nil }
+        return MessageBlock(
+            timestamp: timestamp,
+            sender: sender,
+            priority: priority,
+            content: content
         )
     }
 

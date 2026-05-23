@@ -4,6 +4,30 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.7 build 122] - 2026-05-23 — Gemini chat unblock + Antigravity 2.0.6 ingestion polish (`fix/gemini-chat-binaryNotFound`)
+
+Gemini chat sessions stopped working after v0.23 — every `POST /chat-sessions {"provider":"gemini"}` returned 500 with `LanguageServerClientError error 3`, which we initially misread as `binaryNotFound`. Root cause: Swift's `Error`→`NSError` bridging orders payload-carrying enum cases before payload-less ones, so error code 3 is actually `.malformedResponse(String)`. The agentapi response decoder was looking for `conversationId` at the top level or one level deep under `response`, but Antigravity 2.0.6 nests it at `response.newConversation.conversationId`. Verified by running a standalone `swift` script against the enum (`binaryNotFound -> code=5`, `malformedResponse -> code=3`) and by capturing real daemon stdout via wider error logging.
+
+Then closed the v0.9.x ingestion gaps the now-unblocked send path surfaced: WAL stream never finished (state stuck at `.streaming`), step-type mapping was stale (Antigravity 2.0.0 used 8/9/13; 2.0.6 disperses tools across 5/7/8/9/21/132), and Gemini's natural-language replies live in `step_type=101` `[Message]` blocks that the parser ignored.
+
+### Fixed
+
+- **`LanguageServerClient.newConversation` decoder** ([apple/ClawdmeterMac/AgentControl/LanguageServerClient.swift](apple/ClawdmeterMac/AgentControl/LanguageServerClient.swift)) now accepts all three observed envelope shapes (top-level `conversationId`, `response.conversationId`, `response.newConversation.conversationId`). Phase 0 captured the wrong shape; live 2.0.6 stdout proved the nested layout. Chat session create now returns 201 with a populated `AgentSession`.
+- **Error logging** at the catch site ([apple/ClawdmeterMac/AgentControl/AgentControlServer.swift:1607](apple/ClawdmeterMac/AgentControl/AgentControlServer.swift:1607)) uses `String(describing: error)` instead of `error.localizedDescription` so future Swift `Error` enum misdiagnoses surface the associated value (stdout preview, stderr, exit code) instead of just a case index. The lazy-URL workaround comment in `LanguageServerClient.swift` now records the real root cause so the next reader doesn't chase the same ghost.
+
+### Added
+
+- **`AntigravityChatIngestor` turn-end watchdog** ([apple/ClawdmeterMac/AgentControl/AntigravityChatIngestor.swift](apple/ClawdmeterMac/AgentControl/AntigravityChatIngestor.swift)). `AntigravityConversationDB.subscribe()`'s AsyncStream never finishes on its own — Antigravity keeps the WAL open for the conversation's lifetime — so `currentTurnState` was stuck at `.streaming` forever. New 6-second quiescence watchdog runs alongside the consumer via `withTaskGroup`; whichever fires first cancels the other. State now correctly flips to `.completed` after the WAL goes quiet.
+- **Antigravity 2.0.6 step_type remapping.** Tool calls now render with names for step_types 5 (`write_to_file`/`replace_file_content`), 7 (`grep_search`), 8 (`view_file`), 9 (`list_dir`), 21 (`run_command`), and 132 (`list_permissions`/`manage_task` and other agent-control tools). Was only handling 8/9 + a non-existent 13 from the 2.0.0 schema.
+- **`ConversationProtoParser.scrapeMessageBlocks` + `MessageBlock`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/ConversationProtoParser.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/ConversationProtoParser.swift)). Antigravity routes Gemini's natural-language replies through ASCII `[Message] timestamp=… sender=… priority=… content=…` records embedded in `step_type=101` payloads. The scraper finds the marker, reads forward to the next protobuf wire boundary, and classifies the sender: `system` (user-prompt echo — swallowed; composer already showed it), `<conv>/task-N` (internal agent signal — swallowed), `<bare-uuid>` (Gemini agent prose reply — rendered as `.assistantText`). Verified across 15 production conversation DBs.
+- **Regression tests.** `LanguageServerClientRewriteTests.test_newConversationDecoder_acceptsNewConversationNestedShape` pins the real 2.0.6 stdout. `ConversationProtoParserTests` gains 6 tests covering agent vs system vs task-completion sender classification, multi-block payloads, malformed-shape rejection, and end-to-end `DecodedStep.messages` population. ClawdmeterShared suite goes 629 → 635; LanguageServerClientRewriteTests stays at 28/28.
+
+### Known limitation
+
+Antigravity 2.0.6's agentapi is agent-only — short chat-style prompts like "say hi" trigger an agentic loop (list_dir, view_file) rather than a prose `[Message]` block from the agent. `tools/smoke-chat-v2.sh gemini` now reaches `currentTurnState=completed` cleanly but the assistant-text criterion still fails for short prompts (verified across three smoke runs against fresh WAL DBs). The `[Message]` extraction path is verified and will render correctly for any future Gemini turn that emits prose — those exist in production DBs we inspected (substantive review / summary turns).
+
+Bumps `MARKETING_VERSION` 0.23.6 → 0.23.7, `CURRENT_PROJECT_VERSION` 121 → 122.
+
 ## [0.23.6 build 121] - 2026-05-23 — Chat V2 — function-first rebuild (Mac + iOS) (`feat/chat-v2`)
 
 Rebuilds the Chat tab from scratch as `MacChatV2View` + `IOSChatV2View` with live snapshot-bound surfaces. Wire v14 schema adds `TurnState` + `currentTurnState` + `deepResearch`. Per-backend Stop dispatch (tmux ESC / Codex AbortController / Gemini agentapi `/cancel`). Honest Deep Research across all three providers gated by `tools/verify-deep-research.sh`. Plan-approval store rollover fix (audit P0 #4) + `AgentControlClient` force-unwrap fix. Lifts `PermissionPromptCard` to Shared with `PermissionResponder` protocol. T16 cuts 8 legacy chat surfaces. T15 adds wire-v14 + ChatV2Store + DR argv tests. Smoke-tested round-trip green for Claude (3-4s) and Codex (15s) solo with `currentTurnState` lifecycle propagating cleanly through wire to client.
