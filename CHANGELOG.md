@@ -10,7 +10,7 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 
 - **Root README now describes the current product and repository.** Reframes Clawdmeter from the old Apple-only Claude/Codex meter into the current multi-surface agent control app: Mac Tahoe workbench, iPhone and Watch companions, Linux port, shared analytics, provider runtimes, Open Design, OpenCode, and tool sidecars.
 - **Build and verification docs are current.** Documents the Apple and Linux build entry points, bundled runtime scripts, docs-only verification expectations, repo layout, provider integrations, and key runtime notes for tmux, OpenCode, Antigravity agentapi, Tailscale pairing, and sandboxed release builds.
-- **Shared Linux builds keep using the logging shim.** Guards the remaining unconditional `OSLog` imports in shared AgentControl files so Linux CI can fall back to `LoggingCompat.swift`.
+- **Shared Linux builds keep using the compatibility shims.** Guards the remaining unconditional `OSLog` and `Combine` imports in shared AgentControl/Chat files so Linux CI can fall back to `LoggingCompat.swift` and `CombineCompat.swift`.
 
 Bumps `MARKETING_VERSION` 0.23.7 → 0.23.8, `CURRENT_PROJECT_VERSION` 122 → 123.
 

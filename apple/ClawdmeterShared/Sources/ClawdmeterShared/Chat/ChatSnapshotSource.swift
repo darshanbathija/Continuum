@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Combine)
 import Combine
+#endif
 
 /// Cross-platform view onto a per-session chat snapshot, conformed by
 /// both Mac's `SessionChatStore` and iOS's `iOSChatStore`. The Chat V2
