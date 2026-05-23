@@ -4,6 +4,24 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.9 build 124] - 2026-05-23 — Collapse Settings → Providers chrome to one toggle per row (`darshanbathija/settings-toggle-cleanup`)
+
+Settings → Providers was three rows of engineer-speak: status pills, mono auth-status lines, a 4-item Manage menu on OpenCode, a duplicate inline header + `@openai/codex-sdk` paragraph + Status grid (Mode / Provisioned / SDK version / Install path) + Open install folder / Wipe SDK install buttons + "How auth works" footer on Codex SDK, and the same shape plus a "What changes when SDK mode is on" / "What stays the same" bullet list on Antigravity SDK. Customer can't act on any of that — the actual question on every row is binary: on or off.
+
+### Changed
+
+- **OpenCode provider row** ([apple/ClawdmeterMac/Tahoe/MacSettingsView.swift](apple/ClawdmeterMac/Tahoe/MacSettingsView.swift)): collapses to title + one-line status + a single trailing control. Off-state (binary missing OR no key) shows an "Activate" button that reprobes for the CLI then opens the OpenRouter API key sheet. On-state (binary present AND ≥1 provider configured) shows a `TahoeToggleView` plus a small "Edit API key" button; toggling off calls `OpencodeAuthFile.removeProvider` for every entry, equivalent to a global sign-out.
+- **Codex SDK card** ([apple/ClawdmeterMac/CodexSDKSettingsView.swift](apple/ClawdmeterMac/CodexSDKSettingsView.swift)): rewritten to a single `TahoeToggleView` with a customer-facing status line ("Streaming live. Token usage updates in real time." / "Off. Updates lag a couple of seconds behind the CLI."). Inline progress chip during provisioning + error chip on failure. Card subtitle in `MacSettingsView` updated from "Observation mode toggle + diagnostics for the Codex provider." to "Live token usage and reasoning for Codex sessions."
+- **Antigravity SDK card** ([apple/ClawdmeterMac/AntigravitySDKSettingsView.swift](apple/ClawdmeterMac/AntigravitySDKSettingsView.swift)): same shape as Codex. Card subtitle updated from "Antigravity 2 native runtime — bundled IPC bridge + plan-mode hand-off." to "Live token usage and reasoning for Antigravity sessions."
+
+### Removed
+
+- OpenCode row: status pill, mono `Signed in: openrouter: ...` auth-status line, "Sign in with browser" small button, 4-item "Manage" menu (Add API key / Sign in with browser / Diagnostic / Sign out), bottom "Open docs" link, and the `OpencodeSetupSheet` wiring in this row. OAuth flows + diagnostic remain reachable via the API key sheet's provider picker and the upstream `opencode` CLI.
+- Codex SDK card: duplicate inline title + `@openai/codex-sdk` engineering paragraph, "Enable SDK mode" / "disk-mode JSONL tail polling" wording, Status grid (Mode / Provisioned / SDK version / Install path), "Open install folder" + "Wipe SDK install" buttons, "How auth works" educational footer.
+- Antigravity SDK card: duplicate inline title + sidecar/brain explainer, "SDK mode (recommended for paid Antigravity users)" toggle label, "What changes when SDK mode is on" bullet list naming internal agents, "What stays the same" bullet list naming `.gemini/antigravity/brain/<uuid>/` paths, `StatusPill` row showing the literal UserDefaults backing key.
+
+Bumps `MARKETING_VERSION` 0.23.8 → 0.23.9, `CURRENT_PROJECT_VERSION` 123 → 124. Net diff: 212 insertions / 510 deletions across three Swift files. All 635 `ClawdmeterShared` tests pass; Mac scheme builds clean.
+
 ## [0.23.8 build 123] - 2026-05-23 — Refresh root README for current Clawdmeter repo shape (`darshanbathija/rewrite-readme`)
 
 ### Changed

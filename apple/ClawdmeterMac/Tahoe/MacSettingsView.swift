@@ -180,13 +180,13 @@ public struct MacSettingsView: View {
         }
 
         SettingsCard(title: "Codex SDK",
-                     sub: "Observation mode toggle + diagnostics for the Codex provider.") {
+                     sub: "Live token usage and reasoning for Codex sessions.") {
             CodexSDKSettingsView()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
         SettingsCard(title: "Antigravity SDK",
-                     sub: "Antigravity 2 native runtime — bundled IPC bridge + plan-mode hand-off.") {
+                     sub: "Live token usage and reasoning for Antigravity sessions.") {
             AntigravitySDKSettingsView()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -636,113 +636,61 @@ private struct AccentPicker: View {
 
 // MARK: - Providers (PR #31 chunk 2)
 
-/// OpenCode provider row — install + auth status surfaced from
-/// OpencodeProcessManager.shared. Re-runs `opencode auth list` on
-/// appear so signed-in providers reflect within ~50ms of the user
-/// switching to the Settings tab. The "Open docs" affordance points
-/// at opencode.ai/docs/auth which covers both first-time install and
-/// the per-provider `opencode auth login` flow.
-/// Settings → Providers → OpenCode row. v0.23.0 rewrite — adds the
-/// embedded-terminal setup sheet so users can install / sign in / sign
-/// out / run diagnostics without ever dropping to a Terminal.
+/// Settings → Providers → OpenCode row.
 ///
-/// State machine (CQ3):
+/// Collapsed UX: one toggle, one button.
+///   - Off (binary missing OR no API key) → "Activate" button. Clicking it
+///     re-probes for the binary, then opens the OpenRouter API key sheet
+///     so the user can paste a key. The toggle moves on once a key lands.
+///   - On (binary present AND ≥1 provider configured) → toggle ON plus an
+///     "Edit API key" button that re-opens the same sheet. Flipping the
+///     toggle off removes every configured provider via
+///     OpencodeAuthFile.removeProvider — equivalent to a global sign-out.
 ///
-///   ┌─[bundle-missing]──────────┐  fallback only — DMG tampered
-///   │ orange "Reinstall app"    │
-///   └───────────────────────────┘
-///                │
-///                ▼
-///   ┌─[activated, no auth]──────┐  binary discovered, no providers
-///   │ yellow "Sign in required" │
-///   │ button: Add API key       │── launches OpencodeAPIKeySheet
-///   │ link:   Sign in w/ browser│── launches OpencodeSetupSheet
-///   └───────────────────────────┘    in `.signIn` mode (OAuth path)
-///                │
-///                │ sheet exits with code 0 → reprobe (O5)
-///                ▼
-///   ┌─[activated + signed in]───┐
-///   │ green "Signed in"         │
-///   │ per-provider info rows    │
-///   │ menu: Add API key…        │── launches OpencodeAPIKeySheet
-///   │ menu: Sign in w/ browser… │── launches sheet `.addProvider` (OAuth)
-///   │ menu: Diagnostic          │── launches sheet `.diagnostic`
-///   │ menu: Sign out            │── launches sheet `.signOut` (O6 global)
-///   └───────────────────────────┘
+/// Power-user affordances (sign in with browser / diagnostic / OAuth
+/// providers) are reachable via OpencodeAPIKeySheet's provider picker
+/// or via the upstream `opencode` CLI. They no longer need top-level
+/// chrome in Settings.
 private struct OpencodeProviderRow: View {
     @Environment(\.tahoe) private var t
-    @State private var managerState: OpencodeProcessManager.State = .stopped
     @State private var authStatus: [String: String]? = nil
-    @State private var setupCommand: OpencodeSetupSheet.Command?
-    @State private var activating: Bool = false
-    /// v0.23.4: native API-key sheet for paste-and-go providers
-    /// (OpenRouter / Anthropic API / OpenAI API / Moonshot / …). The
-    /// terminal sheet (`setupCommand`) is reserved for OAuth flows
-    /// (Anthropic Pro browser handoff, GitHub Copilot) and Sign-out /
-    /// Diagnostic.
+    @State private var hasBinary: Bool = false
     @State private var apiKeySheet: Bool = false
+    @State private var activating: Bool = false
 
-    private var hasBinary: Bool {
-        OpencodeProcessManager.shared.binaryPath != nil
+    private var isOn: Bool {
+        hasBinary && !(authStatus?.isEmpty ?? true)
     }
 
-    private var isAuthed: Bool {
-        guard let s = authStatus else { return false }
-        return !s.isEmpty
+    /// One-line status. Keeps the row compact: signed-in surfaces the
+    /// provider name, off-state explains what Activate does.
+    private var detailLine: String {
+        if isOn {
+            let provider = authStatus?.keys.sorted().first ?? "provider"
+            return "Signed in via \(displayName(for: provider)). Click Edit API key to swap."
+        }
+        if !hasBinary {
+            return "OpenCode CLI not detected. Click Activate to detect it (install via opencode.ai if missing) and paste an OpenRouter key."
+        }
+        return "Paste an OpenRouter (or other) API key to enable OpenCode-backed sessions."
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                TahoeProviderGlyph(provider: .opencode, size: 32)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Text("OpenCode")
-                            .font(TahoeFont.body(14, weight: .semibold))
-                            .foregroundStyle(t.fg)
-                        statePill
-                    }
-                    Text(detailLine)
-                        .font(TahoeFont.body(12))
-                        .foregroundStyle(t.fg3)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let authStatus, !authStatus.isEmpty {
-                        Text(authLine(authStatus))
-                            .font(TahoeFont.mono(11))
-                            .foregroundStyle(t.fg2)
-                    }
-                }
-                Spacer(minLength: 12)
-                actionButtons
+        HStack(alignment: .top, spacing: 12) {
+            TahoeProviderGlyph(provider: .opencode, size: 32)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("OpenCode")
+                    .font(TahoeFont.body(14, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Text(detailLine)
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 12) {
-                Button {
-                    if let url = URL(string: "https://opencode.ai/docs/") {
-                        NSWorkspace.shared.open(url)
-                    }
-                } label: {
-                    Text("Open docs")
-                        .font(TahoeFont.body(11, weight: .semibold))
-                        .foregroundStyle(t.fg4)
-                }
-                .buttonStyle(.plain)
-                Spacer()
-            }
+            Spacer(minLength: 12)
+            trailingControl
         }
-        .task {
-            await refreshState()
-        }
-        .sheet(item: $setupCommand) { command in
-            if let tmux = AppDelegate.runtime?.tmuxClient {
-                OpencodeSetupSheet(tmuxClient: tmux, command: command) {
-                    // onCompletion: triggered when child exits 0.
-                    Task { await refreshState() }
-                }
-            } else {
-                Text("tmux not available — relaunch Clawdmeter.")
-                    .padding()
-            }
-        }
+        .task { await refreshState() }
         .sheet(isPresented: $apiKeySheet) {
             OpencodeAPIKeySheet {
                 Task { await refreshState() }
@@ -750,118 +698,68 @@ private struct OpencodeProviderRow: View {
         }
     }
 
-    /// Primary action area on the right side of the row. Renders
-    /// different buttons depending on the state machine in the
-    /// header comment.
     @ViewBuilder
-    private var actionButtons: some View {
-        VStack(alignment: .trailing, spacing: 6) {
-            if !hasBinary {
-                Button("Activate") {
-                    activating = true
-                    Task {
-                        await OpencodeProcessManager.shared.reprobe()
-                        await refreshState()
-                        activating = false
+    private var trailingControl: some View {
+        if isOn {
+            VStack(alignment: .trailing, spacing: 8) {
+                TahoeToggleView(on: Binding(
+                    get: { true },
+                    set: { newValue in
+                        if !newValue { Task { await signOutAll() } }
                     }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(activating)
-            } else if !isAuthed {
-                Button("Add API key") { apiKeySheet = true }
-                    .buttonStyle(.borderedProminent)
-                Button("Sign in with browser") { setupCommand = .signIn }
+                ))
+                Button("Edit API key") { apiKeySheet = true }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-            } else {
-                Menu {
-                    Button("Add API key…") { apiKeySheet = true }
-                    Button("Sign in with browser…") { setupCommand = .addProvider }
-                    Button("Diagnostic") { setupCommand = .diagnostic }
-                    Divider()
-                    Button("Sign out of OpenCode", role: .destructive) {
-                        setupCommand = .signOut
-                    }
-                } label: {
-                    Text("Manage")
-                        .font(TahoeFont.body(12, weight: .semibold))
-                }
-                .menuStyle(.button)
-                .buttonStyle(.bordered)
-                .fixedSize()
             }
+        } else {
+            Button(activating ? "Activating…" : "Activate") {
+                Task { await activate() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(activating)
         }
+    }
+
+    // MARK: - Actions
+
+    /// Activate path: ensure the binary is detected, then surface the API
+    /// key sheet. Binary missing isn't a hard stop — the sheet still lets
+    /// the user paste a key, and OpencodeProcessManager.ensureRunning()
+    /// re-probes on the first session spawn.
+    private func activate() async {
+        activating = true
+        await OpencodeProcessManager.shared.reprobe()
+        await refreshState()
+        activating = false
+        apiKeySheet = true
+    }
+
+    /// Toggle-off → remove every configured provider so the row collapses
+    /// back to the Activate state. Auth file is the source of truth; the
+    /// in-memory authStatus is refreshed afterwards.
+    private func signOutAll() async {
+        let providers = await OpencodeAuthFile.shared.providerIds()
+        for id in providers {
+            try? await OpencodeAuthFile.shared.removeProvider(providerId: id)
+        }
+        await OpencodeProcessManager.shared.reprobe()
+        await refreshState()
     }
 
     private func refreshState() async {
-        managerState = OpencodeProcessManager.shared.state
-        authStatus = OpencodeProcessManager.shared.authStatus
+        hasBinary = OpencodeProcessManager.shared.binaryPath != nil
         await OpencodeProcessManager.shared.refreshAuthStatus()
         authStatus = OpencodeProcessManager.shared.authStatus
-        managerState = OpencodeProcessManager.shared.state
+        hasBinary = OpencodeProcessManager.shared.binaryPath != nil
     }
 
-    /// Compact pill rendering whichever state the manager is in.
-    @ViewBuilder
-    private var statePill: some View {
-        let (label, color): (String, Color) = {
-            switch managerState {
-            case .notInstalled:
-                return ("Not installed", Color.orange)
-            case .stopped:
-                return ("Idle", t.fg4)
-            case .starting:
-                return ("Starting…", Color.blue)
-            case .running:
-                return ("Running", Color.green)
-            case .failed:
-                return ("Failed", Color.red)
-            }
-        }()
-        Text(label)
-            .font(TahoeFont.body(10, weight: .bold))
-            .tracking(0.3)
-            .foregroundStyle(color)
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .background {
-                Capsule().fill(color.opacity(0.15))
-            }
-            .overlay {
-                Capsule().stroke(color.opacity(0.35), lineWidth: 0.5)
-            }
-    }
-
-    /// Human-readable status detail. Uses the manager's binaryPath +
-    /// lastError when available so the user sees exactly what
-    /// happened.
-    private var detailLine: String {
-        switch managerState {
-        case .notInstalled:
-            return "Not installed. Run `brew install opencode` (or download from opencode.ai) to enable OpenCode-backed sessions."
-        case .stopped:
-            if let path = OpencodeProcessManager.shared.binaryPath {
-                return "Installed at \(path). Starts on demand when you spawn an OpenCode session."
-            }
-            return "Starts on demand when you spawn an OpenCode session."
-        case .starting:
-            return "Spinning up the shared `opencode serve` process…"
-        case .running(let port):
-            let path = OpencodeProcessManager.shared.binaryPath ?? "<discovered>"
-            return "Running on 127.0.0.1:\(port) — shared process for every OpenCode session.  Binary: \(path)"
-        case .failed(let detail):
-            return "Failed: \(detail)"
-        }
-    }
-
-    /// Joined "provider: model" lines from `opencode auth list`. Empty
-    /// dict surfaces as "No providers signed in" so the user knows
-    /// what's missing.
-    private func authLine(_ status: [String: String]) -> String {
-        let pairs = status
-            .map { "\($0.key): \($0.value)" }
-            .sorted()
-            .joined(separator: " · ")
-        return "Signed in: \(pairs)"
+    /// Map opencode's internal provider id to the OpencodeAPIKeySheet
+    /// display label so the status string reads "OpenRouter" not
+    /// "openrouter".
+    private func displayName(for providerId: String) -> String {
+        OpencodeAPIKeySheet.Provider(rawValue: providerId)?.displayName
+            ?? providerId
     }
 }
 
