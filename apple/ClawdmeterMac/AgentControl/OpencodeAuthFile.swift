@@ -192,12 +192,19 @@ public actor OpencodeAuthFile {
     }
 
     /// Remove all entries for `providerId` (both normalized and
-    /// un-normalized forms).
+    /// un-normalized forms). No-op when nothing matches — does NOT
+    /// create the auth file just to write `{}`. The idempotency test
+    /// (`test_removeProvider_idempotentWhenMissing`) locks this in.
     public func removeProvider(providerId: String) async throws {
         let normalized = normalize(providerId)
         var entries = await readEntries()
+        let before = entries.count
         entries.removeValue(forKey: providerId)
         entries.removeValue(forKey: normalized)
+        guard entries.count != before else {
+            authFileLogger.debug("opencode auth removeProvider no-op provider=\(normalized, privacy: .public)")
+            return
+        }
         try await writeEntries(entries)
         authFileLogger.info("opencode auth removed provider=\(normalized, privacy: .public)")
     }
