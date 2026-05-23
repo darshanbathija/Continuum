@@ -327,6 +327,13 @@ struct MacTitlebar: View {
                     TahoeDashTab("Design",   active: active == .design)   { onTab(.design) }
                     TahoeDashTab("Settings", active: active == .settings) { onTab(.settings) }
                     Spacer(minLength: 0)
+                    // v0.24.0: in-app update chip. Always visible across
+                    // every tab when an update is available OR the bundle
+                    // is translocated. Self-hides via `chipState()` —
+                    // returns EmptyView when there's nothing to surface,
+                    // so the existing per-tab `secondaryRight` content
+                    // continues to render alone on quiet days.
+                    UpdateChip(coordinator: runtime?.updateCoordinator)
                     secondaryRight
                 }
                 .padding(.horizontal, 14)

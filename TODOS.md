@@ -714,3 +714,126 @@ deferred items the CEO review identified.
      provider instead of prose.
 - **Effort**: ~30min for option 1 (recommended), ~2-3hrs for option 2,
   ~1hr for option 3.
+
+### v0.25.0 follow-up — Sparkle auto-update migration (phase 2)
+
+- **What**: Replace the GitHub-Releases-API checker shipped in v0.25.0
+  (`apple/ClawdmeterMac/Updates/`) with Sparkle 2.x auto-update. Original
+  design captured in the eng-review plan file:
+  `~/.claude/plans/system-instruction-you-are-working-snoopy-quail.md`
+  under "Future work: Sparkle migration".
+- **Why**: The API checker requires the user to drag the new DMG to
+  /Applications on each update. Sparkle gives one-click "Update &
+  Restart." v0.25.0 ships the API checker because Sparkle's value-add is
+  conditional on notarization (Gatekeeper re-prompts on un-notarized
+  relaunch anyway), and personal-team XPC + sandbox + macOS 26 is an
+  unverified combination that the v0.25.0 outside-voice review flagged
+  as PRIMARY UNKNOWN with high probability of failure.
+- **Prerequisites (HARD)**:
+  1. Paid Apple Developer Program account ($99/yr) — required for
+     Developer ID signing + notarization, AND for EdDSA key rotation if
+     the maintainer key is ever compromised.
+  2. Notarization integrated into `tools/build-mac-dmg.sh` (or a new
+     `tools/release-mac.sh` that does build + notarize + appcast
+     atomically).
+  3. **PoC commit FIRST** in a separate PR: add Sparkle framework +
+     Info.plist keys + entitlements + an empty coordinator, archive,
+     sign, run on a clean macOS install, verify XPC services launch +
+     download completes. If PoC fails, do not proceed past it.
+- **Scope**: ~17 files (vendored Sparkle.framework under
+  `apple/Vendor/Sparkle/`, `SparkleUpdateCoordinator.swift` replacing
+  the current `UpdateCoordinator.swift`, Info.plist keys, two
+  entitlements files, `tools/sparkle-setup.sh`, `tools/release-mac.sh`,
+  `docs/appcast.xml`, README/CHANGELOG/SECURITY docs). New EdDSA key
+  in macOS Keychain with documented backup procedure.
+- **Sparkle features worth adding in phase 2**:
+  `sparkle:phasedRolloutInterval` (10% day-1 → 100% day-7 for
+  one-person-shop safety), `SUMinimumSystemVersion` per-item, delta
+  updates (free from `generate_appcast` if prior archives persist),
+  dSYMs preserved per release for crash symbolication.
+- **Sequencing fix**: outside-voice surfaced a real trap in the
+  original Sparkle plan where appcast push + DMG upload happen in
+  separate manual steps. Phase 2 must include an atomic
+  `tools/release-mac.sh` that does build → `gh release create
+  --draft` → upload → verify HEAD 200 → `gh release edit --draft=false`
+  → regen appcast → commit + push.
+- **EdDSA key rotation gotcha**: rotation requires Developer ID re-sign.
+  Personal-team builds CANNOT rotate. If the key leaks, every user is
+  permanently exposed unless the maintainer migrates to Developer ID
+  AND re-signs all future releases. Document this in `docs/SECURITY.md`
+  BEFORE shipping Sparkle.
+- **Effort**: 2-3 weeks (1 PoC PR + 1 implementation PR + manual QA
+  pass + docs).
+
+### v0.24.0 follow-up — Broadcast Chat V3 adversarial-review deferrals
+
+Adversarial review of `darshanbathija/chat-v3` surfaced 13 findings.
+Two were fixed in the same PR (mid-fan-out archive race + double-tap
+button gate). The rest were classified as edge cases, multi-device
+scenarios, or pre-existing system properties and deferred here.
+
+- **WS reconnect after pick-winner hard-closes second client (HIGH)**:
+  If a second device has the broadcast surface open at the moment
+  pick-winner promotes a winner, `frontierGroupChildren` returns empty
+  on reconnect and the WS channel closes with `.unsupportedData`. UI
+  treats it as a transport error instead of "group dissolved." Fix:
+  emit a final snapshot with `children: []` + a `dissolvedAt` marker
+  so the client navigates away cleanly. Affects multi-device viewing
+  during the brief promotion window only. **Effort**: ~1h CC.
+- **Two-pass FrontierSendRequest decode silently accepts malformed
+  bodies (HIGH)**: A client posting `{"text":"hi","perChildText":42}`
+  fails first-pass `FrontierSendRequest` decode (perChildText wrong
+  type), then succeeds against legacy `SendPromptRequest` (extra
+  fields ignored) and broadcasts shared text — hiding the client bug.
+  Fix: log the first-pass decode error before falling back so
+  malformed clients surface. **Effort**: ~15min CC.
+- **Partial broadcast-attachment upload silently degrades (HIGH)**:
+  When uploading the same attachment to 3 children, if upload fails
+  for one child only, that child's prompt loses the `@<path>`
+  reference while the others keep it. User sees asymmetric replies
+  without realizing why. Fix: detect `paths.count != stagables.count`
+  per child and either retry or refuse the send with a clear error.
+  Currently treated as graceful degradation. **Effort**: ~30min CC.
+- **OpencodeAuthFile inter-process race during legacy migration
+  (HIGH)**: Two daemons (stale + new launch) racing
+  `migrateLegacyEntriesIfNeeded` can clobber each other's writes —
+  one daemon's freshly-merged canonical can be overwritten by
+  another's stale view. Pre-existing system property (the whole
+  OpencodeAuthFile actor lacks inter-process locking). Fix: take
+  `open(O_EXLOCK)` on `~/.local/share/opencode/.auth.lock` around
+  the read-merge-write-delete sequence. **Effort**: ~1h CC.
+- **pick-winner double-invocation returns 404 (MEDIUM)**: After the
+  first /pick-winner succeeds, a second one for the same childIndex
+  returns 404 (winner has been promoted out of the group). UI debounce
+  in v0.24.0 prevents the common case (fast double-tap), but a second
+  device or replayed request still hits this. Fix: server idempotency
+  — look up the already-promoted session and return it. **Effort**:
+  ~30min CC.
+- **setFrontierTurnWinner fails after pick-winner (MEDIUM)**: Once
+  the winner has been promoted, starring the same turn fails because
+  the validation uses live-only `frontierGroupChildren`. Edge case
+  (after picking continue, why would you star?). Fix: accept against
+  `includeArchived: true` or persisted history. **Effort**: ~15min CC.
+- **`open(match:)` race with concurrent pick-winner (MEDIUM)**:
+  Time-of-check vs time-of-use — `frontierChildren(groupId:).count >= 2`
+  passes, but another device's pick-winner lands before the UI
+  renders. User opens broadcast surface only to see it dissolve.
+  Fix: gate broadcast-target assignment on the first WS snapshot
+  rather than the snapshot-time count. **Effort**: ~1h CC.
+- **Empty-text guard rejects valid attachment-only sends (MEDIUM)**:
+  If a user sends only attachments (empty `base` text) AND uploads
+  fail for one child, that child gets `invalid_prompt` while
+  siblings succeed. Fix: validate per-child text non-empty at
+  composer time before issuing the send. **Effort**: ~30min CC.
+- **`includeArchived: Bool = false` naming clarity (LOW)**: Default
+  flip changes implicit behavior. Rename to `liveOnly: Bool = true`
+  for explicit intent at call sites. **Effort**: ~15min CC.
+- **`failedSlots` reasons not surfaced in broadcast header (LOW)**:
+  When 2 of 3 broadcast slots succeed, the UI proceeds silently
+  without showing why the third failed. Fix: warning chip in the
+  broadcast header when `failedSlots.count > 0`. **Effort**: ~30min CC.
+- **OpenCode canonical-stale-token edge case (LOW)**: If canonical
+  has an entry with the same provider id as legacy but a malformed/
+  empty `key` field, merge keeps canonical (which is broken) instead
+  of preferring legacy. Fix: prefer legacy when canonical entry's
+  `key` is missing or empty. **Effort**: ~15min CC.

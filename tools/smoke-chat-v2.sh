@@ -52,12 +52,18 @@ PROVIDERS=()
 BROADCAST_ONLY=0
 INCLUDE_BROADCAST=0
 EXPLICIT_BROADCAST=0
-for arg in "$@"; do
-  case "$arg" in
-    --prompt) shift; DEFAULT_PROMPT="$1"; shift ;;
-    --broadcast-only) BROADCAST_ONLY=1; INCLUDE_BROADCAST=1; EXPLICIT_BROADCAST=1 ;;
-    --no-broadcast) INCLUDE_BROADCAST=0; EXPLICIT_BROADCAST=1 ;;
-    claude|codex|gemini) PROVIDERS+=("$arg") ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --prompt)
+      shift
+      [[ $# -gt 0 ]] || die "--prompt requires a value" 2
+      DEFAULT_PROMPT="$1"
+      shift
+      ;;
+    --broadcast-only) BROADCAST_ONLY=1; INCLUDE_BROADCAST=1; EXPLICIT_BROADCAST=1; shift ;;
+    --no-broadcast) INCLUDE_BROADCAST=0; EXPLICIT_BROADCAST=1; shift ;;
+    claude|codex|gemini) PROVIDERS+=("$1"); shift ;;
+    *) die "unknown argument: $1" 2 ;;
   esac
 done
 if [[ ${#PROVIDERS[@]} -eq 0 && $BROADCAST_ONLY -eq 0 ]]; then
@@ -129,10 +135,10 @@ solo_smoke() {
 broadcast_smoke() {
   printf '\n=== broadcast (claude + codex + gemini) ===\n'
   local create_body create_resp frontier_id slots
-  create_body='{"slots":[{"provider":"claude"},{"provider":"codex"},{"provider":"gemini"}]}'
+  create_body="$(jq -n --arg id "$(uuidgen)" '{clientRequestId:$id, models:[{provider:"claude"},{provider:"codex"},{provider:"gemini"}]}')"
   create_resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
     -d "$create_body" "${AUTH[@]}" "${DAEMON_URL}/chat-sessions/frontier" || true)"
-  frontier_id="$(printf '%s' "$create_resp" | jq -r '.id // empty')"
+  frontier_id="$(printf '%s' "$create_resp" | jq -r '.groupId // empty')"
   if [[ -z "$frontier_id" ]]; then
     printf '  %sFAIL%s frontier create: %s\n' "$C_RED" "$C_RESET" "$create_resp"
     FAIL_COUNT=$((FAIL_COUNT+1)); FAIL_LIST+=("broadcast"); return 1

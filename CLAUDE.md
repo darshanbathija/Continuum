@@ -762,6 +762,138 @@ directories: when Claude was launched from a parent of the git repo
 (e.g. `CC Watch/` wrapping `Clawdmeter/`), the JSONLs are filed under
 the parent's encoded name. A naive `/`→`-` encoder misses both cases.
 
+## Chat tab (v0.23.6 Chat V2 → v0.24.0 Chat V3 broadcast)
+
+The Chat tab is a separate surface from the Sessions / Code tab
+described above. Sessions/Code is a tmux-backed agent workbench;
+Chat is the function-first conversational surface. They share the
+same `AgentSessionRegistry`, `DaemonChatStoreRegistry`, and
+`/sessions` daemon, but the UI and ingestion paths diverge.
+
+### Chat V2 (v0.23.6 build 121, 2026-05-23) — function-first rebuild
+
+- `MacChatV2View` / `IOSChatV2View` replace eight legacy chat
+  surfaces. Live snapshot-bound; no per-row re-render storms.
+- Wire v14 adds `TurnState` + `WireChatSnapshot.currentTurnState` +
+  `CreateChatSessionRequest.deepResearch`. Per-turn lifecycle is
+  authoritative now — the previous "no new event in 2s = done"
+  heuristic is the fallback for wire v13- daemons only.
+- Per-backend Stop: tmux `ESC` for Claude, Codex SDK
+  `AbortController.abort()`, Antigravity `agentapi /cancel` POST.
+- Honest Deep Research across Claude, Codex, and Antigravity; gated
+  by `tools/verify-deep-research.sh`.
+- `PermissionPromptCard` lifted into `ClawdmeterShared` with a
+  `PermissionResponder` protocol so both Mac + iOS render the same
+  prompt shape.
+- Wire-version gates live in `AgentControlWireVersion`:
+  `chatMinimum=9`, `frontierMinimum=9`, `turnLifecycleMinimum=14`,
+  `deepResearchMinimum=14`, `chatSearchMinimum=14`. iOS gates each
+  feature behind the matching `supports*` predicate so older paired
+  Macs degrade with a banner instead of failing silently.
+
+### Chat V3 broadcast (v0.24.0 build 125, 2026-05-23) — multi-provider compare
+
+Chat tab gets a broadcast mode. Pick 2–3 providers, send one prompt,
+see the answers side-by-side with per-provider tokens and cost. Star
+the better answer per turn. Continue from a winner to demote the
+broadcast group to a Solo chat that keeps the winning transcript.
+
+**Wire (`Protocol.swift`):**
+- `CreateFrontierRequest` / `CreateFrontierResponse` /
+  `FrontierGroupSnapshot` / `FrontierSendRequest` (with optional
+  `perChildText: [UUID: String]`) / `FrontierTurnWinner` /
+  `SetFrontierTurnWinnerRequest`.
+- HTTP: `POST /chat-sessions/frontier`,
+  `POST /chat-sessions/frontier/:groupId/send`,
+  `POST /chat-sessions/frontier/:groupId/pick-winner`,
+  `POST /chat-sessions/frontier/:groupId/turn-winner`,
+  `POST /chat-sessions/frontier/:groupId/retry-slot`.
+- WebSocket: `frontier-subscribe` op streams a
+  `FrontierGroupSnapshot` per child on a 100ms debounce; envelope is
+  `{op, token, groupId}`.
+- `GET /chat-providers` returns per-provider availability so the
+  broadcast mode picker can grey out providers that aren't
+  configured (Antigravity not running, Codex creds missing, etc.).
+- Deep Research is a creation-time toggle on every
+  `FrontierModelSlot` and propagates to every child (Codex sandbox
+  flag, Claude system prompt).
+
+**Surfaces:**
+- Mac (`MacChatV2View`): left history sidebar, mode toggle (Solo vs
+  Broadcast), provider summary chips above the chat, and a
+  horizontally-scrollable column-per-provider transcript. Tahoe
+  glass aesthetic from the standalone Clawdmeter redesign.
+- iOS (`IOSChatV2View`): compact version. Provider pills above the
+  selected-reply card, swipe between providers.
+
+**Pick-winner semantics (the destructive variant):**
+- `handlePickFrontierWinner` archives every loser child, then calls
+  `AgentSessionRegistry.clearFrontierGroupBinding(id:)` on the
+  winner to drop its `frontierGroupId` / `frontierChildIndex`. The
+  winner appears in the sidebar as a regular Solo chat; follow-ups
+  go through `POST /sessions/:id/send`.
+- UIs flip `openTarget` to `.solo(winner.id)` on the response
+  callback so the active surface follows the winner out of the
+  broadcast group.
+- Star (`/turn-winner`) is the non-destructive variant: pure
+  metadata on the group's `turnWinners` list, no archive.
+
+**Per-child send fan-out:**
+- `FrontierSendRequest.perChildText` lets the broadcast composer
+  send the same bytes to multiple children while only `@`-mentioning
+  each child's own staging path. `uploadAndBuildPerChildPrompts`
+  uploads once per child via per-child paths in
+  `<worktree>/.clawdmeter-attachments/<sessionId>/`. Legacy
+  `SendPromptRequest` shape still accepted for back-compat.
+- Mid-fan-out archive race: each per-child send re-checks
+  `archivedAt` immediately before issuing the prompt, so a
+  concurrent `/pick-winner` can't leak the prompt to a just-archived
+  loser.
+- `frontierGroupChildren(groupId:includeArchived:)` defaults to
+  live-only. Pick-winner enumerates with `includeArchived: true`;
+  every other path (send fan-out, WS snapshot, search hydration)
+  gets live-only.
+
+**Minimum-broadcast gate:**
+- `CreateFrontierResponse.hasMinimumBroadcast` requires ≥ 2
+  successful spawns. A single-success response surfaces every failed
+  slot's `reason` so the composer can show why a broadcast degraded
+  instead of silently dropping into a one-agent "broadcast."
+
+**Search/history hydration:**
+- A search hit for a Frontier group whose live children dropped
+  below 2 (e.g. after pick-winner archived losers) now reopens the
+  matched session as Solo, not as a read-only transcript. Keeps
+  history navigable after the broadcast resolves.
+
+**New files (shared package):**
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/Chat/FrontierSnapshotStore.swift`
+  — `@MainActor ObservableObject` mirror of the WS snapshot; Mac +
+  iOS bind to it directly.
+- `apple/ClawdmeterMac/AgentControl/FrontierWebSocketChannel.swift`
+  — daemon WS channel; observes each child's `SessionChatStore`,
+  debounces, encodes a `FrontierGroupSnapshot` with current
+  `turnWinners`.
+
+**Pre-existing system property closed (P2 fix in same PR):**
+- `OpencodeAuthFile.migrateLegacyEntriesIfNeeded` no longer bails
+  when the canonical file exists. It reads canonical, merges any
+  legacy provider entries that canonical was missing, and writes
+  back. Malformed canonical files are still left untouched so users
+  with salvageable bytes don't lose them.
+
+**Tests:** 643 ClawdmeterShared, 190 Mac. New: 6 in
+`AgentSessionRegistryFrontierTests` (live-only filter +
+`clearFrontierGroupBinding`), 4 in `WireV9Tests` (broadcast minimum
++ per-child round-trip), 1 in `OpencodeAuthFileTests` (canonical
+preservation across migration probe).
+
+**Deferred follow-ups:** see `TODOS.md` "v0.24.0 follow-up —
+Broadcast Chat V3 adversarial-review deferrals" for the 11
+non-blocking findings (WS reconnect after pick-winner, two-pass
+decode silence, partial-upload degradation, OpencodeAuthFile
+inter-process race, etc.).
+
 ## Style + voice
 
 - Code comments lead with **what + why**, not implementation play-by-play.

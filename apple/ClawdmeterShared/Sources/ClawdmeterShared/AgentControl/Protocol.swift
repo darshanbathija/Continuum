@@ -368,6 +368,10 @@ public struct ChatSessionSearchMatch: Codable, Sendable, Hashable, Identifiable 
     /// it as the row's stable identifier but should resolve through
     /// the registry first for live state.
     public let sessionId: UUID
+    /// Frontier group when the match belongs to a broadcast child.
+    /// Lets clients open the aggregate comparison even when the child
+    /// session has not been loaded into the local cache yet.
+    public let frontierGroupId: UUID?
     /// Absolute path to the JSONL on disk. Lets the client open the
     /// transcript via the existing `/transcript?path=` endpoint when
     /// the session isn't in the registry.
@@ -383,8 +387,15 @@ public struct ChatSessionSearchMatch: Codable, Sendable, Hashable, Identifiable 
 
     public var id: UUID { sessionId }
 
-    public init(sessionId: UUID, jsonlPath: String, snippet: String, lastEventAt: Date) {
+    public init(
+        sessionId: UUID,
+        frontierGroupId: UUID? = nil,
+        jsonlPath: String,
+        snippet: String,
+        lastEventAt: Date
+    ) {
         self.sessionId = sessionId
+        self.frontierGroupId = frontierGroupId
         self.jsonlPath = jsonlPath
         self.snippet = snippet
         self.lastEventAt = lastEventAt
@@ -3420,6 +3431,7 @@ public struct CreateFrontierRequest: Codable, Sendable {
 public struct FrontierModelSlot: Codable, Sendable {
     public let provider: AgentKind
     public let model: String?
+    public let effort: ReasoningEffort?
     public let codexChatBackend: CodexChatBackend?
     /// v14 (Chat V2): per-slot Deep Research toggle. Each broadcast pane
     /// can independently run with deep-research argv. Defaults to false
@@ -3429,23 +3441,26 @@ public struct FrontierModelSlot: Codable, Sendable {
     public init(
         provider: AgentKind,
         model: String? = nil,
+        effort: ReasoningEffort? = nil,
         codexChatBackend: CodexChatBackend? = nil,
         deepResearch: Bool = false
     ) {
         self.provider = provider
         self.model = model
+        self.effort = effort
         self.codexChatBackend = codexChatBackend
         self.deepResearch = deepResearch
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, model, codexChatBackend, deepResearch
+        case provider, model, effort, codexChatBackend, deepResearch
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.provider = try c.decode(AgentKind.self, forKey: .provider)
         self.model = try c.decodeIfPresent(String.self, forKey: .model)
+        self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
         self.codexChatBackend = try c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)
         self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
     }
@@ -3463,6 +3478,28 @@ public struct CreateFrontierResponse: Codable, Sendable {
     public init(groupId: UUID, slots: [FrontierSlotResult]) {
         self.groupId = groupId
         self.slots = slots
+    }
+
+    /// Slots whose spawn succeeded — used by the UI to gate broadcast
+    /// mode (need ≥2) and to know which session ids the first prompt
+    /// should fan out to.
+    public var successfulSlots: [FrontierSlotResult] {
+        slots.filter { $0.isOK }
+    }
+
+    /// Slots whose spawn failed (`sessionId == nil`). Surfaces partial
+    /// failures so the composer can show why a broadcast degraded.
+    public var failedSlots: [FrontierSlotResult] {
+        slots.filter { !$0.isOK }
+    }
+
+    /// True iff at least two children spawned successfully — broadcast
+    /// mode requires multiple providers to compare. The UI should treat
+    /// a single-successful response as "broadcast unavailable, surface
+    /// the failure reasons" rather than silently degrading to a one-
+    /// agent broadcast.
+    public var hasMinimumBroadcast: Bool {
+        successfulSlots.count >= 2
     }
 }
 
@@ -3504,6 +3541,104 @@ public struct PickFrontierWinnerRequest: Codable, Sendable {
     }
 }
 
+/// Non-destructive winner metadata for the comparison UI. This powers
+/// the star/check affordance and history stats without archiving losing
+/// children; `/pick-winner` remains the destructive "continue from here"
+/// operation.
+public struct FrontierTurnWinner: Codable, Sendable, Hashable, Identifiable {
+    public let groupId: UUID
+    public let turnId: String
+    public let childIndex: Int
+    public let decidedAt: Date
+
+    public var id: String { "\(groupId.uuidString):\(turnId)" }
+
+    public init(groupId: UUID, turnId: String, childIndex: Int, decidedAt: Date = Date()) {
+        self.groupId = groupId
+        self.turnId = turnId
+        self.childIndex = childIndex
+        self.decidedAt = decidedAt
+    }
+}
+
+public struct SetFrontierTurnWinnerRequest: Codable, Sendable {
+    public let turnId: String
+    public let childIndex: Int
+
+    public init(turnId: String, childIndex: Int) {
+        self.turnId = turnId
+        self.childIndex = childIndex
+    }
+}
+
+public struct FrontierSendResponse: Codable, Sendable, Hashable {
+    public let groupId: UUID
+    public let childCount: Int
+    public let results: [FrontierChildSendResult]
+
+    public init(groupId: UUID, childCount: Int, results: [FrontierChildSendResult]) {
+        self.groupId = groupId
+        self.childCount = childCount
+        self.results = results
+    }
+
+    public var ok: Bool {
+        results.allSatisfy(\.ok)
+    }
+}
+
+/// `POST /chat-sessions/frontier/:groupId/send` body — extends the
+/// solo `SendPromptRequest` with an optional per-child text override.
+///
+/// Why a separate type: the solo `/sessions/:id/send` body is just
+/// `{text, asFollowUp}` and several callers (smoke tests, manual
+/// fan-out) depend on that shape. Frontier sends sometimes need
+/// per-child prompts so an attachment uploaded to child A's staging
+/// dir is referenced as `@/.../A/...` only in child A's prompt, not
+/// in child B's prompt (where that path is unreadable).
+///
+/// `perChildText` is keyed by `sessionId`. If a child's id is missing
+/// from the map, the server falls back to the shared `text`. Backward
+/// compat: the server also accepts `SendPromptRequest`-shaped bodies
+/// for callers that haven't migrated.
+public struct FrontierSendRequest: Codable, Sendable {
+    public let text: String
+    public let asFollowUp: Bool
+    public let perChildText: [String: String]?
+
+    public init(text: String, asFollowUp: Bool = false, perChildText: [UUID: String]? = nil) {
+        self.text = text
+        self.asFollowUp = asFollowUp
+        if let perChildText {
+            self.perChildText = Dictionary(uniqueKeysWithValues:
+                perChildText.map { ($0.key.uuidString, $0.value) }
+            )
+        } else {
+            self.perChildText = nil
+        }
+    }
+
+    /// Look up the override for a given child session id; falls back
+    /// to the shared `text` when no override is registered.
+    public func text(forChild sessionId: UUID) -> String {
+        perChildText?[sessionId.uuidString] ?? text
+    }
+}
+
+public struct FrontierChildSendResult: Codable, Sendable, Hashable {
+    public let childIndex: Int
+    public let sessionId: UUID
+    public let ok: Bool
+    public let reason: String?
+
+    public init(childIndex: Int, sessionId: UUID, ok: Bool, reason: String? = nil) {
+        self.childIndex = childIndex
+        self.sessionId = sessionId
+        self.ok = ok
+        self.reason = reason
+    }
+}
+
 /// `frontier-subscribe` WS envelope — typed snapshot per D8 + Codex #5.
 /// Emitted on every debounce tick (100ms, same as chat-subscribe). Each
 /// envelope is self-contained; consumers replace their state with the
@@ -3514,11 +3649,34 @@ public struct FrontierGroupSnapshot: Codable, Sendable {
     /// debounce its own UI work if it wants.
     public let updateCounter: Int
     public let children: [FrontierChild]
+    public let turnWinners: [FrontierTurnWinner]
 
-    public init(groupId: UUID, updateCounter: Int, children: [FrontierChild]) {
+    public var latestTurnId: String {
+        FrontierTurnIdentifier.latest(in: children.map(\.snapshot))
+    }
+
+    public init(
+        groupId: UUID,
+        updateCounter: Int,
+        children: [FrontierChild],
+        turnWinners: [FrontierTurnWinner] = []
+    ) {
         self.groupId = groupId
         self.updateCounter = updateCounter
         self.children = children
+        self.turnWinners = turnWinners
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case groupId, updateCounter, children, turnWinners
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.groupId = try c.decode(UUID.self, forKey: .groupId)
+        self.updateCounter = try c.decode(Int.self, forKey: .updateCounter)
+        self.children = try c.decode([FrontierChild].self, forKey: .children)
+        self.turnWinners = try c.decodeIfPresent([FrontierTurnWinner].self, forKey: .turnWinners) ?? []
     }
 }
 
@@ -3526,23 +3684,72 @@ public struct FrontierGroupSnapshot: Codable, Sendable {
 public struct FrontierChild: Codable, Sendable {
     public let childIndex: Int
     public let sessionId: UUID
+    public let provider: AgentKind
     public let modelSlug: String
     /// Nil when the child failed to spawn (D10 partial Frontier).
     public let snapshot: WireChatSnapshot?
     public let status: FrontierChildStatus
+    public let currentTurnState: TurnState
 
     public init(
         childIndex: Int,
         sessionId: UUID,
+        provider: AgentKind = .unknown,
         modelSlug: String,
         snapshot: WireChatSnapshot? = nil,
-        status: FrontierChildStatus
+        status: FrontierChildStatus,
+        currentTurnState: TurnState = .idle
     ) {
         self.childIndex = childIndex
         self.sessionId = sessionId
+        self.provider = provider
         self.modelSlug = modelSlug
         self.snapshot = snapshot
         self.status = status
+        self.currentTurnState = currentTurnState
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case childIndex, sessionId, provider, modelSlug, snapshot, status, currentTurnState
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.childIndex = try c.decode(Int.self, forKey: .childIndex)
+        self.sessionId = try c.decode(UUID.self, forKey: .sessionId)
+        self.provider = try c.decodeIfPresent(AgentKind.self, forKey: .provider) ?? .unknown
+        self.modelSlug = try c.decode(String.self, forKey: .modelSlug)
+        self.snapshot = try c.decodeIfPresent(WireChatSnapshot.self, forKey: .snapshot)
+        self.status = try c.decode(FrontierChildStatus.self, forKey: .status)
+        self.currentTurnState = try c.decodeIfPresent(TurnState.self, forKey: .currentTurnState)
+            ?? self.snapshot?.currentTurnState
+            ?? .idle
+    }
+}
+
+public enum FrontierTurnIdentifier {
+    public static func latest(in snapshots: [WireChatSnapshot?]) -> String {
+        let count = snapshots
+            .compactMap { $0 }
+            .map { userMessageCount(in: $0.items) }
+            .max() ?? 0
+        return turnId(forUserMessageCount: count)
+    }
+
+    public static func latest(in items: [ChatItem]) -> String {
+        turnId(forUserMessageCount: userMessageCount(in: items))
+    }
+
+    public static func turnId(forUserMessageCount count: Int) -> String {
+        "turn-\(max(count, 0))"
+    }
+
+    private static func userMessageCount(in items: [ChatItem]) -> Int {
+        items.reduce(into: 0) { count, item in
+            guard case .message(let message) = item,
+                  message.kind == .userText else { return }
+            count += 1
+        }
     }
 }
 

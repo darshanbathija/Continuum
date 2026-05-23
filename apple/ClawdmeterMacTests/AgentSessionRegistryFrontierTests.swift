@@ -1,0 +1,141 @@
+import XCTest
+import ClawdmeterShared
+@testable import Clawdmeter
+
+/// v0.23.9 P1 fix coverage: frontier-group helpers used by continue-from-winner.
+///
+/// These tests use an isolated tempfile registry so they never touch the
+/// user's real `~/Library/Application Support/Clawdmeter/sessions.json`.
+@MainActor
+final class AgentSessionRegistryFrontierTests: XCTestCase {
+
+    private var tempStoreURL: URL!
+
+    override func setUp() async throws {
+        try await super.setUp()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("clawdmeter-registry-tests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        tempStoreURL = dir.appendingPathComponent("sessions.json")
+    }
+
+    override func tearDown() async throws {
+        if let dir = tempStoreURL?.deletingLastPathComponent() {
+            try? FileManager.default.removeItem(at: dir)
+        }
+        try await super.tearDown()
+    }
+
+    private func registry() -> AgentSessionRegistry {
+        AgentSessionRegistry(storeURL: tempStoreURL)
+    }
+
+    // MARK: - frontierGroupChildren(includeArchived:)
+
+    /// Default behavior (includeArchived=false) returns only live children.
+    /// This is what Frontier send fan-out and snapshot subscribers rely on
+    /// so archived losers can never receive new prompts.
+    func test_frontierGroupChildren_defaultExcludesArchived() async {
+        let reg = registry()
+        let groupId = UUID()
+        let claude = reg.createChat(
+            provider: .claude, model: "opus", chatCwd: "/tmp",
+            frontierGroupId: groupId, frontierChildIndex: 0
+        )
+        let codex = reg.createChat(
+            provider: .codex, model: "gpt-5.5", chatCwd: "/tmp",
+            frontierGroupId: groupId, frontierChildIndex: 1
+        )
+
+        // Archive one child (simulates a pick-winner archiving the loser).
+        reg.archive(id: codex.id)
+
+        let liveOnly = reg.frontierGroupChildren(groupId: groupId)
+        XCTAssertEqual(liveOnly.count, 1, "default must filter archived")
+        XCTAssertEqual(liveOnly.first?.id, claude.id)
+    }
+
+    /// Callers that need the full set (pick-winner enumerating losers to
+    /// archive) pass includeArchived: true.
+    func test_frontierGroupChildren_includeArchivedReturnsAll() async {
+        let reg = registry()
+        let groupId = UUID()
+        _ = reg.createChat(
+            provider: .claude, model: "opus", chatCwd: "/tmp",
+            frontierGroupId: groupId, frontierChildIndex: 0
+        )
+        let codex = reg.createChat(
+            provider: .codex, model: "gpt-5.5", chatCwd: "/tmp",
+            frontierGroupId: groupId, frontierChildIndex: 1
+        )
+        reg.archive(id: codex.id)
+
+        let all = reg.frontierGroupChildren(groupId: groupId, includeArchived: true)
+        XCTAssertEqual(all.count, 2, "includeArchived must return live + archived")
+        XCTAssertEqual(all.map(\.frontierChildIndex), [0, 1], "sort order preserved")
+    }
+
+    func test_frontierGroupChildren_emptyWhenGroupUnknown() async {
+        let reg = registry()
+        let group = reg.frontierGroupChildren(groupId: UUID())
+        XCTAssertTrue(group.isEmpty)
+    }
+
+    // MARK: - clearFrontierGroupBinding
+
+    /// After continue-from-winner, the winner's frontierGroupId and
+    /// frontierChildIndex are cleared so the sidebar / history / Frontier
+    /// snapshot all treat it as a regular Solo chat from that moment on.
+    func test_clearFrontierGroupBinding_winnerBecomesSolo() async {
+        let reg = registry()
+        let groupId = UUID()
+        let winner = reg.createChat(
+            provider: .claude, model: "opus", chatCwd: "/tmp",
+            frontierGroupId: groupId, frontierChildIndex: 0
+        )
+        XCTAssertEqual(reg.session(id: winner.id)?.frontierGroupId, groupId)
+        XCTAssertEqual(reg.session(id: winner.id)?.frontierChildIndex, 0)
+
+        reg.clearFrontierGroupBinding(id: winner.id)
+
+        let promoted = reg.session(id: winner.id)
+        XCTAssertNotNil(promoted)
+        XCTAssertNil(promoted?.frontierGroupId, "frontierGroupId must be cleared")
+        XCTAssertNil(promoted?.frontierChildIndex, "frontierChildIndex must be cleared")
+    }
+
+    /// After clearing the winner, frontierGroupChildren no longer surfaces
+    /// it — so any further Frontier-send fan-out routes to nobody and the
+    /// UI's "≥ 2 live children" guard correctly fails.
+    func test_clearFrontierGroupBinding_dropsFromGroupChildren() async {
+        let reg = registry()
+        let groupId = UUID()
+        let winner = reg.createChat(
+            provider: .claude, model: "opus", chatCwd: "/tmp",
+            frontierGroupId: groupId, frontierChildIndex: 0
+        )
+        let loser = reg.createChat(
+            provider: .codex, model: "gpt-5.5", chatCwd: "/tmp",
+            frontierGroupId: groupId, frontierChildIndex: 1
+        )
+        reg.archive(id: loser.id)
+        reg.clearFrontierGroupBinding(id: winner.id)
+
+        let live = reg.frontierGroupChildren(groupId: groupId)
+        XCTAssertTrue(live.isEmpty, "after pick-winner the group has no live children")
+    }
+
+    /// Idempotent: clearing again is a no-op.
+    func test_clearFrontierGroupBinding_idempotent() async {
+        let reg = registry()
+        let groupId = UUID()
+        let s = reg.createChat(
+            provider: .claude, model: "opus", chatCwd: "/tmp",
+            frontierGroupId: groupId, frontierChildIndex: 0
+        )
+        reg.clearFrontierGroupBinding(id: s.id)
+        reg.clearFrontierGroupBinding(id: s.id)
+        let promoted = reg.session(id: s.id)
+        XCTAssertNil(promoted?.frontierGroupId)
+    }
+}

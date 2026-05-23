@@ -4,7 +4,7 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-## [0.24.0 build 127] - 2026-05-23 — Code V2 control plane + persisted workspaces + mobile command outbox + MagicDNS pairing + iOS workbench tabs (`darshanbathija/code-v2`)
+## [0.26.0 build 129] - 2026-05-23 — Code V2 control plane + persisted workspaces + mobile command outbox + MagicDNS pairing + iOS workbench tabs (`darshanbathija/code-v2`)
 
 Code V2 lands as one coordinated ship. The Mac daemon now owns durable workspace records keyed by canonical repo root, a real idempotency-key outbox that prevents iOS retries from double-sending, and a MagicDNS-first pairing flow that survives sleep/wake and Wi-Fi switching. iOS gets a six-tab workbench (Chat, Plan, Diff, PR, Terminal, Files) embedded inside session detail — the pane views existed before but weren't actually wired into the navigation. Wire protocol bumps v15 → v16; every change is additive so older Macs keep decoding via `decodeIfPresent`.
 
@@ -51,6 +51,68 @@ Other fixes during review. iOS outbox dispatch was returning `true` unconditiona
 
 - **iOS outbox falsely acknowledged offline interrupts / approvals / autopilot toggles** (`apple/ClawdmeteriOS/AgentControl/MobileCommandOutbox.swift:259, 263, 287`): `dispatch()` returned `true` for void client methods. Now reads `Bool` from the upgraded client signatures.
 - **OpenCode + Codex SDK send paths bypassed idempotency record** (`apple/ClawdmeterMac/AgentControl/AgentControlServer.swift:4467, 4611`): retries would re-execute the side effect. Threaded `idempotencyKey` + `payloadHash` through and wired success paths through `sendCommandResponse`.
+
+### Notes
+
+- Originally targeted v0.24.0, but two parallel-worktree ships landed first: broadcast chat at v0.24.0 and the in-app update flow at v0.25.0. Rebumped to v0.26.0 + build 129 during the second merge to preserve linearity.
+
+## [0.25.0 build 128] - 2026-05-23 — In-app update flow (GitHub Releases API checker) (`darshanbathija/in-app-update-flow`)
+
+The Mac app now surfaces a small "Update X.Y.Z" chip in the titlebar when a newer release ships on GitHub. Click the chip to read the release notes inline and open the release page in Safari, where you download the new DMG and drag it into `/Applications` like before. No silent install in v0.25.0 — that's parked as a phase-2 Sparkle migration once a paid Apple Developer ID account is in play (see `TODOS.md`).
+
+### Added
+
+- **`UpdateCoordinator` + `UpdatesUI` + `GitHubReleaseConstants`** (`apple/ClawdmeterMac/Updates/`). The coordinator polls `https://api.github.com/repos/darshanbathija/Clawdmeter/releases/latest` once 8 seconds after launch + every 24 hours while running. Tag-pattern parsing is strict: `v<MAJOR>.<MINOR>.<PATCH>-mac` only, so experimental tags don't fire the chip until channel support exists. Version comparison is numeric, not lexicographic — `0.23.10 > 0.23.9` (the bug that lexicographic comparison would produce is locked out by a regression test).
+- **Per-version dismissal cooldown.** Click "Later" and the chip stays hidden for 24 hours for that exact version. A newer version surfaces immediately (the cooldown is per-version, not blanket).
+- **Translocation detection.** When Clawdmeter is run directly from the DMG mount or `~/Downloads` (Gatekeeper translocates the bundle to a randomized `/private/var/folders/…` path), the chip turns yellow and reads "Move to Applications" — Sparkle and any in-place install would fail anyway, so we surface the actionable explanation instead of nagging the user with an update prompt they can't follow through on. Popover has a "Show in Finder" button so the user can drag the bundle to `/Applications` and reopen.
+- **Manual `Check now` button** in the popover, debounced 5 seconds so rapid clicks don't burn the GitHub API rate-limit budget.
+- **Debug feed-URL override.** `defaults write com.clawdmeter.mac ClawdmeterDebugReleasesURL "https://…"` points the coordinator at a static fixture URL — used by QA to test the chip against a feature-branch JSON without rebuilding the app.
+- **20 unit tests** in `ClawdmeterMacTests/UpdateCoordinatorTests.swift` covering version comparison, tag parsing, dismissal cooldown (× 3), debug URL override, translocation detection, debounce, API errors, GitHub release decoding (× 2), `chipState` pure function (× 3), and the centralized URL constants (× 3). Mocked URLSession via a `URLProtocol` subclass — no network, runs in <1 second.
+
+### Privacy
+
+- The daily check sends your IP + a `Clawdmeter/<version>` User-Agent to `api.github.com`. No app version is sent in the request body, no unique identifier is collected. Equivalent to visiting the GitHub releases page once a day in Safari.
+
+### Notes
+
+- Originally targeted v0.24.0, but a parallel-worktree ship landed broadcast chat at v0.24.0 first. Rebumped to v0.25.0 + build 128 during the merge to preserve linearity.
+- The original plan was Sparkle 2.x auto-update. Outside-voice review surfaced that Sparkle's silent-install value-add is conditional on notarization (Gatekeeper re-prompts on the freshly-installed un-notarized bundle anyway), and personal-team XPC + sandbox on macOS 26 is an unverified combination with a high probability of failure. We pivoted to the lightweight API checker so v0.25.0 ships now; the full Sparkle plan lives in `TODOS.md` for phase 2 when a paid Developer ID account is acquired.
+
+Bumps `MARKETING_VERSION` 0.24.0 → 0.25.0, `CURRENT_PROJECT_VERSION` 127 → 128.
+
+## [0.24.0 build 127] - 2026-05-23 — Broadcast Chat V3: side-by-side Claude / Codex / Antigravity (`darshanbathija/chat-v3`)
+
+Chat tab gets a broadcast mode. Pick 2-3 providers, send one prompt, see
+the answers side-by-side with per-provider tokens and cost. Star the
+better answer per turn. Continue from a winner to demote the broadcast
+group to a Solo chat that keeps the winning transcript.
+
+### Added
+
+- **Broadcast comparison surface** — Mac dashboard now has a left history sidebar, mode toggle (Solo vs Broadcast), provider summary chips above the chat, and a horizontally-scrollable column-per-provider transcript. iOS gets a compact version: provider pills above the selected-reply card, swipe between providers. Both surfaces ship with the Tahoe glass aesthetic from the standalone Clawdmeter redesign.
+- **Frontier wire protocol** (`Protocol.swift`) — `CreateFrontierRequest` / `CreateFrontierResponse` / `FrontierGroupSnapshot` / `FrontierSendRequest` / `FrontierTurnWinner` and new endpoints `POST /chat-sessions/frontier`, `POST /chat-sessions/frontier/:groupId/send`, `POST /chat-sessions/frontier/:groupId/pick-winner`, `POST /chat-sessions/frontier/:groupId/turn-winner`, `POST /chat-sessions/frontier/:groupId/retry-slot`. WebSocket subscription op `frontier-subscribe` streams live per-child turn state on a 100ms debounce.
+- **Per-turn winner metadata** — non-destructive star markings for each turn. Continue-from-winner is the destructive variant: archives losers and promotes the winner out of the Frontier group so follow-ups go through the regular `/sessions/:id/send` path.
+- **Deep Research toggle** — creation-time setting that propagates to every child in a Frontier group (Codex sandbox flag and Claude system prompt).
+- **`/chat-providers` gating** — surfaces per-provider availability so the broadcast mode picker can disable providers that aren't configured (e.g. Antigravity not running, Codex creds missing).
+
+### Changed
+
+- **Pre-landing review fixes** ([apple/ClawdmeterMac/AgentControl/AgentControlServer.swift](apple/ClawdmeterMac/AgentControl/AgentControlServer.swift), [apple/ClawdmeterMac/AgentControl/AgentSessionRegistry.swift](apple/ClawdmeterMac/AgentControl/AgentSessionRegistry.swift), [apple/ClawdmeterMac/Workspace/ChatV2/MacChatV2View.swift](apple/ClawdmeterMac/Workspace/ChatV2/MacChatV2View.swift), [apple/ClawdmeteriOS/Workspace/ChatV2/IOSChatV2View.swift](apple/ClawdmeteriOS/Workspace/ChatV2/IOSChatV2View.swift)):
+  - **Continue-from-winner actually leaves broadcast** — server now clears the winner's `frontierGroupId`/`frontierChildIndex` so the sidebar treats it as a regular Solo chat. UIs flip `openTarget` to `.solo(winner.id)` on the callback. `frontierGroupChildren(includeArchived:)` defaults to live-only so Frontier send fan-out + the WebSocket snapshot can never hit archived losers.
+  - **Broadcast first-send minimum** — `CreateFrontierResponse.hasMinimumBroadcast` (≥ 2 successful spawns) gates the broadcast surface. A single-success response surfaces every failed slot's `reason` instead of silently degrading to a one-agent "broadcast."
+  - **Per-child attachments** — `FrontierSendRequest.perChildText` map lets each Frontier child reference its own daemon-side staging path. Same bytes uploaded once per child via `uploadAndBuildPerChildPrompts`; legacy `SendPromptRequest` shape still accepted for back-compat.
+  - **Search/history hydration** — opening a search hit for a Frontier group that has < 2 live children (e.g. after pick-winner archived the losers) now reopens the matched session as Solo instead of a read-only transcript.
+- **OpenCode legacy auth merge restored** ([apple/ClawdmeterMac/AgentControl/OpencodeAuthFile.swift](apple/ClawdmeterMac/AgentControl/OpencodeAuthFile.swift)) — `migrateLegacyEntriesIfNeeded` no longer bails when the canonical file exists. It reads canonical, merges any legacy provider entries that canonical was missing, and writes back. Malformed canonical files are still left untouched so users with salvageable bytes don't lose them.
+
+### Fixed (adversarial review)
+
+- **Mid-fan-out archive race** — Frontier send fan-out now re-checks `archivedAt` immediately before each per-child send. A concurrent `/pick-winner` archiving a loser during another child's `await` can no longer let the prompt leak to the just-archived loser.
+- **Double-tap continue button** — both Mac `ProviderColumn` and iOS `FrontierTranscript` gate the continue-from-winner button with a `continuing` state, so a fast double-tap can't fire two `/pick-winner` POSTs (the second would 404 against the already-promoted winner).
+
+### Test coverage
+
+- 11 new unit tests: 4 in `WireV9Tests` (broadcast minimum + per-child round-trip), 1 in `OpencodeAuthFileTests` (canonical preservation across migration probe), 6 in new `AgentSessionRegistryFrontierTests` (frontierGroupChildren archived filter + clearFrontierGroupBinding).
+- Total: 643 ClawdmeterShared tests pass, 190 Mac tests pass.
 
 ## [0.23.11 build 126] - 2026-05-23 — Real Antigravity token counts from .db step_payload + Keychain SDK key reader + LSP gRPC client (`darshanbathija/usage-page-edits`)
 

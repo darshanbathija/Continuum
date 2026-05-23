@@ -189,10 +189,30 @@ public final class AgentSessionRegistry: ObservableObject {
     /// v0.9 — read all sessions in a Frontier group, sorted by
     /// `frontierChildIndex`. Used by the Frontier WS snapshotter +
     /// HTTP handlers (send fan-out, retry-slot, pick-winner).
-    public func frontierGroupChildren(groupId: UUID) -> [AgentSession] {
+    ///
+    /// Defaults to excluding archived children so Frontier send fan-out
+    /// and snapshot subscribers see only live panes. Callers that need
+    /// the full set (e.g. pick-winner enumerating losers to archive)
+    /// pass `includeArchived: true`.
+    public func frontierGroupChildren(groupId: UUID, includeArchived: Bool = false) -> [AgentSession] {
         sessions
-            .filter { $0.frontierGroupId == groupId }
+            .filter { $0.frontierGroupId == groupId && (includeArchived || $0.archivedAt == nil) }
             .sorted { ($0.frontierChildIndex ?? Int.max) < ($1.frontierChildIndex ?? Int.max) }
+    }
+
+    /// v0.23.9 — clear the Frontier group binding on the winning child
+    /// so continue-from-winner converts it into a regular Solo chat in
+    /// the sidebar + history. The winner's JSONL transcript is
+    /// preserved; only the `frontierGroupId` / `frontierChildIndex`
+    /// fields are dropped.
+    public func clearFrontierGroupBinding(id: UUID) {
+        update(id: id) { s in
+            with(
+                s,
+                frontierGroupId: .some(nil),
+                frontierChildIndex: .some(nil)
+            )
+        }
     }
 
     /// v0.9 — patch the agentapi binding fields on an existing chat
@@ -484,7 +504,9 @@ public final class AgentSessionRegistry: ObservableObject {
         chatCwd: String?? = nil,
         runtimeBinding: SessionRuntimeBinding?? = nil,
         prMirrorState: PRMirrorState?? = nil,
-        lastEventSeq: UInt64? = nil
+        lastEventSeq: UInt64? = nil,
+        frontierGroupId: UUID?? = nil,
+        frontierChildIndex: Int?? = nil
     ) -> AgentSession {
         AgentSession(
             id: s.id,
@@ -518,9 +540,15 @@ public final class AgentSessionRegistry: ObservableObject {
             // v0.8.0 schema v5 (chat-tab): preserve all chat fields
             // across mutations so an update to a chat session doesn't
             // silently convert it back to a code session.
+            //
+            // v0.23.9: frontierGroupId / frontierChildIndex now accept
+            // an explicit override so handlePickFrontierWinner can
+            // promote the winner out of the broadcast group (so
+            // continue-from-winner flips the UI back to .solo without
+            // any further send hitting archived losers).
             kind: s.kind,
-            frontierGroupId: s.frontierGroupId,
-            frontierChildIndex: s.frontierChildIndex,
+            frontierGroupId: Self.resolve(frontierGroupId, fallback: s.frontierGroupId),
+            frontierChildIndex: Self.resolve(frontierChildIndex, fallback: s.frontierChildIndex),
             codexChatBackend: s.codexChatBackend,
             codexChatThreadId: Self.resolve(codexChatThreadId, fallback: s.codexChatThreadId),
             // v0.8.1 schema v6 (agy-migration): geminiBackend +
