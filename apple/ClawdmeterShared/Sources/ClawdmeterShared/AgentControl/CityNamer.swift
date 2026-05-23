@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 
 private let cityLogger = Logger(subsystem: "com.clawdmeter.shared", category: "CityNamer")
 

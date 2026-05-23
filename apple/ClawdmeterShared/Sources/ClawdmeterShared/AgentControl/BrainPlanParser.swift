@@ -22,7 +22,9 @@
 
 import Foundation
 import Markdown
+#if canImport(OSLog)
 import OSLog
+#endif
 
 private let brainPlanLogger = Logger(subsystem: "com.clawdmeter.shared", category: "BrainPlanParser")
 
