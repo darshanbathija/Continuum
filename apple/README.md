@@ -79,6 +79,10 @@ apple/
 │   ├── AppDelegate.swift                       NSStatusItem + NSPopover wiring
 │   ├── AgentControl/                           v1/v2 daemon (Sessions tab)
 │   │   └── TailscaleHost.swift                 v0.3.0 getifaddrs(3) + status JSON fallback
+│   ├── Updates/                                v0.24.0 in-app update flow (GitHub Releases API checker)
+│   │   ├── UpdateCoordinator.swift             polls api.github.com once 8s after launch + every 24h
+│   │   ├── UpdatesUI.swift                     titlebar UpdateChip + release-notes popover
+│   │   └── GitHubReleaseConstants.swift        centralized owner/repo + browser/API/tag URL helpers
 │   ├── Workspace/Composer/                     v0.3.0 Mac chat IDE module
 │   │   ├── ComposerInputCore.swift             SwiftUI composer bound to ComposerStore
 │   │   ├── EmptyStateCenteredComposer.swift    Codex-style centered first-send composer

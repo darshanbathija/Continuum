@@ -209,7 +209,9 @@ public actor OpencodeAuthFile {
     }
 
     /// Remove all entries for `providerId` (both normalized and
-    /// un-normalized forms).
+    /// un-normalized forms). No-op when nothing matches — does NOT
+    /// create the auth file just to write `{}`. The idempotency test
+    /// (`test_removeProvider_idempotentWhenMissing`) locks this in.
     public func removeProvider(providerId: String) async throws {
         let normalized = normalize(providerId)
         var entries = await readEntries()

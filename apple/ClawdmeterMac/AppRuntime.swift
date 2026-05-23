@@ -48,6 +48,12 @@ final class AppRuntime: ObservableObject {
     // user opens the tab.
     let openDesignDaemon: OpenDesignDaemonManager
 
+    // v0.24.0: in-app update checker. Polls GitHub Releases once a day,
+    // surfaces a chip in the titlebar when a newer version ships. The
+    // chip opens a popover with release notes + "Download in Browser"
+    // CTA. Sparkle one-click install is parked in TODOS.md as phase 2.
+    let updateCoordinator: UpdateCoordinator
+
     /// v0.14.0 (plan v2.1 T8): import a folder into Open Design via the
     /// bridge sidecar. Posts `.clawdmeterDidOpenInDesign` on success so
     /// MacRootView can flip its tab + navigate the WebView. Used by the
@@ -106,6 +112,12 @@ final class AppRuntime: ObservableObject {
     var loopbackClient: AgentControlClient?
 
     init() {
+        // v0.24.0: in-app update checker. Instantiate first — no
+        // dependencies on other subsystems, and its background timer
+        // schedules its first check 8s out so logs don't interleave
+        // with the rest of AppRuntime's init.
+        self.updateCoordinator = UpdateCoordinator()
+
         let claudeTokenProvider = KeychainTokenProvider()
         // Mirror Claude Code's local OAuth token into our shared, iCloud-synced
         // Keychain entry so the iPhone and Watch apps can read the same token

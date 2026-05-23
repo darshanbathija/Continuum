@@ -712,6 +712,55 @@ deferred items the CEO review identified.
 - **Effort**: ~30min for option 1 (recommended), ~2-3hrs for option 2,
   ~1hr for option 3.
 
+### v0.25.0 follow-up — Sparkle auto-update migration (phase 2)
+
+- **What**: Replace the GitHub-Releases-API checker shipped in v0.25.0
+  (`apple/ClawdmeterMac/Updates/`) with Sparkle 2.x auto-update. Original
+  design captured in the eng-review plan file:
+  `~/.claude/plans/system-instruction-you-are-working-snoopy-quail.md`
+  under "Future work: Sparkle migration".
+- **Why**: The API checker requires the user to drag the new DMG to
+  /Applications on each update. Sparkle gives one-click "Update &
+  Restart." v0.25.0 ships the API checker because Sparkle's value-add is
+  conditional on notarization (Gatekeeper re-prompts on un-notarized
+  relaunch anyway), and personal-team XPC + sandbox + macOS 26 is an
+  unverified combination that the v0.25.0 outside-voice review flagged
+  as PRIMARY UNKNOWN with high probability of failure.
+- **Prerequisites (HARD)**:
+  1. Paid Apple Developer Program account ($99/yr) — required for
+     Developer ID signing + notarization, AND for EdDSA key rotation if
+     the maintainer key is ever compromised.
+  2. Notarization integrated into `tools/build-mac-dmg.sh` (or a new
+     `tools/release-mac.sh` that does build + notarize + appcast
+     atomically).
+  3. **PoC commit FIRST** in a separate PR: add Sparkle framework +
+     Info.plist keys + entitlements + an empty coordinator, archive,
+     sign, run on a clean macOS install, verify XPC services launch +
+     download completes. If PoC fails, do not proceed past it.
+- **Scope**: ~17 files (vendored Sparkle.framework under
+  `apple/Vendor/Sparkle/`, `SparkleUpdateCoordinator.swift` replacing
+  the current `UpdateCoordinator.swift`, Info.plist keys, two
+  entitlements files, `tools/sparkle-setup.sh`, `tools/release-mac.sh`,
+  `docs/appcast.xml`, README/CHANGELOG/SECURITY docs). New EdDSA key
+  in macOS Keychain with documented backup procedure.
+- **Sparkle features worth adding in phase 2**:
+  `sparkle:phasedRolloutInterval` (10% day-1 → 100% day-7 for
+  one-person-shop safety), `SUMinimumSystemVersion` per-item, delta
+  updates (free from `generate_appcast` if prior archives persist),
+  dSYMs preserved per release for crash symbolication.
+- **Sequencing fix**: outside-voice surfaced a real trap in the
+  original Sparkle plan where appcast push + DMG upload happen in
+  separate manual steps. Phase 2 must include an atomic
+  `tools/release-mac.sh` that does build → `gh release create
+  --draft` → upload → verify HEAD 200 → `gh release edit --draft=false`
+  → regen appcast → commit + push.
+- **EdDSA key rotation gotcha**: rotation requires Developer ID re-sign.
+  Personal-team builds CANNOT rotate. If the key leaks, every user is
+  permanently exposed unless the maintainer migrates to Developer ID
+  AND re-signs all future releases. Document this in `docs/SECURITY.md`
+  BEFORE shipping Sparkle.
+- **Effort**: 2-3 weeks (1 PoC PR + 1 implementation PR + manual QA
+  pass + docs).
 
 ### v0.24.0 follow-up — Broadcast Chat V3 adversarial-review deferrals
 
