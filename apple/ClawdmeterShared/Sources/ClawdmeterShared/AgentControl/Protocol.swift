@@ -2613,6 +2613,28 @@ public struct CreateFrontierResponse: Codable, Sendable {
         self.groupId = groupId
         self.slots = slots
     }
+
+    /// Slots whose spawn succeeded — used by the UI to gate broadcast
+    /// mode (need ≥2) and to know which session ids the first prompt
+    /// should fan out to.
+    public var successfulSlots: [FrontierSlotResult] {
+        slots.filter { $0.isOK }
+    }
+
+    /// Slots whose spawn failed (`sessionId == nil`). Surfaces partial
+    /// failures so the composer can show why a broadcast degraded.
+    public var failedSlots: [FrontierSlotResult] {
+        slots.filter { !$0.isOK }
+    }
+
+    /// True iff at least two children spawned successfully — broadcast
+    /// mode requires multiple providers to compare. The UI should treat
+    /// a single-successful response as "broadcast unavailable, surface
+    /// the failure reasons" rather than silently degrading to a one-
+    /// agent broadcast.
+    public var hasMinimumBroadcast: Bool {
+        successfulSlots.count >= 2
+    }
 }
 
 /// One slot's spawn outcome within a Frontier group.
@@ -2696,6 +2718,44 @@ public struct FrontierSendResponse: Codable, Sendable, Hashable {
 
     public var ok: Bool {
         results.allSatisfy(\.ok)
+    }
+}
+
+/// `POST /chat-sessions/frontier/:groupId/send` body — extends the
+/// solo `SendPromptRequest` with an optional per-child text override.
+///
+/// Why a separate type: the solo `/sessions/:id/send` body is just
+/// `{text, asFollowUp}` and several callers (smoke tests, manual
+/// fan-out) depend on that shape. Frontier sends sometimes need
+/// per-child prompts so an attachment uploaded to child A's staging
+/// dir is referenced as `@/.../A/...` only in child A's prompt, not
+/// in child B's prompt (where that path is unreadable).
+///
+/// `perChildText` is keyed by `sessionId`. If a child's id is missing
+/// from the map, the server falls back to the shared `text`. Backward
+/// compat: the server also accepts `SendPromptRequest`-shaped bodies
+/// for callers that haven't migrated.
+public struct FrontierSendRequest: Codable, Sendable {
+    public let text: String
+    public let asFollowUp: Bool
+    public let perChildText: [String: String]?
+
+    public init(text: String, asFollowUp: Bool = false, perChildText: [UUID: String]? = nil) {
+        self.text = text
+        self.asFollowUp = asFollowUp
+        if let perChildText {
+            self.perChildText = Dictionary(uniqueKeysWithValues:
+                perChildText.map { ($0.key.uuidString, $0.value) }
+            )
+        } else {
+            self.perChildText = nil
+        }
+    }
+
+    /// Look up the override for a given child session id; falls back
+    /// to the shared `text` when no override is registered.
+    public func text(forChild sessionId: UUID) -> String {
+        perChildText?[sessionId.uuidString] ?? text
     }
 }
 

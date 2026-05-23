@@ -935,9 +935,18 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    /// `POST /chat-sessions/frontier/:groupId/send`. The optional
+    /// `perChildText` map lets the UI override the prompt for specific
+    /// children (used by the broadcast attachment path so each child's
+    /// staging path is only `@`-mentioned in its own prompt — uploading
+    /// the same bytes once per child).
     @MainActor
-    public func sendFrontierPrompt(groupId: UUID, text: String) async -> FrontierSendResponse? {
-        let req = SendPromptRequest(text: text, asFollowUp: false)
+    public func sendFrontierPrompt(
+        groupId: UUID,
+        text: String,
+        perChildText: [UUID: String]? = nil
+    ) async -> FrontierSendResponse? {
+        let req = FrontierSendRequest(text: text, asFollowUp: false, perChildText: perChildText)
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
         guard let body = try? encoder.encode(req),
               let request = makeRequest(path: "/chat-sessions/frontier/\(groupId.uuidString)/send", method: "POST", body: body) else {

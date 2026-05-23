@@ -3660,9 +3660,14 @@ public final class AgentControlServer {
     }
 
     /// POST /chat-sessions/frontier/:groupId/send — fan out the prompt
-    /// to every non-failed child. Each child is a regular chat session
-    /// so we reuse the existing /sessions/:id/send semantics by
+    /// to every live (non-archived) child. Each child is a regular chat
+    /// session so we reuse the existing /sessions/:id/send semantics by
     /// dispatching to the underlying send logic per child.
+    ///
+    /// v0.23.9: accepts both `FrontierSendRequest` (preferred — supports
+    /// per-child text overrides for broadcast attachments) and the
+    /// legacy `SendPromptRequest` shape for back-compat with the
+    /// smoke script + first iOS build.
     private func handleFrontierSend(
         request: HTTPRequest,
         connection: NWConnection,
@@ -3671,16 +3676,31 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: groupId) else {
             sendResponse(.badRequest, on: connection); return
         }
+        // Frontier sends must only hit live children. Archived siblings
+        // (e.g. losers after a pick-winner) keep their JSONL for the
+        // history sidebar but should never receive new prompts.
         let children = registry.frontierGroupChildren(groupId: uuid)
         guard !children.isEmpty else {
             sendResponse(.notFound, on: connection); return
         }
-        guard let req = try? JSONDecoder().decode(SendPromptRequest.self, from: request.body) else {
+        let decoder = JSONDecoder()
+        let frontierReq = try? decoder.decode(FrontierSendRequest.self, from: request.body)
+        let legacyReq = frontierReq == nil ? try? decoder.decode(SendPromptRequest.self, from: request.body) : nil
+        let sharedText: String
+        let perChild: [String: String]?
+        if let frontierReq {
+            sharedText = frontierReq.text
+            perChild = frontierReq.perChildText
+        } else if let legacyReq {
+            sharedText = legacyReq.text
+            perChild = nil
+        } else {
             sendResponse(.badRequest, on: connection); return
         }
         var results: [FrontierChildSendResult] = []
         for child in children {
-            results.append(await forwardFrontierChildSend(session: child, text: req.text))
+            let text = perChild?[child.id.uuidString] ?? sharedText
+            results.append(await forwardFrontierChildSend(session: child, text: text))
         }
         let response = FrontierSendResponse(groupId: uuid, childCount: children.count, results: results)
         let encoder = JSONEncoder()
@@ -3704,6 +3724,17 @@ public final class AgentControlServer {
         let bytes = Array(text.utf8)
         guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "invalid_prompt")
+        }
+        // v0.23.9 adversarial-review fix: handleFrontierSend snapshots
+        // the child list before iterating, then awaits per-child sends
+        // serially. While we're awaiting child[i]'s tmux/SDK/agentapi
+        // call, a concurrent /pick-winner can archive child[i+1] on
+        // the same @MainActor registry. Re-fetch the live session
+        // immediately before each send so a just-archived loser
+        // doesn't still receive the prompt.
+        let currentArchivedAt = registry.session(id: session.id)?.archivedAt
+        if currentArchivedAt != nil {
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "archived_mid_send")
         }
         guard RateLimiter.shared.tryAcquireSend(sessionId: session.id) else {
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "rate_limited")
@@ -3854,9 +3885,18 @@ public final class AgentControlServer {
     }
 
     /// POST /chat-sessions/frontier/:groupId/pick-winner — archive the
-    /// non-winning children, return the winner's sessionId. The winner
-    /// becomes a regular Solo chat (still tagged with frontierGroupId so
-    /// history is preserved; the sidebar promotes it out of the group).
+    /// non-winning children and promote the winner out of the broadcast
+    /// group so the sidebar/history treat it as a normal Solo chat.
+    /// Returns the promoted winner session (with `frontierGroupId` /
+    /// `frontierChildIndex` cleared).
+    ///
+    /// v0.23.9: previously the winner kept its `frontierGroupId`, which
+    /// meant follow-up sends still mapped back to the Frontier group
+    /// and the snapshot WS still considered the group "live". Both UIs
+    /// now also flip `openTarget` to `.solo(winner.id)` after this call
+    /// returns. Belt + suspenders: Frontier send / snapshot also filter
+    /// `archivedAt == nil` so even before the next refresh, the
+    /// archived losers cannot receive sends.
     private func handlePickFrontierWinner(
         request: HTTPRequest,
         connection: NWConnection,
@@ -3866,20 +3906,29 @@ public final class AgentControlServer {
               let req = try? JSONDecoder().decode(PickFrontierWinnerRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
-        let children = registry.frontierGroupChildren(groupId: uuid)
-        guard let winner = children.first(where: { $0.frontierChildIndex == req.childIndex }) else {
+        // Enumerate everyone (including any already-archived siblings)
+        // so we cleanly archive the full loser set even if pick-winner
+        // is invoked a second time.
+        let allChildren = registry.frontierGroupChildren(groupId: uuid, includeArchived: true)
+        guard let winner = allChildren.first(where: { $0.frontierChildIndex == req.childIndex && $0.archivedAt == nil }) else {
             sendResponse(.notFound, on: connection); return
         }
         // Archive the losers. Existing archive path persists archivedAt
         // and the sidebar's Show-Archived toggle keeps them reachable.
-        for child in children where child.id != winner.id {
+        for child in allChildren where child.id != winner.id && child.archivedAt == nil {
             registry.archive(id: child.id)
         }
+        // Promote the winner out of the Frontier group. From this point
+        // on, every history/search row, every Frontier send, and every
+        // FrontierWebSocket snapshot treats this session as a regular
+        // Solo chat.
+        registry.clearFrontierGroupBinding(id: winner.id)
+        let promoted = registry.session(id: winner.id) ?? winner
         if let counter = frontierUpdateCounters[uuid] {
             frontierUpdateCounters[uuid] = counter + 1
         }
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
-        if let body = try? encoder.encode(winner) {
+        if let body = try? encoder.encode(promoted) {
             sendResponse(HTTPResponse(
                 status: 200, reason: "OK",
                 contentType: "application/json", body: body

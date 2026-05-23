@@ -140,6 +140,74 @@ final class WireV9Tests: XCTestCase {
         XCTAssertEqual(decoded.slots[2].reason, "codex CLI not on PATH")
     }
 
+    /// v0.23.9 P1 fix: a two-of-three success counts as a real broadcast;
+    /// the UI proceeds with two live children and surfaces the third
+    /// child's failure reason.
+    func test_createFrontierResponse_hasMinimumBroadcastWithTwoSuccesses() {
+        let resp = CreateFrontierResponse(
+            groupId: UUID(),
+            slots: [
+                FrontierSlotResult(index: 0, sessionId: UUID()),
+                FrontierSlotResult(index: 1, sessionId: UUID()),
+                FrontierSlotResult(index: 2, reason: "codex CLI not on PATH")
+            ]
+        )
+        XCTAssertEqual(resp.successfulSlots.count, 2)
+        XCTAssertEqual(resp.failedSlots.count, 1)
+        XCTAssertEqual(resp.failedSlots.first?.reason, "codex CLI not on PATH")
+        XCTAssertTrue(resp.hasMinimumBroadcast)
+    }
+
+    /// v0.23.9 P1 fix: a one-of-three success is NOT a broadcast — UI
+    /// must refuse to open the broadcast surface and instead show why
+    /// the other two slots failed.
+    func test_createFrontierResponse_hasMinimumBroadcastFailsWithOneSuccess() {
+        let resp = CreateFrontierResponse(
+            groupId: UUID(),
+            slots: [
+                FrontierSlotResult(index: 0, sessionId: UUID()),
+                FrontierSlotResult(index: 1, reason: "antigravity not running"),
+                FrontierSlotResult(index: 2, reason: "codex auth missing")
+            ]
+        )
+        XCTAssertEqual(resp.successfulSlots.count, 1)
+        XCTAssertEqual(resp.failedSlots.count, 2)
+        XCTAssertFalse(resp.hasMinimumBroadcast)
+    }
+
+    /// v0.23.9 P2 fix: per-child text overrides survive Codable round-trip
+    /// so the Frontier send fan-out can route a child-specific prompt
+    /// (with that child's attachment path) to each session.
+    func test_frontierSendRequest_perChildTextRoundTrips() throws {
+        let claudeId = UUID()
+        let codexId = UUID()
+        let geminiId = UUID()
+        let req = FrontierSendRequest(
+            text: "what is in this image?",
+            asFollowUp: false,
+            perChildText: [
+                claudeId: "@/path/to/claude/staging/img.png what is in this image?",
+                codexId: "@/path/to/codex/staging/img.png what is in this image?",
+                geminiId: "@/path/to/gemini/staging/img.png what is in this image?"
+            ]
+        )
+        let data = try JSONEncoder().encode(req)
+        let decoded = try JSONDecoder().decode(FrontierSendRequest.self, from: data)
+        XCTAssertEqual(decoded.text, "what is in this image?")
+        XCTAssertEqual(decoded.text(forChild: claudeId), "@/path/to/claude/staging/img.png what is in this image?")
+        XCTAssertEqual(decoded.text(forChild: codexId), "@/path/to/codex/staging/img.png what is in this image?")
+        XCTAssertEqual(decoded.text(forChild: geminiId), "@/path/to/gemini/staging/img.png what is in this image?")
+    }
+
+    /// v0.23.9 P2 fix: when no override is registered for a child id,
+    /// `text(forChild:)` falls back to the shared `text` so unscoped
+    /// callers (no attachments) keep working.
+    func test_frontierSendRequest_perChildTextFallsBackToShared() {
+        let req = FrontierSendRequest(text: "shared prompt", perChildText: nil)
+        let unknownChild = UUID()
+        XCTAssertEqual(req.text(forChild: unknownChild), "shared prompt")
+    }
+
     // MARK: - FrontierGroupSnapshot
 
     func test_frontierGroupSnapshot_withFailedChildAndWinnerMetadata() throws {
