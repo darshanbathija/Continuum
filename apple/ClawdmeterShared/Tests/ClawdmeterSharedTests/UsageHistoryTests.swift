@@ -376,6 +376,10 @@ final class UsageHistoryTests: XCTestCase {
             claudeDir: claudeDir,
             codexDir: codexDir,
             geminiDir: geminiDir,
+            // Pass a non-existent agy dir explicitly so the loader's
+            // "agy installed?" check returns false even when the host
+            // machine has a real `~/.gemini/antigravity-cli/` corpus.
+            agyDir: temp.appendingPathComponent("agy-missing"),
             opencodeDBURL: temp.appendingPathComponent("missing-opencode.db"),
             cacheURL: cacheURL
         )
@@ -503,6 +507,92 @@ final class UsageHistoryTests: XCTestCase {
         async let b = loader.loadAll()
         let (resA, resB) = await (a, b)
         XCTAssertEqual(resA.sessionCount, resB.sessionCount)
+    }
+
+    // MARK: - v0.23.8: Antigravity multi-format + agy CLI ingest
+
+    /// Pins the fix for the $0.026/day bug: when a desktop session is
+    /// written as a SQLite `.db` instead of legacy `.pb`, the loader
+    /// must still see it. Drops a `.db` + matching brain dir under a
+    /// tempdir and asserts the gemini bucket reports a non-zero record.
+    func test_loaderPicksUpDesktopDBFiles() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        let claudeDir = temp.appendingPathComponent("claude")
+        let codexDir = temp.appendingPathComponent("codex")
+        let geminiRoot = temp.appendingPathComponent("antigravity")
+        let geminiDir = geminiRoot.appendingPathComponent("conversations")
+        let brainDir = geminiRoot.appendingPathComponent("brain")
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: geminiDir, withIntermediateDirectories: true)
+
+        let uuid = UUID().uuidString.lowercased()
+        let brainUUID = brainDir.appendingPathComponent(uuid, isDirectory: true)
+        let nested = brainUUID.appendingPathComponent(".system_generated/messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        // Sidecar metadata.json for the turn counter; content blob for
+        // the token estimator.
+        try "{}".write(to: brainUUID.appendingPathComponent("turn-0.metadata.json"), atomically: true, encoding: .utf8)
+        try String(repeating: "x", count: 4000).write(to: nested.appendingPathComponent("turn-0.json"), atomically: true, encoding: .utf8)
+        // .db file (SQLite WAL would have these too but the parser
+        // only stats the file — content irrelevant).
+        try Data(count: 128).write(to: geminiDir.appendingPathComponent("\(uuid).db"))
+
+        let loader = UsageHistoryLoader(
+            claudeDir: claudeDir,
+            codexDir: codexDir,
+            geminiDir: geminiDir,
+            agyDir: temp.appendingPathComponent("agy-missing"),
+            opencodeDBURL: temp.appendingPathComponent("missing.db"),
+            cacheURL: temp.appendingPathComponent("cache.json")
+        )
+        let snapshot = await loader.loadAll()
+        XCTAssertEqual(snapshot.sessionCount, 1, "the .db file should count exactly once")
+        XCTAssertGreaterThan(snapshot.gemini.allTime.totals.totalTokens, 0, "nested .json content should produce a non-zero token estimate")
+    }
+
+    /// Same shape but for the agy CLI corpus. Brain dir is under the
+    /// agy root, not the desktop root; resolveModelKey reads
+    /// settings.json from the agy root.
+    func test_loaderPicksUpAgyCliFiles() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        let claudeDir = temp.appendingPathComponent("claude")
+        let codexDir = temp.appendingPathComponent("codex")
+        let geminiDir = temp.appendingPathComponent("gemini-empty")
+        let agyRoot = temp.appendingPathComponent("antigravity-cli")
+        let agyDir = agyRoot.appendingPathComponent("conversations")
+        let agyBrain = agyRoot.appendingPathComponent("brain")
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: geminiDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: agyDir, withIntermediateDirectories: true)
+
+        let uuid = UUID().uuidString.lowercased()
+        let brainUUID = agyBrain.appendingPathComponent(uuid, isDirectory: true)
+        try FileManager.default.createDirectory(at: brainUUID, withIntermediateDirectories: true)
+        try "{}".write(to: brainUUID.appendingPathComponent("turn-0.metadata.json"), atomically: true, encoding: .utf8)
+        try String(repeating: "y", count: 4000).write(to: brainUUID.appendingPathComponent("transcript.jsonl"), atomically: true, encoding: .utf8)
+        try Data(count: 64).write(to: agyDir.appendingPathComponent("\(uuid).pb"))
+        // settings.json with a known model so resolveModelKey returns non-nil.
+        try #"{ "model": "Gemini 3.1 Pro" }"#.write(
+            to: agyRoot.appendingPathComponent("settings.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let loader = UsageHistoryLoader(
+            claudeDir: claudeDir,
+            codexDir: codexDir,
+            geminiDir: geminiDir,
+            agyDir: agyDir,
+            opencodeDBURL: temp.appendingPathComponent("missing.db"),
+            cacheURL: temp.appendingPathComponent("cache.json")
+        )
+        let snapshot = await loader.loadAll()
+        XCTAssertEqual(snapshot.sessionCount, 1, "the agy .pb file should count exactly once")
+        XCTAssertGreaterThan(snapshot.gemini.allTime.totals.costUSD, 0, "Gemini 3.1 Pro pricing must apply to agy CLI records")
     }
 
     // MARK: - Helpers

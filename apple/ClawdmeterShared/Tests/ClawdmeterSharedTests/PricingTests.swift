@@ -37,6 +37,25 @@ final class PricingTests: XCTestCase {
         XCTAssertFalse(pricing.isPriced("completely-made-up-model-xyz"))
     }
 
+    // v0.23.8: pin the new Gemini frontier-Pro entry. Until this
+    // commit, M134 → "gemini-3.1-pro" fell through as unpriced and
+    // any Antigravity session on the Pro model contributed $0.
+    func test_gemini31Pro_pricesBelow200kAtIOLaunchRates() {
+        // 100K input @ $2/M = $0.20; 50K output @ $12/M = $0.60; total $0.80.
+        let tokens = TokenTotals(inputTokens: 100_000, outputTokens: 50_000)
+        let cost = pricing.cost(for: "gemini-3.1-pro", tokens: tokens)
+        XCTAssertEqual((cost as NSDecimalNumber).doubleValue, 0.80, accuracy: 0.001)
+        XCTAssertTrue(pricing.isPriced("gemini-3.1-pro"))
+    }
+
+    func test_gemini35Flash_pricesAtIO2026Rates() {
+        // 100K input @ $1.50/M = $0.15; 50K output @ $9/M = $0.45; total $0.60.
+        let tokens = TokenTotals(inputTokens: 100_000, outputTokens: 50_000)
+        let cost = pricing.cost(for: "gemini-3.5-flash", tokens: tokens)
+        XCTAssertEqual((cost as NSDecimalNumber).doubleValue, 0.60, accuracy: 0.001)
+        XCTAssertTrue(pricing.isPriced("gemini-3.5-flash"))
+    }
+
     func test_claudeModelPrefixMatch() {
         // claude-sonnet-4-5-20250929 is in the snapshot directly, but a
         // hypothetical future-date variant should fall back via prefix match.

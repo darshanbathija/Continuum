@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Combine)
 import Combine
+#endif
 
 /// v0.23 (Chat V2 — T10): cross-platform observable for the V2 chat
 /// composer's pick state. Mac and iOS both bind their composer chips

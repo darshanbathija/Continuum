@@ -162,33 +162,23 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var providerSettings: some View {
-        // PR #31 chunk 2: Providers card surfaces install + auth state for adapters that run external CLIs.
+        // Four-row Providers card. All providers use the same row shape so
+        // their visual rhythm matches: glyph + title + one-line status +
+        // single trailing control (button or toggle). The Codex SDK and
+        // Antigravity SDK rows replace what used to be standalone cards
+        // with Status grids and educational footers; the underlying
+        // CodexSDKManager / AntigravitySidecarManager wiring is unchanged.
         SettingsCard(title: "Providers",
-                     sub: "External agent runtimes Clawdmeter can drive. Listed providers must be installed and signed in to spawn sessions.") {
+                     sub: "External agent runtimes Clawdmeter can drive.") {
             VStack(alignment: .leading, spacing: 14) {
-                // v0.22.23: explicit Claude Code CLI row at the top
-                // since Claude is the headline provider. Shows
-                // install status + a "Has been used" proxy for the
-                // sign-in state (the real OAuth token lives in
-                // macOS Keychain and isn't readable without entitlement,
-                // so we infer auth from `~/.claude/projects/` having
-                // any entries).
                 ClaudeCLIProviderRow()
                 TahoeHair()
                 OpencodeProviderRow()
+                TahoeHair()
+                CodexSDKProviderRow()
+                TahoeHair()
+                AntigravitySDKProviderRow()
             }
-        }
-
-        SettingsCard(title: "Codex SDK",
-                     sub: "Observation mode toggle + diagnostics for the Codex provider.") {
-            CodexSDKSettingsView()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        SettingsCard(title: "Antigravity SDK",
-                     sub: "Antigravity 2 native runtime — bundled IPC bridge + plan-mode hand-off.") {
-            AntigravitySDKSettingsView()
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -636,113 +626,61 @@ private struct AccentPicker: View {
 
 // MARK: - Providers (PR #31 chunk 2)
 
-/// OpenCode provider row — install + auth status surfaced from
-/// OpencodeProcessManager.shared. Re-runs `opencode auth list` on
-/// appear so signed-in providers reflect within ~50ms of the user
-/// switching to the Settings tab. The "Open docs" affordance points
-/// at opencode.ai/docs/auth which covers both first-time install and
-/// the per-provider `opencode auth login` flow.
-/// Settings → Providers → OpenCode row. v0.23.0 rewrite — adds the
-/// embedded-terminal setup sheet so users can install / sign in / sign
-/// out / run diagnostics without ever dropping to a Terminal.
+/// Settings → Providers → OpenCode row.
 ///
-/// State machine (CQ3):
+/// Collapsed UX: one toggle, one button.
+///   - Off (binary missing OR no API key) → "Activate" button. Clicking it
+///     re-probes for the binary, then opens the OpenRouter API key sheet
+///     so the user can paste a key. The toggle moves on once a key lands.
+///   - On (binary present AND ≥1 provider configured) → toggle ON plus an
+///     "Edit API key" button that re-opens the same sheet. Flipping the
+///     toggle off removes every configured provider via
+///     OpencodeAuthFile.removeProvider — equivalent to a global sign-out.
 ///
-///   ┌─[bundle-missing]──────────┐  fallback only — DMG tampered
-///   │ orange "Reinstall app"    │
-///   └───────────────────────────┘
-///                │
-///                ▼
-///   ┌─[activated, no auth]──────┐  binary discovered, no providers
-///   │ yellow "Sign in required" │
-///   │ button: Add API key       │── launches OpencodeAPIKeySheet
-///   │ link:   Sign in w/ browser│── launches OpencodeSetupSheet
-///   └───────────────────────────┘    in `.signIn` mode (OAuth path)
-///                │
-///                │ sheet exits with code 0 → reprobe (O5)
-///                ▼
-///   ┌─[activated + signed in]───┐
-///   │ green "Signed in"         │
-///   │ per-provider info rows    │
-///   │ menu: Add API key…        │── launches OpencodeAPIKeySheet
-///   │ menu: Sign in w/ browser… │── launches sheet `.addProvider` (OAuth)
-///   │ menu: Diagnostic          │── launches sheet `.diagnostic`
-///   │ menu: Sign out            │── launches sheet `.signOut` (O6 global)
-///   └───────────────────────────┘
+/// Power-user affordances (sign in with browser / diagnostic / OAuth
+/// providers) are reachable via OpencodeAPIKeySheet's provider picker
+/// or via the upstream `opencode` CLI. They no longer need top-level
+/// chrome in Settings.
 private struct OpencodeProviderRow: View {
     @Environment(\.tahoe) private var t
-    @State private var managerState: OpencodeProcessManager.State = .stopped
     @State private var authStatus: [String: String]? = nil
-    @State private var setupCommand: OpencodeSetupSheet.Command?
-    @State private var activating: Bool = false
-    /// v0.23.4: native API-key sheet for paste-and-go providers
-    /// (OpenRouter / Anthropic API / OpenAI API / Moonshot / …). The
-    /// terminal sheet (`setupCommand`) is reserved for OAuth flows
-    /// (Anthropic Pro browser handoff, GitHub Copilot) and Sign-out /
-    /// Diagnostic.
+    @State private var hasBinary: Bool = false
     @State private var apiKeySheet: Bool = false
+    @State private var activating: Bool = false
 
-    private var hasBinary: Bool {
-        OpencodeProcessManager.shared.binaryPath != nil
+    private var isOn: Bool {
+        hasBinary && !(authStatus?.isEmpty ?? true)
     }
 
-    private var isAuthed: Bool {
-        guard let s = authStatus else { return false }
-        return !s.isEmpty
+    /// One-line status. Keeps the row compact: signed-in surfaces the
+    /// provider name, off-state explains what Activate does.
+    private var detailLine: String {
+        if isOn {
+            let provider = authStatus?.keys.sorted().first ?? "provider"
+            return "Signed in via \(displayName(for: provider)). Click Edit API key to swap."
+        }
+        if !hasBinary {
+            return "OpenCode CLI not detected. Click Activate to detect it (install via opencode.ai if missing) and paste an OpenRouter key."
+        }
+        return "Paste an OpenRouter (or other) API key to enable OpenCode-backed sessions."
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                TahoeProviderGlyph(provider: .opencode, size: 32)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Text("OpenCode")
-                            .font(TahoeFont.body(14, weight: .semibold))
-                            .foregroundStyle(t.fg)
-                        statePill
-                    }
-                    Text(detailLine)
-                        .font(TahoeFont.body(12))
-                        .foregroundStyle(t.fg3)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let authStatus, !authStatus.isEmpty {
-                        Text(authLine(authStatus))
-                            .font(TahoeFont.mono(11))
-                            .foregroundStyle(t.fg2)
-                    }
-                }
-                Spacer(minLength: 12)
-                actionButtons
+        HStack(alignment: .top, spacing: 12) {
+            TahoeProviderGlyph(provider: .opencode, size: 32)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("OpenCode")
+                    .font(TahoeFont.body(14, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Text(detailLine)
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 12) {
-                Button {
-                    if let url = URL(string: "https://opencode.ai/docs/") {
-                        NSWorkspace.shared.open(url)
-                    }
-                } label: {
-                    Text("Open docs")
-                        .font(TahoeFont.body(11, weight: .semibold))
-                        .foregroundStyle(t.fg4)
-                }
-                .buttonStyle(.plain)
-                Spacer()
-            }
+            Spacer(minLength: 12)
+            trailingControl
         }
-        .task {
-            await refreshState()
-        }
-        .sheet(item: $setupCommand) { command in
-            if let tmux = AppDelegate.runtime?.tmuxClient {
-                OpencodeSetupSheet(tmuxClient: tmux, command: command) {
-                    // onCompletion: triggered when child exits 0.
-                    Task { await refreshState() }
-                }
-            } else {
-                Text("tmux not available — relaunch Clawdmeter.")
-                    .padding()
-            }
-        }
+        .task { await refreshState() }
         .sheet(isPresented: $apiKeySheet) {
             OpencodeAPIKeySheet {
                 Task { await refreshState() }
@@ -750,127 +688,261 @@ private struct OpencodeProviderRow: View {
         }
     }
 
-    /// Primary action area on the right side of the row. Renders
-    /// different buttons depending on the state machine in the
-    /// header comment.
     @ViewBuilder
-    private var actionButtons: some View {
-        VStack(alignment: .trailing, spacing: 6) {
-            if !hasBinary {
-                Button("Activate") {
-                    activating = true
-                    Task {
-                        await OpencodeProcessManager.shared.reprobe()
-                        await refreshState()
-                        activating = false
+    private var trailingControl: some View {
+        if isOn {
+            VStack(alignment: .trailing, spacing: 8) {
+                TahoeToggleView(on: Binding(
+                    get: { true },
+                    set: { newValue in
+                        if !newValue { Task { await signOutAll() } }
                     }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(activating)
-            } else if !isAuthed {
-                Button("Add API key") { apiKeySheet = true }
-                    .buttonStyle(.borderedProminent)
-                Button("Sign in with browser") { setupCommand = .signIn }
+                ))
+                Button("Edit API key") { apiKeySheet = true }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-            } else {
-                Menu {
-                    Button("Add API key…") { apiKeySheet = true }
-                    Button("Sign in with browser…") { setupCommand = .addProvider }
-                    Button("Diagnostic") { setupCommand = .diagnostic }
-                    Divider()
-                    Button("Sign out of OpenCode", role: .destructive) {
-                        setupCommand = .signOut
-                    }
-                } label: {
-                    Text("Manage")
-                        .font(TahoeFont.body(12, weight: .semibold))
-                }
-                .menuStyle(.button)
-                .buttonStyle(.bordered)
-                .fixedSize()
             }
+        } else {
+            Button(activating ? "Activating…" : "Activate") {
+                Task { await activate() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(activating)
         }
+    }
+
+    // MARK: - Actions
+
+    /// Activate path: ensure the binary is detected, then surface the API
+    /// key sheet. Binary missing isn't a hard stop — the sheet still lets
+    /// the user paste a key, and OpencodeProcessManager.ensureRunning()
+    /// re-probes on the first session spawn.
+    private func activate() async {
+        activating = true
+        await OpencodeProcessManager.shared.reprobe()
+        await refreshState()
+        activating = false
+        apiKeySheet = true
+    }
+
+    /// Toggle-off → remove every configured provider so the row collapses
+    /// back to the Activate state. Auth file is the source of truth; the
+    /// in-memory authStatus is refreshed afterwards.
+    private func signOutAll() async {
+        let providers = await OpencodeAuthFile.shared.providerIds()
+        for id in providers {
+            try? await OpencodeAuthFile.shared.removeProvider(providerId: id)
+        }
+        await OpencodeProcessManager.shared.reprobe()
+        await refreshState()
     }
 
     private func refreshState() async {
-        managerState = OpencodeProcessManager.shared.state
-        authStatus = OpencodeProcessManager.shared.authStatus
+        hasBinary = OpencodeProcessManager.shared.binaryPath != nil
         await OpencodeProcessManager.shared.refreshAuthStatus()
         authStatus = OpencodeProcessManager.shared.authStatus
-        managerState = OpencodeProcessManager.shared.state
+        hasBinary = OpencodeProcessManager.shared.binaryPath != nil
     }
 
-    /// Compact pill rendering whichever state the manager is in.
-    @ViewBuilder
-    private var statePill: some View {
-        let (label, color): (String, Color) = {
-            switch managerState {
-            case .notInstalled:
-                return ("Not installed", Color.orange)
-            case .stopped:
-                if isAuthed {
-                    return ("Signed in", Color.green)
+    /// Map opencode's internal provider id to the OpencodeAPIKeySheet
+    /// display label so the status string reads "OpenRouter" not
+    /// "openrouter".
+    private func displayName(for providerId: String) -> String {
+        OpencodeAPIKeySheet.Provider(rawValue: providerId)?.displayName
+            ?? providerId
+    }
+}
+
+// MARK: - Codex SDK row
+
+/// Same row shape as OpencodeProviderRow / ClaudeCLIProviderRow: glyph +
+/// title + one-line status + trailing TahoeToggleView. Replaces the old
+/// standalone "Codex SDK" SettingsCard that had a duplicate header,
+/// `@openai/codex-sdk` paragraph, Status grid, install path, and Wipe /
+/// Open install folder buttons — none of which a customer can act on.
+///
+/// Toggle ON calls `CodexSDKManager.shared.enableSDKMode()` which lazily
+/// provisions the sidecar (~25 MB npm install on first run). Toggle OFF
+/// calls `disableSDKMode()` which keeps the install on disk so re-enable
+/// is instant. `lastProvisioningError` is read on appear to surface a
+/// stale failure from a previous launch.
+private struct CodexSDKProviderRow: View {
+    @Environment(\.tahoe) private var t
+    @AppStorage("clawdmeter.codex.sdkMode") private var sdkModeEnabled: Bool = false
+    @State private var isProvisioning: Bool = false
+    @State private var lastError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 12) {
+                TahoeProviderGlyph(provider: .codex, size: 32)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Codex SDK")
+                        .font(TahoeFont.body(14, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text(statusLine)
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                if hasBinary {
-                    return ("Sign in required", Color.orange)
-                }
-                return ("Idle", t.fg4)
-            case .starting:
-                return ("Starting…", Color.blue)
-            case .running:
-                return ("Running", Color.green)
-            case .failed:
-                return ("Failed", Color.red)
+                Spacer(minLength: 12)
+                TahoeToggleView(on: Binding(
+                    get: { sdkModeEnabled },
+                    set: { handleToggle($0) }
+                ))
+                .opacity(isProvisioning ? 0.4 : 1)
+                .allowsHitTesting(!isProvisioning)
             }
-        }()
-        Text(label)
-            .font(TahoeFont.body(10, weight: .bold))
-            .tracking(0.3)
-            .foregroundStyle(color)
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .background {
-                Capsule().fill(color.opacity(0.15))
-            }
-            .overlay {
-                Capsule().stroke(color.opacity(0.35), lineWidth: 0.5)
-            }
+            if isProvisioning { progressChip }
+            if let lastError, !lastError.isEmpty { errorChip(lastError) }
+        }
+        .onAppear { refreshErrorIfIdle() }
     }
 
-    /// Human-readable status detail. Uses the manager's binaryPath +
-    /// lastError when available so the user sees exactly what
-    /// happened.
-    private var detailLine: String {
-        switch managerState {
-        case .notInstalled:
-            return "Not installed. Run `brew install opencode` (or download from opencode.ai) to enable OpenCode-backed sessions."
-        case .stopped:
-            if isAuthed {
-                return "Ready to spawn OpenCode sessions. Starts on demand when you choose OpenCode."
-            }
-            if let path = OpencodeProcessManager.shared.binaryPath {
-                return "Installed at \(path). Starts on demand when you spawn an OpenCode session."
-            }
-            return "Starts on demand when you spawn an OpenCode session."
-        case .starting:
-            return "Spinning up the shared `opencode serve` process…"
-        case .running(let port):
-            let path = OpencodeProcessManager.shared.binaryPath ?? "<discovered>"
-            return "Running on 127.0.0.1:\(port) — shared process for every OpenCode session.  Binary: \(path)"
-        case .failed(let detail):
-            return "Failed: \(detail)"
+    private var statusLine: String {
+        if isProvisioning { return "Setting up…" }
+        return sdkModeEnabled
+            ? "Live events on. Token usage streams in real time."
+            : "Off. Token usage updates a couple of seconds behind the CLI."
+    }
+
+    private var progressChip: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Setting up (first run installs ~25 MB)…")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
         }
     }
 
-    /// Joined "provider: model" lines from `opencode auth list`. Empty
-    /// dict surfaces as "No providers signed in" so the user knows
-    /// what's missing.
-    private func authLine(_ status: [String: String]) -> String {
-        let pairs = status
-            .map { "\($0.key): \($0.value)" }
-            .sorted()
-            .joined(separator: " · ")
-        return "Signed in: \(pairs)"
+    private func errorChip(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func handleToggle(_ newValue: Bool) {
+        if newValue {
+            isProvisioning = true
+            lastError = nil
+            Task { @MainActor in
+                let result = await CodexSDKManager.shared.enableSDKMode()
+                isProvisioning = false
+                switch result {
+                case .success:
+                    sdkModeEnabled = true
+                case .failure(let err):
+                    sdkModeEnabled = false
+                    lastError = err.errorDescription ?? "Couldn't turn on live events."
+                }
+            }
+        } else {
+            CodexSDKManager.shared.disableSDKMode()
+            sdkModeEnabled = false
+            lastError = nil
+        }
+    }
+
+    private func refreshErrorIfIdle() {
+        guard !isProvisioning else { return }
+        lastError = CodexSDKManager.shared.lastProvisioningError
+    }
+}
+
+// MARK: - Antigravity SDK row
+
+/// Same row shape as the other provider rows. Replaces the old
+/// standalone "Antigravity SDK" SettingsCard that had duplicate header,
+/// "What changes when SDK mode is on" bullet list, "What stays the same"
+/// bullet list, and a StatusPill showing the literal UserDefaults
+/// backing key — none of which a customer can act on.
+private struct AntigravitySDKProviderRow: View {
+    @Environment(\.tahoe) private var t
+    @AppStorage("clawdmeter.antigravity.sdkMode") private var sdkModeEnabled: Bool = false
+    @State private var isProvisioning: Bool = false
+    @State private var lastError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 12) {
+                TahoeProviderGlyph(provider: .gemini, size: 32)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Antigravity SDK")
+                        .font(TahoeFont.body(14, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text(statusLine)
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                TahoeToggleView(on: Binding(
+                    get: { sdkModeEnabled },
+                    set: { newValue in Task { await applyToggle(newValue) } }
+                ))
+                .opacity(isProvisioning ? 0.4 : 1)
+                .allowsHitTesting(!isProvisioning)
+            }
+            if isProvisioning { progressChip }
+            if let lastError, !lastError.isEmpty { errorChip(lastError) }
+        }
+        .onAppear { refreshErrorIfIdle() }
+    }
+
+    private var statusLine: String {
+        if isProvisioning { return "Setting up…" }
+        return sdkModeEnabled
+            ? "Live events on. Token usage streams in real time."
+            : "Off. Plan view reads the cached brain instead."
+    }
+
+    private var progressChip: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Setting up (first run takes about 15 seconds)…")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+        }
+    }
+
+    private func errorChip(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func applyToggle(_ newValue: Bool) async {
+        guard !isProvisioning else { return }
+        if newValue {
+            isProvisioning = true
+            defer { isProvisioning = false }
+            let result = await AntigravitySidecarManager.shared.enableSDKMode()
+            switch result {
+            case .success:
+                lastError = nil
+            case .failure(let err):
+                lastError = err.errorDescription ?? "Couldn't turn on live events."
+            }
+        } else {
+            AntigravitySidecarManager.shared.disableSDKMode()
+            lastError = nil
+        }
+        refreshErrorIfIdle()
+    }
+
+    private func refreshErrorIfIdle() {
+        guard !isProvisioning else { return }
+        lastError = AntigravitySidecarManager.shared.lastProvisioningError
     }
 }
 

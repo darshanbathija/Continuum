@@ -1,128 +1,271 @@
-# Clawdmeter for Apple
+# Clawdmeter
 
-Live Claude Code + Codex CLI rate-limit gauges on every Apple surface you look at — Mac menu bar, iPhone Home Screen, Apple Watch face — plus a dashboard with historical `$/token` analytics (Today / Past 7d / Past 30d / All time, per repo, daily spend chart).
+Clawdmeter is a native desktop and mobile control surface for coding agents. It
+started as a Claude usage meter, but the current repo is broader: a Mac menu-bar
+meter, a Tahoe-style Mac workbench, iPhone and Apple Watch companions, a Linux
+desktop port, shared usage analytics, and adapters for Claude Code, Codex,
+Antigravity/Gemini, OpenCode, and Open Design.
 
-The Mac app reads Claude Code's OAuth token from your local Keychain, polls Anthropic's rate-limit headers every 60s, mirrors the snapshot to the paired iPhone over iCloud, and pushes to the paired Apple Watch over WatchConnectivity.
+At a high level, Clawdmeter does three jobs:
 
-> **Built on the shoulders of two upstream projects:**
-> - **[Clawdmeter (the original)](https://github.com/darshanbathija/Clawdmeter)** by [@darshanbathija](https://github.com/darshanbathija) — the ESP32 desk-side dashboard that started it all. Every gauge concept, color token (`#d97757` on `#000`), the `UsageData` JSON shape, the Anthropic rate-limit-header polling pattern, and the "send 1 token to keep the 5h timer warm" auto-revive idea were all prototyped there first. This repo is the native Apple port of that hardware project.
-> - **[ccusage](https://github.com/ryoppippi/ccusage)** by [@ryoppippi](https://github.com/ryoppippi) — the entire `$/token` analytics layer (`ClawdmeterShared/Sources/ClawdmeterShared/Analytics/`) is a Swift re-implementation of ccusage's TypeScript aggregation. We parse the same on-disk JSONL files ccusage parses, dedup the same way, and apply the same LiteLLM pricing snapshot. `ccusage daily` in your terminal is the ground-truth our numbers match.
+- Shows live quota and spend for coding-agent providers.
+- Runs and controls local coding-agent sessions from Mac, iPhone, Watch, and Linux.
+- Keeps chat, code, design, usage, device pairing, diagnostics, and provider setup in one app.
 
-## Download for Linux (Ubuntu 22.04+ / ZorinOS 16+)
+Current source version: `0.23.8` (`apple/project.yml` build `123`).
 
-**[➜ Download from Releases](https://github.com/darshanbathija/Clawdmeter/releases/latest)** — either `.AppImage` (works on any distro, ~200MB; bundles GTK4 + WebKitGTK 6.0 deps) or `.deb` (Ubuntu 24.04+ / ZorinOS 17+, ~30MB; uses system GTK4).
+## What ships
 
-```bash
-# AppImage — works on Ubuntu 22.04, 24.04, Zorin 16, Zorin 17, Debian 12+
-chmod +x Clawdmeter-*-x86_64.AppImage
-./Clawdmeter-*-x86_64.AppImage
+| Surface | Current role |
+| --- | --- |
+| **Mac app** | Primary app. Menu-bar gauge plus a full Tahoe-style window with Chat, Usage, Code, Design, and Settings tabs. Owns the local daemon, provider runtimes, tmux sessions, Open Design daemon, OpenCode server, usage aggregation, pairing, and diagnostics. |
+| **iPhone app** | Paired control plane for the Mac. Shows live provider status, analytics, chat/code sessions, new-session creation, plan approvals, diffs, terminal views, and Live Activities. |
+| **Apple Watch app** | Wrist view for live usage and sessions that need attention, including plan approval and interruption flows through the paired iPhone. |
+| **Widgets / complications** | iOS widgets, watchOS complications, and a Mac widget extension backed by the shared app-group cache. |
+| **Linux app** | Native Swift Linux desktop and daemon work under `linux/`, targeting Ubuntu/Zorin GNOME environments with AppIndicator, GTK4/libadwaita, WebKitGTK, VTE, libsecret, and the same shared analytics package. |
+| **Shared package** | `apple/ClawdmeterShared` contains wire DTOs, analytics parsers, pricing, provider models, session protocol types, Tahoe UI primitives, and cross-platform tests. |
+| **Tools** | Build scripts, bundled runtime fetchers, Open Design bridge/plugin code, Codex SDK shim, Antigravity Python sidecar skeleton, and tmux control-mode probes live under `tools/`. |
 
-# .deb — Ubuntu 24.04+ / ZorinOS 17+ only
-sudo apt install ./clawdmeter_*_amd64.deb
-clawdmeter
-```
+## Provider support
 
-The menu-bar gauge needs the GNOME AppIndicator extension on stock Ubuntu (ZorinOS preinstalls it). Clawdmeter detects the missing extension at first launch and offers to install it via `extensions.gnome.org`, or you can run `sudo apt install gnome-shell-extension-appindicator`. See [docs/linux/INSTALL.md](docs/linux/INSTALL.md), [PAIRING.md](docs/linux/PAIRING.md), [TROUBLESHOOTING.md](docs/linux/TROUBLESHOOTING.md).
+| Provider | How Clawdmeter integrates it |
+| --- | --- |
+| **Claude Code** | Spawns the `claude` CLI in tmux, parses Claude JSONL usage, reads local auth state where allowed, supports plan mode, accept-edits, bypass mode with repo trust, session resume, slash-command skill discovery, and live chat/code transcript ingestion. |
+| **Codex** | Supports CLI-backed sessions and a Codex SDK chat path. Usage parsing reads Codex session JSONL, including cumulative-to-delta conversion. Plan mode maps to read-only sandboxing, and send/interrupt/model/effort flows go through the same daemon surface as other agents. |
+| **Antigravity / Gemini** | Gemini quota and Antigravity 2 native sessions are represented through the shared `.gemini` agent kind in current wire contracts. The newer path talks to Antigravity's `agentapi` / language-server runtime, reads conversation DB and brain-dir state, and exposes plan snapshots. |
+| **OpenCode** | OpenCode is a fourth provider, not a fork target. Clawdmeter manages a shared `opencode serve` process, consumes SSE events, sends prompts through OpenCode's HTTP API, maps OpenCode usage into Clawdmeter analytics, and surfaces setup/auth under Settings -> Providers. |
+| **Open Design** | The Mac Design tab embeds a bundled Open Design web app. Clawdmeter starts the daemon, hosts a bridge sidecar, mints desktop import tokens, supports Code-to-Design handoff, and exposes an authenticated `/design/import-folder` route for paired clients. |
 
-## Download for Mac (Apple Silicon)
+## App model
 
-**[➜ Download the latest Clawdmeter.dmg from Releases](https://github.com/darshanbathija/Clawdmeter/releases/latest)**
+The Mac app is the source of truth. It hosts an in-process `Network.framework`
+HTTP and WebSocket daemon:
 
-1. Open the DMG.
-2. Drag **Clawdmeter.app** into the **Applications** folder.
-3. First launch: **right-click → Open** in Applications, then **Open** in the Gatekeeper dialog.
+- HTTP listener starts at `21731`, with fallback ports through `21741`.
+- WebSocket listener normally starts at `21732`.
+- Non-loopback access is restricted to Tailscale/loopback peer ranges and bearer-token pairing.
+- The same daemon backs Mac loopback clients, iPhone pairing, Watch relays, terminal streams, chat snapshots, usage, analytics, diffs, PR actions, and design handoff.
 
-macOS asks once because the build is signed with a personal Apple Developer team (notarization needs a paid `$99/yr` Apple Developer Program account). After the first Open, Gatekeeper trusts the app forever.
+The main Mac tabs are:
 
-The Clawdmeter icon appears in the menu bar. Click it to view your Claude / Codex usage; "Open dashboard" opens the full window with the analytics row.
+- **Chat** - solo or broadcast chat over Claude, Codex, and Antigravity, with Frontier-style multi-provider comparison endpoints in the daemon.
+- **Usage** - live quota cards plus historical spend by provider, day, and repo. OpenCode appears as a dollar-cost lane because it does not expose Anthropic-style rolling quota headers.
+- **Code** - repo/session workbench with city-named worktrees, terminal panes, chat transcript, plan/diff/PR/artifact/source panes, archive/reopen flows, and provider filters.
+- **Design** - embedded Open Design canvas with Code <-> Design handoff through the Clawdmeter bridge plugin.
+- **Settings** - visual theme, provider setup, Codex SDK diagnostics, Antigravity SDK diagnostics, pairing, Live Activities, auto-revive, and diagnostics.
 
-## What's in the box
+## Analytics
 
-| Surface | What it does |
-|---|---|
-| **Mac menu bar** | Live session % + reset countdown for Claude and Codex side-by-side. Click → popover with the same data + an "Open dashboard" link. |
-| **Mac dashboard window** | Side-by-side Claude + Codex live cards (session %, weekly %, auto-revive controls) plus the **Token usage** row: totals grid (4 windows × 2 providers, dollars primary), stacked daily-spend chart, by-repo breakdown with its own window picker. A **Sessions** tab is a first-class chat workbench for live Claude Code + Codex CLI sessions — slash-command palette, `@`-mention picker, attachments (drag-drop / file-picker / paste image), running-session cost ticker, autopilot trust gate, and a `Cmd+T` overlay for raw tmux when you need it (see below). A "Sync with iPhone" button in the header opens a pairing QR + Copy URL popover. |
-| **iPhone app** | TabView: **Live** (Claude live-polled, Codex mirrored from Mac), **Analytics** (totals + by-repo, synced from the Mac over Tailscale once paired), and **Sessions** (start / monitor / approve plans / view diffs / merge PRs on Mac sessions from your phone). |
-| **Apple Watch app** | Wrist meter showing session + weekly usage, plus a session list + Approve / Interrupt / Voice-reply controls for the paired Mac's live agents. |
-| **Widgets** | Lock Screen + Home Screen widgets on iOS, complications on watchOS (four families), and a Mac menu bar widget that ships with the Mac app. |
+The analytics layer is a Swift implementation of the same ideas behind
+`ccusage`: parse local agent logs, normalize token events, deduplicate, price
+with a LiteLLM snapshot, then roll up by provider, day, time window, and repo.
 
-## Sessions: a Mac chat IDE for Claude Code + Codex, paired to your phone
+Important files:
 
-The Sessions tab on Mac is a first-class chat workbench for the CLIs themselves. The matching iPhone tab is the mobile control plane against the same daemon.
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/ClaudeUsageParser.swift`
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/CodexUsageParser.swift`
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/AntigravityUsageParser.swift`
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/OpencodeUsageParser.swift`
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/UsageHistoryLoader.swift`
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/Pricing.swift`
+- `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing.json`
 
-- **Mac chat IDE (v0.3.0).** The Sessions tab is a chat workspace, not a session manager. Send turns from a powerful composer: slash-command palette (`/` lists every installed Claude Code skill walked from `~/.claude/skills/` and the project's `.claude/skills/`), `@`-mention picker (open sessions, agent-cited files, recent JSONLs), attachments (drag-drop from Finder, file picker, paste image as PNG, `QLThumbnailGenerator` previews, 50MB cap), voice dictation (Ctrl+M), and a running-session cost ticker fed by `Pricing.shared`. The send button transforms into a stop button while the session runs. Raw tmux is one keystroke away via the `Cmd+T` overlay.
-- **Continue here.** Right-click a recent JSONL row in the sidebar to spawn a fresh tmux pane with `--resume <cli-id>` (Claude) or `resume <cli-id>` (Codex) — the new pane reads the CLI's own session id out of the JSONL header so the chat history stays continuous.
-- **Autopilot chip with per-repo trust.** A chip in the composer row toggles `--dangerously-skip-permissions` (Claude) or `--dangerously-bypass-approvals-and-sandbox` (Codex). Untrusted repos hit a confirm sheet that flips the chip CTA to "Trust repo + enable autopilot" and the daemon enforces the trust list at the wire — a bearer-token-holding peer can't bypass it.
-- **Cross-Apple compose-draft handoff.** New iPhone "Open on Mac" button on the new-session sheet posts a `compose-draft` envelope over the existing pairing WebSocket; the Mac dashboard pre-fills the centered empty-state composer (text + suggested repo / agent / model / effort). Wire version bumped 3 → 4; iOS shows "Update Clawdmeter on the Mac" if the paired Mac is on the older protocol.
-- **Pairing host resolution rewritten.** `TailscaleHost.resolve()` reads the Tailscale interface address directly via `getifaddrs(3)` and falls back to `tailscale status --json` across three known install paths. Old code only checked `/opt/homebrew/bin/tailscale` and silently fell back to `127.0.0.1` — iPhones couldn't reach the Mac. The pairing popover and Settings → Sessions pane now show the resolved host kind and warn explicitly when the host is loopback or the Tailscale backend is down.
-- **Plan mode works for both agents.** Claude maps to `--permission-mode plan`, Codex maps to `--sandbox read-only`. Approve & run flips the permission / sandbox afterwards.
-- **Pairing is QR + Tailscale.** Tap "Sync with iPhone" on the Mac, scan or paste the URL on the phone. No iCloud, no APNS, no `.p8` key custody.
-- **The Mac daemon** (`Network.framework` HTTP + WS on ports 21731 / 21732, bound to loopback + Tailscale CGNAT) exposes the full control surface to the iPhone and Watch.
-- **iPhone chat snapshot arrives via push, not poll (v0.5.0).** The Mac daemon owns a long-lived per-session chat store (`DaemonChatStoreRegistry`); a new `chat-subscribe` WebSocket op pushes a coalesced 100ms snapshot to the paired iPhone instead of having the phone poll `GET /chat-snapshot` every 3 seconds. Codex `approve-plan` mid-session keeps continuity across the rollout-file boundary via `SessionFileResolver`. Both iPhone + Mac chat threads use native `List` now (out: `LazyVStack` with per-row `.id(item.id)` defeating recycling). Wire version 4 → 5; older Macs auto-fall-back to the HTTP polling path.
+Repo identity intentionally normalizes real git repositories so Conductor
+worktrees, `.claude/worktrees`, and a primary checkout collapse into the same
+row. Non-repo directories are grouped into an `Other` bucket.
 
-See `docs/designs/sessions-v2.md` for the v2.0 control-plane ship, `CHANGELOG.md` for the v0.3.0 chat-IDE rewrite and the v0.5.0 WhatsApp-smooth pipeline, and `TODOS.md` for deferred work.
-
-## Building from source
-
-Requires macOS 14+ and Xcode CLT. Everything else (`xcodebuild`, `hdiutil`, `codesign`) is built into the OS.
-
-```bash
-brew install xcodegen            # one-time
-git clone https://github.com/darshanbathija/Clawdmeter
-cd Clawdmeter/apple
-xcodegen                         # regenerate Clawdmeter.xcodeproj from project.yml
-( cd ClawdmeterShared && swift test )   # 250 tests, ~0.4s
-xcodebuild -scheme "Clawdmeter (Mac)"   -destination 'platform=macOS,arch=arm64' build
-xcodebuild -scheme "Clawdmeter (iOS)"   -destination 'generic/platform=iOS Simulator' build
-xcodebuild -scheme "Clawdmeter (Watch)" -destination 'generic/platform=watchOS Simulator' build
-```
-
-To produce a downloadable DMG for distribution:
-
-```bash
-./tools/build-mac-dmg.sh
-# → dist/Clawdmeter-<version>-arm64.dmg
-```
-
-The script is idempotent — rerun any time. See `apple/README.md` for the per-target layout and the analytics architecture.
-
-## Refreshing LiteLLM pricing
-
-The Mac app ships an embedded LiteLLM pricing snapshot (`apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing.json`). When new Anthropic or OpenAI models ship, refresh it:
+Refresh pricing with:
 
 ```bash
 ./tools/refresh-pricing.sh
 ```
 
-`curl`s the upstream LiteLLM JSON, `jq`-filters to `claude-*` + `gpt-*` + `o[0-9]+*` keys, commits the snapshot.
+## Building Apple targets
 
-## How the analytics line up with ccusage
+Apple project source of truth is `apple/project.yml`; regenerate the Xcode
+project with `xcodegen` after changing targets, settings, resources, or
+schemes.
 
-The Swift analytics layer is intentionally a 1:1 port of ccusage's algorithm — not a redesign.
+Requirements:
 
-| ccusage (TypeScript) | Clawdmeter (Swift) |
-| --- | --- |
-| Claude JSONL line parse | `ClaudeUsageParser.parse(line:)` |
-| Codex cumulative → per-event deltas | `CodexUsageParser.parse(file:)` |
-| LiteLLM model → price lookup | `Pricing.cost(for:tokens:)` (tiered above 200k) |
-| Cross-file dedup on `messageId:requestId` | `UsageHistoryLoader` global `Set<String>` |
-| Daily bucketing | `byDayByRepo` cache schema v8 |
-| `daily` window default | Local-calendar `Today / Past 7d / Past 30d / All time` |
+- Apple Silicon Mac for the packaged DMG path.
+- Xcode with Swift 5.10 support and the current Apple platform SDKs used by the project.
+- `xcodegen` for regenerating `apple/Clawdmeter.xcodeproj`.
+- `tmux` for live agent sessions.
+- Provider CLIs as needed: `claude`, `codex`, `gemini` / Antigravity, and/or `opencode`.
 
-What we added on top (pure UI):
-- **Per-repo bucketing** that walks up for `.git` so Conductor worktrees, `.claude/worktrees/<branch>` directories, and the user's main checkout of the same repo all collapse to one row.
-- **Non-git cwds** (UUIDs, home dirs, abandoned workspace IDs) collapse into a single **Other** row instead of polluting the list.
-- **Independent window pickers** for the totals/chart vs the by-repo list.
+Useful build commands:
 
-If you spot a divergence between Clawdmeter's numbers and `ccusage` in your terminal, **ccusage is right** — file an issue and we'll fix the Swift port.
+```bash
+brew install xcodegen
+
+cd apple
+xcodegen
+
+( cd ClawdmeterShared && swift test )
+
+xcodebuild -scheme "Clawdmeter (Mac)" \
+  -destination 'platform=macOS,arch=arm64' \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+
+xcodebuild -scheme "Clawdmeter (Mac)" \
+  -destination 'platform=macOS,arch=arm64' \
+  CODE_SIGNING_ALLOWED=NO \
+  test
+
+xcodebuild -scheme "Clawdmeter (iOS)" \
+  -destination 'generic/platform=iOS Simulator' \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+
+xcodebuild -scheme "Clawdmeter (Watch)" \
+  -destination 'generic/platform=watchOS Simulator' \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
+
+Package a Mac DMG from the repo root:
+
+```bash
+./tools/build-mac-dmg.sh
+```
+
+The DMG script regenerates the project when `xcodegen` is available, archives
+the Mac scheme, builds a compressed DMG, verifies the mounted app, checks the
+bundled Open Design tree, and enforces a soft/hard size budget.
+
+Optional bundled runtime staging:
+
+```bash
+./tools/download-bundled-node.sh
+./tools/download-bundled-uv.sh
+./tools/download-bundled-opencode.sh
+./tools/build-bundled-open-design.sh
+```
+
+For faster local iteration, the Xcode prebuild steps can be skipped where
+supported with:
+
+```bash
+CLAWDMETER_SKIP_BUNDLED_NODE=1
+CLAWDMETER_SKIP_BUNDLED_UV=1
+CLAWDMETER_SKIP_BUNDLED_OPEN_DESIGN=1
+CLAWDMETER_SKIP_BUNDLED_OPENCODE=1
+```
+
+Skipping those makes the corresponding bundled feature depend on a system
+install or become inert in that local build.
+
+## Building Linux
+
+The Linux package lives under `linux/` and shares
+`apple/ClawdmeterShared`. It is a Swift package with two executables:
+`clawdmeterd` and `clawdmeter`.
+
+Development build:
+
+```bash
+sudo apt install -y \
+  libgtk-4-dev libadwaita-1-dev \
+  libayatana-appindicator3-dev libsecret-1-dev \
+  libcairo2-dev libpango1.0-dev \
+  libwebkitgtk-6.0-dev libvte-2.91-gtk4-dev \
+  pkg-config
+
+cd linux
+./scripts/configure-c-shims.sh
+swift build
+swift test
+```
+
+Distribution packages from the repo root:
+
+```bash
+./tools/build-linux-appimage.sh
+./tools/build-linux-deb.sh
+```
+
+Install/user docs:
+
+- `docs/linux/INSTALL.md`
+- `docs/linux/PAIRING.md`
+- `docs/linux/TROUBLESHOOTING.md`
+- `docs/linux/QA-CHECKLIST.md`
+
+## Other test targets
+
+```bash
+( cd tools/tmux-cc-probe && swift test )
+( cd tools/clawdmeter-codex-sdk && npm test )
+( cd tools/clawdmeter-agents && python3 -m pytest )
+```
+
+The repo has substantial XCTest coverage under:
+
+- `apple/ClawdmeterShared/Tests/ClawdmeterSharedTests`
+- `apple/ClawdmeterMacTests`
+- `linux/Tests/ClawdmeterLinuxTests`
+- `tools/tmux-cc-probe/Tests`
+
+## Repo layout
+
+```text
+.
+|-- apple/
+|   |-- project.yml                         xcodegen source of truth
+|   |-- Clawdmeter.xcodeproj/               generated Xcode project
+|   |-- ClawdmeterShared/                   shared Swift package
+|   |-- ClawdmeterMac/                      Mac app, daemon, Tahoe UI, providers
+|   |-- ClawdmeterMacTests/                 Mac-hosted XCTest target
+|   |-- ClawdmeteriOS/                      iPhone companion app
+|   |-- ClawdmeteriOSWidgets/               iOS widgets
+|   |-- ClawdmeterWatch/                    watchOS app
+|   |-- ClawdmeterWatchWidgets/             watch complications
+|   `-- ClawdmeterMacWidgets/               macOS widget extension
+|-- linux/
+|   |-- Package.swift                       Linux app and daemon package
+|   |-- Sources/                            Swift Linux app, daemon, C shims
+|   |-- Tests/                              Linux tests
+|   |-- scripts/                            C-shim configuration
+|   `-- resources/                          desktop files, service, metadata
+|-- docs/
+|   |-- designs/                            Sessions/control-plane docs
+|   |-- linux/                              Linux install/pairing/QA docs
+|   |-- agentapi-*.md                       Antigravity runtime research
+|   |-- opencode-research-2026-05-22.md     OpenCode integration research
+|   `-- button-wiring-audit.md              UI/backend wiring audit
+|-- tools/
+|   |-- build-*.sh                          DMG, AppImage, and .deb packaging
+|   |-- download-bundled-*.sh               vendored runtime staging
+|   |-- build-bundled-open-design.sh        Open Design bundle builder
+|   |-- clawdmeter-bridge-host/             Open Design bridge sidecar
+|   |-- clawdmeter-open-design-plugin/      Open Design bridge plugin
+|   |-- clawdmeter-codex-sdk/               Node Codex SDK bridge
+|   |-- clawdmeter-agents/                  Python Antigravity sidecar skeleton
+|   `-- tmux-cc-probe/                      tmux control-mode test package
+|-- CHANGELOG.md                            detailed release history
+|-- VERSION                                 marketing version mirror
+`-- CLAUDE.md                               maintainer-oriented implementation notes
+```
+
+## Runtime notes
+
+- `tmux` is the main transport for CLI-backed code sessions.
+- Chat sessions and code sessions share the same `AgentSessionRegistry` and daemon.
+- OpenCode sessions do not use tmux; they go through `opencode serve` plus SSE.
+- Antigravity 2 native sessions are HTTP-RPC against a language server, not a long-lived CLI stream.
+- iPhone pairing is QR/token based and expects loopback or Tailscale-reachable hosts. Tailscale MagicDNS is the easiest path for iOS App Transport Security.
+- Release Mac builds are sandboxed; Debug builds keep broader local access for development.
+- App Store/iCloud/CloudKit/notarization paths still depend on Apple account capabilities outside this repo.
 
 ## Credits
 
-- **[ccusage](https://github.com/ryoppippi/ccusage)** by [@ryoppippi](https://github.com/ryoppippi) — entire analytics aggregator, dedup logic, and LiteLLM pricing model are a Swift re-implementation of ccusage's TypeScript work.
-- **[Clawdmeter ESP32 firmware](https://github.com/darshanbathija/Clawdmeter/tree/clawdmeter)** — gauge concept, color tokens, `UsageData` JSON shape, rate-limit-header polling math, auto-revive idea, BLE GATT shape. The Apple port carries the same design language and the same UsageData struct.
-- **Anthropic** rate-limit headers (`anthropic-ratelimit-unified-5h-*`, `-7d-*`) — the only data source for live gauges; documented at https://docs.anthropic.com.
-- **[LiteLLM](https://github.com/BerriAI/litellm)** — pricing data; we ship a filtered snapshot of `model_prices_and_context_window.json`.
-
-## Licensing
-
-This repo uses the Anthropic brand fonts (Tiempos Text, Styrene B) and color tokens that Anthropic owns. The Swift code itself is non-proprietary, but the bundled fonts and brand colors are not. If you fork, you'll need to either swap the typography to a license-clean alternative or get permission from Anthropic. The original ESP32 Clawdmeter README has the long version of this warning.
+- Original Clawdmeter ESP32 firmware: gauge concept, color language, `UsageData`
+  shape, and Anthropic rate-limit polling model.
+- `ccusage` by ryoppippi: reference behavior for Claude/Codex usage parsing,
+  deduplication, daily bucketing, and pricing expectations.
+- LiteLLM: pricing data snapshot used by the shared analytics package.
+- SwiftTerm: terminal rendering in Mac and iOS session surfaces.
+- Open Design, OpenCode, Claude Code, Codex, and Antigravity/Gemini are external
+  tools/runtimes that Clawdmeter integrates with rather than replacing.
