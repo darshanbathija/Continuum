@@ -193,4 +193,21 @@ final class OpencodeAuthFileTests: XCTestCase {
         let entries = await OpencodeAuthFile.shared.readEntries()
         XCTAssertTrue(entries.isEmpty, "malformed JSON must surface as empty, not crash")
     }
+
+    /// v0.23.9 P2 regression test: setting a key, then re-reading, must
+    /// preserve the entry even when the legacy migration helper runs
+    /// (which it does on every read). Earlier code path bailed when
+    /// canonical existed AND that fast-path was wrong, but importantly,
+    /// the next thing it did was return the canonical bytes — so a
+    /// regression where the new merge path corrupts canonical would
+    /// show up here as an empty/mismatched read.
+    func test_readEntries_preservesEntriesAcrossMigrationProbe() async throws {
+        try await OpencodeAuthFile.shared.setAPIKey(providerId: "openrouter", key: "sk-test")
+        // Force two reads — migrate runs each time, must not destroy
+        // the canonical entry.
+        _ = await OpencodeAuthFile.shared.readEntries()
+        let entries = await OpencodeAuthFile.shared.readEntries()
+        XCTAssertEqual(entries["openrouter"]?["key"] as? String, "sk-test",
+                       "canonical entry must survive the legacy-migration probe")
+    }
 }

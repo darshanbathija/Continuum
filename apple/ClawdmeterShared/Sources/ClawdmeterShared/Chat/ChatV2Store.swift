@@ -18,7 +18,10 @@ import Combine
 /// first-send dispatch helper.
 @MainActor
 public final class ChatV2Store: ObservableObject {
+    @Published public var mode: ChatV2Mode
     @Published public var selectedProvider: AgentKind
+    @Published public var broadcastProviders: Set<AgentKind>
+    @Published public var selectedReplyProvider: AgentKind
     @Published public var selectedModelByProvider: [AgentKind: String]
     @Published public var selectedEffortByProvider: [AgentKind: ReasoningEffort]
     @Published public var deepResearch: Bool
@@ -34,8 +37,22 @@ public final class ChatV2Store: ObservableObject {
         // to a sensible default; collectively this gives a working
         // composer state on cold-launch without prompting the user
         // for everything.
+        let restoredModeRaw = defaults.string(forKey: Self.defaultsPrefix + "mode") ?? ChatV2Mode.broadcast.rawValue
+        self.mode = ChatV2Mode(rawValue: restoredModeRaw) ?? .broadcast
         let restoredProviderRaw = defaults.string(forKey: Self.defaultsPrefix + "provider") ?? AgentKind.claude.rawValue
         self.selectedProvider = AgentKind(rawValue: restoredProviderRaw) ?? .claude
+        let restoredBroadcast = defaults.stringArray(forKey: Self.defaultsPrefix + "broadcastProviders") ?? [
+            AgentKind.claude.rawValue,
+            AgentKind.codex.rawValue,
+            AgentKind.gemini.rawValue
+        ]
+        let decodedBroadcast = Set(restoredBroadcast.compactMap(AgentKind.init(rawValue:)))
+            .intersection(Self.broadcastCapableProviders)
+        self.broadcastProviders = decodedBroadcast.count >= 2
+            ? decodedBroadcast
+            : Set([.claude, .codex])
+        let restoredReplyRaw = defaults.string(forKey: Self.defaultsPrefix + "replyProvider") ?? AgentKind.claude.rawValue
+        self.selectedReplyProvider = AgentKind(rawValue: restoredReplyRaw) ?? .claude
         self.selectedModelByProvider = Self.decodeStringMap(
             defaults.dictionary(forKey: Self.defaultsPrefix + "modelByProvider") ?? [:]
         )
@@ -54,7 +71,15 @@ public final class ChatV2Store: ObservableObject {
     /// UserDefaults write per modifier — so callers don't need to
     /// debounce.
     public func persist() {
+        defaults.set(mode.rawValue, forKey: Self.defaultsPrefix + "mode")
         defaults.set(selectedProvider.rawValue, forKey: Self.defaultsPrefix + "provider")
+        defaults.set(
+            broadcastProviders
+                .sorted { $0.rawValue < $1.rawValue }
+                .map(\.rawValue),
+            forKey: Self.defaultsPrefix + "broadcastProviders"
+        )
+        defaults.set(selectedReplyProvider.rawValue, forKey: Self.defaultsPrefix + "replyProvider")
         defaults.set(Self.encodeMap(selectedModelByProvider), forKey: Self.defaultsPrefix + "modelByProvider")
         defaults.set(Self.encodeMap(selectedEffortByProvider.mapValues { $0.rawValue }),
                      forKey: Self.defaultsPrefix + "effortByProvider")
@@ -80,6 +105,60 @@ public final class ChatV2Store: ObservableObject {
 
     public var selectedEffort: ReasoningEffort? {
         selectedEffortByProvider[selectedProvider]
+    }
+
+    public static let broadcastCapableProviders: Set<AgentKind> = [.claude, .codex, .gemini]
+    public static let defaultBroadcastProviderOrder: [AgentKind] = [.claude, .codex, .gemini]
+
+    public var broadcastProviderOrder: [AgentKind] {
+        Self.defaultBroadcastProviderOrder.filter { broadcastProviders.contains($0) }
+    }
+
+    public var broadcastReady: Bool {
+        broadcastProviderOrder.count >= 2
+    }
+
+    public func toggleBroadcastProvider(_ provider: AgentKind) {
+        guard Self.broadcastCapableProviders.contains(provider) else { return }
+        if broadcastProviders.contains(provider), broadcastProviders.count > 2 {
+            broadcastProviders.remove(provider)
+        } else {
+            broadcastProviders.insert(provider)
+        }
+        if !broadcastProviders.contains(selectedReplyProvider),
+           let first = broadcastProviderOrder.first {
+            selectedReplyProvider = first
+        }
+        persist()
+    }
+
+    public func model(for provider: AgentKind) -> String? {
+        if let userPick = selectedModelByProvider[provider], !userPick.isEmpty {
+            return userPick
+        }
+        switch provider {
+        case .claude:   return ModelCatalog.bundled.claude.first?.id
+        case .codex:    return ModelCatalog.bundled.codex.first?.id
+        case .gemini:   return ModelCatalog.bundled.gemini.first?.id
+        case .opencode: return nil
+        case .unknown:  return nil
+        }
+    }
+
+    public func effort(for provider: AgentKind) -> ReasoningEffort? {
+        selectedEffortByProvider[provider]
+    }
+
+    public func frontierSlots() -> [FrontierModelSlot] {
+        broadcastProviderOrder.map { provider in
+            FrontierModelSlot(
+                provider: provider,
+                model: model(for: provider),
+                effort: effort(for: provider),
+                codexChatBackend: provider == .codex ? codexBackendPreference : nil,
+                deepResearch: deepResearch
+            )
+        }
     }
 
     // MARK: - First-send helper (Mac + iOS)
@@ -154,10 +233,51 @@ public struct ChatV2Attachment: Identifiable, Hashable, Sendable {
     /// Daemon-side absolute path returned by `/sessions/:id/attachments`.
     /// Nil while the upload is in flight.
     public var pathOnDaemon: String?
+    /// Local file URL retained until first-send creates a session/group
+    /// and can upload the bytes. This is essential on iOS where the Mac
+    /// daemon cannot read the phone's sandbox path directly.
+    public var localFileURL: URL?
 
-    public init(id: UUID = UUID(), displayName: String, pathOnDaemon: String? = nil) {
+    public init(id: UUID = UUID(), displayName: String, pathOnDaemon: String? = nil, localFileURL: URL? = nil) {
         self.id = id
         self.displayName = displayName
         self.pathOnDaemon = pathOnDaemon
+        self.localFileURL = localFileURL
+    }
+}
+
+public enum ChatV2Mode: String, Codable, Hashable, Sendable, CaseIterable {
+    case broadcast
+    case solo
+}
+
+public enum ChatOpenTarget: Codable, Hashable, Sendable {
+    case solo(UUID)
+    case frontier(UUID)
+    case transcript(sessionId: UUID, jsonlPath: String)
+
+    public var id: UUID {
+        switch self {
+        case .solo(let id), .frontier(let id), .transcript(let id, _):
+            return id
+        }
+    }
+
+    public var isFrontier: Bool {
+        if case .frontier = self { return true }
+        return false
+    }
+
+    public var isReadOnlyTranscript: Bool {
+        if case .transcript = self { return true }
+        return false
+    }
+}
+
+public struct BroadcastProviderSelection: Codable, Hashable, Sendable {
+    public let providers: [AgentKind]
+
+    public init(providers: [AgentKind]) {
+        self.providers = providers
     }
 }
