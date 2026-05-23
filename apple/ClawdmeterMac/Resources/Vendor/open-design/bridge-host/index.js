@@ -24,9 +24,10 @@
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join, resolve as resolvePath, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 const DESKTOP_IMPORT_TOKEN_SEP = "~";
 const DEFAULT_TTL_MS = 60_000;
@@ -147,16 +148,44 @@ function mintImportToken(baseDir, ttlMs) {
 let daemonReady = false;
 let hasSecret = false;
 
+// Audit P0 fix: refuse paths that would let a paired-but-malicious
+// caller (or a bug in the upstream Mac route) hand us `~/.ssh` or
+// other sensitive locations. Only allow absolute paths under the
+// user's home directory, with no null bytes and no `..` traversal
+// after normalization. Symlinks are resolved before the prefix check,
+// so a symlink in $HOME that points to `/etc` is rejected too.
+function sanitizeBaseDir(raw) {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  if (raw.includes("\0")) return null;
+  if (!raw.startsWith("/")) return null;
+  const home = homedir();
+  // Resolve symlinks where possible so we compare canonical paths.
+  let canonical;
+  try { canonical = realpathSync(raw); }
+  catch { canonical = resolvePath(raw); }
+  const normalized = normalize(canonical);
+  if (!normalized.startsWith(home + "/") && normalized !== home) return null;
+  // Block obviously sensitive subtrees even within $HOME.
+  const blocked = ["/.ssh", "/.gnupg", "/.aws", "/Library/Keychains"];
+  for (const sub of blocked) {
+    if (normalized === home + sub || normalized.startsWith(home + sub + "/")) {
+      return null;
+    }
+  }
+  return normalized;
+}
+
 async function handleSignImportToken(req, res, body) {
   if (!hasSecret) {
     return reply(res, 503, { error: "desktop auth not yet registered with daemon" });
   }
-  const { baseDir, ttlMs } = body || {};
-  if (typeof baseDir !== "string" || baseDir.length === 0) {
-    return reply(res, 400, { error: "baseDir required" });
+  const safe = sanitizeBaseDir(body?.baseDir);
+  if (!safe) {
+    return reply(res, 400, { error: "baseDir must be an absolute path under $HOME (no .ssh / .gnupg / Keychains)" });
   }
+  const { ttlMs } = body || {};
   const ttl = Number.isInteger(ttlMs) && ttlMs > 0 && ttlMs <= DEFAULT_TTL_MS * 2 ? ttlMs : DEFAULT_TTL_MS;
-  const minted = mintImportToken(baseDir, ttl);
+  const minted = mintImportToken(safe, ttl);
   return reply(res, 200, minted);
 }
 
@@ -164,11 +193,11 @@ async function handleImportFolder(req, res, body) {
   if (!hasSecret) {
     return reply(res, 503, { error: "desktop auth not yet registered with daemon" });
   }
-  const { baseDir } = body || {};
-  if (typeof baseDir !== "string" || baseDir.length === 0) {
-    return reply(res, 400, { error: "baseDir required" });
+  const safe = sanitizeBaseDir(body?.baseDir);
+  if (!safe) {
+    return reply(res, 400, { error: "baseDir must be an absolute path under $HOME (no .ssh / .gnupg / Keychains)" });
   }
-  const { token } = mintImportToken(baseDir, DEFAULT_TTL_MS);
+  const { token } = mintImportToken(safe, DEFAULT_TTL_MS);
   try {
     const odResponse = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/import/folder`, {
       method: "POST",
@@ -176,7 +205,7 @@ async function handleImportFolder(req, res, body) {
         "content-type": "application/json",
         "x-od-desktop-import-token": token,
       },
-      body: JSON.stringify({ baseDir, fromTrustedPicker: true }),
+      body: JSON.stringify({ baseDir: safe, fromTrustedPicker: true }),
     });
     const odBody = await odResponse.json().catch(() => ({}));
     return reply(res, odResponse.status, odBody);
@@ -243,6 +272,14 @@ const server = createServer(async (req, res) => {
   if (req.url === "/import-folder")    return handleImportFolder(req, res, body);
   res.statusCode = 404; res.end("not found");
 });
+
+// Audit P1 fix: bound the HTTP server. Loopback-only is not a substitute
+// for resource limits — a buggy co-installed local process can hold
+// connections, exhaust FDs, or stall the bridge with slowloris reads.
+server.setTimeout(30_000);
+server.headersTimeout = 10_000;
+server.keepAliveTimeout = 5_000;
+server.maxConnections = 16;
 
 async function listenWithProbe(startPort) {
   for (let port = startPort; port < startPort + 50; port++) {

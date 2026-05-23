@@ -140,7 +140,13 @@ public enum AntigravityStateReader {
     }
 
     /// Static lookup map. Internal so tests can assert the canonical key.
+    /// Per Antigravity 2.0.6 bundled `enum_to_display.js` (Electron
+    /// resources). M134 was added post-I/O 2026 alongside Gemini 3.1
+    /// Pro — its absence from earlier builds was why frontier-Pro
+    /// sessions were being priced at $0 (raw placeholder string falls
+    /// through Pricing.shared.cost as unknown).
     static let knownModelTokens: [String: String] = [
+        "MODEL_PLACEHOLDER_M134": "gemini-3.1-pro",
         "MODEL_PLACEHOLDER_M133": "gemini-3.5-flash",
         "MODEL_PLACEHOLDER_M132": "gemini-3-pro",
         "MODEL_PLACEHOLDER_M131": "gemini-3-flash",

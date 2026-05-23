@@ -162,33 +162,23 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var providerSettings: some View {
-        // PR #31 chunk 2: Providers card surfaces install + auth state for adapters that run external CLIs.
+        // Four-row Providers card. All providers use the same row shape so
+        // their visual rhythm matches: glyph + title + one-line status +
+        // single trailing control (button or toggle). The Codex SDK and
+        // Antigravity SDK rows replace what used to be standalone cards
+        // with Status grids and educational footers; the underlying
+        // CodexSDKManager / AntigravitySidecarManager wiring is unchanged.
         SettingsCard(title: "Providers",
-                     sub: "External agent runtimes Clawdmeter can drive. Listed providers must be installed and signed in to spawn sessions.") {
+                     sub: "External agent runtimes Clawdmeter can drive.") {
             VStack(alignment: .leading, spacing: 14) {
-                // v0.22.23: explicit Claude Code CLI row at the top
-                // since Claude is the headline provider. Shows
-                // install status + a "Has been used" proxy for the
-                // sign-in state (the real OAuth token lives in
-                // macOS Keychain and isn't readable without entitlement,
-                // so we infer auth from `~/.claude/projects/` having
-                // any entries).
                 ClaudeCLIProviderRow()
                 TahoeHair()
                 OpencodeProviderRow()
+                TahoeHair()
+                CodexSDKProviderRow()
+                TahoeHair()
+                AntigravitySDKProviderRow()
             }
-        }
-
-        SettingsCard(title: "Codex SDK",
-                     sub: "Live token usage and reasoning for Codex sessions.") {
-            CodexSDKSettingsView()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        SettingsCard(title: "Antigravity SDK",
-                     sub: "Live token usage and reasoning for Antigravity sessions.") {
-            AntigravitySDKSettingsView()
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -760,6 +750,199 @@ private struct OpencodeProviderRow: View {
     private func displayName(for providerId: String) -> String {
         OpencodeAPIKeySheet.Provider(rawValue: providerId)?.displayName
             ?? providerId
+    }
+}
+
+// MARK: - Codex SDK row
+
+/// Same row shape as OpencodeProviderRow / ClaudeCLIProviderRow: glyph +
+/// title + one-line status + trailing TahoeToggleView. Replaces the old
+/// standalone "Codex SDK" SettingsCard that had a duplicate header,
+/// `@openai/codex-sdk` paragraph, Status grid, install path, and Wipe /
+/// Open install folder buttons — none of which a customer can act on.
+///
+/// Toggle ON calls `CodexSDKManager.shared.enableSDKMode()` which lazily
+/// provisions the sidecar (~25 MB npm install on first run). Toggle OFF
+/// calls `disableSDKMode()` which keeps the install on disk so re-enable
+/// is instant. `lastProvisioningError` is read on appear to surface a
+/// stale failure from a previous launch.
+private struct CodexSDKProviderRow: View {
+    @Environment(\.tahoe) private var t
+    @AppStorage("clawdmeter.codex.sdkMode") private var sdkModeEnabled: Bool = false
+    @State private var isProvisioning: Bool = false
+    @State private var lastError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 12) {
+                TahoeProviderGlyph(provider: .codex, size: 32)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Codex SDK")
+                        .font(TahoeFont.body(14, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text(statusLine)
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                TahoeToggleView(on: Binding(
+                    get: { sdkModeEnabled },
+                    set: { handleToggle($0) }
+                ))
+                .opacity(isProvisioning ? 0.4 : 1)
+                .allowsHitTesting(!isProvisioning)
+            }
+            if isProvisioning { progressChip }
+            if let lastError, !lastError.isEmpty { errorChip(lastError) }
+        }
+        .onAppear { refreshErrorIfIdle() }
+    }
+
+    private var statusLine: String {
+        if isProvisioning { return "Setting up…" }
+        return sdkModeEnabled
+            ? "Live events on. Token usage streams in real time."
+            : "Off. Token usage updates a couple of seconds behind the CLI."
+    }
+
+    private var progressChip: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Setting up (first run installs ~25 MB)…")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+        }
+    }
+
+    private func errorChip(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func handleToggle(_ newValue: Bool) {
+        if newValue {
+            isProvisioning = true
+            lastError = nil
+            Task { @MainActor in
+                let result = await CodexSDKManager.shared.enableSDKMode()
+                isProvisioning = false
+                switch result {
+                case .success:
+                    sdkModeEnabled = true
+                case .failure(let err):
+                    sdkModeEnabled = false
+                    lastError = err.errorDescription ?? "Couldn't turn on live events."
+                }
+            }
+        } else {
+            CodexSDKManager.shared.disableSDKMode()
+            sdkModeEnabled = false
+            lastError = nil
+        }
+    }
+
+    private func refreshErrorIfIdle() {
+        guard !isProvisioning else { return }
+        lastError = CodexSDKManager.shared.lastProvisioningError
+    }
+}
+
+// MARK: - Antigravity SDK row
+
+/// Same row shape as the other provider rows. Replaces the old
+/// standalone "Antigravity SDK" SettingsCard that had duplicate header,
+/// "What changes when SDK mode is on" bullet list, "What stays the same"
+/// bullet list, and a StatusPill showing the literal UserDefaults
+/// backing key — none of which a customer can act on.
+private struct AntigravitySDKProviderRow: View {
+    @Environment(\.tahoe) private var t
+    @AppStorage("clawdmeter.antigravity.sdkMode") private var sdkModeEnabled: Bool = false
+    @State private var isProvisioning: Bool = false
+    @State private var lastError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 12) {
+                TahoeProviderGlyph(provider: .gemini, size: 32)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Antigravity SDK")
+                        .font(TahoeFont.body(14, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text(statusLine)
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                TahoeToggleView(on: Binding(
+                    get: { sdkModeEnabled },
+                    set: { newValue in Task { await applyToggle(newValue) } }
+                ))
+                .opacity(isProvisioning ? 0.4 : 1)
+                .allowsHitTesting(!isProvisioning)
+            }
+            if isProvisioning { progressChip }
+            if let lastError, !lastError.isEmpty { errorChip(lastError) }
+        }
+        .onAppear { refreshErrorIfIdle() }
+    }
+
+    private var statusLine: String {
+        if isProvisioning { return "Setting up…" }
+        return sdkModeEnabled
+            ? "Live events on. Token usage streams in real time."
+            : "Off. Plan view reads the cached brain instead."
+    }
+
+    private var progressChip: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Setting up (first run takes about 15 seconds)…")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+        }
+    }
+
+    private func errorChip(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func applyToggle(_ newValue: Bool) async {
+        guard !isProvisioning else { return }
+        if newValue {
+            isProvisioning = true
+            defer { isProvisioning = false }
+            let result = await AntigravitySidecarManager.shared.enableSDKMode()
+            switch result {
+            case .success:
+                lastError = nil
+            case .failure(let err):
+                lastError = err.errorDescription ?? "Couldn't turn on live events."
+            }
+        } else {
+            AntigravitySidecarManager.shared.disableSDKMode()
+            lastError = nil
+        }
+        refreshErrorIfIdle()
+    }
+
+    private func refreshErrorIfIdle() {
+        guard !isProvisioning else { return }
+        lastError = AntigravitySidecarManager.shared.lastProvisioningError
     }
 }
 

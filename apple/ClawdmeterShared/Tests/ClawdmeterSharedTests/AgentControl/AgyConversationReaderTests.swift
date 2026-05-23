@@ -159,4 +159,38 @@ final class AgyConversationReaderTests: XCTestCase {
         let root = AgyConversationReader.defaultRoot(homeDirectory: home)
         XCTAssertEqual(root.path, "/Users/example/.gemini/antigravity-cli")
     }
+
+    // MARK: - Model resolution (v0.23.8)
+
+    func test_modelDisplayStringToKey_recognizesFrontierModels() {
+        XCTAssertEqual(AgyConversationReader.modelDisplayStringToKey("Gemini 3.5 Flash"), "gemini-3.5-flash")
+        XCTAssertEqual(AgyConversationReader.modelDisplayStringToKey("Gemini 3.5 Flash (Medium)"), "gemini-3.5-flash")
+        XCTAssertEqual(AgyConversationReader.modelDisplayStringToKey("Gemini 3.5 Flash (High)"), "gemini-3.5-flash")
+        XCTAssertEqual(AgyConversationReader.modelDisplayStringToKey("Gemini 3.1 Pro"), "gemini-3.1-pro")
+        XCTAssertEqual(AgyConversationReader.modelDisplayStringToKey("Gemini 3.1 Pro (Max)"), "gemini-3.1-pro")
+    }
+
+    func test_modelDisplayStringToKey_fallsBackForUnknownStrings() {
+        // Unknown future model: hyphenate as a best-effort key. Pricing's
+        // longest-prefix matcher may still resolve it; the unpriced
+        // model bucket catches the rest.
+        XCTAssertEqual(AgyConversationReader.modelDisplayStringToKey("Gemini 4 Ultra"), "gemini-4-ultra")
+    }
+
+    func test_resolveModelKey_readsSettingsJson() throws {
+        let fixture = try makeFixture()
+        let settings = #"{ "colorScheme": "dark", "model": "Gemini 3.5 Flash (Medium)" }"#
+        try settings.write(
+            to: fixture.root.appendingPathComponent("settings.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        XCTAssertEqual(AgyConversationReader.resolveModelKey(rootURL: fixture.root), "gemini-3.5-flash")
+    }
+
+    func test_resolveModelKey_returnsNilWhenSettingsMissing() throws {
+        let fixture = try makeFixture()
+        // No settings.json on disk; caller falls back to desktop model.
+        XCTAssertNil(AgyConversationReader.resolveModelKey(rootURL: fixture.root))
+    }
 }

@@ -141,6 +141,54 @@ public enum AgyConversationReader {
         return fileManager.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
     }
 
+    /// Resolves the agy CLI's currently-selected model into a pricing
+    /// key matching `pricing.json`. `<root>/settings.json` stores the
+    /// model as a human display string (`"Gemini 3.5 Flash (Medium)"`,
+    /// `"Gemini 3.1 Pro"`) rather than the desktop's
+    /// `MODEL_PLACEHOLDER_M<n>` opaque token, so the lookup table here
+    /// is different shape from `AntigravityStateReader.knownModelTokens`.
+    /// Returns nil when settings.json is absent or unparseable — the
+    /// caller should fall back to the desktop's resolved model.
+    public static func resolveModelKey(
+        rootURL: URL,
+        fileManager: FileManager = .default
+    ) -> String? {
+        let settingsURL = rootURL.appendingPathComponent("settings.json", isDirectory: false)
+        guard let data = try? Data(contentsOf: settingsURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = json["model"] as? String else {
+            return nil
+        }
+        return modelDisplayStringToKey(raw)
+    }
+
+    /// Maps an agy settings.json `model` value to the corresponding
+    /// pricing.json key. The agy CLI surfaces models as
+    /// "Gemini <version> <Variant> (<EffortBudget>)"; we strip the
+    /// effort suffix because pricing is per model+variant, not per
+    /// effort. Returns the raw input lowercased when no map entry
+    /// matches — keeps the analytics pipeline from silently dropping
+    /// records when Google ships a new display name (Pricing.swift
+    /// will then log it under `unpricedModelTokens` for follow-up).
+    static func modelDisplayStringToKey(_ raw: String) -> String {
+        // Strip the `(Medium)` / `(High)` / `(Max)` effort suffix in
+        // parentheses — pricing is independent of effort budget.
+        let trimmed = raw.split(separator: "(").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? raw
+        let lowered = trimmed.lowercased()
+        switch lowered {
+        case "gemini 3.5 flash":           return "gemini-3.5-flash"
+        case "gemini 3.5 flash thinking":  return "gemini-3.5-flash-thinking"
+        case "gemini 3.1 pro":             return "gemini-3.1-pro"
+        case "gemini 3 pro":               return "gemini-3-pro"
+        case "gemini 3 flash":             return "gemini-3-flash"
+        case "gemini 3 flash thinking":    return "gemini-3-flash-thinking"
+        case "gemini 2.5 flash":           return "gemini-2.5-flash"
+        default:
+            // Hyphenate so Pricing's longest-prefix match has a chance.
+            return lowered.replacingOccurrences(of: " ", with: "-")
+        }
+    }
+
     /// Snapshots the corpus under `<rootURL>/conversations/`. Returns
     /// `.empty` when the directory is missing — callers shouldn't have
     /// to special-case "agy not installed yet."

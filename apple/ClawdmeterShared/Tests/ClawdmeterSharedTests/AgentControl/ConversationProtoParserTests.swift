@@ -147,6 +147,55 @@ final class ConversationProtoParserTests: XCTestCase {
         XCTAssertEqual(tokens, 0)
     }
 
+    // v0.23.8: regression guard for the $0.026/day Antigravity bug.
+    // Antigravity 2.0.6 writes the bulk of per-conversation content
+    // under `.system_generated/messages/*.json` + `transcript.jsonl`
+    // and `.system_generated/tasks/*.log` — the old top-level *.md
+    // scan picked up almost none of it. These tests pin the new
+    // recursive + multi-extension behavior so we don't silently
+    // regress to underreporting by 60×.
+
+    func test_estimateTokens_includesNestedJsonAndJsonlAndLog() throws {
+        let brain = try tempBrain()
+        let messages = brain.appendingPathComponent(".system_generated/messages", isDirectory: true)
+        let tasks = brain.appendingPathComponent(".system_generated/tasks", isDirectory: true)
+        try FileManager.default.createDirectory(at: messages, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tasks, withIntermediateDirectories: true)
+
+        // 400 bytes nested .json + 800 bytes nested .jsonl + 200 bytes nested .log.
+        try String(repeating: "x", count: 400).write(to: messages.appendingPathComponent("turn-0.json"), atomically: true, encoding: .utf8)
+        try String(repeating: "x", count: 800).write(to: tasks.appendingPathComponent("transcript.jsonl"), atomically: true, encoding: .utf8)
+        try String(repeating: "x", count: 200).write(to: tasks.appendingPathComponent("task-1.log"), atomically: true, encoding: .utf8)
+
+        let tokens = ConversationProtoParser.estimatePlaintextTokens(brainURL: brain, fileManager: .default)
+        XCTAssertEqual(tokens, 350, "(400 + 800 + 200) ÷ 4 = 350 tokens across nested .json/.jsonl/.log")
+    }
+
+    func test_estimateTokens_excludesMetadataJsonSidecars() throws {
+        let brain = try tempBrain()
+        // 4000-byte real artifact + 800-byte metadata sidecar. The
+        // sidecar is what `countTurns` uses; counting its bytes too
+        // would double-count.
+        try String(repeating: "y", count: 4000).write(to: brain.appendingPathComponent("plan.md"), atomically: true, encoding: .utf8)
+        try String(repeating: "y", count: 800).write(to: brain.appendingPathComponent("plan.md.metadata.json"), atomically: true, encoding: .utf8)
+
+        let tokens = ConversationProtoParser.estimatePlaintextTokens(brainURL: brain, fileManager: .default)
+        XCTAssertEqual(tokens, 1000, "4000 / 4 = 1000; metadata.json sidecar excluded")
+    }
+
+    func test_estimateTokens_skipsUnsupportedExtensions() throws {
+        let brain = try tempBrain()
+        // Binary blobs, images, archives etc. shouldn't be counted as
+        // text tokens. Only md/txt/json/jsonl/log are.
+        try Data(count: 4000).write(to: brain.appendingPathComponent("snapshot.bin"))
+        try Data(count: 4000).write(to: brain.appendingPathComponent("frame.png"))
+        try Data(count: 4000).write(to: brain.appendingPathComponent("bundle.zip"))
+        try String(repeating: "z", count: 400).write(to: brain.appendingPathComponent("note.txt"), atomically: true, encoding: .utf8)
+
+        let tokens = ConversationProtoParser.estimatePlaintextTokens(brainURL: brain, fileManager: .default)
+        XCTAssertEqual(tokens, 100, "Only the 400-byte .txt counts; 12KB of binary blobs are ignored")
+    }
+
     // MARK: - Full probe with brain context
 
     func test_probe_attachesTurnCountAndEstimateWhenBrainProvided() throws {
