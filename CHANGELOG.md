@@ -4,6 +4,15 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.8 build 123] - 2026-05-23 — Refresh root README for current Clawdmeter repo shape (`darshanbathija/rewrite-readme`)
+
+### Changed
+
+- **Root README now describes the current product and repository.** Reframes Clawdmeter from the old Apple-only Claude/Codex meter into the current multi-surface agent control app: Mac Tahoe workbench, iPhone and Watch companions, Linux port, shared analytics, provider runtimes, Open Design, OpenCode, and tool sidecars.
+- **Build and verification docs are current.** Documents the Apple and Linux build entry points, bundled runtime scripts, docs-only verification expectations, repo layout, provider integrations, and key runtime notes for tmux, OpenCode, Antigravity agentapi, Tailscale pairing, and sandboxed release builds.
+
+Bumps `MARKETING_VERSION` 0.23.7 → 0.23.8, `CURRENT_PROJECT_VERSION` 122 → 123.
+
 ## [0.23.7 build 122] - 2026-05-23 — Gemini chat unblock + Antigravity 2.0.6 ingestion polish (`fix/gemini-chat-binaryNotFound`)
 
 Gemini chat sessions stopped working after v0.23 — every `POST /chat-sessions {"provider":"gemini"}` returned 500 with `LanguageServerClientError error 3`, which we initially misread as `binaryNotFound`. Root cause: Swift's `Error`→`NSError` bridging orders payload-carrying enum cases before payload-less ones, so error code 3 is actually `.malformedResponse(String)`. The agentapi response decoder was looking for `conversationId` at the top level or one level deep under `response`, but Antigravity 2.0.6 nests it at `response.newConversation.conversationId`. Verified by running a standalone `swift` script against the enum (`binaryNotFound -> code=5`, `malformedResponse -> code=3`) and by capturing real daemon stdout via wider error logging.
