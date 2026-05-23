@@ -906,6 +906,15 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    /// Chat V2 convenience wrapper for the broadcast first-send path.
+    @MainActor
+    public func createBroadcastChat(
+        clientRequestId: UUID = UUID(),
+        slots: [FrontierModelSlot]
+    ) async -> CreateFrontierResponse? {
+        await createFrontier(clientRequestId: clientRequestId, slots: slots)
+    }
+
     /// `POST /chat-sessions/frontier/:groupId/send` — fan out a prompt
     /// to every child. Returns true on 2xx, false on transport error.
     @MainActor
@@ -923,6 +932,44 @@ public final class AgentControlClient: ObservableObject {
         } catch {
             self.lastError = error.localizedDescription
             return false
+        }
+    }
+
+    @MainActor
+    public func sendFrontierPrompt(groupId: UUID, text: String) async -> FrontierSendResponse? {
+        let req = SendPromptRequest(text: text, asFollowUp: false)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(path: "/chat-sessions/frontier/\(groupId.uuidString)/send", method: "POST", body: body) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+            let response = try decoder.decode(FrontierSendResponse.self, from: data)
+            await refreshSessions()
+            return response
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func setFrontierTurnWinner(groupId: UUID, turnId: String, childIndex: Int) async -> FrontierTurnWinner? {
+        let req = SetFrontierTurnWinnerRequest(turnId: turnId, childIndex: childIndex)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(path: "/chat-sessions/frontier/\(groupId.uuidString)/turn-winner", method: "POST", body: body) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(FrontierTurnWinner.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
         }
     }
 
@@ -946,6 +993,11 @@ public final class AgentControlClient: ObservableObject {
             self.lastError = error.localizedDescription
             return nil
         }
+    }
+
+    @MainActor
+    public func continueFrontierFromWinner(groupId: UUID, childIndex: Int) async -> AgentSession? {
+        await frontierPickWinner(groupId: groupId, childIndex: childIndex)
     }
 
     /// Children of a Frontier group, sorted by childIndex. Filters

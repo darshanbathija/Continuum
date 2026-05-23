@@ -28,9 +28,13 @@ final class ChatV2StoreTests: XCTestCase {
 
     // MARK: - Defaults
 
-    func test_init_defaults_to_claude_provider_and_no_deepResearch() {
+    func test_init_defaults_to_broadcast_and_claude_solo_provider() {
         let store = ChatV2Store(defaults: defaults)
+        XCTAssertEqual(store.mode, .broadcast)
         XCTAssertEqual(store.selectedProvider, .claude)
+        XCTAssertEqual(store.broadcastProviderOrder, [.claude, .codex, .gemini])
+        XCTAssertTrue(store.broadcastReady)
+        XCTAssertEqual(store.selectedReplyProvider, .claude)
         XCTAssertFalse(store.deepResearch)
         XCTAssertEqual(store.codexBackendPreference, .sdk)
         XCTAssertTrue(store.attachments.isEmpty)
@@ -49,7 +53,10 @@ final class ChatV2StoreTests: XCTestCase {
 
     func test_persist_then_reload_restores_picks() {
         let store = ChatV2Store(defaults: defaults)
+        store.mode = .solo
         store.selectedProvider = .codex
+        store.broadcastProviders = [.claude, .gemini]
+        store.selectedReplyProvider = .gemini
         store.deepResearch = true
         store.selectedModelByProvider[.codex] = "gpt-5.5-custom"
         store.selectedEffortByProvider[.codex] = .high
@@ -57,11 +64,62 @@ final class ChatV2StoreTests: XCTestCase {
         store.persist()
 
         let reloaded = ChatV2Store(defaults: defaults)
+        XCTAssertEqual(reloaded.mode, .solo)
         XCTAssertEqual(reloaded.selectedProvider, .codex)
+        XCTAssertEqual(reloaded.broadcastProviderOrder, [.claude, .gemini])
+        XCTAssertEqual(reloaded.selectedReplyProvider, .gemini)
         XCTAssertTrue(reloaded.deepResearch)
         XCTAssertEqual(reloaded.selectedModelByProvider[.codex], "gpt-5.5-custom")
         XCTAssertEqual(reloaded.selectedEffortByProvider[.codex], .high)
         XCTAssertEqual(reloaded.codexBackendPreference, .cli)
+    }
+
+    func test_broadcast_provider_toggle_keeps_two_supported_providers() {
+        let store = ChatV2Store(defaults: defaults)
+
+        store.toggleBroadcastProvider(.gemini)
+        XCTAssertEqual(store.broadcastProviderOrder, [.claude, .codex])
+        XCTAssertTrue(store.broadcastReady)
+
+        store.toggleBroadcastProvider(.codex)
+        XCTAssertEqual(store.broadcastProviderOrder, [.claude, .codex], "broadcast must keep at least two providers selected")
+
+        store.toggleBroadcastProvider(.opencode)
+        XCTAssertEqual(store.broadcastProviderOrder, [.claude, .codex], "OpenCode is not broadcast-capable in this pass")
+    }
+
+    func test_frontierSlots_carry_provider_model_effort_backend_and_deepResearch() {
+        let store = ChatV2Store(defaults: defaults)
+        store.broadcastProviders = [.claude, .codex]
+        store.deepResearch = true
+        store.selectedModelByProvider[.claude] = "claude-opus-test"
+        store.selectedModelByProvider[.codex] = "gpt-5.5-test"
+        store.selectedEffortByProvider[.codex] = .high
+        store.codexBackendPreference = .cli
+
+        let slots = store.frontierSlots()
+        XCTAssertEqual(slots.map(\.provider), [.claude, .codex])
+        XCTAssertEqual(slots[0].model, "claude-opus-test")
+        XCTAssertNil(slots[0].codexChatBackend)
+        XCTAssertEqual(slots[1].model, "gpt-5.5-test")
+        XCTAssertEqual(slots[1].effort, .high)
+        XCTAssertEqual(slots[1].codexChatBackend, .cli)
+        XCTAssertTrue(slots.allSatisfy(\.deepResearch))
+    }
+
+    func test_chatOpenTarget_roundTrips_frontier_and_solo() throws {
+        let soloId = UUID()
+        let frontierId = UUID()
+        let targets: [ChatOpenTarget] = [.solo(soloId), .frontier(frontierId)]
+
+        let data = try JSONEncoder().encode(targets)
+        let decoded = try JSONDecoder().decode([ChatOpenTarget].self, from: data)
+
+        XCTAssertEqual(decoded, targets)
+        XCTAssertEqual(decoded[0].id, soloId)
+        XCTAssertEqual(decoded[1].id, frontierId)
+        XCTAssertFalse(decoded[0].isFrontier)
+        XCTAssertTrue(decoded[1].isFrontier)
     }
 
     // MARK: - firstSendKind

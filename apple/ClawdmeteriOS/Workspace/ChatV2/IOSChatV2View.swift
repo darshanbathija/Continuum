@@ -1,49 +1,28 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import ClawdmeterShared
 
-/// v0.23 Chat V2 — Tahoe-skinned iOS chat surface. Mirrors the
-/// `ios-chat.jsx` artboard in the Tahoe redesign HTML: TahoeGlass
-/// surfaces, TahoeProviderGlyph chips, accent halos drawn from the
-/// user-picked `TahoeProvider.base`, no raw SwiftUI Color hardcoding.
-///
-/// No dead buttons:
-/// - History sheet — rows tap to open (wired).
-/// - New chat — clears openSessionId + resets composer.
-/// - Provider chip — Menu picking AgentKind.
-/// - Deep Research toggle — flips `ChatV2Store.deepResearch`,
-///   persists to UserDefaults, threads into `.chatCreateV2`.
-/// - Send / Stop — Send goes through ComposerSendController; Stop
-///   POSTs `/sessions/:id/interrupt`, routes through
-///   SessionInterruptDispatcher so it works on all 3 backends.
-/// - Attachment chip — `PhotosPicker` for images + `.fileImporter`
-///   for files; staged in `ChatV2Store.attachments`; `@`-mentioned
-///   into the prompt body on send.
-/// - "Pair with Mac" empty state — actionable copy + the existing
-///   pairing surface is reachable via Settings (no dead CTA).
 public struct IOSChatV2View: View {
     @ObservedObject var client: AgentControlClient
     @StateObject private var chatStore: ChatV2Store
     @StateObject private var sendCtl: ComposerSendController
-
-    @State private var openSessionId: UUID?
-    @State private var historySheetPresented: Bool = false
+    @State private var openTarget: ChatOpenTarget?
+    @State private var historyPresented = false
 
     public init(agentClient: AgentControlClient) {
         self._client = ObservedObject(wrappedValue: agentClient)
-        _sendCtl = StateObject(wrappedValue: ComposerSendController(client: agentClient))
         _chatStore = StateObject(wrappedValue: ChatV2Store())
+        _sendCtl = StateObject(wrappedValue: ComposerSendController(client: agentClient))
     }
 
     public var body: some View {
-        NavigationStack {
-            ChatBody(
-                client: client,
-                chatStore: chatStore,
-                sendCtl: sendCtl,
-                openSessionId: $openSessionId,
-                historySheetPresented: $historySheetPresented
-            )
-        }
+        ChatBody(
+            client: client,
+            chatStore: chatStore,
+            sendCtl: sendCtl,
+            openTarget: $openTarget,
+            historyPresented: $historyPresented
+        )
     }
 }
 
@@ -53,160 +32,291 @@ private struct ChatBody: View {
     @ObservedObject var client: AgentControlClient
     @ObservedObject var chatStore: ChatV2Store
     @ObservedObject var sendCtl: ComposerSendController
-    @Binding var openSessionId: UUID?
-    @Binding var historySheetPresented: Bool
+    @Binding var openTarget: ChatOpenTarget?
+    @Binding var historyPresented: Bool
+    @State private var providerMatrix: ChatProvidersResponse?
 
     var body: some View {
         ZStack {
             TahoeWallpaperView()
             VStack(spacing: 0) {
+                header
                 if !client.isConfigured {
                     UnpairedState()
-                } else if let openSessionId,
-                          let session = client.chatSessions.first(where: { $0.id == openSessionId }) {
-                    Transcript(session: session, client: client)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    EmptyState()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    broadcastStrip
+                    transcript
                 }
                 Composer(
-                    sendCtl: sendCtl,
                     store: chatStore,
+                    sendCtl: sendCtl,
+                    openTarget: $openTarget,
                     client: client,
-                    openSession: openSessionId.flatMap { id in client.chatSessions.first(where: { $0.id == id }) },
-                    onCreated: { id in openSessionId = id }
+                    providerMatrix: providerMatrix
                 )
                 .padding(.horizontal, 14)
-                .padding(.bottom, 6)
+                .padding(.bottom, 8)
             }
         }
-        .navigationTitle("Chat")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { historySheetPresented = true } label: {
-                    TahoeIcon("sidebar", size: 16).foregroundStyle(t.fg2)
-                }
-                .accessibilityLabel("History")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    openSessionId = nil
-                    sendCtl.reset()
-                    chatStore.clearAttachments()
-                } label: {
-                    TahoeIcon("plus", size: 16).foregroundStyle(t.fg2)
-                }
-                .accessibilityLabel("New chat")
-            }
-        }
-        .sheet(isPresented: $historySheetPresented) {
+        .sheet(isPresented: $historyPresented) {
             HistorySheet(
                 sessions: client.chatSessions,
+                selected: $openTarget,
                 client: client,
-                selected: $openSessionId,
-                onDismiss: { historySheetPresented = false }
+                onDismiss: { historyPresented = false }
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .task { await client.refreshSessions() }
+        .task {
+            await client.refreshSessions()
+            providerMatrix = await client.fetchChatProviders()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("CLAWDMETER")
+                    .font(TahoeFont.body(10, weight: .bold))
+                    .foregroundStyle(t.fg4)
+                Text("Chat")
+                    .font(TahoeFont.body(22, weight: .semibold))
+                    .foregroundStyle(t.fg)
+            }
+            Spacer()
+            Button { historyPresented = true } label: {
+                TahoeIcon("archive", size: 17).foregroundStyle(t.fg2)
+                    .frame(width: 34, height: 34)
+                    .background(Color.white.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(.plain)
+            Button {
+                openTarget = nil
+                sendCtl.reset()
+                chatStore.clearAttachments()
+            } label: {
+                TahoeIcon("plus", size: 17).foregroundStyle(t.fg2)
+                    .frame(width: 34, height: 34)
+                    .background(Color.white.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+
+    private var broadcastStrip: some View {
+        TahoeGlass(radius: 18, tone: .chip) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(openTarget?.isReadOnlyTranscript == true ? "Archived transcript" : (openTarget?.isFrontier == true || chatStore.mode == .broadcast ? "Broadcast to all selected" : "Solo reply"))
+                        .font(TahoeFont.body(13, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text(openTarget?.isReadOnlyTranscript == true ? "Read-only history result" : (openTarget?.isFrontier == true || chatStore.mode == .broadcast ? "Compare answers · tap a model to read its reply" : "One provider answers this thread"))
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(t.fg3)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { chatStore.mode == .broadcast },
+                    set: { chatStore.mode = $0 ? .broadcast : .solo; chatStore.persist() }
+                ))
+                .labelsHidden()
+                .disabled(openTarget != nil)
+            }
+            .padding(12)
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 10)
+    }
+
+    @ViewBuilder
+    private var transcript: some View {
+        switch openTarget {
+        case .solo(let id):
+            if let session = client.chatSessions.first(where: { $0.id == id }) {
+                SoloTranscript(session: session, client: client)
+            } else {
+                EmptyState(title: "Conversation not loaded", subtitle: "Open a recent chat or start a new one.")
+            }
+        case .frontier(let groupId):
+            FrontierTranscript(groupId: groupId, client: client, selectedProvider: $chatStore.selectedReplyProvider)
+                .id(groupId)
+        case .transcript(_, let path):
+            ReadOnlyTranscript(path: path, client: client)
+        case nil:
+            EmptyState(title: chatStore.mode == .broadcast ? "Ask all three" : "Start a solo chat",
+                       subtitle: chatStore.mode == .broadcast ? "Claude, Codex, and Antigravity will answer together." : "Pick a provider and send the first prompt.")
+        }
     }
 }
 
-// MARK: - Transcript
-
 @available(iOS 17, *)
-private struct Transcript: View {
+private struct SoloTranscript: View {
     let session: AgentSession
     @ObservedObject var client: AgentControlClient
 
     var body: some View {
         let store = iOSChatStoreCache.shared.store(for: session.id, client: client)
-        TranscriptScroll(store: store, sessionId: session.id, client: client)
+        TranscriptScroll(items: store.snapshot.items, updateCounter: store.snapshot.updateCounter)
+    }
+}
+
+@available(iOS 17, *)
+private struct FrontierTranscript: View {
+    @Environment(\.tahoe) private var t
+    let groupId: UUID
+    @ObservedObject var client: AgentControlClient
+    @Binding var selectedProvider: AgentKind
+    @StateObject private var frontierStore: FrontierSnapshotStore
+
+    init(groupId: UUID, client: AgentControlClient, selectedProvider: Binding<AgentKind>) {
+        self.groupId = groupId
+        self.client = client
+        self._selectedProvider = selectedProvider
+        _frontierStore = StateObject(wrappedValue: FrontierSnapshotStore(groupId: groupId, client: client))
+    }
+
+    private var children: [AgentSession] {
+        client.frontierChildren(groupId: groupId)
+    }
+
+    private var selectedChild: AgentSession? {
+        children.first(where: { $0.agent == selectedProvider }) ?? children.first
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(children, id: \.id) { child in
+                        Button {
+                            selectedProvider = child.agent
+                        } label: {
+                            HStack(spacing: 6) {
+                                TahoeProviderGlyph(provider: child.agent.tahoeProvider, size: 16)
+                                Text(child.agent.tahoeProvider.displayName)
+                                    .font(TahoeFont.body(12, weight: .semibold))
+                            }
+                            .foregroundStyle(selectedChild?.id == child.id ? t.fg : t.fg3)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 7)
+                            .background(selectedChild?.id == child.id ? Color.white.opacity(0.12) : Color.white.opacity(0.05), in: Capsule())
+                            .overlay(Capsule().stroke(selectedChild?.id == child.id ? child.agent.tahoeProvider.halo.color.opacity(0.45) : t.hairline, lineWidth: 0.5))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 14)
+            }
+
+            if let child = selectedChild {
+                let store = iOSChatStoreCache.shared.store(for: child.id, client: client)
+                let frontierChild = snapshotChild(for: child)
+                let visibleItems = frontierChild?.snapshot?.items ?? store.snapshot.items
+                TranscriptScroll(
+                    items: visibleItems,
+                    updateCounter: frontierChild?.snapshot?.updateCounter ?? store.snapshot.updateCounter
+                )
+                    .overlay(alignment: .bottomTrailing) {
+                        HStack(spacing: 8) {
+                            Button {
+                                Task {
+                                    _ = await client.setFrontierTurnWinner(
+                                        groupId: groupId,
+                                        turnId: frontierStore.snapshot.latestTurnId,
+                                        childIndex: child.frontierChildIndex ?? 0
+                                    )
+                                }
+                            } label: {
+                                Label("Winner", systemImage: "bookmark")
+                                    .font(TahoeFont.body(11, weight: .semibold))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(.thinMaterial, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(frontierStore.snapshot.latestTurnId == "turn-0")
+                            Button {
+                                Task { _ = await client.continueFrontierFromWinner(groupId: groupId, childIndex: child.frontierChildIndex ?? 0) }
+                            } label: {
+                                TahoeIcon("arrowR", size: 13)
+                                    .padding(9)
+                                    .background(.thinMaterial, in: Circle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(14)
+                    }
+            } else {
+                EmptyState(title: "Broadcast is starting", subtitle: "Provider replies will appear here.")
+            }
+        }
+        .onAppear { frontierStore.start() }
+        .onDisappear { frontierStore.stop() }
+    }
+
+    private func snapshotChild(for session: AgentSession) -> FrontierChild? {
+        frontierStore.snapshot.children.first { $0.sessionId == session.id }
+    }
+}
+
+@available(iOS 17, *)
+private struct ReadOnlyTranscript: View {
+    let path: String
+    @ObservedObject var client: AgentControlClient
+    @State private var envelope: TranscriptEnvelope?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let envelope {
+                TranscriptScroll(
+                    items: envelope.messages.map(ChatItem.message),
+                    updateCounter: UInt64(envelope.messages.count)
+                )
+            } else if failed {
+                EmptyState(title: "Transcript unavailable", subtitle: "The archived JSONL could not be loaded.")
+            } else {
+                ProgressView().controlSize(.regular)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: path) {
+            failed = false
+            envelope = await client.fetchTranscript(path: path)
+            failed = envelope == nil
+        }
     }
 }
 
 @available(iOS 17, *)
 private struct TranscriptScroll: View {
     @Environment(\.tahoe) private var t
-    @ObservedObject var store: iOSChatStore
-    let sessionId: UUID
-    @ObservedObject var client: AgentControlClient
-    @State private var userPinnedToBottom: Bool = true
+    let items: [ChatItem]
+    let updateCounter: UInt64
 
     var body: some View {
         ScrollViewReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(store.snapshot.items) { item in
-                            MessageRow(item: item).id(item.id)
-                                .onAppear {
-                                    if item.id == store.snapshot.items.last?.id {
-                                        userPinnedToBottom = true
-                                    }
-                                }
-                                .onDisappear {
-                                    if item.id == store.snapshot.items.last?.id {
-                                        userPinnedToBottom = false
-                                    }
-                                }
-                        }
-                        Color.clear.frame(height: 12).id("bottom-anchor")
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(items) { item in
+                        MessageRow(item: item).id(item.id)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
+                    Color.clear.frame(height: 70).id("bottom")
                 }
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: store.snapshot.updateCounter) { _, _ in
-                    guard userPinnedToBottom else { return }
-                    if let last = store.snapshot.items.last {
-                        withAnimation(.easeOut(duration: 0.18)) {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
-                    }
-                }
-
-                if !userPinnedToBottom, !store.snapshot.items.isEmpty {
-                    Button {
-                        userPinnedToBottom = true
-                        if let last = store.snapshot.items.last {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            TahoeIcon("chevD", size: 10)
-                            Text("Latest")
-                                .font(TahoeFont.body(11.5, weight: .semibold))
-                        }
-                        .foregroundStyle(t.fg)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(.thinMaterial, in: Capsule())
-                        .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 12)
-                    .padding(.bottom, 14)
-                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
             }
-            .overlay(alignment: .bottom) {
-                if let prompt = store.snapshot.pendingPermissionPrompt {
-                    PermissionPromptCard(
-                        prompt: prompt,
-                        sessionId: sessionId,
-                        responder: IOSPermissionResponder(client: client)
-                    )
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 14)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            .onChange(of: updateCounter) { _, _ in
+                withAnimation(.easeOut(duration: 0.18)) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -217,594 +327,467 @@ private struct MessageRow: View {
 
     var body: some View {
         switch item {
-        case .message(let m):
-            switch m.kind {
+        case .message(let message):
+            switch message.kind {
             case .userText:
                 HStack {
-                    Spacer(minLength: 40)
-                    TahoeGlass(radius: 14, tone: .chip) {
-                        Text(m.body)
-                            .font(TahoeFont.body(13))
-                            .foregroundStyle(t.fg)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .textSelection(.enabled)
-                    }
+                    Spacer(minLength: 42)
+                    Text(message.body)
+                        .font(TahoeFont.body(14))
+                        .foregroundStyle(t.fg)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 10)
+                        .background(t.accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 16))
                 }
             case .assistantText:
-                VStack(alignment: .leading, spacing: 4) {
-                    if !m.title.isEmpty {
-                        Text(m.title.uppercased())
-                            .font(TahoeFont.body(10, weight: .bold))
-                            .tracking(0.5)
-                            .foregroundStyle(t.fg4)
+                TahoeGlass(radius: 18, tone: .raised) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !message.title.isEmpty {
+                            Text(message.title.uppercased())
+                                .font(TahoeFont.body(10, weight: .bold))
+                                .foregroundStyle(t.fg4)
+                        }
+                        Text(message.body)
+                            .font(TahoeFont.body(14))
+                            .foregroundStyle(t.fg)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(m.body)
-                        .font(TahoeFont.body(13.5))
-                        .foregroundStyle(t.fg)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            case .meta:
-                HStack(spacing: 6) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 11))
-                        .foregroundStyle(t.fg3)
-                    Text(m.body)
-                        .font(TahoeFont.body(11))
-                        .foregroundStyle(t.fg3)
+                    .padding(13)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             case .toolCall, .toolResult:
                 HStack(alignment: .top, spacing: 8) {
                     TahoeIcon("terminal", size: 11).foregroundStyle(t.fg3)
-                    VStack(alignment: .leading, spacing: 2) {
-                        if !m.title.isEmpty {
-                            Text(m.title)
-                                .font(TahoeFont.body(11, weight: .medium))
-                                .foregroundStyle(t.fg2)
-                        }
-                        Text(m.body)
-                            .font(TahoeFont.mono(11.5))
-                            .foregroundStyle(t.fg3)
-                            .lineLimit(6)
-                    }
+                    Text(message.body)
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(5)
                 }
+                .padding(10)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+            case .meta:
+                Text(message.body)
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg4)
             }
         case .toolRun(_, let pairs):
-            HStack(spacing: 6) {
-                TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
-                Text(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
-                    .font(TahoeFont.body(11))
-                    .foregroundStyle(t.fg3)
-            }
+            Text(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
+                .font(TahoeFont.body(11))
+                .foregroundStyle(t.fg3)
         }
     }
 }
 
-// MARK: - Composer
-
 @available(iOS 17, *)
 private struct Composer: View {
     @Environment(\.tahoe) private var t
-    @ObservedObject var sendCtl: ComposerSendController
     @ObservedObject var store: ChatV2Store
+    @ObservedObject var sendCtl: ComposerSendController
+    @Binding var openTarget: ChatOpenTarget?
     @ObservedObject var client: AgentControlClient
-    var openSession: AgentSession?
-    let onCreated: (UUID) -> Void
-
-    @FocusState private var textFocused: Bool
-    @State private var fileImporterPresented: Bool = false
-
-    private var isStreaming: Bool {
-        if sendCtl.sending { return true }
-        guard let session = openSession else { return false }
-        let store = iOSChatStoreCache.shared.store(for: session.id, client: client)
-        return store.snapshot.currentTurnState == .streaming
-    }
+    let providerMatrix: ChatProvidersResponse?
+    @State private var fileImporterPresented = false
+    @FocusState private var focused: Bool
 
     var body: some View {
-        TahoeGlass(radius: 18, tone: .raised) {
-            VStack(alignment: .leading, spacing: 0) {
+        TahoeGlass(radius: 22, tone: .raised) {
+            VStack(alignment: .leading, spacing: 8) {
                 if !store.attachments.isEmpty {
                     attachmentStrip
                 }
                 TextField(placeholder, text: $sendCtl.text, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .lineLimit(1...6)
                     .font(TahoeFont.body(14))
                     .foregroundStyle(t.fg)
-                    .focused($textFocused)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 14)
-                    .padding(.bottom, 4)
-                    .disabled(sendCtl.sending)
+                    .lineLimit(1...5)
+                    .focused($focused)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
 
                 if let err = sendCtl.lastError {
                     Text(err)
                         .font(TahoeFont.body(11))
                         .foregroundStyle(.red)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
                 }
 
-                HStack(spacing: 6) {
-                    providerChip
-                    deepResearchChip
-                    attachmentChip
-                    Spacer()
-                    if isStreaming {
-                        StatusStrip(openSession: openSession, client: client)
+                HStack(spacing: 7) {
+                    if openTarget == nil {
+                        providerControls
+                        deepResearchButton
+                    } else {
+                        threadBadge
                     }
-                    sendOrStopButton
+                    Button { fileImporterPresented = true } label: {
+                        TahoeIcon("paperclip", size: 13).foregroundStyle(t.fg3)
+                            .frame(width: 30, height: 30)
+                            .background(Color.white.opacity(0.06), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    sendButton
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
-                .padding(.top, 4)
             }
         }
         .fileImporter(isPresented: $fileImporterPresented, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            switch result {
-            case .success(let urls):
-                Task { await stageAttachments(urls: urls) }
-            case .failure:
-                break
-            }
-        }
-    }
-
-    // MARK: - Chips
-
-    private var providerChip: some View {
-        Menu {
-            ForEach([AgentKind.claude, .codex, .gemini], id: \.self) { kind in
-                Button {
-                    store.selectedProvider = kind
-                    store.persist()
-                } label: {
-                    HStack {
-                        Text(kind.tahoeProvider.displayName)
-                        if kind == store.selectedProvider {
-                            Image(systemName: "checkmark")
-                        }
-                    }
+            if case .success(let urls) = result {
+                for url in urls {
+                    store.addAttachment(ChatV2Attachment(displayName: url.lastPathComponent, localFileURL: url))
                 }
             }
-        } label: {
-            HStack(spacing: 5) {
-                TahoeProviderGlyph(provider: store.selectedProvider.tahoeProvider, size: 14)
-                Text(store.selectedProvider.tahoeProvider.displayName)
-                    .font(TahoeFont.body(11.5, weight: .semibold))
-                    .foregroundStyle(t.fg)
-                TahoeIcon("chevD", size: 9).foregroundStyle(t.fg3)
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background {
-                Capsule().fill(t.dark ? Color.white.opacity(0.08) : Color.black.opacity(0.04))
-            }
-            .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
         }
     }
 
-    private var deepResearchChip: some View {
+    @ViewBuilder
+    private var providerControls: some View {
+        if store.mode == .broadcast {
+            Menu {
+                ForEach(ChatV2Store.defaultBroadcastProviderOrder, id: \.self) { provider in
+                    Button { store.toggleBroadcastProvider(provider) } label: {
+                        HStack {
+                            Text(provider.tahoeProvider.displayName)
+                            if store.broadcastProviders.contains(provider) { Image(systemName: "checkmark") }
+                        }
+                    }
+                    .disabled(!isProviderAvailable(provider))
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    TahoeIcon("branch", size: 12)
+                    Text("All selected")
+                        .font(TahoeFont.body(11.5, weight: .semibold))
+                }
+                .foregroundStyle(t.fg)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.white.opacity(0.08), in: Capsule())
+            }
+        } else {
+            Menu {
+                ForEach(ChatV2Store.defaultBroadcastProviderOrder, id: \.self) { provider in
+                    Button {
+                        store.selectedProvider = provider
+                        store.persist()
+                    } label: {
+                        Text(provider.tahoeProvider.displayName)
+                    }
+                    .disabled(!isProviderAvailable(provider))
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    TahoeProviderGlyph(provider: store.selectedProvider.tahoeProvider, size: 15)
+                    Text(store.selectedProvider.tahoeProvider.displayName)
+                        .font(TahoeFont.body(11.5, weight: .semibold))
+                }
+                .foregroundStyle(t.fg)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.white.opacity(0.08), in: Capsule())
+            }
+        }
+    }
+
+    private var deepResearchButton: some View {
         Button {
             store.deepResearch.toggle()
             store.persist()
         } label: {
-            HStack(spacing: 5) {
-                TahoeIcon("search", size: 11)
-                    .foregroundStyle(store.deepResearch
-                                     ? haloColor
-                                     : t.fg3)
-                Text("Deep Research")
-                    .font(TahoeFont.body(11.5, weight: store.deepResearch ? .semibold : .medium))
-                    .foregroundStyle(store.deepResearch ? haloColor : t.fg3)
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background {
-                Capsule().fill(
-                    store.deepResearch
-                    ? haloColor.opacity(0.15)
-                    : (t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
-                )
-            }
-            .overlay(Capsule().strokeBorder(
-                store.deepResearch ? haloColor.opacity(0.4) : t.hairline,
-                lineWidth: 0.5))
+            TahoeIcon("search", size: 13)
+                .foregroundStyle(store.deepResearch ? t.accent : t.fg3)
+                .frame(width: 30, height: 30)
+                .background(store.deepResearch ? t.accent.opacity(0.16) : Color.white.opacity(0.06), in: Circle())
         }
         .buttonStyle(.plain)
     }
 
-    private var attachmentChip: some View {
-        Button { fileImporterPresented = true } label: {
-            TahoeIcon("paperclip", size: 12)
-                .foregroundStyle(t.fg3)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 5)
-                .background {
-                    Capsule().fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
+    private var threadBadge: some View {
+        HStack(spacing: 6) {
+            TahoeIcon(openTarget?.isReadOnlyTranscript == true ? "doc" : (openTarget?.isFrontier == true ? "branch" : "chat"), size: 12)
+            Text(openTarget?.isReadOnlyTranscript == true ? "Read-only" : (openTarget?.isFrontier == true ? "Broadcast" : "Solo"))
+                .font(TahoeFont.body(11.5, weight: .semibold))
+        }
+        .foregroundStyle(t.fg3)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.white.opacity(0.06), in: Capsule())
+    }
+
+    private var sendButton: some View {
+        Button { Task { await dispatchSend() } } label: {
+            ZStack {
+                Circle().fill(sendCtl.canSend ? t.accent : Color.white.opacity(0.08))
+                if sendCtl.sending {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    TahoeIcon("arrowU", size: 15).foregroundStyle(sendCtl.canSend ? .white : t.fg4)
                 }
-                .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
+            }
+            .frame(width: 36, height: 36)
         }
         .buttonStyle(.plain)
+        .disabled(!sendCtl.canSend || sendCtl.sending || openTarget?.isReadOnlyTranscript == true)
     }
 
     private var attachmentStrip: some View {
-        HStack(spacing: 6) {
-            ForEach(store.attachments) { a in
-                HStack(spacing: 5) {
-                    TahoeIcon("doc", size: 10).foregroundStyle(t.fg3)
-                    Text(a.displayName)
-                        .font(TahoeFont.mono(11))
-                        .foregroundStyle(t.fg2)
-                        .lineLimit(1)
-                    Button { store.removeAttachment(id: a.id) } label: {
-                        TahoeIcon("x", size: 10).foregroundStyle(t.fg3)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(store.attachments) { attachment in
+                    HStack(spacing: 5) {
+                        TahoeIcon("doc", size: 10).foregroundStyle(t.fg3)
+                        Text(attachment.displayName)
+                            .font(TahoeFont.mono(10.5))
+                            .foregroundStyle(t.fg2)
+                            .lineLimit(1)
+                        Button { store.removeAttachment(id: attachment.id) } label: {
+                            TahoeIcon("x", size: 9).foregroundStyle(t.fg4)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.06), in: Capsule())
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background {
-                    Capsule().fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
-                }
-                .overlay(Capsule().strokeBorder(t.hairline, lineWidth: 0.5))
             }
+            .padding(.horizontal, 14)
         }
-        .padding(.horizontal, 14)
         .padding(.top, 10)
-        .padding(.bottom, 2)
-    }
-
-    @ViewBuilder
-    private var sendOrStopButton: some View {
-        if isStreaming {
-            Button { Task { await dispatchStop() } } label: {
-                ZStack {
-                    Circle().fill(Color.red.opacity(t.dark ? 0.18 : 0.14))
-                    TahoeIcon("stop", size: 14).foregroundStyle(.red)
-                }
-                .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
-        } else {
-            Button { Task { await dispatchSend() } } label: {
-                ZStack {
-                    Circle().fill(sendCtl.canSend
-                                  ? providerBaseColor
-                                  : (t.dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06)))
-                    TahoeIcon("arrowU", size: 15)
-                        .foregroundStyle(sendCtl.canSend ? Color.white : t.fg4)
-                }
-                .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
-            .disabled(!sendCtl.canSend)
-        }
     }
 
     private var placeholder: String {
-        if store.deepResearch {
-            return "Ask a research question — multi-step search · 2-10 min"
-        }
-        return "Ask \(store.selectedProvider.tahoeProvider.displayName)…"
+        if openTarget?.isReadOnlyTranscript == true { return "Archived transcript is read-only" }
+        if openTarget?.isFrontier == true { return "Ask all selected…" }
+        if openTarget != nil { return "Reply…" }
+        return store.mode == .broadcast ? "Ask all three…" : "Ask \(store.selectedProvider.tahoeProvider.displayName)…"
     }
-
-    private var providerBaseColor: Color {
-        store.selectedProvider.tahoeProvider.base.color
-    }
-
-    private var haloColor: Color {
-        store.selectedProvider.tahoeProvider.halo.color
-    }
-
-    // MARK: - Send / stop / attach
 
     private func dispatchSend() async {
-        guard sendCtl.canSend else { return }
-        let mentions = store.attachments.compactMap { $0.pathOnDaemon }.map { "@\($0)" }.joined(separator: " ")
-        if !mentions.isEmpty, !sendCtl.text.contains(mentions) {
-            sendCtl.text = mentions + " " + sendCtl.text
-        }
-        if let session = openSession {
-            await sendCtl.send(via: .solo(sessionId: session.id))
-            store.clearAttachments()
-            return
-        }
-        let preIds = Set(client.chatSessions.map(\.id))
-        await sendCtl.send(via: store.firstSendKind())
-        store.clearAttachments()
-        await client.refreshSessions()
-        if let newSession = client.chatSessions.first(where: { !preIds.contains($0.id) }) {
-            onCreated(newSession.id)
-        }
-    }
-
-    private func dispatchStop() async {
-        guard let session = openSession else { return }
-        await client.interruptSession(sessionId: session.id)
-    }
-
-    private func stageAttachments(urls: [URL]) async {
-        for url in urls {
-            let _ = url.startAccessingSecurityScopedResource()
-            defer { url.stopAccessingSecurityScopedResource() }
-            // Upload to the open session if we have one; otherwise the
-            // attachment lands as a local file ref and the daemon
-            // accepts the absolute `@<path>` mention.
-            let att = ChatV2Attachment(displayName: url.lastPathComponent, pathOnDaemon: url.path)
-            store.addAttachment(att)
-            if let openSession,
-               let data = try? Data(contentsOf: url),
-               let uploadedPath = await client.uploadAttachment(
-                   sessionId: openSession.id,
-                   ext: url.pathExtension,
-                   data: data) {
-                if let idx = store.attachments.firstIndex(where: { $0.id == att.id }) {
-                    store.attachments[idx].pathOnDaemon = uploadedPath
+        await sendCtl.sendCustom { trimmed in
+            switch openTarget {
+            case .solo(let sessionId):
+                let prompt = await uploadAndBuildPrompt(base: trimmed, sessionIds: [sessionId])
+                let ok = await client.sendPrompt(sessionId: sessionId, text: prompt, asFollowUp: true)
+                if ok { store.clearAttachments() }
+                return ok ? nil : (client.lastError ?? "Couldn't send prompt.")
+            case .frontier(let groupId):
+                let children = client.frontierChildren(groupId: groupId)
+                let prompt = await uploadAndBuildPrompt(base: trimmed, sessionIds: children.map(\.id))
+                guard let response = await client.sendFrontierPrompt(groupId: groupId, text: prompt) else {
+                    return client.lastError ?? "Couldn't broadcast prompt."
+                }
+                store.clearAttachments()
+                return response.ok ? nil : response.results.compactMap(\.reason).joined(separator: "\n")
+            case .transcript:
+                return "Archived transcripts are read-only. Start a new chat to continue."
+            case nil:
+                if store.mode == .broadcast {
+                    let slots = store.frontierSlots().filter { isProviderAvailable($0.provider) }
+                    guard slots.count >= 2 else { return "At least two broadcast providers must be available." }
+                    guard let created = await client.createBroadcastChat(slots: slots) else {
+                        return client.lastError ?? "Couldn't create broadcast chat."
+                    }
+                    openTarget = .frontier(created.groupId)
+                    let sessionIds = created.slots.compactMap(\.sessionId)
+                    let prompt = await uploadAndBuildPrompt(base: trimmed, sessionIds: sessionIds)
+                    guard let response = await client.sendFrontierPrompt(groupId: created.groupId, text: prompt) else {
+                        return client.lastError ?? "Couldn't broadcast prompt."
+                    }
+                    store.clearAttachments()
+                    return response.ok ? nil : response.results.compactMap(\.reason).joined(separator: "\n")
+                } else {
+                    guard let session = await client.createChatSession(
+                        provider: store.selectedProvider,
+                        model: store.selectedModel,
+                        codexBackend: store.selectedProvider == .codex ? store.codexBackendPreference : nil,
+                        effort: store.selectedEffort,
+                        deepResearch: store.deepResearch
+                    ) else {
+                        return client.lastError ?? "Couldn't create chat."
+                    }
+                    openTarget = .solo(session.id)
+                    let prompt = await uploadAndBuildPrompt(base: trimmed, sessionIds: [session.id])
+                    let ok = await client.sendPrompt(sessionId: session.id, text: prompt, asFollowUp: false)
+                    if ok { store.clearAttachments() }
+                    return ok ? nil : (client.lastError ?? "Couldn't send prompt.")
                 }
             }
         }
     }
-}
 
-// MARK: - Status strip
-
-@available(iOS 17, *)
-private struct StatusStrip: View {
-    @Environment(\.tahoe) private var t
-    var openSession: AgentSession?
-    @ObservedObject var client: AgentControlClient
-    @State private var turnStartedAt: Date?
-
-    private var turnState: TurnState {
-        guard let session = openSession else { return .idle }
-        return iOSChatStoreCache.shared.store(for: session.id, client: client).snapshot.currentTurnState
+    private func isProviderAvailable(_ provider: AgentKind) -> Bool {
+        guard let entries = providerMatrix?.providers.filter({ $0.provider == provider }),
+              !entries.isEmpty else {
+            return true
+        }
+        return entries.contains { $0.available }
     }
 
-    var body: some View {
-        HStack(spacing: 8) {
-            IndicatorRing(
-                streaming: turnState == .streaming,
-                tint: (openSession?.agent.tahoeProvider ?? .claude).base.color
-            )
-            .frame(width: 14, height: 14)
-            Stopwatch(running: turnState == .streaming, turnStartedAt: $turnStartedAt)
-        }
-        .onChange(of: turnState) { _, newState in
-            switch newState {
-            case .streaming:
-                if turnStartedAt == nil { turnStartedAt = Date() }
-            case .completed, .interrupted:
-                break
-            case .idle:
-                turnStartedAt = nil
+    private func uploadAndBuildPrompt(base: String, sessionIds: [UUID]) async -> String {
+        var paths: [String] = []
+        for attachment in store.attachments {
+            if let existing = attachment.pathOnDaemon {
+                paths.append(existing)
+                continue
             }
+            guard let url = attachment.localFileURL,
+                  let sessionId = sessionIds.first else { continue }
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url),
+                  let uploaded = await client.uploadAttachment(sessionId: sessionId, ext: url.pathExtension, data: data)
+            else { continue }
+            paths.append(uploaded)
         }
+        guard !paths.isEmpty else { return base }
+        return paths.map { "@\($0)" }.joined(separator: " ") + " " + base
     }
 }
-
-@available(iOS 17, *)
-private struct IndicatorRing: View {
-    var streaming: Bool
-    var tint: Color
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 0.05, paused: !streaming)) { context in
-            Canvas { ctx, size in
-                let t = context.date.timeIntervalSinceReferenceDate
-                let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
-                let path = Path { p in
-                    let start = Angle(degrees: (t * 360).truncatingRemainder(dividingBy: 360))
-                    let end = Angle(degrees: start.degrees + 120)
-                    p.addArc(center: CGPoint(x: rect.midX, y: rect.midY),
-                             radius: rect.width / 2,
-                             startAngle: start, endAngle: end, clockwise: false)
-                }
-                ctx.stroke(path, with: .color(tint), style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
-            }
-            .opacity(streaming ? 1 : 0.35)
-        }
-    }
-}
-
-@available(iOS 17, *)
-private struct Stopwatch: View {
-    @Environment(\.tahoe) private var t
-    var running: Bool
-    @Binding var turnStartedAt: Date?
-
-    var body: some View {
-        TimelineView(.periodic(from: Date(), by: 0.5)) { context in
-            Text(formatted(elapsed: elapsed(at: context.date)))
-                .font(TahoeFont.mono(11))
-                .foregroundStyle(running ? t.fg : t.fg3)
-                .monospacedDigit()
-        }
-    }
-
-    private func elapsed(at now: Date) -> TimeInterval {
-        guard let start = turnStartedAt else { return 0 }
-        return max(0, now.timeIntervalSince(start))
-    }
-
-    private func formatted(elapsed: TimeInterval) -> String {
-        let total = Int(elapsed)
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-}
-
-// MARK: - History sheet
 
 @available(iOS 17, *)
 private struct HistorySheet: View {
     @Environment(\.tahoe) private var t
     let sessions: [AgentSession]
+    @Binding var selected: ChatOpenTarget?
     @ObservedObject var client: AgentControlClient
-    @Binding var selected: UUID?
     let onDismiss: () -> Void
-
-    @State private var query: String = ""
+    @State private var query = ""
     @State private var results: [ChatSessionSearchMatch] = []
-    @State private var searchInFlight: Bool = false
     @State private var searchTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                TahoeGlass(radius: 10, tone: .chip) {
-                    HStack(spacing: 8) {
-                        TahoeIcon("search", size: 12).foregroundStyle(t.fg3)
-                        TextField("Search chats", text: $query)
-                            .textFieldStyle(.plain)
-                            .font(TahoeFont.body(13))
-                            .foregroundStyle(t.fg)
-                        if searchInFlight {
-                            ProgressView().controlSize(.mini)
-                        } else if !query.isEmpty {
-                            Button { query = ""; results = [] } label: {
-                                TahoeIcon("x", size: 11).foregroundStyle(t.fg3)
-                            }
-                            .buttonStyle(.plain)
+            List {
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ForEach(rows) { row in
+                        Button {
+                            selected = row.target
+                            onDismiss()
+                        } label: {
+                            rowLabel(row)
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-                .onChange(of: query) { _, newValue in
-                    scheduleSearch(newValue)
-                }
-
-                List {
-                    if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        if sessions.isEmpty {
-                            Text("No chats yet")
-                                .font(TahoeFont.body(13))
-                                .foregroundStyle(t.fg3)
-                        } else {
-                            ForEach(sessions.sorted(by: { $0.lastEventAt > $1.lastEventAt })) { session in
-                                Button { selected = session.id; onDismiss() } label: {
-                                    sessionRow(session)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    } else if results.isEmpty && !searchInFlight {
-                        Text("No matches")
-                            .font(TahoeFont.body(13))
-                            .foregroundStyle(t.fg3)
-                    } else {
-                        ForEach(results) { match in
-                            Button { selected = match.sessionId; onDismiss() } label: {
-                                searchRow(match)
-                            }
-                            .buttonStyle(.plain)
+                } else {
+                    ForEach(results) { match in
+                        Button {
+                            Task { await open(match: match) }
+                        } label: {
+                            Text(match.snippet).lineLimit(3)
                         }
                     }
                 }
-                .listStyle(.plain)
             }
-            .navigationTitle("History")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { onDismiss() }
-                }
-            }
+            .searchable(text: $query, prompt: "Search chats")
+            .navigationTitle("Chats")
+            .onChange(of: query) { _, value in scheduleSearch(value) }
         }
     }
 
-    private func sessionRow(_ session: AgentSession) -> some View {
-        HStack(spacing: 10) {
-            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.displayLabel)
-                    .font(TahoeFont.body(13.5, weight: .medium))
-                    .foregroundStyle(t.fg)
-                    .lineLimit(1)
-                if let model = session.model, !model.isEmpty {
-                    Text(model)
-                        .font(TahoeFont.mono(10.5))
-                        .foregroundStyle(t.fg3)
-                }
-            }
-            Spacer()
-            if session.deepResearch {
-                TahoeIcon("search", size: 11)
-                    .foregroundStyle(session.agent.tahoeProvider.halo.color)
+    private var rows: [HistoryRowModel] {
+        var seen = Set<UUID>()
+        var out: [HistoryRowModel] = []
+        for session in sessions.sorted(by: { $0.lastEventAt > $1.lastEventAt }) {
+            if let groupId = session.frontierGroupId {
+                guard !seen.contains(groupId) else { continue }
+                seen.insert(groupId)
+                let children = sessions.filter { $0.frontierGroupId == groupId }
+                out.append(HistoryRowModel(
+                    id: groupId,
+                    target: .frontier(groupId),
+                    title: "Broadcast comparison",
+                    subtitle: children.map { $0.agent.tahoeProvider.displayName }.joined(separator: " / "),
+                    providers: children.map(\.agent)
+                ))
+            } else {
+                out.append(HistoryRowModel(
+                    id: session.id,
+                    target: .solo(session.id),
+                    title: session.displayLabel,
+                    subtitle: session.model ?? "default",
+                    providers: [session.agent]
+                ))
             }
         }
+        return out
     }
 
-    private func searchRow(_ match: ChatSessionSearchMatch) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                TahoeIcon("doc", size: 11).foregroundStyle(t.fg3)
-                Text(match.jsonlPath.split(separator: "/").last.map(String.init) ?? match.jsonlPath)
-                    .font(TahoeFont.body(12.5, weight: .medium))
-                    .foregroundStyle(t.fg)
-                    .lineLimit(1)
+    @MainActor
+    private func open(match: ChatSessionSearchMatch) async {
+        await client.refreshSessions()
+        if let groupId = match.frontierGroupId {
+            if client.frontierChildren(groupId: groupId).isEmpty {
+                _ = await client.fetchTranscript(path: match.jsonlPath, limit: 1)
+                selected = .transcript(sessionId: match.sessionId, jsonlPath: match.jsonlPath)
+            } else {
+                selected = .frontier(groupId)
             }
-            Text(match.snippet)
-                .font(TahoeFont.body(11.5))
-                .foregroundStyle(t.fg3)
-                .lineLimit(2)
-        }
-    }
-
-    private func scheduleSearch(_ q: String) {
-        searchTask?.cancel()
-        let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            results = []
-            searchInFlight = false
+            onDismiss()
             return
         }
-        searchInFlight = true
-        searchTask = Task {
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            if Task.isCancelled { return }
-            let resp = await client.searchChatHistory(query: trimmed, limit: 50)
-            if Task.isCancelled { return }
-            await MainActor.run {
-                results = resp?.matches ?? []
-                searchInFlight = false
+        if let session = client.chatSessions.first(where: { $0.id == match.sessionId }) {
+            selected = session.frontierGroupId.map(ChatOpenTarget.frontier) ?? .solo(session.id)
+            onDismiss()
+            return
+        }
+        _ = await client.fetchTranscript(path: match.jsonlPath, limit: 1)
+        selected = .transcript(sessionId: match.sessionId, jsonlPath: match.jsonlPath)
+        onDismiss()
+    }
+
+    private func rowLabel(_ row: HistoryRowModel) -> some View {
+        HStack(spacing: 10) {
+            ForEach(Array(row.providers.prefix(3).enumerated()), id: \.offset) { _, provider in
+                TahoeProviderGlyph(provider: provider.tahoeProvider, size: 18)
             }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.title).font(TahoeFont.body(13.5, weight: .semibold))
+                Text(row.subtitle).font(TahoeFont.body(11)).foregroundStyle(t.fg3)
+            }
+        }
+    }
+
+    private func scheduleSearch(_ value: String) {
+        searchTask?.cancel()
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            results = []
+            return
+        }
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard !Task.isCancelled,
+                  let response = await client.searchChatHistory(query: trimmed, limit: 50) else { return }
+            await MainActor.run { results = response.matches }
         }
     }
 }
 
-// MARK: - Empty / unpaired states
+private struct HistoryRowModel: Identifiable {
+    let id: UUID
+    let target: ChatOpenTarget
+    let title: String
+    let subtitle: String
+    let providers: [AgentKind]
+}
 
 @available(iOS 17, *)
 private struct EmptyState: View {
     @Environment(\.tahoe) private var t
+    let title: String
+    let subtitle: String
 
     var body: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: -8) {
-                ForEach([TahoeProvider.claude, .codex, .gemini], id: \.self) { p in
-                    TahoeProviderGlyph(provider: p, size: 30)
-                }
-            }
-            .padding(.bottom, 4)
-            Text("Start a new chat")
-                .font(TahoeFont.body(16, weight: .semibold))
+        VStack(spacing: 8) {
+            Text(title)
+                .font(TahoeFont.body(18, weight: .semibold))
                 .foregroundStyle(t.fg)
-            Text("Pick a provider, type a prompt. Toggle Deep Research for multi-step search with citations.")
-                .font(TahoeFont.body(12.5))
+            Text(subtitle)
+                .font(TahoeFont.body(13))
                 .foregroundStyle(t.fg3)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
         }
+        .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(20)
     }
 }
 
@@ -813,31 +796,17 @@ private struct UnpairedState: View {
     @Environment(\.tahoe) private var t
 
     var body: some View {
-        VStack(spacing: 12) {
-            TahoeIcon("qr", size: 36).foregroundStyle(t.fg3)
-            Text("Pair with your Mac")
-                .font(TahoeFont.body(16, weight: .semibold))
+        VStack(spacing: 8) {
+            TahoeIcon("link", size: 26).foregroundStyle(t.fg3)
+            Text("Pair with Mac")
+                .font(TahoeFont.body(18, weight: .semibold))
                 .foregroundStyle(t.fg)
-            Text("Open Clawdmeter on Mac → Sync with iPhone, then scan or paste the URL on this device.")
-                .font(TahoeFont.body(12.5))
+            Text("Chat uses the paired Mac daemon to run providers.")
+                .font(TahoeFont.body(13))
                 .foregroundStyle(t.fg3)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
         }
+        .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(20)
-    }
-}
-
-private extension AgentControlClient {
-    @MainActor
-    func interruptSession(sessionId: UUID) async {
-        guard let host = host, let token = token else { return }
-        guard let url = URL(string: "http://\(Self.urlHostLiteral(host)):\(httpPort)/sessions/\(sessionId.uuidString)/interrupt") else { return }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 5
-        _ = try? await URLSession.shared.data(for: req)
     }
 }

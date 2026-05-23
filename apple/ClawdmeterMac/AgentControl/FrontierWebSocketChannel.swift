@@ -43,6 +43,7 @@ public final class FrontierWebSocketChannel: WSChannel {
     private let groupId: UUID
     private let registry: DaemonChatStoreRegistry
     private let sessionRegistry: AgentSessionRegistry
+    private let turnWinnersProvider: () -> [FrontierTurnWinner]
     private var stores: [(child: AgentSession, store: SessionChatStore)] = []
     private var cancellables: [AnyCancellable] = []
     private var pendingPush: Task<Void, Never>?
@@ -56,12 +57,14 @@ public final class FrontierWebSocketChannel: WSChannel {
         connection: NWConnection,
         groupId: UUID,
         registry: DaemonChatStoreRegistry,
-        sessionRegistry: AgentSessionRegistry
+        sessionRegistry: AgentSessionRegistry,
+        turnWinnersProvider: @escaping () -> [FrontierTurnWinner] = { [] }
     ) {
         self.connection = connection
         self.groupId = groupId
         self.registry = registry
         self.sessionRegistry = sessionRegistry
+        self.turnWinnersProvider = turnWinnersProvider
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.withoutEscapingSlashes]
@@ -136,28 +139,36 @@ public final class FrontierWebSocketChannel: WSChannel {
                 sourceEntries: snap.sourceEntries,
                 artifactEntries: snap.artifactEntries,
                 codexTodos: snap.codexTodos,
+                pendingPermissionPrompt: store.pendingPermissionPrompt,
                 totalInputTokens: snap.totalInputTokens,
                 totalOutputTokens: snap.totalOutputTokens,
                 lastEventAt: snap.lastEventAt ?? child.lastEventAt,
-                updateCounter: snap.updateCounter
+                updateCounter: snap.updateCounter,
+                currentTurnState: snap.currentTurnState
             )
             let status: FrontierChildStatus = {
                 if child.archivedAt != nil { return .complete }
-                if snap.items.isEmpty { return .pending }
-                return .streaming
+                switch snap.currentTurnState {
+                case .streaming: return .streaming
+                case .completed, .interrupted: return .complete
+                case .idle: return snap.items.isEmpty ? .pending : .complete
+                }
             }()
             children.append(FrontierChild(
                 childIndex: child.frontierChildIndex ?? 0,
                 sessionId: child.id,
+                provider: child.agent,
                 modelSlug: child.model ?? "",
                 snapshot: wire,
-                status: status
+                status: status,
+                currentTurnState: snap.currentTurnState
             ))
         }
         let envelope = FrontierGroupSnapshot(
             groupId: groupId,
             updateCounter: updateCounter,
-            children: children
+            children: children,
+            turnWinners: turnWinnersProvider()
         )
         guard let body = try? encoder.encode(envelope) else {
             frontierStreamLogger.error("frontier-subscribe: encode failed group=\(self.groupId.uuidString, privacy: .public)")

@@ -117,6 +117,7 @@ public actor OpencodeAuthFile {
     private func migrateLegacyEntriesIfNeeded() async {
         let legacyURL = Self.legacySandboxDataDirectoryURL.appendingPathComponent("auth.json")
         guard FileManager.default.fileExists(atPath: legacyURL.path),
+              !FileManager.default.fileExists(atPath: Self.fileURL.path),
               legacyURL.path != Self.fileURL.path else {
             return
         }
@@ -196,9 +197,19 @@ public actor OpencodeAuthFile {
     public func removeProvider(providerId: String) async throws {
         let normalized = normalize(providerId)
         var entries = await readEntries()
-        entries.removeValue(forKey: providerId)
-        entries.removeValue(forKey: normalized)
-        try await writeEntries(entries)
+        let removedRaw = entries.removeValue(forKey: providerId) != nil
+        let removedNormalized = providerId == normalized
+            ? false
+            : entries.removeValue(forKey: normalized) != nil
+        guard removedRaw || removedNormalized else {
+            authFileLogger.info("opencode auth remove skipped provider=\(normalized, privacy: .public)")
+            return
+        }
+        if entries.isEmpty {
+            try? FileManager.default.removeItem(at: Self.fileURL)
+        } else {
+            try await writeEntries(entries)
+        }
         authFileLogger.info("opencode auth removed provider=\(normalized, privacy: .public)")
     }
 

@@ -153,6 +153,7 @@ public final class AgentControlServer {
     /// status change. Used by the frontier-subscribe WS channel (TBD)
     /// and by the response from /retry-slot.
     private var frontierUpdateCounters: [UUID: Int] = [:]
+    private var frontierTurnWinners: [UUID: [String: FrontierTurnWinner]] = [:]
 
     // v0.8.x: a per-session pane-scanner task for mid-conversation
     // permission prompts (e.g. Claude per-tool approvals) will land
@@ -212,6 +213,7 @@ public final class AgentControlServer {
         self.chatStoreRegistry = chatStoreRegistry ?? DaemonChatStoreRegistry(
             resolveURL: { _, session in resolver.resolve(session: session) }
         )
+        self.frontierTurnWinners = Self.loadFrontierTurnWinners()
     }
 
     /// Hand the daemon the live usage publishers + analytics store
@@ -308,6 +310,36 @@ public final class AgentControlServer {
         autopilotSweepTask?.cancel()
         autopilotSweepTask = nil
         serverLogger.info("Server stopped")
+    }
+
+    private static var frontierTurnWinnersURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+        return base
+            .appendingPathComponent("Clawdmeter", isDirectory: true)
+            .appendingPathComponent("frontier-turn-winners.json")
+    }
+
+    private static func loadFrontierTurnWinners() -> [UUID: [String: FrontierTurnWinner]] {
+        let url = frontierTurnWinnersURL
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([UUID: [String: FrontierTurnWinner]].self, from: data)) ?? [:]
+    }
+
+    private func saveFrontierTurnWinners() {
+        let url = Self.frontierTurnWinnersURL
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(frontierTurnWinners)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            serverLogger.warning("failed to persist frontier winners: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Audit P1 fix: tick AutopilotState every 30s, disable any sessions
@@ -682,7 +714,10 @@ public final class AgentControlServer {
                 connection: connection,
                 groupId: groupId,
                 registry: chatStoreRegistry,
-                sessionRegistry: registry
+                sessionRegistry: registry,
+                turnWinnersProvider: { [weak self] in
+                    self?.frontierTurnWinners[groupId]?.values.sorted { $0.decidedAt < $1.decidedAt } ?? []
+                }
             )
             wsChannels[ObjectIdentifier(connection)] = frontierChannel
             frontierChannel.start()
@@ -1147,6 +1182,9 @@ public final class AgentControlServer {
         }
         t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/pick-winner") { [weak self] req, conn, params in
             await self?.handlePickFrontierWinner(request: req, connection: conn, groupId: params["groupId"] ?? "")
+        }
+        t.register(method: "POST", pattern: "/chat-sessions/frontier/:groupId/turn-winner") { [weak self] req, conn, params in
+            await self?.handleSetFrontierTurnWinner(request: req, connection: conn, groupId: params["groupId"] ?? "")
         }
         // v0.23 (Chat V2 wire v14): full-history search across JSONLs
         // on disk. Walks the chat sessions the registry knows about
@@ -1902,6 +1940,7 @@ public final class AgentControlServer {
             let mtime: Date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? session.lastEventAt
             matches.append(ChatSessionSearchMatch(
                 sessionId: session.id,
+                frontierGroupId: session.frontierGroupId,
                 jsonlPath: url.path,
                 snippet: snippet,
                 lastEventAt: mtime
@@ -3639,19 +3678,18 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(SendPromptRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
-        // Fan-out. Each child swallows + logs its own error so the
-        // others continue (D10 partial). Per-child results are
-        // observable via chat-subscribe WS frames on each session id;
-        // the aggregate HTTP response is just 202 Accepted.
+        var results: [FrontierChildSendResult] = []
         for child in children {
-            Task { [weak self] in
-                await self?.forwardFrontierChildSend(session: child, text: req.text)
-            }
+            results.append(await forwardFrontierChildSend(session: child, text: req.text))
         }
+        let response = FrontierSendResponse(groupId: uuid, childCount: children.count, results: results)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let body = (try? encoder.encode(response)) ?? Data("{\"ok\":false}".utf8)
         sendResponse(HTTPResponse(
             status: 202, reason: "Accepted",
             contentType: "application/json",
-            body: Data("{\"ok\":true,\"childCount\":\(children.count)}".utf8)
+            body: body
         ), on: connection)
         if let counter = frontierUpdateCounters[uuid] {
             frontierUpdateCounters[uuid] = counter + 1
@@ -3662,7 +3700,14 @@ public final class AgentControlServer {
     /// inside handleSendPrompt (agentapi vs SDK vs tmux) but does NOT
     /// touch the HTTP connection — Frontier fan-out caller already
     /// returned a 202. Errors are logged + dropped.
-    private func forwardFrontierChildSend(session: AgentSession, text: String) async {
+    private func forwardFrontierChildSend(session: AgentSession, text: String) async -> FrontierChildSendResult {
+        let bytes = Array(text.utf8)
+        guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "invalid_prompt")
+        }
+        guard RateLimiter.shared.tryAcquireSend(sessionId: session.id) else {
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "rate_limited")
+        }
         // agentapi (Gemini)
         if session.geminiBackend == .agentapi,
            let conversationId = session.antigravityConversationId {
@@ -3670,10 +3715,12 @@ public final class AgentControlServer {
                 try await sendAntigravityMessage(
                     session: session, conversationId: conversationId, content: text
                 )
+                await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
             } catch {
                 serverLogger.warning("frontier child gemini send failed: \(error.localizedDescription, privacy: .public)")
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: error.localizedDescription)
             }
-            return
         }
         // SDK (Codex)
         if session.kind == .chat && session.agent == .codex && session.codexChatBackend == .sdk {
@@ -3694,25 +3741,32 @@ public final class AgentControlServer {
                         workingDirectory: cwd,
                         initialPrompt: text,
                         threadId: nil,
+                        model: session.model,
                         sandboxMode: "read-only",
+                        modelReasoningEffort: session.effort?.codexConfigValue,
                         skipGitRepoCheck: true
                     )
                 }
+                await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
             } catch {
                 serverLogger.warning("frontier child codex-sdk send failed: \(error.localizedDescription, privacy: .public)")
+                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: error.localizedDescription)
             }
-            return
         }
         // CLI (Claude / Codex CLI)
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
             serverLogger.warning("frontier child has no pane id — skipping send")
-            return
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "missing_pane_id")
         }
         do {
             let bytes = text.data(using: .utf8) ?? Data()
             try await tmux.pasteBytes(paneId: paneId, bytes: bytes + Data([0x0D]))
+            await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
         } catch {
             serverLogger.warning("frontier child tmux paste failed: \(error.localizedDescription, privacy: .public)")
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: error.localizedDescription)
         }
     }
 
@@ -3749,7 +3803,9 @@ public final class AgentControlServer {
         let slot = FrontierModelSlot(
             provider: existing.agent,
             model: existing.model,
-            codexChatBackend: existing.codexChatBackend
+            effort: existing.effort,
+            codexChatBackend: existing.codexChatBackend,
+            deepResearch: existing.deepResearch
         )
         // Delete the old session (cleans up chat-cwd + chat store entry).
         await teardownSDKChat(sessionId: existing.id)
@@ -3833,6 +3889,39 @@ public final class AgentControlServer {
         }
     }
 
+    private func handleSetFrontierTurnWinner(
+        request: HTTPRequest,
+        connection: NWConnection,
+        groupId: String
+    ) async {
+        guard let uuid = UUID(uuidString: groupId),
+              let req = try? JSONDecoder().decode(SetFrontierTurnWinnerRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let children = registry.frontierGroupChildren(groupId: uuid)
+        guard children.contains(where: { $0.frontierChildIndex == req.childIndex }) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let winner = FrontierTurnWinner(groupId: uuid, turnId: req.turnId, childIndex: req.childIndex)
+        var group = frontierTurnWinners[uuid] ?? [:]
+        group[req.turnId] = winner
+        frontierTurnWinners[uuid] = group
+        saveFrontierTurnWinners()
+        if let counter = frontierUpdateCounters[uuid] {
+            frontierUpdateCounters[uuid] = counter + 1
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(winner) {
+            sendResponse(HTTPResponse(
+                status: 200, reason: "OK",
+                contentType: "application/json", body: body
+            ), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
     /// Internal spawn dispatch shared by handlePostFrontier +
     /// handleFrontierRetrySlot. Throws SpawnFailure.message on per-slot
     /// failure so the caller can surface a per-slot reason string.
@@ -3858,8 +3947,10 @@ public final class AgentControlServer {
                 model: slot.model,
                 chatCwd: "",
                 codexChatBackend: codexBackend,
+                effort: slot.effort,
                 frontierGroupId: groupId,
-                frontierChildIndex: childIndex
+                frontierChildIndex: childIndex,
+                deepResearch: slot.deepResearch
             )
             let chatCwd: String
             do {
@@ -3919,7 +4010,8 @@ public final class AgentControlServer {
                 model: slot.model,
                 chatCwd: "",
                 frontierGroupId: groupId,
-                frontierChildIndex: childIndex
+                frontierChildIndex: childIndex,
+                deepResearch: slot.deepResearch
             )
             let chatCwd: String
             do {
