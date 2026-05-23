@@ -142,7 +142,19 @@ private struct ChatBody: View {
                 EmptyState(title: "Conversation not loaded", subtitle: "Open a recent chat or start a new one.")
             }
         case .frontier(let groupId):
-            FrontierTranscript(groupId: groupId, client: client, selectedProvider: $chatStore.selectedReplyProvider)
+            FrontierTranscript(
+                groupId: groupId,
+                client: client,
+                selectedProvider: $chatStore.selectedReplyProvider,
+                onContinueWinner: { winner in
+                    // P1 fix (v0.23.9): server promoted the winner out
+                    // of the broadcast group; flip the iOS UI to Solo
+                    // so follow-ups go through /sessions/:id/send (not
+                    // Frontier fan-out hitting archived losers).
+                    openTarget = .solo(winner.id)
+                    Task { await client.refreshSessions() }
+                }
+            )
                 .id(groupId)
         case .transcript(_, let path):
             ReadOnlyTranscript(path: path, client: client)
@@ -170,12 +182,24 @@ private struct FrontierTranscript: View {
     let groupId: UUID
     @ObservedObject var client: AgentControlClient
     @Binding var selectedProvider: AgentKind
+    let onContinueWinner: (AgentSession) -> Void
     @StateObject private var frontierStore: FrontierSnapshotStore
+    // v0.23.9 adversarial-review fix: gate the continue button while
+    // its /pick-winner POST is in flight so a double-tap doesn't
+    // fire two requests (the second would 404 against an already-
+    // promoted winner).
+    @State private var continuing = false
 
-    init(groupId: UUID, client: AgentControlClient, selectedProvider: Binding<AgentKind>) {
+    init(
+        groupId: UUID,
+        client: AgentControlClient,
+        selectedProvider: Binding<AgentKind>,
+        onContinueWinner: @escaping (AgentSession) -> Void
+    ) {
         self.groupId = groupId
         self.client = client
         self._selectedProvider = selectedProvider
+        self.onContinueWinner = onContinueWinner
         _frontierStore = StateObject(wrappedValue: FrontierSnapshotStore(groupId: groupId, client: client))
     }
 
@@ -240,13 +264,25 @@ private struct FrontierTranscript: View {
                             .buttonStyle(.plain)
                             .disabled(frontierStore.snapshot.latestTurnId == "turn-0")
                             Button {
-                                Task { _ = await client.continueFrontierFromWinner(groupId: groupId, childIndex: child.frontierChildIndex ?? 0) }
+                                guard !continuing else { return }
+                                continuing = true
+                                Task {
+                                    defer { Task { @MainActor in continuing = false } }
+                                    if let promoted = await client.continueFrontierFromWinner(
+                                        groupId: groupId,
+                                        childIndex: child.frontierChildIndex ?? 0
+                                    ) {
+                                        await MainActor.run { onContinueWinner(promoted) }
+                                    }
+                                }
                             } label: {
                                 TahoeIcon("arrowR", size: 13)
                                     .padding(9)
                                     .background(.thinMaterial, in: Circle())
+                                    .opacity(continuing ? 0.5 : 1)
                             }
                             .buttonStyle(.plain)
+                            .disabled(continuing)
                         }
                         .padding(14)
                     }
@@ -566,14 +602,24 @@ private struct Composer: View {
         await sendCtl.sendCustom { trimmed in
             switch openTarget {
             case .solo(let sessionId):
-                let prompt = await uploadAndBuildPrompt(base: trimmed, sessionIds: [sessionId])
+                let prompt = await uploadAndBuildPrompt(base: trimmed, sessionId: sessionId)
                 let ok = await client.sendPrompt(sessionId: sessionId, text: prompt, asFollowUp: true)
                 if ok { store.clearAttachments() }
                 return ok ? nil : (client.lastError ?? "Couldn't send prompt.")
             case .frontier(let groupId):
                 let children = client.frontierChildren(groupId: groupId)
-                let prompt = await uploadAndBuildPrompt(base: trimmed, sessionIds: children.map(\.id))
-                guard let response = await client.sendFrontierPrompt(groupId: groupId, text: prompt) else {
+                guard children.count >= 2 else {
+                    return "Broadcast needs at least two live children — pick a Solo chat to continue."
+                }
+                let perChild = await uploadAndBuildPerChildPrompts(
+                    base: trimmed,
+                    sessionIds: children.map(\.id)
+                )
+                guard let response = await client.sendFrontierPrompt(
+                    groupId: groupId,
+                    text: trimmed,
+                    perChildText: perChild
+                ) else {
                     return client.lastError ?? "Couldn't broadcast prompt."
                 }
                 store.clearAttachments()
@@ -587,10 +633,26 @@ private struct Composer: View {
                     guard let created = await client.createBroadcastChat(slots: slots) else {
                         return client.lastError ?? "Couldn't create broadcast chat."
                     }
+                    // P1 fix (v0.23.9): require at least two slots to
+                    // spawn successfully before opening the broadcast
+                    // surface. A single-success "broadcast" is a silent
+                    // degradation.
+                    guard created.hasMinimumBroadcast else {
+                        let reasons = created.failedSlots.compactMap(\.reason)
+                        let detail = reasons.isEmpty ? "" : "\n" + reasons.joined(separator: "\n")
+                        return "Broadcast needs at least two providers; only \(created.successfulSlots.count) spawned.\(detail)"
+                    }
                     openTarget = .frontier(created.groupId)
-                    let sessionIds = created.slots.compactMap(\.sessionId)
-                    let prompt = await uploadAndBuildPrompt(base: trimmed, sessionIds: sessionIds)
-                    guard let response = await client.sendFrontierPrompt(groupId: created.groupId, text: prompt) else {
+                    let sessionIds = created.successfulSlots.compactMap(\.sessionId)
+                    let perChild = await uploadAndBuildPerChildPrompts(
+                        base: trimmed,
+                        sessionIds: sessionIds
+                    )
+                    guard let response = await client.sendFrontierPrompt(
+                        groupId: created.groupId,
+                        text: trimmed,
+                        perChildText: perChild
+                    ) else {
                         return client.lastError ?? "Couldn't broadcast prompt."
                     }
                     store.clearAttachments()
@@ -606,7 +668,7 @@ private struct Composer: View {
                         return client.lastError ?? "Couldn't create chat."
                     }
                     openTarget = .solo(session.id)
-                    let prompt = await uploadAndBuildPrompt(base: trimmed, sessionIds: [session.id])
+                    let prompt = await uploadAndBuildPrompt(base: trimmed, sessionId: session.id)
                     let ok = await client.sendPrompt(sessionId: session.id, text: prompt, asFollowUp: false)
                     if ok { store.clearAttachments() }
                     return ok ? nil : (client.lastError ?? "Couldn't send prompt.")
@@ -623,24 +685,66 @@ private struct Composer: View {
         return entries.contains { $0.available }
     }
 
-    private func uploadAndBuildPrompt(base: String, sessionIds: [UUID]) async -> String {
+    /// Solo path: upload each attachment to one session's staging dir
+    /// and prepend `@<path>` mentions to the prompt body.
+    private func uploadAndBuildPrompt(base: String, sessionId: UUID) async -> String {
         var paths: [String] = []
         for attachment in store.attachments {
             if let existing = attachment.pathOnDaemon {
                 paths.append(existing)
                 continue
             }
-            guard let url = attachment.localFileURL,
-                  let sessionId = sessionIds.first else { continue }
+            guard let url = attachment.localFileURL else { continue }
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             guard let data = try? Data(contentsOf: url),
-                  let uploaded = await client.uploadAttachment(sessionId: sessionId, ext: url.pathExtension, data: data)
+                  let uploaded = await client.uploadAttachment(
+                      sessionId: sessionId, ext: url.pathExtension, data: data
+                  )
             else { continue }
             paths.append(uploaded)
         }
         guard !paths.isEmpty else { return base }
         return paths.map { "@\($0)" }.joined(separator: " ") + " " + base
+    }
+
+    /// Broadcast path (P2 fix v0.23.9): the daemon stages attachments
+    /// per session, so each Frontier child needs its own staging path
+    /// for any uploaded file. Upload the same bytes once per child and
+    /// build a per-child prompt with that child's `@<path>` prefix.
+    /// Returns nil if there are no attachments — caller falls back to
+    /// the shared text in `sendFrontierPrompt`.
+    private func uploadAndBuildPerChildPrompts(
+        base: String,
+        sessionIds: [UUID]
+    ) async -> [UUID: String]? {
+        guard !store.attachments.isEmpty, !sessionIds.isEmpty else { return nil }
+        struct Stagable { let url: URL; let data: Data; let ext: String }
+        var stagables: [Stagable] = []
+        for attachment in store.attachments {
+            guard let url = attachment.localFileURL else { continue }
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else { continue }
+            stagables.append(Stagable(url: url, data: data, ext: url.pathExtension))
+        }
+        guard !stagables.isEmpty else { return nil }
+        var perChild: [UUID: String] = [:]
+        for sessionId in sessionIds {
+            var paths: [String] = []
+            for stagable in stagables {
+                if let uploaded = await client.uploadAttachment(
+                    sessionId: sessionId,
+                    ext: stagable.ext,
+                    data: stagable.data
+                ) {
+                    paths.append(uploaded)
+                }
+            }
+            let prompt = paths.isEmpty ? base : paths.map { "@\($0)" }.joined(separator: " ") + " " + base
+            perChild[sessionId] = prompt
+        }
+        return perChild
     }
 }
 
@@ -715,12 +819,28 @@ private struct HistorySheet: View {
     private func open(match: ChatSessionSearchMatch) async {
         await client.refreshSessions()
         if let groupId = match.frontierGroupId {
-            if client.frontierChildren(groupId: groupId).isEmpty {
-                _ = await client.fetchTranscript(path: match.jsonlPath, limit: 1)
-                selected = .transcript(sessionId: match.sessionId, jsonlPath: match.jsonlPath)
-            } else {
+            let liveChildren = client.frontierChildren(groupId: groupId)
+            if liveChildren.count >= 2 {
                 selected = .frontier(groupId)
+                onDismiss()
+                return
             }
+            // P1 fix (v0.23.9): if the group collapsed (e.g. after
+            // pick-winner promoted one child out + archived the
+            // others), reopen as Solo over the matched child rather
+            // than a read-only transcript.
+            if let session = client.chatSessions.first(where: { $0.id == match.sessionId }) {
+                selected = session.frontierGroupId.map(ChatOpenTarget.frontier) ?? .solo(session.id)
+                onDismiss()
+                return
+            }
+            if let promoted = liveChildren.first {
+                selected = .solo(promoted.id)
+                onDismiss()
+                return
+            }
+            _ = await client.fetchTranscript(path: match.jsonlPath, limit: 1)
+            selected = .transcript(sessionId: match.sessionId, jsonlPath: match.jsonlPath)
             onDismiss()
             return
         }
