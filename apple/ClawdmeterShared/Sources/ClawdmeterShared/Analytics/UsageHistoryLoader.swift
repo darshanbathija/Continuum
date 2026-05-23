@@ -23,6 +23,14 @@ public actor UsageHistoryLoader {
     private let claudeDir: URL
     private let codexDir: URL
     private let geminiDir: URL
+    /// v0.23.8: agy CLI conversation root. Antigravity 2.0.6 ships two
+    /// surfaces — the desktop Electron IDE at `~/.gemini/antigravity/`
+    /// and the `agy` CLI at `~/.gemini/antigravity-cli/`. Both write
+    /// per-conversation files under a `conversations/` subdir and a
+    /// matching `brain/<uuid>/` content dir, but the CLI was invisible
+    /// to analytics until this loader started walking it. Optional so
+    /// machines without the CLI installed skip the pass cleanly.
+    private let agyDir: URL?
     /// v0.22.8: OpenCode SQLite database (`~/.local/share/opencode/opencode.db`).
     /// Optional + Mac-only — iOS doesn't run OpenCode locally and its
     /// sandbox blocks `~/.local/share/`. Nil ⇒ no opencode column in the
@@ -38,6 +46,7 @@ public actor UsageHistoryLoader {
         claudeDir: URL? = nil,
         codexDir: URL? = nil,
         geminiDir: URL? = nil,
+        agyDir: URL? = nil,
         opencodeDBURL: URL? = nil,
         cacheURL: URL? = nil,
         pricing: Pricing = .shared
@@ -47,9 +56,15 @@ public actor UsageHistoryLoader {
         self.codexDir = codexDir ?? home.appendingPathComponent(".codex/sessions", isDirectory: true)
         // v0.6.0: Antigravity 2 native. Replaces Gemini CLI v0.42's
         // ~/.gemini/tmp/<repo>/logs.json (which Antigravity stopped writing).
-        // AntigravityUsageParser walks ~/.gemini/antigravity/conversations/*.pb
+        // AntigravityUsageParser walks ~/.gemini/antigravity/conversations/{*.pb,*.db}
         // and resolves UUIDs to repos via BrainSummaryIndexer.
+        // v0.23.8: SQLite `.db` files joined `.pb` files in this dir
+        // when Antigravity migrated mid-2026; we now walk both extensions.
         self.geminiDir = geminiDir ?? home.appendingPathComponent(".gemini/antigravity/conversations", isDirectory: true)
+        // v0.23.8: agy CLI corpus. Resolves to nil when the dir is
+        // missing so machines without agy installed skip the pass.
+        let defaultAgy = home.appendingPathComponent(".gemini/antigravity-cli/conversations", isDirectory: true)
+        self.agyDir = agyDir ?? (FileManager.default.fileExists(atPath: defaultAgy.path) ? defaultAgy : nil)
         // v0.22.8: lookup OPENCODE_DATA_DIR + standard XDG fallback.
         // OpencodeUsageParser.defaultDatabaseURL() returns nil if the
         // DB doesn't exist, so the analytics pipeline naturally skips
@@ -105,11 +120,19 @@ public actor UsageHistoryLoader {
 
         let claudeFiles = enumerate(dir: claudeDir, suffix: ".jsonl")
         let codexFiles = enumerate(dir: codexDir, suffix: ".jsonl")
-        // v0.6.0 Antigravity 2: per-conversation .pb files in
+        // v0.6.0 Antigravity 2: per-conversation files in
         // ~/.gemini/antigravity/conversations/. Pre-build the brain index
         // once per load so the per-file parser doesn't re-read the
         // global index for every conversation.
-        let geminiFiles = enumerate(dir: geminiDir, suffix: ".pb")
+        // v0.23.8: walk both `.pb` (legacy proto) and `.db` (SQLite
+        // WAL — the newer format Antigravity migrated to mid-2026).
+        // The user's $0.026/day was caused by the loader ignoring 31
+        // of 69 desktop conversations because they were `.db` files;
+        // see `Self.dedupedDesktopFiles(...)` for the UUID dedup that
+        // handles the rare case where the same conversation has both.
+        let geminiPBFiles = enumerate(dir: geminiDir, suffix: ".pb")
+        let geminiDBFiles = enumerate(dir: geminiDir, suffix: ".db")
+        let geminiFiles = Self.dedupedDesktopFiles(pb: geminiPBFiles, db: geminiDBFiles)
         let antigravityDataDir = geminiDir.deletingLastPathComponent()
         let brainIndex = BrainSummaryIndexer.read(
             at: antigravityDataDir.appendingPathComponent("agyhub_summaries_proto.pb")
@@ -119,6 +142,33 @@ public actor UsageHistoryLoader {
         let antigravityModel = (try? AntigravityStateReader.read(
             at: antigravityDataDir.appendingPathComponent("antigravity_state.pbtxt")
         ))?.displayModelName ?? "gemini-3.5-flash"
+
+        // v0.23.8: agy CLI walk. Same shape as desktop (per-conversation
+        // .pb file + matching brain/<uuid>/ dir) but a separate root,
+        // separate brain index, separate model setting, and a distinct
+        // `agy:` dedup prefix so the two surfaces can't collide.
+        let agyFiles: [FileMeta]
+        let agyDataDir: URL?
+        let agyBrainIndex: BrainSummaryIndex
+        let agyModel: String
+        if let agyDir, FileManager.default.fileExists(atPath: agyDir.path) {
+            agyFiles = enumerate(dir: agyDir, suffix: ".pb")
+            let root = agyDir.deletingLastPathComponent()
+            agyDataDir = root
+            // agy doesn't write `agyhub_summaries_proto.pb`; the loader
+            // falls back to the brain-UUID prefix for repo bucketing.
+            agyBrainIndex = BrainSummaryIndex(byUUID: [:], byCwdPath: [:])
+            // Prefer the agy-specific model from settings.json; fall
+            // back to the desktop's selection when settings.json is
+            // missing or unparseable (covers the common case where the
+            // user runs one model across both surfaces).
+            agyModel = AgyConversationReader.resolveModelKey(rootURL: root) ?? antigravityModel
+        } else {
+            agyFiles = []
+            agyDataDir = nil
+            agyBrainIndex = BrainSummaryIndex(byUUID: [:], byCwdPath: [:])
+            agyModel = antigravityModel
+        }
 
         // Identify active (newest mtime) per dir — those bypass cache.
         let claudeActive = claudeFiles.max(by: { $0.mtime < $1.mtime })?.url
@@ -152,10 +202,35 @@ public actor UsageHistoryLoader {
                     at: url,
                     antigravityDataDir: antigravityDataDir,
                     brainIndex: brainIndex,
-                    modelName: antigravityModel
+                    modelName: antigravityModel,
+                    dedupPrefix: "antigravity"
                 )
             }
         )
+
+        // v0.23.8: agy CLI pass. Runs only when the corpus exists on
+        // disk — `agyDataDir` is nil otherwise. Same parser as desktop
+        // with a distinct dedup prefix so brain UUIDs don't collide.
+        let agyResults: [PerFileResult]
+        if let agyDataDir, !agyFiles.isEmpty {
+            let agyActive = agyFiles.max(by: { $0.mtime < $1.mtime })?.url
+            agyResults = await parseConcurrently(
+                files: agyFiles,
+                cache: cache,
+                activeURL: agyActive,
+                parser: { url in
+                    try Self.parseAntigravityFile(
+                        at: url,
+                        antigravityDataDir: agyDataDir,
+                        brainIndex: agyBrainIndex,
+                        modelName: agyModel,
+                        dedupPrefix: "agy"
+                    )
+                }
+            )
+        } else {
+            agyResults = []
+        }
 
         // Merge all per-file results, applying global cross-file dedup. Per
         // plan A9: the per-file `dedupKeys` set is unioned into a global Set
@@ -193,9 +268,16 @@ public actor UsageHistoryLoader {
             sessionCount += 1
             nextCache.files[result.path] = result.cacheEntry
         }
-        if !geminiResults.isEmpty {
+        // v0.23.8: fold desktop IDE and agy CLI results into the same
+        // .gemini bucket. The two surfaces share pricing and share the
+        // user's Gemini-monthly-spend mental model, so analytics treats
+        // them as one provider. Per-record `dedupKey` ("antigravity:UUID"
+        // vs "agy:UUID") still keeps the two sets from cross-talking on
+        // brain-UUID collisions.
+        let combinedGemini = geminiResults + agyResults
+        if !combinedGemini.isEmpty {
             geminiDayByRepo = [:]
-            for result in geminiResults {
+            for result in combinedGemini {
                 mergePerFileResult(
                     result,
                     into: &geminiDayByRepo!,
@@ -282,6 +364,28 @@ public actor UsageHistoryLoader {
         let dedupKeys: Set<String>
         let unpricedModelTokens: [String: TokenTotals]
         let cacheEntry: AnalyticsCache.FileEntry
+    }
+
+    /// Merges the desktop IDE's `.pb` (legacy) and `.db` (SQLite WAL,
+    /// post-migration) conversation files into a single list, deduping
+    /// by UUID. When a UUID appears in both formats — which can happen
+    /// after Antigravity rewrites a session to SQLite — we keep the
+    /// newer file. Brain-dir token estimates are identical regardless
+    /// of which conversation-file format we pass to the probe, so the
+    /// choice only affects file-mtime / file-size recorded in the cache.
+    private nonisolated static func dedupedDesktopFiles(pb: [FileMeta], db: [FileMeta]) -> [FileMeta] {
+        var byUUID: [String: FileMeta] = [:]
+        for file in pb + db {
+            let uuid = file.url.deletingPathExtension().lastPathComponent
+            if let existing = byUUID[uuid] {
+                if file.mtime > existing.mtime {
+                    byUUID[uuid] = file
+                }
+            } else {
+                byUUID[uuid] = file
+            }
+        }
+        return Array(byUUID.values)
     }
 
     private func enumerate(dir: URL, suffix: String) -> [FileMeta] {
@@ -431,16 +535,18 @@ public actor UsageHistoryLoader {
         at url: URL,
         antigravityDataDir: URL,
         brainIndex: BrainSummaryIndex,
-        modelName: String
+        modelName: String,
+        dedupPrefix: String
     ) throws -> PerFileResult {
-        // v0.6.0 Antigravity 2: per-conversation .pb file. The file
-        // itself is encrypted at rest (see ConversationProtoParser);
+        // v0.6.0 Antigravity 2: per-conversation file (.pb or .db).
+        // The file itself is encrypted at rest (see ConversationProtoParser);
         // tokens are estimated from the matching brain dir's metadata.
         let records = try AntigravityUsageParser.parse(
             conversationURL: url,
             antigravityDataDir: antigravityDataDir,
             brainIndex: brainIndex,
-            modelName: modelName
+            modelName: modelName,
+            dedupPrefix: dedupPrefix
         )
         var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
         var dedupKeys = Set<String>()
@@ -663,7 +769,21 @@ struct AnalyticsCache: Codable, Sendable {
     // in both types handles missing-field decode for older snapshots, but
     // the v9 bump forces a cold reparse so the on-disk cache shape stays
     // consistent with the in-memory shape after upgrade.
-    static let currentVersion: Int = 9
+    // v10 (2026-05-23): Antigravity token estimator now sums every
+    // content-bearing file in the brain dir (.md/.txt/.json/.jsonl/.log
+    // recursively, minus *.metadata.json) instead of top-level *.md only,
+    // and the loader now walks both `.pb` and `.db` desktop files plus
+    // the previously-invisible `~/.gemini/antigravity-cli/conversations/`
+    // agy CLI corpus. Cached file rows from v9 carry the old estimates
+    // and would underreport Antigravity cost by ~60×, so the bump forces
+    // a one-time full reparse.
+    // v11 (2026-05-23): .db files now use AntigravityDBUsageParser to
+    // extract real input/output/cached/reasoning token counts from the
+    // plaintext step_payload protobuf, replacing the bytes-÷-4 heuristic.
+    // Real counts run ~10-30× higher than the heuristic; bumping the
+    // schema forces a one-time reparse so v10 caches don't keep showing
+    // estimated numbers.
+    static let currentVersion: Int = 11
 
     let version: Int
     var files: [String: FileEntry]

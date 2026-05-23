@@ -36,19 +36,29 @@ public enum AntigravityUsageParser {
     /// has no turns yet.
     ///
     /// - Parameters:
-    ///   - conversationURL: `~/.gemini/antigravity/conversations/<uuid>.pb`
-    ///   - antigravityDataDir: `~/.gemini/antigravity/` — used to locate
-    ///     the matching `brain/<uuid>/` dir + the BrainSummaryIndex (cached
-    ///     by the caller; passed in to avoid re-parsing per file).
+    ///   - conversationURL: `<dataDir>/conversations/<uuid>.{pb,db}`. The
+    ///     file extension is irrelevant — the parser only uses file size
+    ///     + mtime from this URL; token volume comes from the brain dir.
+    ///     Accepting both extensions is what lets one parser cover the
+    ///     legacy protobuf format and the SQLite-WAL format Antigravity
+    ///     migrated to mid-2026.
+    ///   - antigravityDataDir: e.g. `~/.gemini/antigravity/` for the
+    ///     desktop IDE or `~/.gemini/antigravity-cli/` for the `agy` CLI.
+    ///     The parser locates `brain/<uuid>/` under this root.
     ///   - brainIndex: pre-built UUID→cwd lookup from
     ///     `BrainSummaryIndexer.read(at:)` for repo-bucketing.
     ///   - modelName: current model name (e.g. `"gemini-3.5-flash"`).
     ///     Used to drive pricing lookup.
+    ///   - dedupPrefix: namespace for the dedup key so the desktop and
+    ///     agy surfaces don't collide if a UUID ever appears in both.
+    ///     Defaults to `"antigravity"` (desktop IDE); agy callers pass
+    ///     `"agy"`.
     public static func parse(
         conversationURL: URL,
         antigravityDataDir: URL,
         brainIndex: BrainSummaryIndex,
-        modelName: String
+        modelName: String,
+        dedupPrefix: String = "antigravity"
     ) throws -> [UsageRecord] {
         // Brain UUID == conversation file basename without extension.
         let brainUUID = conversationURL.deletingPathExtension().lastPathComponent
@@ -66,23 +76,35 @@ public enum AntigravityUsageParser {
         let repo = repoKey(forBrainUUID: brainUUID, in: brainIndex)
         let timestamp = probe.lastModified
 
-        // Token-count proxy. We don't know the prompt/output split in Disk
-        // mode — apportion the estimate 70/30 prompt/output. Pricing.swift
-        // costs `input` + `output` separately, so this gives a reasonable
-        // composite number for the analytics row.
-        let totalEst = probe.estimatedTokens
-        let promptEst = (totalEst * 70) / 100
-        let outputEst = totalEst - promptEst
-
-        let tokens = TokenTotals(
-            inputTokens: promptEst,
-            outputTokens: outputEst,
-            cacheCreationTokens: 0,
-            cacheReadTokens: 0,
-            reasoningTokens: 0,
-            costUSD: 0,
-            requestCount: probe.turnCount
-        )
+        // v0.23.9: .db files (the SQLite WAL format Antigravity 2.0.6+
+        // writes for current sessions) have plaintext step_payload
+        // blobs containing real UsageMetadata sub-messages. Try the
+        // precise extractor first; fall back to the byte estimator
+        // when zero matches are found (signature changed, .pb file
+        // that's still encrypted, etc.). See
+        // AntigravityDBUsageParser for the reverse-engineered field
+        // mapping.
+        let tokens: TokenTotals
+        if conversationURL.pathExtension == "db" {
+            let dbUsage = AntigravityDBUsageParser.parseUsage(dbURL: conversationURL)
+            if dbUsage.recordCount > 0 {
+                tokens = TokenTotals(
+                    inputTokens: dbUsage.inputTokens,
+                    outputTokens: dbUsage.outputTokens,
+                    cacheCreationTokens: 0,
+                    cacheReadTokens: dbUsage.cachedTokens,
+                    reasoningTokens: dbUsage.reasoningTokens,
+                    costUSD: 0,
+                    requestCount: dbUsage.recordCount
+                )
+            } else {
+                // .db file but no UsageMetadata extracted — fall
+                // through to the byte estimator below.
+                tokens = byteEstimateTokens(probe: probe)
+            }
+        } else {
+            tokens = byteEstimateTokens(probe: probe)
+        }
 
         return [UsageRecord(
             provider: .gemini,
@@ -93,8 +115,26 @@ public enum AntigravityUsageParser {
             // Stable dedup key: brain UUID never changes for the lifetime
             // of the conversation, so re-parsing the same file across
             // cache invalidations doesn't double-count.
-            dedupKey: "antigravity:\(brainUUID)"
+            dedupKey: "\(dedupPrefix):\(brainUUID)"
         )]
+    }
+
+    /// Coarse fallback: bytes-per-turn × ¼ ≈ tokens, split 70/30 input
+    /// vs output. Used for .pb files (still encrypted) and for .db
+    /// files where the proto signature didn't match.
+    private static func byteEstimateTokens(probe: ConversationProbe) -> TokenTotals {
+        let totalEst = probe.estimatedTokens
+        let promptEst = (totalEst * 70) / 100
+        let outputEst = totalEst - promptEst
+        return TokenTotals(
+            inputTokens: promptEst,
+            outputTokens: outputEst,
+            cacheCreationTokens: 0,
+            cacheReadTokens: 0,
+            reasoningTokens: 0,
+            costUSD: 0,
+            requestCount: probe.turnCount
+        )
     }
 
     /// Resolves the repo string for a brain UUID. Tries the index first
