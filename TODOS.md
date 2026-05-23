@@ -478,16 +478,19 @@ are the explicit deferrals.
 
 ## v2.1 — capability deferrals
 
-### Per-repo model + effort defaults (D7)
-- **What**: Long-press a model in the picker → "Set as default for this
-  repo." Persist per-repo `SessionDefaults` in
-  `~/.clawdmeter/repo-defaults.json`. New-session sheet pre-fills from
-  the repo default.
-- **Why**: Daily friction reduction. Different repos want different
-  models (Opus for axtior refactors, Haiku for Defx quick fixes).
-- **Status**: User explicitly deferred during EXPANSION ceremony to keep
-  the v2 ship bounded.
-- **Effort**: ~2hr CC.
+### Per-repo model + effort defaults (D7) — SHIPPED 2026-05-23 v0.24.0
+- **Shipped via**: `WorkspaceStore.workspaces.json` + `AgentControlServer`
+  GET /workspaces + PATCH /workspaces/:id. Storage moved from the spec'd
+  `~/.clawdmeter/repo-defaults.json` to the unified
+  `~/Library/Application Support/Clawdmeter/workspaces.json` (one
+  `CodeWorkspaceRecord` per canonical repo root carrying
+  `WorkspaceProviderDefaults`). Migration synthesizes the first record
+  per repo from the newest existing session.
+- **Carry-over**: surfacing the long-press "Set as default for this
+  repo" affordance in the iOS new-session sheet is still TODO — the
+  storage and wire surface are ready, the picker UI just needs to
+  call `AgentControlClient.updateWorkspaceDefaults`.
+- **Completed**: v0.24.0 (2026-05-23)
 
 ### Voice-first new session creation (D6)
 - **What**: Speak a sentence like "Start a Claude Opus session in
