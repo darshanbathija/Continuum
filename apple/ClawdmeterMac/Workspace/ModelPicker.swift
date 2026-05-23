@@ -78,7 +78,7 @@ struct ModelPicker: View {
         case .claude: return catalog.claude
         case .codex:  return catalog.codex
         case .gemini: return catalog.gemini
-        case .opencode: return []  // PR #29: model resolved by `opencode auth login`
+        case .opencode: return catalog.opencode
         case .unknown: return []  // X3: no catalog slice for forward-compat unknown
         }
     }

@@ -34,7 +34,12 @@ final class WireV14ContractTests: XCTestCase {
     // MARK: - Wire version
 
     func test_wire_v14_current() {
-        XCTAssertEqual(AgentControlWireVersion.current, 14)
+        // v14 minimums still apply (`turnLifecycleMinimum`,
+        // `deepResearchMinimum`, `chatSearchMinimum`); only `current`
+        // has advanced. v16 added the persisted workspace store +
+        // uniform mobile outbox idempotency contract — see
+        // `WireV11Tests.test_currentWireVersionIsSixteen`.
+        XCTAssertEqual(AgentControlWireVersion.current, 16)
     }
 
     func test_v14_minimums_match() {

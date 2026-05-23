@@ -65,9 +65,10 @@ public final class OpencodeProcessManager {
     /// Settings panel as "Installed at <path>".
     @Published public private(set) var binaryPath: String?
 
-    /// Auth list parsed from `opencode auth list`. Each entry maps a
-    /// provider name ("anthropic", "openai", "google") to the configured
-    /// model id (e.g. "claude-3-5-sonnet"). Empty when no providers are
+    /// Auth list parsed from `opencode auth list`, with
+    /// `~/.local/share/opencode/auth.json` as a fallback for API-key
+    /// entries Clawdmeter writes directly. Each entry maps provider name to
+    /// the configured auth type/model/env source. Empty when no providers are
     /// signed in, nil when auth probe hasn't been run yet.
     @Published public private(set) var authStatus: [String: String]?
 
@@ -212,12 +213,19 @@ public final class OpencodeProcessManager {
         return req
     }
 
-    /// Refresh the auth status by running `opencode auth list`. The
-    /// command output is parsed in `parseAuthList`. Cheap (~50ms);
-    /// called automatically on start and exposed for the Settings panel
-    /// to re-run after the user signs in via the CLI.
+    /// Refresh the auth status by running `opencode auth list`, then merge
+    /// in providers from opencode's auth.json. The file fallback matters for
+    /// native API-key saves: the current CLI renders those entries as a
+    /// box-drawn table rather than the legacy `provider: model` output, and
+    /// older/newer CLI variants may change their display shape again.
     public func refreshAuthStatus() async {
-        guard let binary = binaryPath else { return }
+        if binaryPath == nil {
+            binaryPath = locateBinary()
+        }
+        guard let binary = binaryPath else {
+            authStatus = await Self.authStatusFromFile()
+            return
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["auth", "list"]
@@ -229,6 +237,7 @@ public final class OpencodeProcessManager {
             try process.run()
         } catch {
             logger.info("opencode auth list spawn failed: \(error.localizedDescription, privacy: .public)")
+            authStatus = await Self.authStatusFromFile()
             return
         }
         // Wait for completion off the main actor.
@@ -237,11 +246,18 @@ public final class OpencodeProcessManager {
         }.value
         guard process.terminationStatus == 0 else {
             logger.info("opencode auth list returned \(process.terminationStatus, privacy: .public)")
+            authStatus = await Self.authStatusFromFile()
             return
         }
         let data = stdout.fileHandleForReading.availableData
         let output = String(data: data, encoding: .utf8) ?? ""
-        authStatus = Self.parseAuthList(output)
+        var status = Self.parseAuthList(output)
+        let fileStatus = await Self.authStatusFromFile()
+        let existingKeys = Set(status.keys.map { $0.lowercased() })
+        for (provider, source) in fileStatus where !existingKeys.contains(provider.lowercased()) {
+            status[provider] = source
+        }
+        authStatus = status
         logger.info("opencode auth status: \(self.authStatus?.count ?? 0, privacy: .public) providers")
     }
 
@@ -266,6 +282,9 @@ public final class OpencodeProcessManager {
         let fixedCandidates = [
             "/opt/homebrew/bin/opencode",
             "/usr/local/bin/opencode",
+            URL(fileURLWithPath: clawdmeterRealUserHome())
+                .appendingPathComponent(".opencode/bin/opencode")
+                .path,
         ]
         for path in fixedCandidates {
             if FileManager.default.isExecutableFile(atPath: path) {
@@ -441,26 +460,74 @@ public final class OpencodeProcessManager {
 
     // MARK: - Auth list parsing (testable)
 
-    /// Parse the output of `opencode auth list`. The CLI prints one
-    /// provider per line in a "provider: model" format (e.g.
-    /// "anthropic: claude-3-5-sonnet"). The parser is lenient — blank
-    /// lines, headers, and decorative separators are skipped.
+    /// Parse the output of `opencode auth list`. Historical CLIs printed
+    /// one provider per line in a `provider: model` format; current CLIs
+    /// render a box-drawn credentials table like `● OpenRouter api`.
+    /// The parser is lenient: blank lines, headers, ANSI color escapes, and
+    /// decorative separators are skipped.
     /// Internal so tests can exercise it without spawning the binary.
     internal static func parseAuthList(_ output: String) -> [String: String] {
         var result: [String: String] = [:]
-        for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+        for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = stripANSIEscapes(String(line)).trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty,
                   !trimmed.hasPrefix("#"),
+                  !trimmed.hasPrefix("┌"),
+                  !trimmed.hasPrefix("│"),
+                  !trimmed.hasPrefix("└"),
                   !trimmed.hasPrefix("─"),
-                  trimmed.contains(":") else { continue }
-            let parts = trimmed.split(separator: ":", maxSplits: 1).map { String($0).trimmingCharacters(in: .whitespaces) }
-            guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { continue }
-            // Filter obvious headers ("Provider", "Model", etc).
-            let key = parts[0].lowercased()
-            if key == "provider" || key == "name" { continue }
-            result[parts[0]] = parts[1]
+                  trimmed != "Credentials",
+                  trimmed != "Environment" else { continue }
+
+            if trimmed.contains(":") {
+                let parts = trimmed.split(separator: ":", maxSplits: 1).map { String($0).trimmingCharacters(in: .whitespaces) }
+                guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { continue }
+                // Filter obvious headers ("Provider", "Model", etc).
+                let key = parts[0].lowercased()
+                if key == "provider" || key == "name" { continue }
+                if result[parts[0]] == nil {
+                    result[parts[0]] = parts[1]
+                }
+                continue
+            }
+
+            let bulletPrefixes = ["●", "•", "-", "*"]
+            guard let prefix = bulletPrefixes.first(where: { trimmed.hasPrefix($0) }) else {
+                continue
+            }
+            let line = trimmed
+                .dropFirst(prefix.count)
+                .trimmingCharacters(in: .whitespaces)
+            let pieces = line.split { $0.isWhitespace }.map(String.init)
+            guard pieces.count >= 2 else { continue }
+            let value = pieces.last!
+            let provider = pieces.dropLast().joined(separator: " ")
+            guard !provider.isEmpty, !value.isEmpty else { continue }
+            if result[provider] == nil {
+                result[provider] = value
+            }
         }
         return result
+    }
+
+    private static func stripANSIEscapes(_ text: String) -> String {
+        text.replacingOccurrences(
+            of: "\u{001B}\\[[0-9;]*[A-Za-z]",
+            with: "",
+            options: .regularExpression
+        )
+    }
+
+    private static func authStatusFromFile() async -> [String: String] {
+        let entries = await OpencodeAuthFile.shared.readEntries()
+        var status: [String: String] = [:]
+        for (provider, entry) in entries {
+            if let type = entry["type"] as? String, !type.isEmpty {
+                status[provider] = type
+            } else {
+                status[provider] = "configured"
+            }
+        }
+        return status
     }
 }

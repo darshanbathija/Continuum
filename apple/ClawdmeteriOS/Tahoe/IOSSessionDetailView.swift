@@ -9,6 +9,37 @@ import ClawdmeterShared
 /// `AgentControlClient.approvePlan` / `sendPrompt`. Composer is a real
 /// `TextField` (was a placeholder `Text` label), and pull-to-refresh
 /// wires `agentClient.refreshAll()`.
+/// v16 Code V2 workbench tabs. Each tab maps onto one of the six panes
+/// that previously existed as standalone files but were never embedded.
+/// Persisted per-session in `UserDefaults` so re-opening a session
+/// returns to the last viewed tab.
+enum SessionWorkbenchTab: String, CaseIterable, Identifiable {
+    case chat, plan, diff, pr, terminal, artifacts
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .chat: return "Chat"
+        case .plan: return "Plan"
+        case .diff: return "Diff"
+        case .pr: return "PR"
+        case .terminal: return "Term"
+        case .artifacts: return "Files"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .chat: return "bubble.left.and.bubble.right"
+        case .plan: return "list.bullet.rectangle"
+        case .diff: return "doc.text.magnifyingglass"
+        case .pr: return "arrow.triangle.merge"
+        case .terminal: return "terminal"
+        case .artifacts: return "doc.richtext"
+        }
+    }
+}
+
 public struct IOSSessionDetailView: View {
     @Environment(\.tahoe) private var t
     @ObservedObject var agentClient: AgentControlClient
@@ -22,7 +53,10 @@ public struct IOSSessionDetailView: View {
     @State private var refineText: String = ""
     @State private var lastError: String?
     @State private var configSheetPresented: Bool = false
+    @State private var outboxSheetPresented: Bool = false
+    @State private var selectedTab: SessionWorkbenchTab
     @StateObject private var chatStore: iOSChatStore
+    @StateObject private var outbox: MobileCommandOutbox
 
     public init(
         agentClient: AgentControlClient,
@@ -35,6 +69,11 @@ public struct IOSSessionDetailView: View {
         self.data = data
         self.onBack = onBack
         _chatStore = StateObject(wrappedValue: iOSChatStore(sessionId: sessionId, client: agentClient))
+        _outbox = StateObject(wrappedValue: MobileCommandOutbox(client: agentClient))
+        // Restore last-selected tab per session. Chat is the default for
+        // a freshly opened session.
+        let stored = UserDefaults.standard.string(forKey: "clawdmeter.ios.session.\(sessionId).tab")
+        _selectedTab = State(initialValue: SessionWorkbenchTab(rawValue: stored ?? "chat") ?? .chat)
     }
 
     /// Find the session this screen represents. Returns nil if it was
@@ -103,6 +142,29 @@ public struct IOSSessionDetailView: View {
                 }
                 .frame(maxWidth: .infinity)
 
+                // v16 outbox badge — taps open the per-session outbox pane.
+                if outboxBadgeCount > 0 {
+                    Button {
+                        outboxSheetPresented = true
+                    } label: {
+                        ZStack {
+                            Capsule().fill(t.glassTintHi)
+                            Capsule().stroke(t.hairline, lineWidth: 0.5)
+                            HStack(spacing: 4) {
+                                Image(systemName: "tray.and.arrow.up")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(t.accent)
+                                Text("\(outboxBadgeCount)")
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(t.fg)
+                            }
+                            .padding(.horizontal, 10)
+                        }
+                        .frame(height: 38)
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 if session != nil && !data.isDemo {
                     IOSRoundIconBtn("sliders", action: openConfigSheet)
                 } else if data.isDemo {
@@ -111,96 +173,59 @@ public struct IOSSessionDetailView: View {
             }
             .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
 
-            // Thread
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if data.isDemo {
-                        // Preview / demo bindings only — JSX placeholder
-                        // thread keeps Xcode Previews looking alive.
-                        ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
-                            IOSThreadMsg(msg: msg, providerOverride: session?.agent)
-                        }
-                        IOSPlanHaloMini(
-                            steps: planSteps,
-                            canApprove: true,
-                            onRefine: { refineAlertShown = true },
-                            onApprove: { Task { await approvePlan() } }
-                        )
-                    } else if session == nil {
-                        emptyState(
-                            title: "Session unavailable",
-                            body: "This session may have been archived on your Mac. Go back to see what's still running."
-                        )
-                    } else if chatStore.snapshot.items.isEmpty {
-                        emptyState(
-                            title: "No transcript yet",
-                            body: "Messages appear here after the Mac publishes this session's chat snapshot."
-                        )
-                        if !planSteps.isEmpty {
-                            IOSPlanHaloMini(
-                                steps: planSteps,
-                                canApprove: hasRealPlan,
-                                onRefine: { refineAlertShown = true },
-                                onApprove: { Task { await approvePlan() } }
-                            )
-                        }
-                    } else {
-                        ForEach(chatStore.snapshot.items) { item in
-                            IOSWireChatItemRow(item: item, provider: session?.agent ?? .claude)
-                        }
-                        if !planSteps.isEmpty {
-                            IOSPlanHaloMini(
-                                steps: planSteps,
-                                canApprove: hasRealPlan,
-                                onRefine: { refineAlertShown = true },
-                                onApprove: { Task { await approvePlan() } }
-                            )
-                        }
-                    }
-                }
-                .padding(.horizontal, 16).padding(.vertical, 4)
-            }
-            .frame(maxHeight: .infinity)
-            .refreshable {
-                await agentClient.refreshAll()
+            // v16 workbench tab strip. Hidden in demo mode (the demo
+            // bindings only stub the chat thread) and when no session
+            // is found (we just show the empty state in the chat tab).
+            if !data.isDemo, session != nil {
+                tabChipStrip
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
             }
 
-            // Composer — real TextField when a session is open. Tapping send
-            // invokes `agentClient.sendPrompt(sessionId:text:)`. In demo
-            // bindings the placeholder text reads "Refine the plan…" but
-            // the send call is short-circuited (no real session).
-            TahoeGlass(radius: 22, tone: .raised) {
-                HStack(spacing: 8) {
-                    TextField(composerPlaceholder, text: $composerText, axis: .vertical)
-                        .font(TahoeFont.body(14))
-                        .foregroundStyle(t.fg)
-                        .lineLimit(1...4)
-                        .textInputAutocapitalization(.sentences)
-                        .submitLabel(.send)
-                        .disabled(session == nil && !data.isDemo)
-                    Spacer(minLength: 4)
-                    Button(action: { Task { await sendComposer() } }) {
-                        ZStack {
-                            Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
-                                                         startPoint: .top, endPoint: .bottom))
-                            if sending {
-                                ProgressView()
-                                    .progressViewStyle(.circular)
-                                    .tint(.white)
-                            } else {
-                                TahoeIcon("arrowU", size: 16, weight: .bold).foregroundStyle(.white)
+            // v16 tab body. Each branch renders the pane for the current
+            // tab. Chat keeps its custom thread + composer; the other
+            // five wrap the standalone pane views that previously
+            // existed but were never embedded.
+            tabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Composer — only relevant in the Chat tab. Other tabs have
+            // their own write actions (plan: approve; PR: merge;
+            // terminal: keystroke; artifacts: download).
+            if selectedTab == .chat {
+                TahoeGlass(radius: 22, tone: .raised) {
+                    HStack(spacing: 8) {
+                        TextField(composerPlaceholder, text: $composerText, axis: .vertical)
+                            .font(TahoeFont.body(14))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1...4)
+                            .textInputAutocapitalization(.sentences)
+                            .submitLabel(.send)
+                            .disabled(session == nil && !data.isDemo)
+                        Spacer(minLength: 4)
+                        Button(action: { Task { await sendComposer() } }) {
+                            ZStack {
+                                Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
+                                                             startPoint: .top, endPoint: .bottom))
+                                if sending {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                        .tint(.white)
+                                } else {
+                                    TahoeIcon("arrowU", size: 16, weight: .bold).foregroundStyle(.white)
+                                }
                             }
+                            .frame(width: 38, height: 38)
+                            .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
+                            .opacity(canSend ? 1.0 : 0.45)
                         }
-                        .frame(width: 38, height: 38)
-                        .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
-                        .opacity(canSend ? 1.0 : 0.45)
+                        .buttonStyle(.plain)
+                        .disabled(!canSend || sending)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!canSend || sending)
+                    .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 10)
                 }
-                .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 10)
+                .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 14)
             }
-            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 14)
         }
         .alert("Refine the plan", isPresented: $refineAlertShown) {
             TextField("What should change?", text: $refineText)
@@ -230,13 +255,184 @@ public struct IOSSessionDetailView: View {
             }
             .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $outboxSheetPresented) {
+            NavigationStack {
+                iOSOutboxPane(outbox: outbox, sessionId: sessionId)
+                    .navigationTitle("Outbox")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+            .presentationDetents([.medium, .large])
+        }
         .task(id: sessionId) {
             await chatStore.refresh()
             chatStore.start()
         }
+        .onChange(of: selectedTab) { _, newValue in
+            UserDefaults.standard.set(newValue.rawValue, forKey: "clawdmeter.ios.session.\(sessionId).tab")
+        }
         .onDisappear {
             chatStore.stop()
         }
+    }
+
+    // MARK: - Tab UI
+
+    /// Visible tabs change with session state. Plan only when there's a
+    /// plan; PR only when the session has a worktree; Terminal only when
+    /// at least one tmux pane exists; Artifacts only when the session
+    /// snapshot lists at least one artifact entry.
+    private var visibleTabs: [SessionWorkbenchTab] {
+        var tabs: [SessionWorkbenchTab] = [.chat]
+        if let s = realAgentSession {
+            if let plan = s.planText, !plan.isEmpty {
+                tabs.append(.plan)
+            } else if s.status == .planning {
+                tabs.append(.plan)
+            }
+            tabs.append(.diff)
+            // Show PR + Terminal eagerly so the user can navigate to
+            // them when empty (the pane handles its own empty state).
+            tabs.append(.pr)
+            if !s.terminalPanes.isEmpty {
+                tabs.append(.terminal)
+            }
+            if !chatStore.snapshot.artifactEntries.isEmpty {
+                tabs.append(.artifacts)
+            }
+        }
+        return tabs
+    }
+
+    @ViewBuilder
+    private var tabChipStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(visibleTabs) { tab in
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 12, weight: .medium))
+                            Text(tab.label)
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background {
+                            Capsule().fill(selectedTab == tab ? t.accent : t.glassTintHi)
+                        }
+                        .overlay {
+                            Capsule().stroke(selectedTab == tab ? .clear : t.hairline, lineWidth: 0.5)
+                        }
+                        .foregroundStyle(selectedTab == tab ? .white : t.fg)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .chat:
+            chatPane
+        case .plan:
+            if let s = realAgentSession {
+                iOSPlanTrackerView(session: s, onApprove: { await approvePlan() })
+            } else {
+                emptyState(title: "No session", body: "Session unavailable.")
+            }
+        case .diff:
+            if let s = realAgentSession {
+                iOSDiffView(session: s, client: agentClient)
+            } else {
+                emptyState(title: "No session", body: "Session unavailable.")
+            }
+        case .pr:
+            if let s = realAgentSession {
+                iOSPRPane(session: s, client: agentClient)
+            } else {
+                emptyState(title: "No session", body: "Session unavailable.")
+            }
+        case .terminal:
+            if let s = realAgentSession {
+                iOSTerminalTabsView(client: agentClient, session: s)
+            } else {
+                emptyState(title: "No session", body: "Session unavailable.")
+            }
+        case .artifacts:
+            if let s = realAgentSession {
+                iOSArtifactsPane(client: agentClient, session: s, chatStore: chatStore)
+            } else {
+                emptyState(title: "No session", body: "Session unavailable.")
+            }
+        }
+    }
+
+    /// Pre-tabs body content, unchanged. Renders the chat thread + plan
+    /// halo inline so the existing UX stays intact when the user opens
+    /// a session and stays on the Chat tab.
+    @ViewBuilder
+    private var chatPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if data.isDemo {
+                    ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
+                        IOSThreadMsg(msg: msg, providerOverride: session?.agent)
+                    }
+                    IOSPlanHaloMini(
+                        steps: planSteps,
+                        canApprove: true,
+                        onRefine: { refineAlertShown = true },
+                        onApprove: { Task { await approvePlan() } }
+                    )
+                } else if session == nil {
+                    emptyState(
+                        title: "Session unavailable",
+                        body: "This session may have been archived on your Mac. Go back to see what's still running."
+                    )
+                } else if chatStore.snapshot.items.isEmpty {
+                    emptyState(
+                        title: "No transcript yet",
+                        body: "Messages appear here after the Mac publishes this session's chat snapshot."
+                    )
+                    if !planSteps.isEmpty {
+                        IOSPlanHaloMini(
+                            steps: planSteps,
+                            canApprove: hasRealPlan,
+                            onRefine: { refineAlertShown = true },
+                            onApprove: { Task { await approvePlan() } }
+                        )
+                    }
+                } else {
+                    ForEach(chatStore.snapshot.items) { item in
+                        IOSWireChatItemRow(item: item, provider: session?.agent ?? .claude)
+                    }
+                    if !planSteps.isEmpty {
+                        IOSPlanHaloMini(
+                            steps: planSteps,
+                            canApprove: hasRealPlan,
+                            onRefine: { refineAlertShown = true },
+                            onApprove: { Task { await approvePlan() } }
+                        )
+                    }
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 4)
+        }
+        .refreshable {
+            await agentClient.refreshAll()
+        }
+    }
+
+    /// Combined pending + failed count for this session; drives the nav
+    /// bar badge that opens the per-session outbox pane.
+    private var outboxBadgeCount: Int {
+        outbox.pending.filter { $0.sessionId == sessionId }.count
+            + outbox.failed.filter { $0.sessionId == sessionId }.count
     }
 
     // MARK: - Computed UX state

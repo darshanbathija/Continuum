@@ -809,6 +809,12 @@ private struct OpencodeProviderRow: View {
             case .notInstalled:
                 return ("Not installed", Color.orange)
             case .stopped:
+                if isAuthed {
+                    return ("Signed in", Color.green)
+                }
+                if hasBinary {
+                    return ("Sign in required", Color.orange)
+                }
                 return ("Idle", t.fg4)
             case .starting:
                 return ("Starting…", Color.blue)
@@ -839,6 +845,9 @@ private struct OpencodeProviderRow: View {
         case .notInstalled:
             return "Not installed. Run `brew install opencode` (or download from opencode.ai) to enable OpenCode-backed sessions."
         case .stopped:
+            if isAuthed {
+                return "Ready to spawn OpenCode sessions. Starts on demand when you choose OpenCode."
+            }
             if let path = OpencodeProcessManager.shared.binaryPath {
                 return "Installed at \(path). Starts on demand when you spawn an OpenCode session."
             }

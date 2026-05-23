@@ -103,12 +103,19 @@ struct PairingScannerView: UIViewControllerRepresentable {
     ///   - tokens must match `^[A-Za-z0-9_-]{16,256}$` (base64url shape).
     static func parse(urlString: String) -> PairingChallenge? {
         guard let url = URL(string: urlString),
-              url.scheme == "clawdmeter",
+              let scheme = url.scheme,
+              scheme == "clawdmeter" || scheme == "clawdmeters",
               let host = url.host,
               let httpPort = url.port,
               isAllowedPairingHost(host),
               isValidPort(httpPort)
         else { return nil }
+        // v16: `clawdmeters://` is the TLS-preferred scheme. iOS marks
+        // the challenge so a future AgentControlClient knows to switch
+        // to `https://`. The daemon today still listens on plain HTTP,
+        // so we don't act on the flag until server TLS termination
+        // ships — but we persist it so the URL parser is forward-compat.
+        let useHTTPS = (scheme == "clawdmeters")
         var token: String?
         var wsPort: Int?
         var designPort: Int?
@@ -131,7 +138,8 @@ struct PairingScannerView: UIViewControllerRepresentable {
         }
         guard let token, let wsPort else { return nil }
         return PairingChallenge(host: host, port: httpPort, wsPort: wsPort, token: token,
-                                designPort: designPort, designToken: designToken)
+                                designPort: designPort, designToken: designToken,
+                                useHTTPS: useHTTPS)
     }
 
     /// Host must be loopback, in Tailscale CGNAT (100.64.0.0/10), or a

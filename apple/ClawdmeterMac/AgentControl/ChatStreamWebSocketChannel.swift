@@ -119,10 +119,14 @@ public final class ChatStreamWebSocketChannel: WSChannel {
             sourceEntries: snapshot.sourceEntries,
             artifactEntries: snapshot.artifactEntries,
             codexTodos: snapshot.codexTodos,
+            pendingPermissionPrompt: store?.pendingPermissionPrompt,
             totalInputTokens: snapshot.totalInputTokens,
             totalOutputTokens: snapshot.totalOutputTokens,
+            cacheReadTokens: snapshot.totalCacheReadTokens,
+            cacheCreationTokens: snapshot.totalCacheCreationTokens,
             lastEventAt: snapshot.lastEventAt ?? session.lastEventAt,
-            updateCounter: snapshot.updateCounter
+            updateCounter: snapshot.updateCounter,
+            currentTurnState: snapshot.currentTurnState
         )
         guard let body = try? encoder.encode(wire) else {
             chatStreamLogger.error("chat-subscribe: failed to encode snapshot for session \(self.session.id.uuidString, privacy: .public)")

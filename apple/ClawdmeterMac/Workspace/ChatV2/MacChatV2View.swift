@@ -666,6 +666,7 @@ private struct Composer: View {
     let onCreated: (UUID) -> Void
 
     @FocusState private var textFocused: Bool
+    @State private var opencodeReady: Bool = false
 
     private var isStreaming: Bool {
         guard let runtime, let session = openSession,
@@ -733,13 +734,14 @@ private struct Composer: View {
         }
         .onAppear { textFocused = true }
         .onChange(of: openSession?.id) { _, _ in textFocused = true }
+        .task { await refreshOpencodeAvailability() }
     }
 
     // MARK: - Chips
 
     private var providerChip: some View {
         Menu {
-            ForEach([AgentKind.claude, .codex, .gemini], id: \.self) { kind in
+            ForEach(selectableProviders, id: \.self) { kind in
                 Button {
                     store.selectedProvider = kind
                     store.persist()
@@ -770,6 +772,25 @@ private struct Composer: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+
+    private var selectableProviders: [AgentKind] {
+        var providers: [AgentKind] = [.claude, .codex, .gemini]
+        if opencodeReady {
+            providers.append(.opencode)
+        }
+        return providers
+    }
+
+    private func refreshOpencodeAvailability() async {
+        await OpencodeProcessManager.shared.refreshAuthStatus()
+        let hasBinary = OpencodeProcessManager.shared.binaryPath != nil
+        let hasProvider = !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
+        opencodeReady = hasBinary && hasProvider
+        if !opencodeReady, store.selectedProvider == .opencode {
+            store.selectedProvider = .claude
+            store.persist()
+        }
     }
 
     private var deepResearchChip: some View {
@@ -816,6 +837,7 @@ private struct Composer: View {
                 case .claude: return ModelCatalog.bundled.claude
                 case .codex:  return ModelCatalog.bundled.codex
                 case .gemini: return ModelCatalog.bundled.gemini
+                case .opencode: return ModelCatalog.bundled.opencode
                 default: return []
                 }
             }()

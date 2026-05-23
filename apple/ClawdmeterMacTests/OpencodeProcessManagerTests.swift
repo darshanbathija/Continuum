@@ -100,6 +100,32 @@ final class OpencodeProcessManagerTests: XCTestCase {
         XCTAssertEqual(parsed["anthropic"], "claude-3-5-sonnet:beta")
     }
 
+    func test_parseAuthList_handlesCurrentBoxOutput() {
+        let output = """
+        \u{001B}[0m
+        ┌  Credentials \u{001B}[90m~/.local/share/opencode/auth.json
+        │
+        ●  OpenRouter \u{001B}[90mapi
+        │
+        └  1 credentials
+
+        ┌  Environment
+        │
+        ●  OpenRouter \u{001B}[90mOPENROUTER_API_KEY
+        │
+        └  1 environment variable
+        """
+        let parsed = OpencodeProcessManager.parseAuthList(output)
+        XCTAssertEqual(parsed["OpenRouter"], "api")
+        XCTAssertEqual(parsed.count, 1)
+    }
+
+    func test_parseAuthList_handlesBulletProviderNamesWithSpaces() {
+        let output = "●  Google AI Studio api"
+        let parsed = OpencodeProcessManager.parseAuthList(output)
+        XCTAssertEqual(parsed["Google AI Studio"], "api")
+    }
+
     // MARK: - Initial state
 
     func test_initialState_isStopped() {

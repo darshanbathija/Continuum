@@ -295,6 +295,7 @@ public struct OpencodeAPIKeySheet: View {
                     key: key
                 )
                 await OpencodeProcessManager.shared.reprobe()
+                await ChatProviderProbe.shared.invalidate()
                 apiKeySheetLogger.info(
                     "opencode api key saved provider=\(providerId, privacy: .public) display=\(displayName, privacy: .public)"
                 )

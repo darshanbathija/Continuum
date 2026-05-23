@@ -54,6 +54,35 @@ enum TailscaleHost {
     }
 
     static func resolve() -> Resolved {
+        // v16 MagicDNS preference. When the user opts into MagicDNS in
+        // Settings → Pairing (default ON), we look up the tailnet hostname
+        // first and only fall back to numeric addresses when MagicDNS is
+        // unavailable or the Tailscale backend isn't running. Hostname
+        // pairing is more robust across IP changes (sleep/wake, switching
+        // networks) and is required for the future `clawdmeters://` TLS
+        // scheme (TLS needs a hostname to match the Tailscale-issued cert).
+        let preferMagicDNS = UserDefaults.standard.object(
+            forKey: "clawdmeter.pairing.preferMagicDNS"
+        ) as? Bool ?? true
+
+        if preferMagicDNS, let dns = readTailscaleStatus() {
+            if dns.backendState == "Running" {
+                return Resolved(host: dns.dnsName, kind: .tailscaleDNS)
+            }
+            // Backend not running — fall through to numeric scan so the
+            // user still gets a usable QR if their tunnel was up at some
+            // point in the past and the interface IP is still bound.
+            if let v4 = scanInterfaceForTailscaleIPv4() {
+                return Resolved(host: v4, kind: .tailscaleIPv4)
+            }
+            if let v6 = scanInterfaceForTailscaleIPv6() {
+                return Resolved(host: "[\(v6)]", kind: .tailscaleIPv6)
+            }
+            return Resolved(host: dns.dnsName, kind: .tailscaleDNSBackendDown(state: dns.backendState))
+        }
+
+        // MagicDNS disabled OR Tailscale CLI not installed — original
+        // numeric-first ladder.
         if let v4 = scanInterfaceForTailscaleIPv4() {
             return Resolved(host: v4, kind: .tailscaleIPv4)
         }

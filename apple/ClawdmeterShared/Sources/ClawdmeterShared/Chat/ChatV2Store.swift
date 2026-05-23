@@ -71,7 +71,7 @@ public final class ChatV2Store: ObservableObject {
         case .claude:   return ModelCatalog.bundled.claude.first?.id
         case .codex:    return ModelCatalog.bundled.codex.first?.id
         case .gemini:   return ModelCatalog.bundled.gemini.first?.id
-        case .opencode: return nil
+        case .opencode: return ModelCatalog.bundled.opencode.first?.id
         case .unknown:  return nil
         }
     }

@@ -101,7 +101,15 @@ public actor ChatProviderProbe {
         // Run the binary checks off the actor to avoid blocking on
         // ShellRunner.locateBinary's PATH walk. (Actor will serialize
         // re-entry into this method anyway via `inflight`.)
-        let probes: (claudeAvailable: Bool, codexAvailable: Bool, codexSDKAvailable: Bool, agentapiLive: Bool) = await Task.detached {
+        let probes: (
+            claudeAvailable: Bool,
+            codexAvailable: Bool,
+            codexSDKAvailable: Bool,
+            agentapiLive: Bool,
+            opencodeAvailable: Bool,
+            opencodeAuthProviderCount: Int,
+            opencodeEnvironmentAuthAvailable: Bool
+        ) = await Task.detached {
             let claudeAvailable = ShellRunner.locateBinary("claude") != nil
             let codexAvailable = ShellRunner.locateBinary("codex") != nil
             // CodexSDKManager is @MainActor — hop for the read.
@@ -111,7 +119,38 @@ public actor ChatProviderProbe {
                 if case .live = LanguageServerClient().discoverLive() { return true }
                 return false
             }
-            return (claudeAvailable, codexAvailable, codexSDKAvailable, lsLive)
+            let opencodeAvailable = await MainActor.run {
+                OpencodeProcessManager.shared.locateBinary() != nil
+            }
+            let opencodeAuthProviderCount = await OpencodeAuthFile.shared.providerIds().count
+            let opencodeEnvironmentAuthAvailable = ProcessInfo.processInfo.environment.contains { key, value in
+                guard !value.isEmpty else { return false }
+                switch key {
+                case "OPENROUTER_API_KEY",
+                     "ANTHROPIC_API_KEY",
+                     "OPENAI_API_KEY",
+                     "GOOGLE_GENERATIVE_AI_API_KEY",
+                     "GEMINI_API_KEY",
+                     "MISTRAL_API_KEY",
+                     "GROQ_API_KEY",
+                     "XAI_API_KEY",
+                     "DEEPSEEK_API_KEY",
+                     "MOONSHOT_API_KEY",
+                     "MOONSHOTAI_API_KEY":
+                    return true
+                default:
+                    return false
+                }
+            }
+            return (
+                claudeAvailable,
+                codexAvailable,
+                codexSDKAvailable,
+                lsLive,
+                opencodeAvailable,
+                opencodeAuthProviderCount,
+                opencodeEnvironmentAuthAvailable
+            )
         }.value
 
         // Apply per-provider auth overrides. nil override → fall back
@@ -127,6 +166,18 @@ public actor ChatProviderProbe {
         let (codexSDKAuth, codexSDKReason) = resolveAuth(key: "codex:sdk", fallback: probes.codexSDKAvailable)
         let (codexCLIAuth, codexCLIReason) = resolveAuth(key: "codex:cli", fallback: probes.codexAvailable)
         let (geminiAuth, geminiReason) = resolveAuth(key: "gemini", fallback: probes.agentapiLive)
+        let (opencodeAuth, opencodeReason) = resolveAuth(
+            key: "opencode",
+            fallback: probes.opencodeAvailable
+                && (probes.opencodeAuthProviderCount > 0 || probes.opencodeEnvironmentAuthAvailable)
+        )
+        let opencodeDefaultReason: String? = {
+            if !probes.opencodeAvailable { return "opencode CLI not installed" }
+            if probes.opencodeAuthProviderCount == 0 && !probes.opencodeEnvironmentAuthAvailable {
+                return "Add an OpenCode provider key in Settings"
+            }
+            return nil
+        }()
 
         let response = ChatProvidersResponse(providers: [
             ChatProviderEntry(
@@ -161,9 +212,17 @@ public actor ChatProviderProbe {
                 lastProbedAt: now,
                 reason: geminiReason ?? (probes.agentapiLive ? nil : "Open Antigravity 2 to start a Gemini chat")
             ),
+            ChatProviderEntry(
+                provider: .opencode,
+                available: probes.opencodeAvailable,
+                authenticated: opencodeAuth,
+                capabilityProbePassed: probes.opencodeAvailable && opencodeAuth,
+                lastProbedAt: now,
+                reason: opencodeReason ?? opencodeDefaultReason
+            ),
         ])
         cache = CacheEntry(response: response, computedAt: now)
-        probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codexSDK=\(probes.codexSDKAvailable, privacy: .public) codexCLI=\(probes.codexAvailable, privacy: .public) gemini=\(probes.agentapiLive, privacy: .public)")
+        probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codexSDK=\(probes.codexSDKAvailable, privacy: .public) codexCLI=\(probes.codexAvailable, privacy: .public) gemini=\(probes.agentapiLive, privacy: .public) opencode=\(probes.opencodeAvailable, privacy: .public)")
         return response
     }
 

@@ -44,6 +44,18 @@ public final class AgentControlServer {
     private let registry: AgentSessionRegistry
     private let tmux: TmuxControlClient
     private let notifications: NotificationDispatcher
+    /// v16 Code V2: persisted per-repo workspace registry. Drives the
+    /// `GET /workspaces` + `PATCH /workspaces/:id` endpoints and seeds
+    /// new sessions with the repo's last-used model/effort/agent so
+    /// iOS new-session flow doesn't need to ship explicit defaults.
+    let workspaceStore: WorkspaceStore
+    /// v16 Code V2: bounded LRU receipt cache for iOS write commands.
+    /// Wraps the write handlers so a retried request with the same
+    /// idempotency key returns the cached response instead of repeating
+    /// the side effect (no double-send, no double-merge). Replayed
+    /// from `mobile-commands.jsonl` on startup so a daemon restart
+    /// still dedups in-flight retries.
+    let mobileCommandOutbox: MobileCommandOutbox
     /// Phase 0a: long-lived per-session chat-store registry. Replaces the
     /// "reparse JSONL on every /chat-snapshot request" path. Used by the
     /// HTTP handler (snapshotStore) and, in Phase 2, by the WS dispatcher
@@ -186,7 +198,9 @@ public final class AgentControlServer {
         notifications: NotificationDispatcher,
         whois: TailscaleWhois = .shared,
         chatStoreRegistry: DaemonChatStoreRegistry? = nil,
-        chatFileResolver: SessionFileResolver? = nil
+        chatFileResolver: SessionFileResolver? = nil,
+        workspaceStore: WorkspaceStore? = nil,
+        mobileCommandOutbox: MobileCommandOutbox? = nil
     ) {
         self.pairingTokens = pairingTokens
         self.repoIndex = repoIndex
@@ -194,6 +208,15 @@ public final class AgentControlServer {
         self.tmux = tmux
         self.notifications = notifications
         self.whois = whois
+        // v16 Code V2: WorkspaceStore is @MainActor like the rest of the
+        // registries — default-construct on the same actor so the file
+        // load + migrate-from-sessions runs without an actor hop. Tests
+        // can inject an isolated tmpdir-backed store.
+        self.workspaceStore = workspaceStore ?? WorkspaceStore()
+        // v16 Code V2: bounded receipt cache. The replay-from-audit-log
+        // call is fire-and-forget — happens on the first request to an
+        // idempotent endpoint (see `tryReplayIdempotent`).
+        self.mobileCommandOutbox = mobileCommandOutbox ?? MobileCommandOutbox()
         // Phase 0b: the file resolver delegates Claude lookups to
         // `SessionChatStore.resolveSessionFileURL(repoCwd:)` and handles
         // Codex respawn lineage itself. The default `~/.codex/sessions`
@@ -289,6 +312,12 @@ public final class AgentControlServer {
         // Mac restart hits a warm store instead of a cold reparse.
         // Async on a detached Task so it doesn't block listener bind.
         chatStoreRegistry.warm(recentLimit: 5)
+        // v16 Code V2: replay the last 256 mobile-command audit entries
+        // so a daemon restart still dedups in-flight iOS retries. Fire
+        // and forget — the cache hydrates within tens of ms.
+        Task.detached { [outbox = self.mobileCommandOutbox] in
+            await outbox.replayFromAuditLog()
+        }
         startAutopilotSweep()
     }
 
@@ -957,6 +986,19 @@ public final class AgentControlServer {
         t.register(method: "GET", pattern: "/sessions") { [weak self] _, conn, _ in
             self?.handleGetSessions(connection: conn)
         }
+        // v16: persisted workspace registry. iOS new-session flow inherits
+        // these per-repo defaults so the user doesn't have to re-pick
+        // model/effort every time they spawn a new agent in the same repo.
+        t.register(method: "GET", pattern: "/workspaces") { [weak self] _, conn, _ in
+            self?.handleListWorkspaces(connection: conn)
+        }
+        t.register(method: "PATCH", pattern: "/workspaces/:id") { [weak self] req, conn, params in
+            await self?.handleUpdateWorkspaceDefaults(
+                workspaceId: params["id"] ?? "",
+                request: req,
+                connection: conn
+            )
+        }
         t.register(method: "GET", pattern: "/sessions/needs-attention") { [weak self] _, conn, _ in
             await self?.handleGetNeedsAttention(connection: conn)
         }
@@ -1014,8 +1056,8 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions") { [weak self] req, conn, _ in
             await self?.handlePostSession(request: req, connection: conn)
         }
-        t.register(method: "POST", pattern: "/sessions/:id/approve-plan") { [weak self] _, conn, params in
-            await self?.handleApprovePlan(sessionId: params["id"] ?? "", connection: conn)
+        t.register(method: "POST", pattern: "/sessions/:id/approve-plan") { [weak self] req, conn, params in
+            await self?.handleApprovePlan(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
         t.register(method: "POST", pattern: "/sessions/:id/archive") { [weak self] _, conn, params in
             self?.handleArchive(sessionId: params["id"] ?? "", archived: true, connection: conn)
@@ -1052,8 +1094,8 @@ public final class AgentControlServer {
                 connection: conn
             )
         }
-        t.register(method: "POST", pattern: "/sessions/:id/interrupt") { [weak self] _, conn, params in
-            await self?.handleInterrupt(sessionId: params["id"] ?? "", connection: conn)
+        t.register(method: "POST", pattern: "/sessions/:id/interrupt") { [weak self] req, conn, params in
+            await self?.handleInterrupt(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
         t.register(method: "POST", pattern: "/sessions/:id/permission-respond") { [weak self] req, conn, params in
             await self?.handlePermissionRespond(sessionId: params["id"] ?? "", request: req, connection: conn)
@@ -1188,6 +1230,8 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(ChangeModelRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
         guard !req.model.isEmpty, ModelCatalog.bundled.entry(forId: req.model) != nil else {
             sendResponse(.badRequest, on: connection); return
         }
@@ -1209,7 +1253,13 @@ public final class AgentControlServer {
             sessionId: uuid, sourcePeer: peer,
             from: oldModel, to: req.model, effort: req.effort?.rawValue
         )
-        await respondWithSession(uuid: uuid, connection: connection)
+        await respondWithSession(
+            uuid: uuid,
+            idempotencyKey: req.idempotencyKey,
+            kind: .changeModel,
+            payloadHash: payloadHash,
+            connection: connection
+        )
     }
 
     private func handleChangeEffort(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
@@ -1219,6 +1269,8 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(ChangeEffortRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
@@ -1232,7 +1284,13 @@ public final class AgentControlServer {
             sessionId: uuid, sourcePeer: peer,
             model: session.model, effort: req.effort.rawValue
         )
-        await respondWithSession(uuid: uuid, connection: connection)
+        await respondWithSession(
+            uuid: uuid,
+            idempotencyKey: req.idempotencyKey,
+            kind: .changeEffort,
+            payloadHash: payloadHash,
+            connection: connection
+        )
     }
 
     private func handleChangeMode(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
@@ -1242,6 +1300,8 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(ChangeModeRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
         if req.mode == .cloud {
             sendResponse(.badRequest, on: connection); return
         }
@@ -1262,7 +1322,13 @@ public final class AgentControlServer {
             sessionId: uuid, sourcePeer: peer,
             mode: req.mode.rawValue, planMode: req.planMode
         )
-        await respondWithSession(uuid: uuid, connection: connection)
+        await respondWithSession(
+            uuid: uuid,
+            idempotencyKey: req.idempotencyKey,
+            kind: .changeMode,
+            payloadHash: payloadHash,
+            connection: connection
+        )
     }
 
     private func handleSendPrompt(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
@@ -1272,6 +1338,12 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(SendPromptRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
+        // v16 outbox: short-circuit duplicate retries before any side
+        // effect. If we've already processed this idempotency key, replay
+        // the cached response. The caller (iOS outbox) will mark the
+        // outbox entry as `.acknowledged` and stop retrying.
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
         let bytes = Array(req.text.utf8)
         guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
             sendResponse(.badRequest, on: connection); return
@@ -1295,7 +1367,14 @@ public final class AgentControlServer {
                 )
                 let peer = Self.endpointString(connection.endpoint)
                 await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
-                sendJSON(["ok": true], on: connection)
+                await sendCommandResponse(
+                    body: ["ok": true],
+                    key: req.idempotencyKey,
+                    kind: .send,
+                    sessionId: uuid,
+                    payloadHash: payloadHash,
+                    on: connection
+                )
             } catch let LanguageServerClientError.notRunning {
                 serverLogger.warning("send-prompt for agentapi session \(uuid.uuidString, privacy: .public): LS not running")
                 sendResponse(HTTPResponse(
@@ -1318,7 +1397,13 @@ public final class AgentControlServer {
         if session.kind == .chat
             && session.agent == .codex
             && session.codexChatBackend == .sdk {
-            await sendChatSDKPrompt(session: session, prompt: req.text, connection: connection)
+            await sendChatSDKPrompt(
+                session: session,
+                prompt: req.text,
+                idempotencyKey: req.idempotencyKey,
+                payloadHash: payloadHash,
+                connection: connection
+            )
             return
         }
         // v0.23.2 P1-04: OpenCode send. Wires the iOS / Mac composer's
@@ -1328,7 +1413,13 @@ public final class AgentControlServer {
         // SessionChatStore — clients reading the chat-subscribe WS see
         // the assistant turn appear without an additional poll.
         if session.agent == .opencode {
-            await sendOpencodePrompt(session: session, prompt: req.text, connection: connection)
+            await sendOpencodePrompt(
+                session: session,
+                prompt: req.text,
+                idempotencyKey: req.idempotencyKey,
+                payloadHash: payloadHash,
+                connection: connection
+            )
             return
         }
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
@@ -1402,7 +1493,14 @@ public final class AgentControlServer {
             }
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
-            sendJSON(["ok": true], on: connection)
+            await sendCommandResponse(
+                body: ["ok": true],
+                key: req.idempotencyKey,
+                kind: .send,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
         } catch {
             serverLogger.error("send-prompt failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
@@ -1950,10 +2048,17 @@ public final class AgentControlServer {
         return nil
     }
 
-    private func handleInterrupt(sessionId: String, connection: NWConnection) async {
+    private func handleInterrupt(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId) else {
             sendResponse(.notFound, on: connection); return
         }
+        // v16 outbox: empty body is the legacy path (key=nil = no dedup).
+        // Non-empty bodies decode as `InterruptRequest`; missing field
+        // defaults to nil and the wrapper is a no-op.
+        let req = (try? JSONDecoder().decode(InterruptRequest.self, from: request.body))
+            ?? InterruptRequest(idempotencyKey: nil)
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
         // v0.23 (Chat V2 — audit P0 #2): route through
         // SessionInterruptDispatcher so Stop works for Codex SDK and
         // Gemini agentapi sessions too, not just tmux-backed ones.
@@ -1969,11 +2074,20 @@ public final class AgentControlServer {
         let result = await dispatcher.interrupt(sessionId: uuid)
         switch result {
         case .interrupted:
-            sendJSON(["ok": true], on: connection)
+            await sendCommandResponse(
+                body: ["ok": true],
+                key: req.idempotencyKey,
+                kind: .interrupt,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
         case .sessionNotFound:
             sendResponse(.notFound, on: connection)
         case .tmuxFailed:
             sendResponse(.internalError, on: connection)
+        case .notSupported:
+            sendJSON(["ok": false, "error": "notSupported"], on: connection, status: 501)
         }
     }
 
@@ -2040,6 +2154,8 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(AutopilotRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
         // Autopilot crosses a real security boundary (per-repo trust list).
         // Throttle the toggle so a misbehaving client can't flap it.
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
@@ -2072,7 +2188,13 @@ public final class AgentControlServer {
             sessionId: uuid, sourcePeer: peer,
             enabled: req.enabled, repoKey: repoKey
         )
-        await respondWithSession(uuid: uuid, connection: connection)
+        await respondWithSession(
+            uuid: uuid,
+            idempotencyKey: req.idempotencyKey,
+            kind: .setAutopilot,
+            payloadHash: payloadHash,
+            connection: connection
+        )
     }
 
     private func handlePickPairWinner(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
@@ -2082,6 +2204,8 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(PickWinnerRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
         guard let result = registry.pickPairWinner(sessionId: uuid, winner: req.winnerSessionId) else {
             sendResponse(.notFound, on: connection); return
         }
@@ -2089,14 +2213,28 @@ public final class AgentControlServer {
         encoder.dateEncodingStrategy = .iso8601
         switch result {
         case .decided(let winner, let decidedAt):
-            let body = try? encoder.encode([
+            var body: [String: Any] = [
                 "winnerSessionId": winner.uuidString,
                 "decidedAt": ISO8601DateFormatter().string(from: decidedAt),
-            ])
-            sendResponse(.ok(contentType: "application/json", body: body ?? Data()), on: connection)
+            ]
+            if let key = req.idempotencyKey {
+                let receipt = MobileCommandReceipt(idempotencyKey: key, status: .acknowledged, processedAt: Date())
+                body["receipt"] = receipt.jsonDictionary
+            }
+            let bytes = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
+            await recordIdempotent(
+                key: req.idempotencyKey, kind: .pickWinner,
+                sessionId: uuid, connection: connection, payloadHash: payloadHash,
+                responseBody: bytes, responseStatus: 200
+            )
+            sendResponse(.ok(contentType: "application/json", body: bytes), on: connection)
         case .alreadyDecided(let winner, let decidedAt):
             let payload = PickWinnerConflictResponse(winnerSessionId: winner, decidedAt: decidedAt)
             let body = (try? encoder.encode(payload)) ?? Data()
+            // 409 stays uncached — a second client racing the same key
+            // should still see the conflict. The pick-winner endpoint is
+            // safe to replay with the same key because it's intentionally
+            // idempotent at the registry layer.
             sendResponse(HTTPResponse(status: 409, reason: "Conflict",
                                       contentType: "application/json", body: body), on: connection)
         case .notPaired, .invalidWinner:
@@ -2265,12 +2403,105 @@ public final class AgentControlServer {
         return hunks
     }
 
+    private func fetchPRStatus(cwd: String) async throws -> PRStatus? {
+        guard let ghBin = ShellRunner.locateBinary("gh") else { return nil }
+        let fields = [
+            "url",
+            "number",
+            "title",
+            "body",
+            "state",
+            "isDraft",
+            "additions",
+            "deletions",
+            "changedFiles",
+            "reviewDecision",
+            "statusCheckRollup",
+        ].joined(separator: ",")
+        let result = try await ShellRunner.shared.run(
+            executable: ghBin,
+            arguments: ["pr", "view", "--json", fields],
+            cwd: cwd,
+            timeout: 20
+        )
+        guard result.exitStatus == 0 else {
+            let stderr = result.stderrString.lowercased()
+            if stderr.contains("no pull requests found")
+                || stderr.contains("no open pull requests")
+                || stderr.contains("could not find")
+                || stderr.contains("not found") {
+                return nil
+            }
+            throw NSError(
+                domain: "AgentControlServer.PR",
+                code: Int(result.exitStatus),
+                userInfo: [NSLocalizedDescriptionKey: result.stderrString]
+            )
+        }
+        guard let obj = try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any] else {
+            throw NSError(
+                domain: "AgentControlServer.PR",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "could not parse gh pr view JSON"]
+            )
+        }
+        let isDraft = obj["isDraft"] as? Bool ?? false
+        let state: PRStatus.State = {
+            if isDraft { return .draft }
+            switch (obj["state"] as? String ?? "").lowercased() {
+            case "open": return .open
+            case "merged": return .merged
+            case "closed": return .closed
+            default: return .open
+            }
+        }()
+        return PRStatus(
+            url: obj["url"] as? String ?? "",
+            number: obj["number"] as? Int ?? 0,
+            title: obj["title"] as? String ?? "",
+            body: obj["body"] as? String ?? "",
+            state: state,
+            additions: obj["additions"] as? Int ?? 0,
+            deletions: obj["deletions"] as? Int ?? 0,
+            changedFiles: obj["changedFiles"] as? Int ?? 0,
+            reviewDecision: obj["reviewDecision"] as? String,
+            checksRollup: Self.checksRollup(from: obj["statusCheckRollup"])
+        )
+    }
+
+    private static func checksRollup(from value: Any?) -> String? {
+        guard let checks = value as? [[String: Any]], !checks.isEmpty else { return nil }
+        var sawPending = false
+        for check in checks {
+            let status = ((check["status"] as? String) ?? "").lowercased()
+            let conclusion = ((check["conclusion"] as? String) ?? "").lowercased()
+            if ["failure", "failed", "timed_out", "cancelled", "action_required"].contains(conclusion) {
+                return "failure"
+            }
+            if conclusion.isEmpty || status == "queued" || status == "in_progress" || status == "pending" {
+                sawPending = true
+            }
+        }
+        return sawPending ? "pending" : "success"
+    }
+
     private func handleGetPR(sessionId: String, connection: NWConnection) async {
-        guard let uuid = UUID(uuidString: sessionId), registry.session(id: uuid) != nil else {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
-        // Phase 4 wires PRMirror; Phase 0 returns null (iOS shows "Create PR" CTA).
-        sendJSON(["pr": NSNull()], on: connection)
+        guard ShellRunner.locateBinary("gh") != nil else {
+            sendJSON(["error": "gh CLI not found on Mac. Install: brew install gh"], on: connection, status: 503)
+            return
+        }
+        do {
+            guard let status = try await fetchPRStatus(cwd: session.effectiveCwd) else {
+                sendJSON(["pr": NSNull()], on: connection)
+                return
+            }
+            sendCodable(status, on: connection)
+        } catch {
+            sendJSON(["error": "gh pr view failed", "detail": "\(error)"], on: connection, status: 502)
+        }
     }
 
     private func handleCreatePR(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
@@ -2302,7 +2533,16 @@ public final class AgentControlServer {
                 return
             }
             let prURL = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-            sendJSON(["url": prURL], on: connection)
+            var payload: [String: Any] = ["url": prURL]
+            if let key = req.idempotencyKey {
+                payload["receipt"] = [
+                    "idempotencyKey": key,
+                    "status": MobileCommandStatus.acknowledged.rawValue,
+                    "receivedAt": ISO8601DateFormatter().string(from: Date()),
+                    "serverReceiptId": UUID().uuidString,
+                ]
+            }
+            sendJSON(payload, on: connection)
         } catch {
             sendResponse(.internalError, on: connection)
         }
@@ -2313,27 +2553,69 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection); return
         }
         let cwd = session.effectiveCwd
-        guard let gitBin = ShellRunner.locateBinary("git") else {
-            sendResponse(.internalError, on: connection); return
+        guard let ghBin = ShellRunner.locateBinary("gh") else {
+            sendJSON(["error": "gh CLI not found on Mac. Install: brew install gh"], on: connection, status: 503)
+            return
         }
+        let mergeRequest = (try? JSONDecoder().decode(MergePRRequest.self, from: request.body)) ?? MergePRRequest()
+        let explicitOverride = mergeRequest.adminOverride || request.path.contains("override=true")
         do {
-            let branchResult = try await ShellRunner.shared.run(
-                executable: gitBin, arguments: ["symbolic-ref", "--short", "HEAD"],
-                cwd: cwd, timeout: 5
-            )
-            let target = branchResult.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-            let isProtected = ["main", "master"].contains(target)
-            let override = request.path.contains("override=true")
-            if isProtected && !override {
-                sendResponse(HTTPResponse(
-                    status: 409, reason: "Conflict",
-                    contentType: "application/json",
-                    body: Data(#"{"error":"Target branch is protected; pass override=true or open a PR","requireExplicitOverride":true}"#.utf8)
-                ), on: connection); return
+            guard let pr = try await fetchPRStatus(cwd: cwd) else {
+                sendJSON(["error": "No PR found for this branch"], on: connection, status: 404)
+                return
             }
-            sendJSON(["ok": true, "merged": false, "note": "Phase 4 merge impl pending"], on: connection)
+            if !explicitOverride {
+                if pr.checksRollup == "failure" {
+                    sendJSON(["error": "Checks are failing", "requireExplicitOverride": true], on: connection, status: 409)
+                    return
+                }
+                if pr.checksRollup == "pending" {
+                    sendJSON(["error": "Checks are still pending", "requireExplicitOverride": true], on: connection, status: 409)
+                    return
+                }
+                if pr.state == .closed {
+                    sendJSON(["error": "PR is closed"], on: connection, status: 409)
+                    return
+                }
+                if pr.state == .merged {
+                    let receipt = mergeRequest.idempotencyKey.map {
+                        MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+                    }
+                    sendCodable(MergePRResponse(ok: true, merged: true, pr: pr, receipt: receipt), on: connection)
+                    return
+                }
+            }
+            var args = ["pr", "merge", String(pr.number)]
+            switch mergeRequest.method {
+            case .merge: args.append("--merge")
+            case .squash: args.append("--squash")
+            case .rebase: args.append("--rebase")
+            }
+            if mergeRequest.deleteBranch { args.append("--delete-branch") }
+            if mergeRequest.auto { args.append("--auto") }
+            if explicitOverride { args.append("--admin") }
+            let result = try await ShellRunner.shared.run(
+                executable: ghBin,
+                arguments: args,
+                cwd: cwd,
+                timeout: 90
+            )
+            if result.exitStatus != 0 {
+                sendJSON([
+                    "ok": false,
+                    "merged": false,
+                    "error": "gh pr merge failed",
+                    "stderr": result.stderrString,
+                ], on: connection, status: 409)
+                return
+            }
+            let refreshed = try? await fetchPRStatus(cwd: cwd)
+            let receipt = mergeRequest.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+            }
+            sendCodable(MergePRResponse(ok: true, merged: true, pr: refreshed ?? pr, receipt: receipt), on: connection)
         } catch {
-            sendResponse(.internalError, on: connection)
+            sendJSON(["ok": false, "merged": false, "error": "\(error)"], on: connection, status: 500)
         }
     }
 
@@ -2604,30 +2886,33 @@ public final class AgentControlServer {
             snapshotCounter = registryStore?.snapshot.updateCounter ?? session.lastEventSeq
             snapshotLastEventAt = session.lastEventAt
         }
+        let warmSnapshot = registryStore?.snapshot
         let snapshot = WireChatSnapshot(
             sessionId: session.id,
             items: snapshotItems,
-            planSteps: [],
-            sourceEntries: [],
-            artifactEntries: [],
+            planSteps: warmSnapshot?.planSteps ?? [],
+            sourceEntries: warmSnapshot?.sourceEntries ?? [],
+            artifactEntries: warmSnapshot?.artifactEntries ?? [],
             // v0.7.8: forward Codex SDK todos when the warm store has them.
             // Cold fallback keeps empty — codex todos only land via SDK
             // events, which the store accumulates while live.
-            codexTodos: registryStore?.snapshot.codexTodos ?? [],
+            codexTodos: warmSnapshot?.codexTodos ?? [],
             // v0.8 QA: forward any pending CLI permission prompt so iOS
             // (or HTTP-polling clients) can render the AskUserQuestion-
             // style card too. Mac UI reads the @Published property
             // directly on SessionChatStore.
             pendingPermissionPrompt: registryStore?.pendingPermissionPrompt,
-            totalInputTokens: 0,
-            totalOutputTokens: 0,
+            totalInputTokens: warmSnapshot?.totalInputTokens ?? 0,
+            totalOutputTokens: warmSnapshot?.totalOutputTokens ?? 0,
+            cacheReadTokens: warmSnapshot?.totalCacheReadTokens ?? 0,
+            cacheCreationTokens: warmSnapshot?.totalCacheCreationTokens ?? 0,
             lastEventAt: snapshotLastEventAt,
             updateCounter: snapshotCounter,
             // v14: surface the store's lifecycle so V2 clients can drive
             // the Stop↔Send button + stopwatch clamp without polling
             // for "last item arrived in last N seconds" heuristics.
             // `.idle` fallback when there's no registry store (cold path).
-            currentTurnState: registryStore?.snapshot.currentTurnState ?? .idle
+            currentTurnState: warmSnapshot?.currentTurnState ?? .idle
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -2946,6 +3231,50 @@ public final class AgentControlServer {
         }
     }
 
+    /// v16 outbox variant: serializes the session, inlines the receipt
+    /// when present, caches the response bytes for replay. Used by
+    /// change-model/effort/mode handlers that need to return the
+    /// updated `AgentSession`.
+    private func respondWithSession(
+        uuid: UUID,
+        idempotencyKey: String?,
+        kind: MobileCommandKind,
+        payloadHash: String,
+        connection: NWConnection
+    ) async {
+        guard let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(session),
+              var dict = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        else {
+            sendResponse(.internalError, on: connection); return
+        }
+        if let key = idempotencyKey, !key.isEmpty {
+            let receipt = MobileCommandReceipt(
+                idempotencyKey: key,
+                status: .acknowledged,
+                processedAt: Date()
+            )
+            dict["receipt"] = receipt.jsonDictionary
+        }
+        guard let bytes = try? JSONSerialization.data(withJSONObject: dict) else {
+            sendResponse(.internalError, on: connection); return
+        }
+        await recordIdempotent(
+            key: idempotencyKey,
+            kind: kind,
+            sessionId: uuid,
+            connection: connection,
+            payloadHash: payloadHash,
+            responseBody: bytes,
+            responseStatus: 200
+        )
+        sendResponse(.ok(contentType: "application/json", body: bytes), on: connection)
+    }
+
     private func isSuccessfulSwap(_ result: SessionConfigChanger.SwapResult) -> Bool {
         if case .swapped = result { return true }
         return false
@@ -3170,6 +3499,56 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    // MARK: - v16 workspaces
+
+    /// `GET /workspaces` → `WorkspaceListResponse`. Wire v16+ only.
+    private func handleListWorkspaces(connection: NWConnection) {
+        let response = WorkspaceListResponse(workspaces: workspaceStore.all())
+        sendCodable(response, on: connection)
+    }
+
+    /// `PATCH /workspaces/:id` body `UpdateWorkspaceDefaultsRequest`.
+    /// Returns the updated `CodeWorkspaceRecord`. 404 when no workspace
+    /// matches the path id.
+    private func handleUpdateWorkspaceDefaults(
+        workspaceId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: workspaceId) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(UpdateWorkspaceDefaultsRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        guard let updated = workspaceStore.setProviderDefaults(
+            id: uuid,
+            defaults: req.providerDefaults
+        ) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Inline the receipt into the response body so clients with a
+        // pending outbox entry can match by idempotencyKey.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let recordData = try? encoder.encode(updated),
+              var dict = try? JSONSerialization.jsonObject(with: recordData) as? [String: Any]
+        else {
+            sendResponse(.internalError, on: connection); return
+        }
+        if let key = req.idempotencyKey {
+            let receipt = MobileCommandReceipt(
+                idempotencyKey: key,
+                status: .acknowledged,
+                processedAt: Date()
+            )
+            dict["receipt"] = receipt.jsonDictionary
+        }
+        sendJSON(dict, on: connection)
     }
 
     private func handleGetOneSession(sessionId: String, connection: NWConnection) {
@@ -3703,6 +4082,15 @@ public final class AgentControlServer {
             }
             return
         }
+        // OpenCode sidecar
+        if session.kind == .chat && session.agent == .opencode {
+            do {
+                try await forwardOpencodePrompt(session: session, prompt: text)
+            } catch {
+                serverLogger.warning("frontier child opencode send failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
         // CLI (Claude / Codex CLI)
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
             serverLogger.warning("frontier child has no pane id — skipping send")
@@ -3961,10 +4349,80 @@ public final class AgentControlServer {
                 throw SpawnFailure.message("agentapi_new_conversation_failed: \(error.localizedDescription)")
             }
         case .opencode:
-            // PR #29: OpenCode in a frontier broadcast slot would
-            // require OpencodeProcessManager+SSE plumbing here. Defer
-            // to a follow-up; surfaces as a slot failure.
-            throw SpawnFailure.message("opencode_frontier_not_implemented")
+            guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
+                switch OpencodeProcessManager.shared.state {
+                case .notInstalled:
+                    throw SpawnFailure.message("opencode_not_installed")
+                case .failed(let detail):
+                    throw SpawnFailure.message("opencode_serve_failed: \(detail)")
+                default:
+                    throw SpawnFailure.message("opencode_not_running")
+                }
+            }
+            OpencodeSSEAdapter.shared.start()
+            if OpencodeSSEAdapter.shared.chatStoreAccessor == nil {
+                let registry = self.registry
+                let chatStoreRegistry = self.chatStoreRegistry
+                OpencodeSSEAdapter.shared.chatStoreAccessor = { [weak registry, weak chatStoreRegistry] uuid in
+                    guard let registry, let chatStoreRegistry else { return nil }
+                    guard let session = registry.session(id: uuid) else { return nil }
+                    return chatStoreRegistry.acquire(for: session)
+                }
+            }
+            guard var request = await OpencodeProcessManager.shared.makeAuthorizedRequest(path: "/session") else {
+                throw SpawnFailure.message("opencode_not_running")
+            }
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "title": "Frontier #\(childIndex + 1) - OpenCode"
+            ])
+            let opencodeID: String
+            do {
+                let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode < 400 else {
+                    throw SpawnFailure.message("opencode_session_create_failed")
+                }
+                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let id = obj["id"] as? String else {
+                    throw SpawnFailure.message("opencode_bad_session_response")
+                }
+                opencodeID = id
+            } catch let failure as SpawnFailure {
+                throw failure
+            } catch {
+                throw SpawnFailure.message("opencode_session_create_failed: \(error.localizedDescription)")
+            }
+            let session = registry.createChat(
+                provider: .opencode,
+                model: slot.model,
+                chatCwd: "",
+                frontierGroupId: groupId,
+                frontierChildIndex: childIndex
+            )
+            let chatCwd: String
+            do {
+                let url = try ChatCwdManager.ensure(for: session.id)
+                chatCwd = url.path
+            } catch {
+                registry.delete(id: session.id)
+                throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
+            }
+            registry.updateRuntime(
+                id: session.id, worktreePath: chatCwd,
+                tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
+            )
+            let updated = registry.session(id: session.id) ?? session
+            OpencodeSSEAdapter.shared.register(
+                clawdmeterID: updated.id, opencodeID: opencodeID, repo: chatCwd
+            )
+            _ = chatStoreRegistry.snapshotStore(for: updated)
+            AgentEventStream.recordEvent(
+                sessionId: updated.id,
+                kind: .sessionCreated,
+                payload: ["repo": chatCwd, "agent": "opencode", "opencodeID": opencodeID]
+            )
+            return updated
         case .unknown:
             // X3: forward-compat unknown agent — no frontier-child spawn
             // path. Surfaces as a slot failure to the broadcast caller.
@@ -4009,6 +4467,8 @@ public final class AgentControlServer {
     private func sendOpencodePrompt(
         session: AgentSession,
         prompt: String,
+        idempotencyKey: String? = nil,
+        payloadHash: String = "",
         connection: NWConnection
     ) async {
         // First-prompt naming, same convention as sendChatSDKPrompt.
@@ -4087,11 +4547,18 @@ public final class AgentControlServer {
                 ), on: connection)
                 return
             }
-            sendResponse(HTTPResponse(
-                status: 200, reason: "OK",
-                contentType: "application/json",
-                body: Data(#"{"ok":true}"#.utf8)
-            ), on: connection)
+            // v16 outbox: idempotency receipt + cache. Routing through
+            // sendCommandResponse so a retried request with the same key
+            // returns the cached ok-response without re-posting to the
+            // OpenCode sidecar (which would double-send the user's prompt).
+            await sendCommandResponse(
+                body: ["ok": true],
+                key: idempotencyKey,
+                kind: .send,
+                sessionId: session.id,
+                payloadHash: payloadHash,
+                on: connection
+            )
         } catch {
             serverLogger.warning("opencode send: \(error.localizedDescription, privacy: .public)")
             sendResponse(HTTPResponse(
@@ -4102,9 +4569,59 @@ public final class AgentControlServer {
         }
     }
 
+    private func forwardOpencodePrompt(session: AgentSession, prompt: String) async throws {
+        if let store = chatStoreRegistry.snapshotStore(for: session) {
+            let userMsgId = "opencode-user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
+            store.appendSDKMessages([
+                ChatMessage(
+                    id: userMsgId,
+                    kind: .userText,
+                    title: "You",
+                    body: prompt,
+                    at: Date()
+                )
+            ])
+        }
+        guard let opencodeID = await OpencodeSSEAdapter.shared.opencodeSessionId(for: session.id) else {
+            throw NSError(
+                domain: "AgentControlServer.OpenCode",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "opencode_session_not_registered"]
+            )
+        }
+        guard var req = await OpencodeProcessManager.shared.makeAuthorizedRequest(
+            path: "/session/\(opencodeID)/message"
+        ) else {
+            throw NSError(
+                domain: "AgentControlServer.OpenCode",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "opencode_server_unreachable"]
+            )
+        }
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "parts": [
+                ["type": "text", "text": prompt]
+            ]
+        ])
+        req.timeoutInterval = 20
+        let (_, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw NSError(
+                domain: "AgentControlServer.OpenCode",
+                code: status,
+                userInfo: [NSLocalizedDescriptionKey: "opencode_send_failed: \(status)"]
+            )
+        }
+    }
+
     private func sendChatSDKPrompt(
         session: AgentSession,
         prompt: String,
+        idempotencyKey: String? = nil,
+        payloadHash: String = "",
         connection: NWConnection
     ) async {
         // D1 chat naming: tag the customName from the first user prompt
@@ -4201,8 +4718,32 @@ public final class AgentControlServer {
         let updated = registry.session(id: session.id) ?? session
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        if let body = try? encoder.encode(updated) {
-            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        // v16 outbox: inline the receipt into the AgentSession body and
+        // cache the response bytes so a retried same-key request returns
+        // the same payload without re-driving CodexSubscriptionRelay
+        // (which would silently fire a second turn through the SDK).
+        if let body = try? encoder.encode(updated),
+           var dict = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            if let key = idempotencyKey, !key.isEmpty {
+                let receipt = MobileCommandReceipt(
+                    idempotencyKey: key, status: .acknowledged, processedAt: Date()
+                )
+                dict["receipt"] = receipt.jsonDictionary
+            }
+            if let merged = try? JSONSerialization.data(withJSONObject: dict) {
+                await recordIdempotent(
+                    key: idempotencyKey,
+                    kind: .send,
+                    sessionId: session.id,
+                    connection: connection,
+                    payloadHash: payloadHash,
+                    responseBody: merged,
+                    responseStatus: 200
+                )
+                sendResponse(.ok(contentType: "application/json", body: merged), on: connection)
+            } else {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            }
         } else {
             sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
         }
@@ -4512,13 +5053,20 @@ public final class AgentControlServer {
         return newest
     }
 
-    private func handleApprovePlan(sessionId: String, connection: NWConnection) async {
+    private func handleApprovePlan(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId),
               let session = registry.session(id: uuid),
               let windowId = session.tmuxWindowId else {
             sendResponse(.notFound, on: connection)
             return
         }
+        // v16 outbox: approve-plan is a fire-and-forget POST with no
+        // body schema. Optional InterruptRequest-shaped body carries
+        // the idempotency key; missing body keeps the legacy path.
+        let req = (try? JSONDecoder().decode(InterruptRequest.self, from: request.body))
+            ?? InterruptRequest(idempotencyKey: nil)
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
         guard session.status == .planning,
               session.planText?.isEmpty == false || session.agent == .codex else {
             sendResponse(HTTPResponse(
@@ -4622,7 +5170,14 @@ public final class AgentControlServer {
             // invalidation there is a cheap no-op. Belt to the suspenders
             // anyway: invalidate both paths.
             chatFileResolver.invalidate(sessionId: uuid)
-            sendResponse(.ok(contentType: "application/json", body: Data(#"{"ok":true}"#.utf8)), on: connection)
+            await sendCommandResponse(
+                body: ["ok": true],
+                key: req.idempotencyKey,
+                kind: .approve,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
         } catch {
             serverLogger.error("approve-plan failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
@@ -5030,6 +5585,147 @@ public final class AgentControlServer {
         sendResponse(.ok(contentType: "application/json", body: body), on: connection)
     }
 
+    // MARK: - v16 idempotency helpers
+
+    /// Returns true after writing a cached response to `connection`.
+    /// The caller short-circuits its handler logic in that case so the
+    /// side effect (send to tmux, swap model, merge PR) doesn't repeat.
+    /// `kind` is recorded into the audit log but is not strictly required
+    /// for the lookup itself — keys are globally unique by construction.
+    @discardableResult
+    private func tryReplayIdempotent(
+        key: String?,
+        on connection: NWConnection
+    ) async -> Bool {
+        guard let key, !key.isEmpty else { return false }
+        guard let cached = await mobileCommandOutbox.entry(forKey: key) else { return false }
+        // Re-emit the cached response bytes. When the cache only carried
+        // the receipt (audit-log replay path, no body), synthesize a
+        // minimal JSON body that still carries the receipt so iOS can
+        // mark the outbox entry done.
+        let body: Data
+        let contentType: String
+        if let cachedBody = cached.responseBody {
+            body = cachedBody
+            contentType = cached.responseContentType
+        } else {
+            let payload: [String: Any] = ["receipt": cached.receipt.jsonDictionary, "replay": true]
+            body = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+            contentType = "application/json"
+        }
+        let response: HTTPResponse
+        if cached.responseStatus == 200 {
+            response = .ok(contentType: contentType, body: body)
+        } else {
+            // Non-200 cached responses (failed commands) replay with
+            // the original status code so iOS preserves the original
+            // error treatment.
+            response = HTTPResponse(
+                status: cached.responseStatus,
+                reason: "Cached Response",
+                contentType: contentType,
+                body: body
+            )
+        }
+        sendResponse(response, on: connection)
+        serverLogger.info("idempotent replay (key=\(key.prefix(8), privacy: .public)…, kind=\(cached.kind.rawValue, privacy: .public))")
+        return true
+    }
+
+    /// Cache a freshly-processed command's response under `key` so the
+    /// next retry with the same key replays. Also writes a hashed audit
+    /// row to `~/.clawdmeter/audit/mobile-commands.jsonl`.
+    private func recordIdempotent(
+        key: String?,
+        kind: MobileCommandKind,
+        sessionId: UUID?,
+        connection: NWConnection,
+        payloadHash: String,
+        responseBody: Data?,
+        responseContentType: String = "application/json",
+        responseStatus: Int = 200,
+        failed: Bool = false,
+        errorMessage: String? = nil
+    ) async {
+        guard let key, !key.isEmpty else { return }
+        let entry: MobileCommandOutbox.CachedEntry
+        if failed {
+            entry = await mobileCommandOutbox.recordFailure(
+                key: key,
+                kind: kind,
+                error: errorMessage ?? "unknown",
+                responseStatus: responseStatus,
+                responseBody: responseBody
+            )
+        } else {
+            entry = await mobileCommandOutbox.record(
+                key: key,
+                kind: kind,
+                responseBody: responseBody,
+                responseContentType: responseContentType,
+                responseStatus: responseStatus
+            )
+        }
+        await AuditLog.shared.recordMobileCommand(
+            idempotencyKey: key,
+            kind: kind.rawValue,
+            sessionId: sessionId,
+            sourcePeer: Self.endpointString(connection.endpoint),
+            status: entry.receipt.status.rawValue,
+            payloadHash: payloadHash,
+            serverReceiptId: entry.receipt.serverReceiptId
+        )
+    }
+
+    /// One-shot helper for idempotent JSON success responses. Inlines the
+    /// receipt into the body dict so iOS can match by idempotencyKey,
+    /// caches the bytes for replay, and writes the audit row. Equivalent
+    /// to `sendJSON(body)` when `key` is nil (legacy clients).
+    private func sendCommandResponse(
+        body: [String: Any],
+        key: String?,
+        kind: MobileCommandKind,
+        sessionId: UUID?,
+        payloadHash: String,
+        on connection: NWConnection
+    ) async {
+        var body = body
+        if let key, !key.isEmpty {
+            let receipt = MobileCommandReceipt(
+                idempotencyKey: key,
+                status: .acknowledged,
+                processedAt: Date()
+            )
+            body["receipt"] = receipt.jsonDictionary
+        }
+        guard let bytes = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        if key != nil {
+            await recordIdempotent(
+                key: key,
+                kind: kind,
+                sessionId: sessionId,
+                connection: connection,
+                payloadHash: payloadHash,
+                responseBody: bytes,
+                responseStatus: 200
+            )
+        }
+        sendResponse(.ok(contentType: "application/json", body: bytes), on: connection)
+    }
+
+    private func sendCodable<T: Encodable>(_ value: T, on connection: NWConnection) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(value) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+    }
+
     /// v0.14.0: sendJSON with arbitrary HTTP status (used by T20 design
     /// bridge proxy to surface 503/400/502 with structured error JSON).
     private func sendJSON(_ object: [String: Any], on connection: NWConnection, status: Int) {
@@ -5042,6 +5738,7 @@ public final class AgentControlServer {
         case 403: reason = "Forbidden"
         case 404: reason = "Not Found"
         case 500: reason = "Internal Server Error"
+        case 501: reason = "Not Implemented"
         case 502: reason = "Bad Gateway"
         case 503: reason = "Service Unavailable"
         default:  reason = "Status"

@@ -27,6 +27,7 @@ struct NewSessionMacSheet: View {
     @State private var agent: AgentKind = .claude
     @State private var goal: String = ""
     @State private var planMode: Bool = true
+    @State private var opencodeReady: Bool = false
     // v0.7.9: worktree by default. Local stays in the enum for
     // back-compat but the mode chip is no longer in the New Session UI.
     @State private var mode: SessionMode = .worktree
@@ -64,9 +65,9 @@ struct NewSessionMacSheet: View {
                           prompt: Text("/Users/.../my-repo"))
 
                 Picker("Agent", selection: $agent) {
-                    Text("Claude").tag(AgentKind.claude)
-                    Text("Codex").tag(AgentKind.codex)
-                    Text("Gemini").tag(AgentKind.gemini)
+                    ForEach(selectableAgents, id: \.self) { kind in
+                        Text(kind.tahoeProvider.displayName).tag(kind)
+                    }
                 }
                 .pickerStyle(.segmented)
 
@@ -122,6 +123,25 @@ struct NewSessionMacSheet: View {
         .onAppear {
             if let selected = model.selectedRepoKey { repoPath = selected }
         }
+        .task { await refreshOpencodeAvailability() }
+    }
+
+    private var selectableAgents: [AgentKind] {
+        var agents: [AgentKind] = [.claude, .codex, .gemini]
+        if opencodeReady {
+            agents.append(.opencode)
+        }
+        return agents
+    }
+
+    private func refreshOpencodeAvailability() async {
+        await OpencodeProcessManager.shared.refreshAuthStatus()
+        let hasBinary = OpencodeProcessManager.shared.binaryPath != nil
+        let hasProvider = !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
+        opencodeReady = hasBinary && hasProvider
+        if !opencodeReady, agent == .opencode {
+            agent = .claude
+        }
     }
 
     private func startSession() async {
@@ -142,10 +162,7 @@ struct NewSessionMacSheet: View {
         case .claude: modelDefault = defaults.modelId
         case .codex:  modelDefault = ModelCatalog.bundled.codex.first?.id
         case .gemini: modelDefault = ModelCatalog.bundled.gemini.first?.id
-        case .opencode:
-            // PR #29: OpenCode resolves the underlying model via
-            // `opencode auth login`; no client-side default to seed.
-            modelDefault = nil
+        case .opencode: modelDefault = ModelCatalog.bundled.opencode.first?.id
         case .unknown:
             // X3: unreachable from the picker (allCases excludes .unknown)
             errorMessage = "Unknown agent kind — relaunch to refresh."
