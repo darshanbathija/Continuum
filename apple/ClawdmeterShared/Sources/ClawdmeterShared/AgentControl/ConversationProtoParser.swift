@@ -191,20 +191,40 @@ public enum ConversationProtoParser {
         return entries.filter { $0.lastPathComponent.hasSuffix(".metadata.json") }.count
     }
 
-    /// Sums the byte sizes of all plaintext markdown artifacts in the
-    /// brain dir (task.md, implementation_plan.md, walkthrough.md,
-    /// subagent reports). Divides by 4 chars/token — an industry-standard
-    /// coarse approximation for English text. Returns 0 when no markdown
-    /// is found.
+    /// Sums byte sizes of every content-bearing artifact in the brain
+    /// dir, recursing into `.agents/` and `.system_generated/`. Divides
+    /// by 4 chars/token — coarse industry approximation. Returns 0 when
+    /// the dir is missing or empty.
+    ///
+    /// Why recurse: Antigravity 2.0.6 only writes a single planning `.md`
+    /// at the brain root (e.g. `product_roadmap.md`) but stores the bulk
+    /// of conversation content under `.system_generated/messages/*.json`
+    /// (one file per turn) and `.system_generated/logs/transcript.jsonl`.
+    /// A real session might have 17 KB of root `.md` but 1.1 MB of
+    /// nested `.json`/`.jsonl`/`.log` — a flat `.md`-only scan
+    /// underestimates by 60×, which is exactly the $0.026/day pattern we
+    /// were debugging. Counted extensions: md, txt, json, jsonl, log.
+    /// Excluded: `*.metadata.json` (already counted by `countTurns`;
+    /// double-counting would double the estimate without adding signal).
     static func estimatePlaintextTokens(brainURL: URL, fileManager: FileManager) -> Int {
-        guard let entries = try? fileManager.contentsOfDirectory(
+        guard let enumerator = fileManager.enumerator(
             at: brainURL,
-            includingPropertiesForKeys: [.fileSizeKey]
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+            options: []
         ) else { return 0 }
         var totalBytes = 0
-        for entry in entries where entry.pathExtension == "md" {
-            if let size = try? entry.resourceValues(forKeys: [.fileSizeKey]).fileSize {
-                totalBytes += size
+        for case let entry as URL in enumerator {
+            let values = try? entry.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+            guard values?.isRegularFile == true else { continue }
+            let name = entry.lastPathComponent
+            // Skip sidecar metadata files; the turn counter already
+            // reads them, and they're tiny anyway (~500 bytes each).
+            if name.hasSuffix(".metadata.json") { continue }
+            switch entry.pathExtension {
+            case "md", "txt", "json", "jsonl", "log":
+                totalBytes += values?.fileSize ?? 0
+            default:
+                continue
             }
         }
         return totalBytes / 4

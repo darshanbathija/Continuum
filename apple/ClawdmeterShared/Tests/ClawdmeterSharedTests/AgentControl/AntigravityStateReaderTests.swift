@@ -36,6 +36,23 @@ final class AntigravityStateReaderTests: XCTestCase {
         XCTAssertEqual(state.displayModelName, "gemini-3.5-flash")
     }
 
+    // v0.23.8: pin the new I/O-2026 placeholder mapping. Before this
+    // commit, a session on M134 (Gemini 3.1 Pro) priced at $0 because
+    // the raw placeholder string fell through `Pricing.shared.cost(...)`.
+    func test_parse_resolvesM134ToGemini31Pro() {
+        let text = "last_selected_agent_model:  MODEL_PLACEHOLDER_M134"
+        let state = AntigravityStateReader.parse(text: text)
+        XCTAssertEqual(state.displayModelName, "gemini-3.1-pro")
+    }
+
+    func test_knownModelTokens_coversFullPostIOLineup() {
+        // Smoke test against the map directly so accidental deletions
+        // surface here even when no .pbtxt text exercises them.
+        XCTAssertEqual(AntigravityStateReader.knownModelTokens["MODEL_PLACEHOLDER_M134"], "gemini-3.1-pro")
+        XCTAssertEqual(AntigravityStateReader.knownModelTokens["MODEL_PLACEHOLDER_M133"], "gemini-3.5-flash")
+        XCTAssertEqual(AntigravityStateReader.knownModelTokens["MODEL_PLACEHOLDER_M132"], "gemini-3-pro")
+    }
+
     func test_parse_pendingMigration() {
         let text = """
         last_selected_agent_model:  MODEL_PLACEHOLDER_M133
