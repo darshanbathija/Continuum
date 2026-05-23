@@ -4,6 +4,40 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.24.0 build 125] - 2026-05-23 — Broadcast Chat V3: side-by-side Claude / Codex / Antigravity (`darshanbathija/chat-v3`)
+
+Chat tab gets a broadcast mode. Pick 2-3 providers, send one prompt, see
+the answers side-by-side with per-provider tokens and cost. Star the
+better answer per turn. Continue from a winner to demote the broadcast
+group to a Solo chat that keeps the winning transcript.
+
+### Added
+
+- **Broadcast comparison surface** — Mac dashboard now has a left history sidebar, mode toggle (Solo vs Broadcast), provider summary chips above the chat, and a horizontally-scrollable column-per-provider transcript. iOS gets a compact version: provider pills above the selected-reply card, swipe between providers. Both surfaces ship with the Tahoe glass aesthetic from the standalone Clawdmeter redesign.
+- **Frontier wire protocol** (`Protocol.swift`) — `CreateFrontierRequest` / `CreateFrontierResponse` / `FrontierGroupSnapshot` / `FrontierSendRequest` / `FrontierTurnWinner` and new endpoints `POST /chat-sessions/frontier`, `POST /chat-sessions/frontier/:groupId/send`, `POST /chat-sessions/frontier/:groupId/pick-winner`, `POST /chat-sessions/frontier/:groupId/turn-winner`, `POST /chat-sessions/frontier/:groupId/retry-slot`. WebSocket subscription op `frontier-subscribe` streams live per-child turn state on a 100ms debounce.
+- **Per-turn winner metadata** — non-destructive star markings for each turn. Continue-from-winner is the destructive variant: archives losers and promotes the winner out of the Frontier group so follow-ups go through the regular `/sessions/:id/send` path.
+- **Deep Research toggle** — creation-time setting that propagates to every child in a Frontier group (Codex sandbox flag and Claude system prompt).
+- **`/chat-providers` gating** — surfaces per-provider availability so the broadcast mode picker can disable providers that aren't configured (e.g. Antigravity not running, Codex creds missing).
+
+### Changed
+
+- **Pre-landing review fixes** ([apple/ClawdmeterMac/AgentControl/AgentControlServer.swift](apple/ClawdmeterMac/AgentControl/AgentControlServer.swift), [apple/ClawdmeterMac/AgentControl/AgentSessionRegistry.swift](apple/ClawdmeterMac/AgentControl/AgentSessionRegistry.swift), [apple/ClawdmeterMac/Workspace/ChatV2/MacChatV2View.swift](apple/ClawdmeterMac/Workspace/ChatV2/MacChatV2View.swift), [apple/ClawdmeteriOS/Workspace/ChatV2/IOSChatV2View.swift](apple/ClawdmeteriOS/Workspace/ChatV2/IOSChatV2View.swift)):
+  - **Continue-from-winner actually leaves broadcast** — server now clears the winner's `frontierGroupId`/`frontierChildIndex` so the sidebar treats it as a regular Solo chat. UIs flip `openTarget` to `.solo(winner.id)` on the callback. `frontierGroupChildren(includeArchived:)` defaults to live-only so Frontier send fan-out + the WebSocket snapshot can never hit archived losers.
+  - **Broadcast first-send minimum** — `CreateFrontierResponse.hasMinimumBroadcast` (≥ 2 successful spawns) gates the broadcast surface. A single-success response surfaces every failed slot's `reason` instead of silently degrading to a one-agent "broadcast."
+  - **Per-child attachments** — `FrontierSendRequest.perChildText` map lets each Frontier child reference its own daemon-side staging path. Same bytes uploaded once per child via `uploadAndBuildPerChildPrompts`; legacy `SendPromptRequest` shape still accepted for back-compat.
+  - **Search/history hydration** — opening a search hit for a Frontier group that has < 2 live children (e.g. after pick-winner archived the losers) now reopens the matched session as Solo instead of a read-only transcript.
+- **OpenCode legacy auth merge restored** ([apple/ClawdmeterMac/AgentControl/OpencodeAuthFile.swift](apple/ClawdmeterMac/AgentControl/OpencodeAuthFile.swift)) — `migrateLegacyEntriesIfNeeded` no longer bails when the canonical file exists. It reads canonical, merges any legacy provider entries that canonical was missing, and writes back. Malformed canonical files are still left untouched so users with salvageable bytes don't lose them.
+
+### Fixed (adversarial review)
+
+- **Mid-fan-out archive race** — Frontier send fan-out now re-checks `archivedAt` immediately before each per-child send. A concurrent `/pick-winner` archiving a loser during another child's `await` can no longer let the prompt leak to the just-archived loser.
+- **Double-tap continue button** — both Mac `ProviderColumn` and iOS `FrontierTranscript` gate the continue-from-winner button with a `continuing` state, so a fast double-tap can't fire two `/pick-winner` POSTs (the second would 404 against the already-promoted winner).
+
+### Test coverage
+
+- 11 new unit tests: 4 in `WireV9Tests` (broadcast minimum + per-child round-trip), 1 in `OpencodeAuthFileTests` (canonical preservation across migration probe), 6 in new `AgentSessionRegistryFrontierTests` (frontierGroupChildren archived filter + clearFrontierGroupBinding).
+- Total: 643 ClawdmeterShared tests pass, 190 Mac tests pass.
+
 ## [0.23.9 build 124] - 2026-05-23 — Collapse Settings → Providers chrome to one toggle per row (`darshanbathija/settings-toggle-cleanup`)
 
 Settings → Providers was three rows of engineer-speak: status pills, mono auth-status lines, a 4-item Manage menu on OpenCode, a duplicate inline header + `@openai/codex-sdk` paragraph + Status grid (Mode / Provisioned / SDK version / Install path) + Open install folder / Wipe SDK install buttons + "How auth works" footer on Codex SDK, and the same shape plus a "What changes when SDK mode is on" / "What stays the same" bullet list on Antigravity SDK. Customer can't act on any of that — the actual question on every row is binary: on or off.

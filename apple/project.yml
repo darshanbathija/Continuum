@@ -19,8 +19,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.23.9"
-    CURRENT_PROJECT_VERSION: "124"
+    MARKETING_VERSION: "0.24.0"
+    CURRENT_PROJECT_VERSION: "125"
 
 packages:
   ClawdmeterShared:
