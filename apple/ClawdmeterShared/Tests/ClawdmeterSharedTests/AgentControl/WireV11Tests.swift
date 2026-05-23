@@ -15,14 +15,22 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsFourteen() {
-        // v14 (2026-05-23, Chat V2): explicit per-turn lifecycle on the
-        // snapshot wire (`WireChatSnapshot.currentTurnState: TurnState`),
-        // deepResearch toggle on chat requests + AgentSession, and the
-        // new `GET /chat-sessions/search?q=` endpoint. All additive +
-        // decodeIfPresent — v13 clients still decode v14 payloads
-        // cleanly with default values.
-        XCTAssertEqual(AgentControlWireVersion.current, 14)
+    func test_currentWireVersionIsSixteen() {
+        // v16 (2026-05-23, Code V2 deferred follow-ups): persisted
+        // workspace store endpoints (`GET /workspaces`, `PATCH /workspaces/:id`),
+        // uniform idempotency-key + receipt across every write endpoint,
+        // MagicDNS-first pairing host preference + forward-compat
+        // `clawdmeters://` TLS scheme. All additive; v15 clients keep
+        // decoding because every new field is optional + decodeIfPresent.
+        XCTAssertEqual(AgentControlWireVersion.current, 16)
+    }
+
+    func test_workspacesMinimumIsSixteen() {
+        XCTAssertEqual(AgentControlWireVersion.workspacesMinimum, 16)
+    }
+
+    func test_mobileOutboxMinimumIsSixteen() {
+        XCTAssertEqual(AgentControlWireVersion.mobileOutboxMinimum, 16)
     }
 
     func test_opencodeMinimumIsThirteen() {
@@ -31,6 +39,12 @@ final class WireV11Tests: XCTestCase {
 
     func test_antigravityChatMinimumIsEleven() {
         XCTAssertEqual(AgentControlWireVersion.antigravityChatMinimum, 11)
+    }
+
+    func test_codeV2MinimumIsFifteen() {
+        XCTAssertEqual(AgentControlWireVersion.codeV2Minimum, 15)
+        XCTAssertFalse(AgentControlWireVersion.supportsCodeV2ControlPlane(serverWireVersion: 14))
+        XCTAssertTrue(AgentControlWireVersion.supportsCodeV2ControlPlane(serverWireVersion: 15))
     }
 
     func test_supportsAntigravityChat_trueAtCurrentVersion() {

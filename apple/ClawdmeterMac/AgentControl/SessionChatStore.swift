@@ -178,7 +178,9 @@ public final class SessionChatStore: ObservableObject {
     @Published public private(set) var pendingPermissionPrompt: PendingPermissionPrompt?
 
     public func setPendingPermissionPrompt(_ prompt: PendingPermissionPrompt?) {
+        guard pendingPermissionPrompt != prompt else { return }
         pendingPermissionPrompt = prompt
+        Task { [staging] in await staging.touch() }
     }
     /// External plan text (from AgentSession.planText). When set, the
     /// next staging snapshot extracts steps from this text and merges
@@ -230,7 +232,11 @@ public final class SessionChatStore: ObservableObject {
         model: String? = nil,
         suppressMirror: Bool = false
     ) {
-        guard !messages.isEmpty else { return }
+        let hasTokenDelta = deltaInputTokens != 0
+            || deltaOutputTokens != 0
+            || deltaCacheCreationTokens != 0
+            || deltaCacheReadTokens != 0
+        guard !messages.isEmpty || hasTokenDelta || model != nil else { return }
         let line = ParsedLine(
             timestamp: timestamp,
             messages: messages,
@@ -246,7 +252,7 @@ public final class SessionChatStore: ObservableObject {
         // stores need this (CLI/JSONL-backed stores already have a
         // disk transcript). suppressMirror=true is set during replay
         // so we don't re-write the same messages on every replay cycle.
-        if sdkOnly && !suppressMirror {
+        if sdkOnly && !suppressMirror && !messages.isEmpty {
             SDKChatTranscriptMirror.append(sessionId: sessionId, messages: messages)
         }
     }
@@ -1190,7 +1196,12 @@ actor StagingParser {
             ingestIntoDerivedIndexes(msg)
             anyAppended = true
         }
-        if anyAppended {
+        let hasUsage =
+            line.deltaInputTokens != 0
+            || line.deltaOutputTokens != 0
+            || line.deltaCacheCreationTokens != 0
+            || line.deltaCacheReadTokens != 0
+        if anyAppended || hasUsage || (line.model?.isEmpty == false) {
             updateCounter &+= 1
             // Activity tracking: the metadata strip uses this to decide
             // whether the "thinking" indicator should pulse. We keep
@@ -1201,6 +1212,8 @@ actor StagingParser {
                 if lastEventAt == nil || stamp > lastEventAt! {
                     lastEventAt = stamp
                 }
+            } else if hasUsage, lastEventAt == nil || line.timestamp > lastEventAt! {
+                lastEventAt = line.timestamp
             }
             totalInputTokens += line.deltaInputTokens
             totalOutputTokens += line.deltaOutputTokens
@@ -1210,15 +1223,9 @@ actor StagingParser {
             // context-window meter. Only assistant turns carry usage on
             // Claude — gating on a non-zero delta keeps tool-result and
             // user lines from clobbering the last real turn.
-            let hasUsage =
-                line.deltaInputTokens != 0
-                || line.deltaOutputTokens != 0
-                || line.deltaCacheCreationTokens != 0
-                || line.deltaCacheReadTokens != 0
-            if hasUsage,
-               let stamp = line.messages.map(\.at).max(),
-               lastUsageAt == nil || stamp >= lastUsageAt! {
-                lastUsageAt = stamp
+            let usageStamp = line.messages.map(\.at).max() ?? line.timestamp
+            if hasUsage, lastUsageAt == nil || usageStamp >= lastUsageAt! {
+                lastUsageAt = usageStamp
                 lastInputTokens = line.deltaInputTokens
                 lastOutputTokens = line.deltaOutputTokens
                 lastCacheCreationTokens = line.deltaCacheCreationTokens
@@ -1255,6 +1262,13 @@ actor StagingParser {
     func setCurrentTurnState(_ state: TurnState) {
         guard currentTurnState != state else { return }
         currentTurnState = state
+        updateCounter &+= 1
+    }
+
+    /// Bump the published snapshot without changing parsed transcript state.
+    /// Used when parallel store state such as `pendingPermissionPrompt`
+    /// changes; WS subscribers read that field while encoding the snapshot.
+    func touch() {
         updateCounter &+= 1
     }
 

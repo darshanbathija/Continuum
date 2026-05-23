@@ -98,7 +98,20 @@ public enum AgentControlWireVersion {
     /// search endpoint walking JSONL on disk. All additive +
     /// decodeIfPresent: older Macs/clients see decode-default values
     /// without crashing.
-    public static let current: Int = 14
+    /// v15 (2026-05-23, Code V2 control plane): additive durable workspace,
+    /// runtime binding, provider-event, mobile-command, billing-confidence,
+    /// and PR mirror DTOs. `AgentSession` gains optional workspace/runtime
+    /// fields and explicit `runtimeCwd` / `chatCwd` so chat sessions stop
+    /// overloading `worktreePath` as their cwd. `ModelCatalog` gains an
+    /// OpenCode bucket plus provider-indexed accessors.
+    /// v16 (2026-05-23, Code V2 deferred follow-ups ship): adds persisted
+    /// workspace store (`GET /workspaces`, `PATCH /workspaces/:id`), uniform
+    /// idempotency-key + receipt across every write endpoint (send,
+    /// approve, interrupt, change-model/effort/mode, autopilot, pick-winner),
+    /// MagicDNS-first pairing host preference + forward-compat
+    /// `clawdmeters://` TLS scheme. Older Macs return 404 on the workspace
+    /// endpoints; iOS falls back to per-session repo bucketing.
+    public static let current: Int = 16
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -187,6 +200,25 @@ public enum AgentControlWireVersion {
     /// (which only covers the most-recent 2 conversations on iOS, 20 on
     /// Mac) and label results "Recent only".
     public static let chatSearchMinimum: Int = 14
+    /// Minimum wire version that surfaces the Code V2 durable control-plane
+    /// fields (`SessionRuntimeBinding`, explicit cwd fields, mobile command
+    /// receipts, PR mirror state). Older peers keep using the legacy
+    /// AgentSession shape; every new field is decodeIfPresent.
+    public static let codeV2Minimum: Int = 15
+
+    /// Minimum wire version that exposes the persisted workspace store at
+    /// `GET /workspaces` + `PATCH /workspaces/:id`. Older Macs 404 the
+    /// requests; iOS falls back to per-session repo bucketing (no per-repo
+    /// defaults inheritance for new sessions).
+    public static let workspacesMinimum: Int = 16
+
+    /// Minimum wire version where every write endpoint (send, approve,
+    /// interrupt, change-*, autopilot, pick-winner, create-pr, merge)
+    /// honors a per-request idempotency key and returns a
+    /// `MobileCommandReceipt`. Older Macs treat the field as a no-op;
+    /// iOS retains the receipt locally so a duplicate retry against
+    /// a too-old Mac surfaces as "no receipt — assume delivered".
+    public static let mobileOutboxMinimum: Int = 16
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -294,6 +326,30 @@ public enum AgentControlWireVersion {
     public static func supportsChatSearch(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= chatSearchMinimum
+    }
+
+    /// Whether the paired Mac exposes Code V2's durable workspace/runtime
+    /// binding fields. UI can render legacy sessions normally when false,
+    /// but should hide workspace archive / command-receipt affordances.
+    public static func supportsCodeV2ControlPlane(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= codeV2Minimum
+    }
+
+    /// Whether the paired Mac exposes the v16 `/workspaces` endpoints.
+    public static func supportsWorkspaces(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= workspacesMinimum
+    }
+
+    /// Whether the paired Mac honors the v16 idempotency key + receipt
+    /// contract across every write endpoint. When false, the iOS outbox
+    /// still enqueues + retries — the server just doesn't dedup, so a
+    /// dropped Wi-Fi mid-retry on an older Mac could double-send. iOS
+    /// surfaces a banner when this is false and pending entries exist.
+    public static func supportsMobileOutbox(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= mobileOutboxMinimum
     }
 }
 
@@ -568,12 +624,24 @@ public struct ModelCatalog: Codable, Sendable {
     /// `cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels`
     /// surfaces — 3-flavor split between Pro/Flash/Flash-Lite.
     public let gemini: [ModelCatalogEntry]
+    /// OpenCode is a runtime/provider adapter, not a single model vendor.
+    /// Entries here represent Clawdmeter-visible choices while the exact
+    /// underlying provider/model identity is persisted on
+    /// `SessionRuntimeBinding.providerModelId`.
+    public let opencode: [ModelCatalogEntry]
     public let updatedAt: Date
 
-    public init(claude: [ModelCatalogEntry], codex: [ModelCatalogEntry], gemini: [ModelCatalogEntry] = [], updatedAt: Date) {
+    public init(
+        claude: [ModelCatalogEntry],
+        codex: [ModelCatalogEntry],
+        gemini: [ModelCatalogEntry] = [],
+        opencode: [ModelCatalogEntry] = [],
+        updatedAt: Date
+    ) {
         self.claude = claude
         self.codex = codex
         self.gemini = gemini
+        self.opencode = opencode
         self.updatedAt = updatedAt
     }
 
@@ -620,6 +688,9 @@ public struct ModelCatalog: Codable, Sendable {
             // v0.7.17: same Standard/Extended split as 3.5 Flash above.
             ModelCatalogEntry(id: "gemini-3-flash-thinking",   provider: .gemini, displayName: "Gemini 3 Flash (Thinking)",   cliAlias: "flash-thinking",     supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Complex problem solving", badge: "Thinking"),
         ],
+        opencode: [
+            ModelCatalogEntry(id: "opencode-default", provider: .opencode, displayName: "OpenCode default", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "BYOK provider", badge: "BYOK"),
+        ],
         updatedAt: Date(timeIntervalSince1970: 1747353600) // 2026-05-15
     )
 
@@ -628,6 +699,29 @@ public struct ModelCatalog: Codable, Sendable {
         claude.first(where: { $0.id == id || $0.cliAlias == id })
             ?? codex.first(where: { $0.id == id || $0.cliAlias == id })
             ?? gemini.first(where: { $0.id == id || $0.cliAlias == id })
+            ?? opencode.first(where: { $0.id == id || $0.cliAlias == id })
+    }
+
+    /// Provider-indexed catalog used by Code V2 pickers. The legacy arrays
+    /// stay on the wire for back-compat; this accessor is the new durable
+    /// shape clients should prefer.
+    public var byProvider: [String: [ModelCatalogEntry]] {
+        [
+            AgentKind.claude.rawValue: claude,
+            AgentKind.codex.rawValue: codex,
+            AgentKind.gemini.rawValue: gemini,
+            AgentKind.opencode.rawValue: opencode,
+        ]
+    }
+
+    public func entries(for provider: AgentKind) -> [ModelCatalogEntry] {
+        switch provider {
+        case .claude: return claude
+        case .codex: return codex
+        case .gemini: return gemini
+        case .opencode: return opencode
+        case .unknown: return []
+        }
     }
 
     // MARK: - Codable
@@ -637,7 +731,7 @@ public struct ModelCatalog: Codable, Sendable {
     /// Codable throws on missing keys; decodeIfPresent + default returns
     /// an empty Gemini array.
     private enum CodingKeys: String, CodingKey {
-        case claude, codex, gemini, updatedAt
+        case claude, codex, gemini, opencode, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -645,6 +739,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.claude = try c.decode([ModelCatalogEntry].self, forKey: .claude)
         self.codex = try c.decode([ModelCatalogEntry].self, forKey: .codex)
         self.gemini = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .gemini) ?? []
+        self.opencode = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .opencode) ?? []
         self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
     }
 
@@ -653,6 +748,7 @@ public struct ModelCatalog: Codable, Sendable {
         try c.encode(claude, forKey: .claude)
         try c.encode(codex, forKey: .codex)
         try c.encode(gemini, forKey: .gemini)
+        try c.encode(opencode, forKey: .opencode)
         try c.encode(updatedAt, forKey: .updatedAt)
     }
 }
@@ -872,6 +968,615 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
     }
 }
 
+// MARK: - Code V2 control plane (wire v15)
+
+/// Concrete runtime transport backing a session. This is intentionally
+/// separate from `AgentKind`: OpenCode can run Anthropic/OpenAI/Google
+/// models underneath; Codex can be CLI or SDK; Gemini is agentapi rather
+/// than the old standalone CLI.
+public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterable {
+    case claudeCLI = "claude_cli"
+    case codexCLI = "codex_cli"
+    case codexSDK = "codex_sdk"
+    case antigravityAgentAPI = "antigravity_agentapi"
+    case opencodeServer = "opencode_server"
+    case vscodeBridge = "vscode_bridge"
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = SessionRuntimeKind(rawValue: raw) ?? .unknown
+    }
+
+    public static func inferred(
+        agent: AgentKind,
+        codexBackend: CodexChatBackend? = nil,
+        geminiBackend: GeminiBackend? = nil
+    ) -> SessionRuntimeKind {
+        switch agent {
+        case .claude:
+            return .claudeCLI
+        case .codex:
+            return codexBackend == .sdk ? .codexSDK : .codexCLI
+        case .gemini:
+            return geminiBackend == .agentapi ? .antigravityAgentAPI : .unknown
+        case .opencode:
+            return .opencodeServer
+        case .unknown:
+            return .unknown
+        }
+    }
+}
+
+/// How trustworthy a cost/usage value is. Provider-reported costs should
+/// survive unchanged; local pricing only fills gaps and must be labelled.
+public enum BillingConfidence: String, Codable, Hashable, Sendable, CaseIterable {
+    case providerReported = "provider_reported"
+    case locallyPriced = "locally_priced"
+    case estimated
+    case unavailable
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = BillingConfidence(rawValue: raw) ?? .unavailable
+    }
+}
+
+public struct SessionRuntimeCapabilities: Codable, Hashable, Sendable {
+    public let supportsStreaming: Bool
+    public let supportsCancel: Bool
+    public let supportsPermissionPrompts: Bool
+    public let supportsUsage: Bool
+    public let supportsTerminal: Bool
+    public let supportsPRMirror: Bool
+    public let supportsArtifacts: Bool
+
+    public init(
+        supportsStreaming: Bool = true,
+        supportsCancel: Bool = false,
+        supportsPermissionPrompts: Bool = false,
+        supportsUsage: Bool = false,
+        supportsTerminal: Bool = false,
+        supportsPRMirror: Bool = true,
+        supportsArtifacts: Bool = true
+    ) {
+        self.supportsStreaming = supportsStreaming
+        self.supportsCancel = supportsCancel
+        self.supportsPermissionPrompts = supportsPermissionPrompts
+        self.supportsUsage = supportsUsage
+        self.supportsTerminal = supportsTerminal
+        self.supportsPRMirror = supportsPRMirror
+        self.supportsArtifacts = supportsArtifacts
+    }
+
+    public static func defaults(for runtime: SessionRuntimeKind) -> SessionRuntimeCapabilities {
+        switch runtime {
+        case .claudeCLI, .codexCLI:
+            return SessionRuntimeCapabilities(
+                supportsCancel: true,
+                supportsPermissionPrompts: true,
+                supportsUsage: true,
+                supportsTerminal: true
+            )
+        case .codexSDK:
+            return SessionRuntimeCapabilities(
+                supportsCancel: true,
+                supportsPermissionPrompts: false,
+                supportsUsage: true,
+                supportsTerminal: false
+            )
+        case .antigravityAgentAPI:
+            return SessionRuntimeCapabilities(
+                supportsCancel: true,
+                supportsPermissionPrompts: false,
+                supportsUsage: true,
+                supportsTerminal: false
+            )
+        case .opencodeServer:
+            return SessionRuntimeCapabilities(
+                supportsCancel: true,
+                supportsPermissionPrompts: true,
+                supportsUsage: true,
+                supportsTerminal: true
+            )
+        case .vscodeBridge:
+            return SessionRuntimeCapabilities(
+                supportsCancel: true,
+                supportsPermissionPrompts: true,
+                supportsUsage: false,
+                supportsTerminal: true
+            )
+        case .unknown:
+            return SessionRuntimeCapabilities(supportsStreaming: false)
+        }
+    }
+}
+
+/// Runtime/provider binding for a session. This is the durable replacement
+/// for overloading `AgentKind` with transport, billing, and external ids.
+public struct SessionRuntimeBinding: Codable, Hashable, Sendable {
+    public let runtimeKind: SessionRuntimeKind
+    public let externalSessionId: String?
+    public let externalThreadId: String?
+    public let projectId: String?
+    public let providerModelId: String?
+    public let billingProvider: String?
+    public let capabilities: SessionRuntimeCapabilities
+    public let cancelSupported: Bool
+    public let billingConfidence: BillingConfidence
+    public let boundAt: Date
+    public let metadata: [String: String]
+
+    public init(
+        runtimeKind: SessionRuntimeKind,
+        externalSessionId: String? = nil,
+        externalThreadId: String? = nil,
+        projectId: String? = nil,
+        providerModelId: String? = nil,
+        billingProvider: String? = nil,
+        capabilities: SessionRuntimeCapabilities? = nil,
+        cancelSupported: Bool? = nil,
+        billingConfidence: BillingConfidence = .unavailable,
+        boundAt: Date = Date(),
+        metadata: [String: String] = [:]
+    ) {
+        let resolvedCapabilities = capabilities ?? SessionRuntimeCapabilities.defaults(for: runtimeKind)
+        self.runtimeKind = runtimeKind
+        self.externalSessionId = externalSessionId
+        self.externalThreadId = externalThreadId
+        self.projectId = projectId
+        self.providerModelId = providerModelId
+        self.billingProvider = billingProvider
+        self.capabilities = resolvedCapabilities
+        self.cancelSupported = cancelSupported ?? resolvedCapabilities.supportsCancel
+        self.billingConfidence = billingConfidence
+        self.boundAt = boundAt
+        self.metadata = metadata
+    }
+
+    public func updating(
+        externalSessionId: String?? = nil,
+        externalThreadId: String?? = nil,
+        projectId: String?? = nil,
+        providerModelId: String?? = nil,
+        billingProvider: String?? = nil,
+        billingConfidence: BillingConfidence? = nil,
+        metadata: [String: String]? = nil
+    ) -> SessionRuntimeBinding {
+        SessionRuntimeBinding(
+            runtimeKind: runtimeKind,
+            externalSessionId: Self.resolve(externalSessionId, fallback: self.externalSessionId),
+            externalThreadId: Self.resolve(externalThreadId, fallback: self.externalThreadId),
+            projectId: Self.resolve(projectId, fallback: self.projectId),
+            providerModelId: Self.resolve(providerModelId, fallback: self.providerModelId),
+            billingProvider: Self.resolve(billingProvider, fallback: self.billingProvider),
+            capabilities: capabilities,
+            cancelSupported: cancelSupported,
+            billingConfidence: billingConfidence ?? self.billingConfidence,
+            boundAt: boundAt,
+            metadata: metadata ?? self.metadata
+        )
+    }
+
+    private static func resolve<T>(_ candidate: T??, fallback: T?) -> T? {
+        switch candidate {
+        case .none: return fallback
+        case .some(let value): return value
+        }
+    }
+}
+
+public struct WorkspaceProviderDefaults: Codable, Hashable, Sendable {
+    public let defaultAgent: AgentKind
+    public let defaultModelByProvider: [String: String]
+    public let defaultRuntimeByProvider: [String: SessionRuntimeKind]
+    public let defaultEffort: ReasoningEffort?
+
+    public init(
+        defaultAgent: AgentKind = .claude,
+        defaultModelByProvider: [String: String] = [:],
+        defaultRuntimeByProvider: [String: SessionRuntimeKind] = [:],
+        defaultEffort: ReasoningEffort? = nil
+    ) {
+        self.defaultAgent = defaultAgent
+        self.defaultModelByProvider = defaultModelByProvider
+        self.defaultRuntimeByProvider = defaultRuntimeByProvider
+        self.defaultEffort = defaultEffort
+    }
+}
+
+public struct WorkspaceArchiveMetadata: Codable, Hashable, Sendable {
+    public let archivedAt: Date?
+    public let finalStatus: String?
+    public let selectedWinnerSessionId: UUID?
+    public let summary: String?
+
+    public init(
+        archivedAt: Date? = nil,
+        finalStatus: String? = nil,
+        selectedWinnerSessionId: UUID? = nil,
+        summary: String? = nil
+    ) {
+        self.archivedAt = archivedAt
+        self.finalStatus = finalStatus
+        self.selectedWinnerSessionId = selectedWinnerSessionId
+        self.summary = summary
+    }
+}
+
+/// Persisted Code V2 workspace/worktree entity. A Project owns one or more
+/// repos; each repo can expose many isolated workspaces/worktrees; sessions
+/// bind into those workspaces through `AgentSession.workspaceId`.
+public struct CodeWorkspaceRecord: Codable, Hashable, Sendable, Identifiable {
+    public let id: UUID
+    public let projectId: UUID
+    public let repoRoot: String
+    public let repoDisplayName: String
+    public let defaultBranch: String?
+    public let worktreeRoot: String?
+    public let runtimeCwd: String
+    public let chatCwd: String?
+    public let providerDefaults: WorkspaceProviderDefaults
+    public let activeSessionIds: [UUID]
+    public let branchName: String?
+    public let prMirrorState: PRMirrorState?
+    public let archiveMetadata: WorkspaceArchiveMetadata?
+    public let createdAt: Date
+    public let updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        projectId: UUID,
+        repoRoot: String,
+        repoDisplayName: String,
+        defaultBranch: String? = nil,
+        worktreeRoot: String? = nil,
+        runtimeCwd: String,
+        chatCwd: String? = nil,
+        providerDefaults: WorkspaceProviderDefaults = WorkspaceProviderDefaults(),
+        activeSessionIds: [UUID] = [],
+        branchName: String? = nil,
+        prMirrorState: PRMirrorState? = nil,
+        archiveMetadata: WorkspaceArchiveMetadata? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.projectId = projectId
+        self.repoRoot = repoRoot
+        self.repoDisplayName = repoDisplayName
+        self.defaultBranch = defaultBranch
+        self.worktreeRoot = worktreeRoot
+        self.runtimeCwd = runtimeCwd
+        self.chatCwd = chatCwd
+        self.providerDefaults = providerDefaults
+        self.activeSessionIds = activeSessionIds
+        self.branchName = branchName
+        self.prMirrorState = prMirrorState
+        self.archiveMetadata = archiveMetadata
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+/// Normalized provider event stream used by mobile and desktop projections.
+public enum ProviderEventKind: String, Codable, Hashable, Sendable, CaseIterable {
+    case turnStarted = "turn_started"
+    case messageAdded = "message_added"
+    case toolCall = "tool_call"
+    case toolResult = "tool_result"
+    case usageDelta = "usage_delta"
+    case turnCompleted = "turn_completed"
+    case turnFailed = "turn_failed"
+    case permissionPrompt = "permission_prompt"
+    case summaryUpdated = "summary_updated"
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = ProviderEventKind(rawValue: raw) ?? .messageAdded
+    }
+}
+
+public struct ProviderEventEnvelope: Codable, Hashable, Sendable, Identifiable {
+    public let id: String
+    public let sessionId: UUID
+    public let runtimeBinding: SessionRuntimeBinding?
+    public let kind: ProviderEventKind
+    public let at: Date
+    public let cursor: UInt64?
+    /// Variant-specific JSON payload encoded as a string to keep the shared
+    /// protocol strict and forward-compatible.
+    public let payload: String
+
+    public init(
+        id: String = UUID().uuidString,
+        sessionId: UUID,
+        runtimeBinding: SessionRuntimeBinding? = nil,
+        kind: ProviderEventKind,
+        at: Date = Date(),
+        cursor: UInt64? = nil,
+        payload: String = "{}"
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.runtimeBinding = runtimeBinding
+        self.kind = kind
+        self.at = at
+        self.cursor = cursor
+        self.payload = payload
+    }
+}
+
+public enum MobileCommandKind: String, Codable, Hashable, Sendable, CaseIterable {
+    case send
+    case approve
+    case interrupt
+    case permissionResponse = "permission_response"
+    case terminalInput = "terminal_input"
+    case createPR = "create_pr"
+    case mergePR = "merge_pr"
+    /// v16: every write endpoint that the iOS outbox can issue gets a
+    /// kind for audit/UX disambiguation.
+    case changeModel = "change_model"
+    case changeEffort = "change_effort"
+    case changeMode = "change_mode"
+    case setAutopilot = "set_autopilot"
+    case pickWinner = "pick_winner"
+    case updateWorkspace = "update_workspace"
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = MobileCommandKind(rawValue: raw) ?? .send
+    }
+}
+
+public enum MobileCommandStatus: String, Codable, Hashable, Sendable, CaseIterable {
+    case queued
+    case sent
+    case acknowledged
+    case failed
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = MobileCommandStatus(rawValue: raw) ?? .failed
+    }
+}
+
+public struct MobileCommandEnvelope: Codable, Hashable, Sendable, Identifiable {
+    public var id: String { idempotencyKey }
+    public let idempotencyKey: String
+    public let deviceId: String
+    public let sessionId: UUID?
+    public let kind: MobileCommandKind
+    public let status: MobileCommandStatus
+    public let createdAt: Date
+    public let lastAttemptAt: Date?
+    public let retryCount: Int
+    public let payload: String
+
+    public init(
+        idempotencyKey: String,
+        deviceId: String,
+        sessionId: UUID? = nil,
+        kind: MobileCommandKind,
+        status: MobileCommandStatus = .queued,
+        createdAt: Date = Date(),
+        lastAttemptAt: Date? = nil,
+        retryCount: Int = 0,
+        payload: String = "{}"
+    ) {
+        self.idempotencyKey = idempotencyKey
+        self.deviceId = deviceId
+        self.sessionId = sessionId
+        self.kind = kind
+        self.status = status
+        self.createdAt = createdAt
+        self.lastAttemptAt = lastAttemptAt
+        self.retryCount = retryCount
+        self.payload = payload
+    }
+}
+
+public struct MobileCommandReceipt: Codable, Hashable, Sendable, Identifiable {
+    public var id: String { idempotencyKey }
+    public let idempotencyKey: String
+    public let status: MobileCommandStatus
+    public let receivedAt: Date
+    public let processedAt: Date?
+    public let serverReceiptId: String
+    public let error: String?
+
+    public init(
+        idempotencyKey: String,
+        status: MobileCommandStatus,
+        receivedAt: Date = Date(),
+        processedAt: Date? = nil,
+        serverReceiptId: String = UUID().uuidString,
+        error: String? = nil
+    ) {
+        self.idempotencyKey = idempotencyKey
+        self.status = status
+        self.receivedAt = receivedAt
+        self.processedAt = processedAt
+        self.serverReceiptId = serverReceiptId
+        self.error = error
+    }
+
+    /// JSON dictionary representation suitable for inlining into an
+    /// existing `[String: Any]` response body without round-tripping
+    /// through JSONEncoder. ISO8601 dates, raw status string. Server
+    /// uses this when an endpoint still returns an ad-hoc dict (most
+    /// of them do) but needs to attach a `"receipt"` key.
+    public var jsonDictionary: [String: Any] {
+        let iso = ISO8601DateFormatter()
+        var dict: [String: Any] = [
+            "idempotencyKey": idempotencyKey,
+            "status": status.rawValue,
+            "receivedAt": iso.string(from: receivedAt),
+            "serverReceiptId": serverReceiptId,
+        ]
+        if let processedAt { dict["processedAt"] = iso.string(from: processedAt) }
+        if let error { dict["error"] = error }
+        return dict
+    }
+}
+
+/// `POST /sessions/:id/interrupt` body. v15 and earlier sent no body;
+/// v16+ accepts an optional `InterruptRequest` so the outbox can dedupe
+/// a re-issued Stop. Server tolerates empty / missing body and treats
+/// the request as no-key (i.e. always-process).
+public struct InterruptRequest: Codable, Sendable {
+    public let idempotencyKey: String?
+
+    public init(idempotencyKey: String? = nil) {
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+/// `GET /workspaces` response — top-level array carrier so the daemon's
+/// `sendCodable` path emits a proper top-level type (Swift's
+/// JSONEncoder can't encode raw Arrays as top-level today without a
+/// shim). v16+. Older Macs 404 the endpoint; iOS treats that as "no
+/// persisted workspaces" and falls back to per-session repo bucketing.
+public struct WorkspaceListResponse: Codable, Sendable {
+    public let workspaces: [CodeWorkspaceRecord]
+
+    public init(workspaces: [CodeWorkspaceRecord]) {
+        self.workspaces = workspaces
+    }
+}
+
+/// `PATCH /workspaces/:id` request — partial update to a workspace's
+/// provider defaults. Only the fields provided are overwritten; the
+/// rest of the record (sessions, archive metadata) is untouched.
+public struct UpdateWorkspaceDefaultsRequest: Codable, Sendable {
+    public let providerDefaults: WorkspaceProviderDefaults
+    public let idempotencyKey: String?
+
+    public init(providerDefaults: WorkspaceProviderDefaults, idempotencyKey: String? = nil) {
+        self.providerDefaults = providerDefaults
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public enum PRReviewState: String, Codable, Hashable, Sendable, CaseIterable {
+    case approved
+    case changesRequested = "changes_requested"
+    case reviewRequired = "review_required"
+    case pending
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = PRReviewState(rawValue: raw) ?? .unknown
+    }
+}
+
+public enum PRMergeability: String, Codable, Hashable, Sendable, CaseIterable {
+    case mergeable
+    case blocked
+    case dirty
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = PRMergeability(rawValue: raw) ?? .unknown
+    }
+}
+
+public enum PRCheckState: String, Codable, Hashable, Sendable, CaseIterable {
+    case success
+    case pending
+    case failure
+    case skipped
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = PRCheckState(rawValue: raw) ?? .unknown
+    }
+}
+
+public struct PRCheckMirror: Codable, Hashable, Sendable, Identifiable {
+    public var id: String { name }
+    public let name: String
+    public let state: PRCheckState
+    public let url: String?
+    public let completedAt: Date?
+
+    public init(name: String, state: PRCheckState, url: String? = nil, completedAt: Date? = nil) {
+        self.name = name
+        self.state = state
+        self.url = url
+        self.completedAt = completedAt
+    }
+}
+
+public struct PRMergeResult: Codable, Hashable, Sendable {
+    public let merged: Bool
+    public let mergedAt: Date?
+    public let sha: String?
+    public let error: String?
+
+    public init(merged: Bool, mergedAt: Date? = nil, sha: String? = nil, error: String? = nil) {
+        self.merged = merged
+        self.mergedAt = mergedAt
+        self.sha = sha
+        self.error = error
+    }
+}
+
+public struct PRMirrorState: Codable, Hashable, Sendable {
+    public let branchName: String?
+    public let prURL: String?
+    public let number: Int?
+    public let title: String?
+    public let state: PRStatus.State?
+    public let checks: [PRCheckMirror]
+    public let checksRollup: PRCheckState
+    public let reviewState: PRReviewState
+    public let mergeability: PRMergeability
+    public let protectedBranchGate: Bool
+    public let lastMergeResult: PRMergeResult?
+    public let lastCheckedAt: Date?
+
+    public init(
+        branchName: String? = nil,
+        prURL: String? = nil,
+        number: Int? = nil,
+        title: String? = nil,
+        state: PRStatus.State? = nil,
+        checks: [PRCheckMirror] = [],
+        checksRollup: PRCheckState = .unknown,
+        reviewState: PRReviewState = .unknown,
+        mergeability: PRMergeability = .unknown,
+        protectedBranchGate: Bool = false,
+        lastMergeResult: PRMergeResult? = nil,
+        lastCheckedAt: Date? = nil
+    ) {
+        self.branchName = branchName
+        self.prURL = prURL
+        self.number = number
+        self.title = title
+        self.state = state
+        self.checks = checks
+        self.checksRollup = checksRollup
+        self.reviewState = reviewState
+        self.mergeability = mergeability
+        self.protectedBranchGate = protectedBranchGate
+        self.lastMergeResult = lastMergeResult
+        self.lastCheckedAt = lastCheckedAt
+    }
+}
+
 /// Where the session executes — the Codex-desktop "mode picker" axis.
 /// Switching mode on a live session triggers a restart in the new cwd
 /// (D13 overlay flow). Wire-stable: new variants append.
@@ -1081,6 +1786,26 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// parent session. Sidebar nests sub-rows under the parent.
     public let parentSessionId: UUID?
 
+    // MARK: - Code V2 schema v8 additions (wire v15)
+
+    /// Durable workspace/worktree id. Nil for legacy sessions created
+    /// before Code V2 workspace persistence landed.
+    public let workspaceId: UUID?
+    /// Explicit cwd for the runtime process. For code sessions this is the
+    /// worktree root when isolated, otherwise the repo root. For chat
+    /// sessions this is the per-chat cwd.
+    public let runtimeCwd: String?
+    /// Explicit chat cwd. Kept separate from `runtimeCwd` because a future
+    /// editor bridge can attach chat context from one directory while the
+    /// runtime executes inside an isolated worktree.
+    public let chatCwd: String?
+    /// Durable runtime/provider binding. Replaces implicit "AgentKind means
+    /// transport + billing + external id" assumptions.
+    public let runtimeBinding: SessionRuntimeBinding?
+    /// Backend-owned PR/check mirror. Nil until a PR exists or the daemon
+    /// has polled the branch.
+    public let prMirrorState: PRMirrorState?
+
     // MARK: - Sessions v2 schema v3 additions
     //
     // All three optional + decoder-tolerant so v2 sessions.json files
@@ -1208,6 +1933,11 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         terminalPanes: [TerminalPaneRef] = [],
         scheduledFollowUps: [ScheduledFollowUp] = [],
         parentSessionId: UUID? = nil,
+        workspaceId: UUID? = nil,
+        runtimeCwd: String? = nil,
+        chatCwd: String? = nil,
+        runtimeBinding: SessionRuntimeBinding? = nil,
+        prMirrorState: PRMirrorState? = nil,
         effort: ReasoningEffort? = nil,
         abPairSessionId: UUID? = nil,
         abPairDecidedAt: Date? = nil,
@@ -1241,6 +1971,11 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.terminalPanes = terminalPanes
         self.scheduledFollowUps = scheduledFollowUps
         self.parentSessionId = parentSessionId
+        self.workspaceId = workspaceId
+        self.runtimeCwd = runtimeCwd
+        self.chatCwd = chatCwd
+        self.runtimeBinding = runtimeBinding
+        self.prMirrorState = prMirrorState
         self.effort = effort
         self.abPairSessionId = abPairSessionId
         self.abPairDecidedAt = abPairDecidedAt
@@ -1284,6 +2019,13 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.terminalPanes = (try? c.decodeIfPresent([TerminalPaneRef].self, forKey: .terminalPanes)) ?? []
         self.scheduledFollowUps = (try? c.decodeIfPresent([ScheduledFollowUp].self, forKey: .scheduledFollowUps)) ?? []
         self.parentSessionId = try c.decodeIfPresent(UUID.self, forKey: .parentSessionId)
+        // Code V2 schema v8 fields. All optional + decoder-tolerant so
+        // pre-v15 sessions.json files survive unchanged.
+        self.workspaceId = (try? c.decodeIfPresent(UUID.self, forKey: .workspaceId)) ?? nil
+        self.runtimeCwd = (try? c.decodeIfPresent(String.self, forKey: .runtimeCwd)) ?? nil
+        self.chatCwd = (try? c.decodeIfPresent(String.self, forKey: .chatCwd)) ?? nil
+        self.runtimeBinding = (try? c.decodeIfPresent(SessionRuntimeBinding.self, forKey: .runtimeBinding)) ?? nil
+        self.prMirrorState = (try? c.decodeIfPresent(PRMirrorState.self, forKey: .prMirrorState)) ?? nil
         // Schema v3 fields: optional + decoder-tolerant so v2 files decode.
         self.effort = (try? c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)) ?? nil
         self.abPairSessionId = (try? c.decodeIfPresent(UUID.self, forKey: .abPairSessionId)) ?? nil
@@ -1338,9 +2080,11 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// of (worktreePath, repoKey) is non-nil at persistence time;
     /// preconditionFailure here catches any drift in that invariant.
     public var effectiveCwd: String {
+        if let cwd = runtimeCwd, !cwd.isEmpty { return cwd }
+        if kind == .chat, let cwd = chatCwd, !cwd.isEmpty { return cwd }
         if let wt = worktreePath, !wt.isEmpty { return wt }
         if let rk = repoKey, !rk.isEmpty { return rk }
-        preconditionFailure("AgentSession \(id) has neither worktreePath nor repoKey — daemon spawned an invalid session (kind=\(kind))")
+        preconditionFailure("AgentSession \(id) has no runtimeCwd/chatCwd/worktreePath/repoKey — daemon spawned an invalid session (kind=\(kind))")
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1349,6 +2093,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              status, planText, createdAt, lastEventAt, lastEventSeq,
              mode, archivedAt,
              terminalPanes, scheduledFollowUps, parentSessionId,
+             // v15 Code V2 control-plane fields.
+             workspaceId, runtimeCwd, chatCwd, runtimeBinding, prMirrorState,
              effort, abPairSessionId, abPairDecidedAt,
              customName,
              // v0.8.0 schema v5 (Chat tab).
@@ -1455,10 +2201,14 @@ public struct ChangeModelRequest: Codable, Sendable {
     /// Optional new effort to apply together with the model swap. If nil,
     /// existing effort is preserved.
     public let effort: ReasoningEffort?
+    /// Code V2 mobile outbox dedupe key. v16+ servers reuse the receipt
+    /// for replays of the same key.
+    public let idempotencyKey: String?
 
-    public init(model: String, effort: ReasoningEffort? = nil) {
+    public init(model: String, effort: ReasoningEffort? = nil, idempotencyKey: String? = nil) {
         self.model = model
         self.effort = effort
+        self.idempotencyKey = idempotencyKey
     }
 }
 
@@ -1468,10 +2218,12 @@ public struct ChangeModeRequest: Codable, Sendable {
     public let mode: SessionMode
     /// Claude-only. Ignored for Codex.
     public let planMode: Bool?
+    public let idempotencyKey: String?
 
-    public init(mode: SessionMode, planMode: Bool? = nil) {
+    public init(mode: SessionMode, planMode: Bool? = nil, idempotencyKey: String? = nil) {
         self.mode = mode
         self.planMode = planMode
+        self.idempotencyKey = idempotencyKey
     }
 }
 
@@ -1479,9 +2231,11 @@ public struct ChangeModeRequest: Codable, Sendable {
 /// swap; still triggers respawn).
 public struct ChangeEffortRequest: Codable, Sendable {
     public let effort: ReasoningEffort
+    public let idempotencyKey: String?
 
-    public init(effort: ReasoningEffort) {
+    public init(effort: ReasoningEffort, idempotencyKey: String? = nil) {
         self.effort = effort
+        self.idempotencyKey = idempotencyKey
     }
 }
 
@@ -1492,10 +2246,14 @@ public struct SendPromptRequest: Codable, Sendable {
     /// If true, the daemon writes to tmux paste-buffer + pastes (good for
     /// multi-line / IME / large content). If false, plain send-keys.
     public let asFollowUp: Bool
+    /// Code V2 mobile outbox dedupe key. Optional for legacy clients;
+    /// durable mobile sends should populate it.
+    public let idempotencyKey: String?
 
-    public init(text: String, asFollowUp: Bool = true) {
+    public init(text: String, asFollowUp: Bool = true, idempotencyKey: String? = nil) {
         self.text = text
         self.asFollowUp = asFollowUp
+        self.idempotencyKey = idempotencyKey
     }
 }
 
@@ -1562,9 +2320,11 @@ public struct UploadAttachmentResponse: Codable, Sendable {
 /// timeout + per-repo trust list + red banner across surfaces.
 public struct AutopilotRequest: Codable, Sendable {
     public let enabled: Bool
+    public let idempotencyKey: String?
 
-    public init(enabled: Bool) {
+    public init(enabled: Bool, idempotencyKey: String? = nil) {
         self.enabled = enabled
+        self.idempotencyKey = idempotencyKey
     }
 }
 
@@ -1584,9 +2344,11 @@ public struct SetAutoReviveRequest: Codable, Sendable {
 /// 409 with the winning sibling id.
 public struct PickWinnerRequest: Codable, Sendable {
     public let winnerSessionId: UUID
+    public let idempotencyKey: String?
 
-    public init(winnerSessionId: UUID) {
+    public init(winnerSessionId: UUID, idempotencyKey: String? = nil) {
         self.winnerSessionId = winnerSessionId
+        self.idempotencyKey = idempotencyKey
     }
 }
 
@@ -1607,7 +2369,7 @@ public struct PickWinnerConflictResponse: Codable, Sendable {
 
 /// `GET /sessions/:id/pr` response. nil = no PR yet (offer Create).
 public struct PRStatus: Codable, Sendable {
-    public enum State: String, Codable, Sendable {
+    public enum State: String, Codable, Hashable, Sendable {
         case open, merged, closed, draft
     }
 
@@ -1653,11 +2415,87 @@ public struct CreatePRRequest: Codable, Sendable {
     public let title: String?       // nil = AI-generate via Haiku 4.5
     public let body: String?        // nil = AI-generate
     public let baseBranch: String?  // nil = repo default
+    public let idempotencyKey: String?
 
-    public init(title: String? = nil, body: String? = nil, baseBranch: String? = nil) {
+    public init(
+        title: String? = nil,
+        body: String? = nil,
+        baseBranch: String? = nil,
+        idempotencyKey: String? = nil
+    ) {
         self.title = title
         self.body = body
         self.baseBranch = baseBranch
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public enum PRMergeMethod: String, Codable, Hashable, Sendable, CaseIterable {
+    case merge
+    case squash
+    case rebase
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = PRMergeMethod(rawValue: raw) ?? .squash
+    }
+}
+
+public struct MergePRRequest: Codable, Sendable {
+    public let method: PRMergeMethod
+    public let deleteBranch: Bool
+    public let auto: Bool
+    public let adminOverride: Bool
+    public let idempotencyKey: String?
+
+    public init(
+        method: PRMergeMethod = .squash,
+        deleteBranch: Bool = false,
+        auto: Bool = false,
+        adminOverride: Bool = false,
+        idempotencyKey: String? = nil
+    ) {
+        self.method = method
+        self.deleteBranch = deleteBranch
+        self.auto = auto
+        self.adminOverride = adminOverride
+        self.idempotencyKey = idempotencyKey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case method, deleteBranch, auto, adminOverride, idempotencyKey
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.method = (try? c.decodeIfPresent(PRMergeMethod.self, forKey: .method)) ?? .squash
+        self.deleteBranch = (try? c.decodeIfPresent(Bool.self, forKey: .deleteBranch)) ?? false
+        self.auto = (try? c.decodeIfPresent(Bool.self, forKey: .auto)) ?? false
+        self.adminOverride = (try? c.decodeIfPresent(Bool.self, forKey: .adminOverride)) ?? false
+        self.idempotencyKey = try c.decodeIfPresent(String.self, forKey: .idempotencyKey)
+    }
+}
+
+public struct MergePRResponse: Codable, Sendable {
+    public let ok: Bool
+    public let merged: Bool
+    public let pr: PRStatus?
+    public let receipt: MobileCommandReceipt?
+    public let error: String?
+
+    public init(
+        ok: Bool,
+        merged: Bool,
+        pr: PRStatus? = nil,
+        receipt: MobileCommandReceipt? = nil,
+        error: String? = nil
+    ) {
+        self.ok = ok
+        self.merged = merged
+        self.pr = pr
+        self.receipt = receipt
+        self.error = error
     }
 }
 
@@ -1929,10 +2767,12 @@ public struct PermissionOption: Codable, Sendable, Hashable, Identifiable {
 public struct PermissionRespondRequest: Codable, Sendable {
     public let promptId: String
     public let optionId: String
+    public let idempotencyKey: String?
 
-    public init(promptId: String, optionId: String) {
+    public init(promptId: String, optionId: String, idempotencyKey: String? = nil) {
         self.promptId = promptId
         self.optionId = optionId
+        self.idempotencyKey = idempotencyKey
     }
 }
 
@@ -1960,15 +2800,41 @@ public struct PairingChallenge: Codable, Sendable {
     /// v0.14.0 (plan v2.1 T19): per-pairing HKDF-derived design credential.
     /// Stable across daemon restarts, revocable via PairingTokenStore.
     public let designToken: String?
+    /// v16: when true, the pairing URL used the `clawdmeters://` scheme,
+    /// indicating the Mac will eventually wrap its daemon in TLS. iOS
+    /// flips its `AgentControlClient.useHTTPS` flag so a future server
+    /// TLS roll-out is automatic. Today's daemon is still plain HTTP;
+    /// the flag is plumbing only.
+    public let useHTTPS: Bool
 
     public init(host: String, port: Int, wsPort: Int, token: String,
-                designPort: Int? = nil, designToken: String? = nil) {
+                designPort: Int? = nil, designToken: String? = nil,
+                useHTTPS: Bool = false) {
         self.host = host
         self.port = port
         self.wsPort = wsPort
         self.token = token
         self.designPort = designPort
         self.designToken = designToken
+        self.useHTTPS = useHTTPS
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.host = try c.decode(String.self, forKey: .host)
+        self.port = try c.decode(Int.self, forKey: .port)
+        self.wsPort = try c.decode(Int.self, forKey: .wsPort)
+        self.token = try c.decode(String.self, forKey: .token)
+        self.designPort = try c.decodeIfPresent(Int.self, forKey: .designPort)
+        self.designToken = try c.decodeIfPresent(String.self, forKey: .designToken)
+        // useHTTPS is v16-only; older Macs never set it and older iOS
+        // builds never persisted it. decodeIfPresent + default false
+        // means both pre-v16 paths keep working.
+        self.useHTTPS = try c.decodeIfPresent(Bool.self, forKey: .useHTTPS) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case host, port, wsPort, token, designPort, designToken, useHTTPS
     }
 }
 

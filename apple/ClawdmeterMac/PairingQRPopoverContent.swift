@@ -169,7 +169,25 @@ struct PairingQRPopoverContent: View {
     private func pairingURLString() -> String? {
         guard let httpPort = runtime.agentControlServer.boundPort,
               let wsPort = runtime.agentControlServer.boundWsPort else { return nil }
-        var url = "clawdmeter://\(hostName):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
+        // v16 TLS preference plumbing. When the user toggles "Use TLS
+        // for pairing" in Settings AND the resolved host is MagicDNS
+        // (Tailscale-issued cert needs the .ts.net hostname to match),
+        // emit the `clawdmeters://` scheme. iOS parses the variant and
+        // sets a `useHTTPS` flag on its AgentControlClient. The daemon
+        // is NOT yet running with a TLS listener — this is forward-
+        // compat plumbing so the iOS app's parser is ready when the
+        // future server-side TLS termination ships. Stays
+        // `clawdmeter://` otherwise so today's iOS clients keep working.
+        let preferTLS = UserDefaults.standard.bool(forKey: "clawdmeter.pairing.preferTLS")
+        // Pattern-match because TailscaleHost.Resolved.Kind has an
+        // associated value on `.tailscaleDNSBackendDown(state:)` and
+        // therefore doesn't synthesize Equatable.
+        let isMagicDNS: Bool = {
+            if case .tailscaleDNS = hostKind { return true }
+            return false
+        }()
+        let scheme: String = (preferTLS && isMagicDNS) ? "clawdmeters" : "clawdmeter"
+        var url = "\(scheme)://\(hostName):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
         // v0.14.0 (plan v2.1): include Design routing fields when the
         // daemon is ready. iOS older builds ignore unknown query keys.
         // Use the current bearer token as the pairing-id input. When the

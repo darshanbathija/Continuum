@@ -202,13 +202,7 @@ public final class ComposerStore: ObservableObject {
             case .claude: entry = catalog.claude.first
             case .codex:  entry = catalog.codex.first
             case .gemini: entry = catalog.gemini.first
-            case .opencode:
-                // PR #29: OpenCode doesn't carry its own model slice
-                // in ModelCatalog; the underlying model is configured
-                // via `opencode auth login` and surfaced through
-                // OpenCode's `/event` SSE. Composer chips clear here;
-                // future polish PRs add a dedicated catalog slice.
-                entry = nil
+            case .opencode: entry = catalog.opencode.first
             case .unknown:
                 // X3: forward-compat unknown agent — no catalog slice
                 // exists. Composer chips clear; the picker hides the

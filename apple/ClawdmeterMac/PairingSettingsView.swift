@@ -31,17 +31,45 @@ struct PairingSettingsView: View {
         self.runtime = runtime
     }
 
+    @AppStorage("clawdmeter.pairing.preferMagicDNS") private var preferMagicDNS: Bool = true
+    @AppStorage("clawdmeter.pairing.preferTLS") private var preferTLS: Bool = false
+
     var body: some View {
         Form {
             pairSection
+            connectivitySection
             scanRootsSection
             supervisorSection
             securitySection
             pluginsSection
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 680)
+        .frame(width: 520, height: 720)
         .onAppear { refreshQR() }
+    }
+
+    private func isMagicDNSHost(_ kind: TailscaleHost.Resolved.Kind) -> Bool {
+        // TailscaleHost.Resolved.Kind has an associated value on
+        // `.tailscaleDNSBackendDown(state:)` — Equatable isn't
+        // synthesized. Pattern-match directly.
+        if case .tailscaleDNS = kind { return true }
+        return false
+    }
+
+    private var connectivitySection: some View {
+        Section {
+            Toggle("Prefer MagicDNS host in pairing QR", isOn: $preferMagicDNS)
+                .onChange(of: preferMagicDNS) { _, _ in refreshQR() }
+            Toggle("Use TLS for pairing (advanced)", isOn: $preferTLS)
+                .onChange(of: preferTLS) { _, _ in refreshQR() }
+                .disabled(!preferMagicDNS || !isMagicDNSHost(resolvedHost.kind))
+        } header: {
+            Text("Connectivity")
+        } footer: {
+            Text("MagicDNS uses the Tailscale-issued `*.ts.net` hostname so pairing survives IP changes (sleep/wake, switching Wi-Fi). TLS pairing wraps the pairing URL in `clawdmeters://` for future server-side TLS — requires `tailscale cert` and a Running MagicDNS backend. The daemon itself still listens on plain HTTP today; this toggle ships the URL plumbing so iOS is ready when server TLS lands.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - Sections

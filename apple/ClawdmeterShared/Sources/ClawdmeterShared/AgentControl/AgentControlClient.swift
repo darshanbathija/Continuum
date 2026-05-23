@@ -282,23 +282,42 @@ public final class AgentControlClient: ObservableObject {
 
     @MainActor
     @discardableResult
-    public func changeEffort(sessionId: UUID, effort: ReasoningEffort) async -> AgentSession? {
-        await postJSON(path: "/sessions/\(sessionId.uuidString)/effort", body: ChangeEffortRequest(effort: effort))
+    public func changeEffort(
+        sessionId: UUID,
+        effort: ReasoningEffort,
+        idempotencyKey: String? = nil
+    ) async -> AgentSession? {
+        await postJSON(
+            path: "/sessions/\(sessionId.uuidString)/effort",
+            body: ChangeEffortRequest(effort: effort, idempotencyKey: idempotencyKey)
+        )
     }
 
     @MainActor
     @discardableResult
-    public func changeMode(sessionId: UUID, mode: SessionMode, planMode: Bool? = nil) async -> AgentSession? {
-        await postJSON(path: "/sessions/\(sessionId.uuidString)/mode",
-                        body: ChangeModeRequest(mode: mode, planMode: planMode))
+    public func changeMode(
+        sessionId: UUID,
+        mode: SessionMode,
+        planMode: Bool? = nil,
+        idempotencyKey: String? = nil
+    ) async -> AgentSession? {
+        await postJSON(
+            path: "/sessions/\(sessionId.uuidString)/mode",
+            body: ChangeModeRequest(mode: mode, planMode: planMode, idempotencyKey: idempotencyKey)
+        )
     }
 
     @MainActor
     @discardableResult
-    public func sendPrompt(sessionId: UUID, text: String, asFollowUp: Bool = true) async -> Bool {
+    public func sendPrompt(
+        sessionId: UUID,
+        text: String,
+        asFollowUp: Bool = true,
+        idempotencyKey: String? = nil
+    ) async -> Bool {
         let ok = await postBody(
             path: "/sessions/\(sessionId.uuidString)/send",
-            body: SendPromptRequest(text: text, asFollowUp: asFollowUp)
+            body: SendPromptRequest(text: text, asFollowUp: asFollowUp, idempotencyKey: idempotencyKey)
         )
         if ok {
             await refreshSessions()
@@ -394,14 +413,29 @@ public final class AgentControlClient: ObservableObject {
     }
 
     @MainActor
-    public func interruptSession(sessionId: UUID) async {
-        await postEmpty(path: "/sessions/\(sessionId.uuidString)/interrupt")
+    @discardableResult
+    public func interruptSession(sessionId: UUID, idempotencyKey: String? = nil) async -> Bool {
+        // v16 outbox: optional key. nil keeps the legacy empty-body POST.
+        // Returns true on HTTP 2xx so the outbox can detect offline
+        // failures and reschedule retries. Legacy fire-and-forget callers
+        // discard the return via @discardableResult.
+        if let key = idempotencyKey {
+            return await postBody(
+                path: "/sessions/\(sessionId.uuidString)/interrupt",
+                body: InterruptRequest(idempotencyKey: key)
+            )
+        } else {
+            return await postEmpty(path: "/sessions/\(sessionId.uuidString)/interrupt")
+        }
     }
 
     @MainActor
-    public func setAutopilot(sessionId: UUID, enabled: Bool) async {
-        await postBody(path: "/sessions/\(sessionId.uuidString)/autopilot",
-                        body: AutopilotRequest(enabled: enabled))
+    @discardableResult
+    public func setAutopilot(sessionId: UUID, enabled: Bool, idempotencyKey: String? = nil) async -> Bool {
+        return await postBody(
+            path: "/sessions/\(sessionId.uuidString)/autopilot",
+            body: AutopilotRequest(enabled: enabled, idempotencyKey: idempotencyKey)
+        )
     }
 
     /// D4 (v0.17, wire v12): toggle the Mac's per-provider auto-revive
@@ -684,12 +718,16 @@ public final class AgentControlClient: ObservableObject {
     }
 
     @MainActor
-    private func postEmpty(path: String) async {
-        guard let request = makeRequest(path: path, method: "POST") else { return }
+    @discardableResult
+    private func postEmpty(path: String) async -> Bool {
+        guard let request = makeRequest(path: path, method: "POST") else { return false }
         do {
             _ = try await sendChecked(request)
+            self.lastError = nil
+            return true
         } catch {
             self.lastError = error.localizedDescription
+            return false
         }
     }
 
@@ -1029,12 +1067,163 @@ public final class AgentControlClient: ObservableObject {
     }
 
     @MainActor
-    public func approvePlan(sessionId: UUID) async {
-        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/approve-plan", method: "POST") else { return }
+    @discardableResult
+    public func approvePlan(sessionId: UUID, idempotencyKey: String? = nil) async -> Bool {
+        // v16 outbox: encode an InterruptRequest-shaped body when the
+        // caller supplies a key so the server can dedup. The legacy
+        // empty-body POST stays the no-key path. Returns true on
+        // HTTP 2xx; outbox dispatch reads this to detect failures and
+        // reschedule, while legacy fire-and-forget callers discard.
+        let path = "/sessions/\(sessionId.uuidString)/approve-plan"
+        if let key = idempotencyKey {
+            let body = (try? JSONEncoder().encode(InterruptRequest(idempotencyKey: key))) ?? Data()
+            guard var request = makeRequest(path: path, method: "POST", body: body) else { return false }
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            do {
+                _ = try await sendChecked(request)
+                self.lastError = nil
+                return true
+            } catch {
+                self.lastError = error.localizedDescription
+                return false
+            }
+        } else {
+            guard let request = makeRequest(path: path, method: "POST") else { return false }
+            do {
+                _ = try await sendChecked(request)
+                self.lastError = nil
+                return true
+            } catch {
+                self.lastError = error.localizedDescription
+                return false
+            }
+        }
+    }
+
+    // MARK: - v16 PR + merge
+
+    /// `POST /sessions/:id/create-pr`. Returns the PR URL (created or
+    /// already existing) on success. v16+ supports the idempotency key
+    /// so a retry doesn't create a duplicate PR.
+    @MainActor
+    public func createPR(
+        sessionId: UUID,
+        title: String? = nil,
+        body: String? = nil,
+        baseBranch: String? = nil,
+        idempotencyKey: String? = nil
+    ) async -> String? {
+        let req = CreatePRRequest(
+            title: title,
+            body: body,
+            baseBranch: baseBranch,
+            idempotencyKey: idempotencyKey
+        )
+        let encoded = (try? JSONEncoder().encode(req)) ?? Data()
+        guard var request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/create-pr",
+            method: "POST",
+            body: encoded
+        ) else { return nil }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {
-            _ = try await sendChecked(request)
+            let data = try await sendChecked(request)
+            if let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let url = dict["url"] as? String {
+                return url
+            }
+            return nil
         } catch {
             self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// `POST /sessions/:id/merge`. Returns the parsed `MergePRResponse`
+    /// on success. v16+ supports the idempotency key.
+    @MainActor
+    public func merge(
+        sessionId: UUID,
+        method: PRMergeMethod = .squash,
+        deleteBranch: Bool = false,
+        auto: Bool = false,
+        adminOverride: Bool = false,
+        idempotencyKey: String? = nil
+    ) async -> MergePRResponse? {
+        let req = MergePRRequest(
+            method: method,
+            deleteBranch: deleteBranch,
+            auto: auto,
+            adminOverride: adminOverride,
+            idempotencyKey: idempotencyKey
+        )
+        let encoded = (try? JSONEncoder().encode(req)) ?? Data()
+        guard var request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/merge",
+            method: "POST",
+            body: encoded
+        ) else { return nil }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(MergePRResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    // MARK: - v16 workspaces
+
+    /// `GET /workspaces`. Returns the persisted per-repo workspaces. iOS
+    /// surfaces these to seed defaults in the new-session sheet. Older
+    /// Macs (wire < 16) return 404; this method yields an empty array.
+    @MainActor
+    public func listWorkspaces() async -> [CodeWorkspaceRecord] {
+        guard let request = makeRequest(path: "/workspaces", method: "GET") else { return [] }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let envelope = try decoder.decode(WorkspaceListResponse.self, from: data)
+            return envelope.workspaces
+        } catch {
+            self.lastError = error.localizedDescription
+            return []
+        }
+    }
+
+    /// `PATCH /workspaces/:id`. Updates provider defaults; returns the
+    /// updated record on success.
+    @MainActor
+    public func updateWorkspaceDefaults(
+        workspaceId: UUID,
+        defaults: WorkspaceProviderDefaults,
+        idempotencyKey: String? = nil
+    ) async -> CodeWorkspaceRecord? {
+        let req = UpdateWorkspaceDefaultsRequest(
+            providerDefaults: defaults,
+            idempotencyKey: idempotencyKey
+        )
+        let encoded = (try? JSONEncoder().encode(req)) ?? Data()
+        guard var request = makeRequest(
+            path: "/workspaces/\(workspaceId.uuidString)",
+            method: "PATCH",
+            body: encoded
+        ) else { return nil }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            // PATCH returns the updated record at the top level + an
+            // optional receipt key — decode just the record.
+            return try decoder.decode(CodeWorkspaceRecord.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
         }
     }
 
@@ -1057,7 +1246,25 @@ public final class AgentControlClient: ObservableObject {
                     mode: s.mode, archivedAt: Date(),
                     terminalPanes: s.terminalPanes,
                     scheduledFollowUps: s.scheduledFollowUps,
-                    parentSessionId: s.parentSessionId
+                    parentSessionId: s.parentSessionId,
+                    workspaceId: s.workspaceId,
+                    runtimeCwd: s.runtimeCwd,
+                    chatCwd: s.chatCwd,
+                    runtimeBinding: s.runtimeBinding,
+                    prMirrorState: s.prMirrorState,
+                    effort: s.effort,
+                    abPairSessionId: s.abPairSessionId,
+                    abPairDecidedAt: s.abPairDecidedAt,
+                    customName: s.customName,
+                    kind: s.kind,
+                    frontierGroupId: s.frontierGroupId,
+                    frontierChildIndex: s.frontierChildIndex,
+                    codexChatBackend: s.codexChatBackend,
+                    codexChatThreadId: s.codexChatThreadId,
+                    geminiBackend: s.geminiBackend,
+                    antigravityConversationId: s.antigravityConversationId,
+                    antigravityProjectId: s.antigravityProjectId,
+                    deepResearch: s.deepResearch
                 )
             }
         } catch {
@@ -1083,7 +1290,25 @@ public final class AgentControlClient: ObservableObject {
                     mode: s.mode, archivedAt: nil,
                     terminalPanes: s.terminalPanes,
                     scheduledFollowUps: s.scheduledFollowUps,
-                    parentSessionId: s.parentSessionId
+                    parentSessionId: s.parentSessionId,
+                    workspaceId: s.workspaceId,
+                    runtimeCwd: s.runtimeCwd,
+                    chatCwd: s.chatCwd,
+                    runtimeBinding: s.runtimeBinding,
+                    prMirrorState: s.prMirrorState,
+                    effort: s.effort,
+                    abPairSessionId: s.abPairSessionId,
+                    abPairDecidedAt: s.abPairDecidedAt,
+                    customName: s.customName,
+                    kind: s.kind,
+                    frontierGroupId: s.frontierGroupId,
+                    frontierChildIndex: s.frontierChildIndex,
+                    codexChatBackend: s.codexChatBackend,
+                    codexChatThreadId: s.codexChatThreadId,
+                    geminiBackend: s.geminiBackend,
+                    antigravityConversationId: s.antigravityConversationId,
+                    antigravityProjectId: s.antigravityProjectId,
+                    deepResearch: s.deepResearch
                 )
             }
         } catch {

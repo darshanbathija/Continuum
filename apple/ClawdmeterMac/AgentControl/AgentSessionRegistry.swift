@@ -94,6 +94,15 @@ public final class AgentSessionRegistry: ObservableObject {
             lastEventSeq: 1,
             mode: mode,
             parentSessionId: parentSessionId,
+            runtimeCwd: worktreePath ?? repoKey,
+            runtimeBinding: Self.makeRuntimeBinding(
+                agent: agent,
+                model: model,
+                codexBackend: nil,
+                geminiBackend: geminiBackend,
+                antigravityConversationId: antigravityConversationId,
+                antigravityProjectId: antigravityProjectId
+            ),
             effort: effort,
             abPairSessionId: abPairSessionId,
             geminiBackend: geminiBackend,
@@ -152,6 +161,16 @@ public final class AgentSessionRegistry: ObservableObject {
             lastEventAt: now,
             lastEventSeq: 1,
             mode: .local,
+            runtimeCwd: chatCwd,
+            chatCwd: chatCwd,
+            runtimeBinding: Self.makeRuntimeBinding(
+                agent: provider,
+                model: model,
+                codexBackend: codexChatBackend,
+                geminiBackend: geminiBackend,
+                antigravityConversationId: antigravityConversationId,
+                antigravityProjectId: antigravityProjectId
+            ),
             effort: effort,
             kind: .chat,
             frontierGroupId: frontierGroupId,
@@ -208,11 +227,23 @@ public final class AgentSessionRegistry: ObservableObject {
         projectId: String
     ) {
         update(id: id) { s in
-            with(
-                s,
+            let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
+                agent: s.agent,
+                model: s.model,
+                codexBackend: s.codexChatBackend,
                 geminiBackend: .agentapi,
                 antigravityConversationId: conversationId,
                 antigravityProjectId: projectId
+            )).updating(
+                externalSessionId: .some(conversationId.uuidString),
+                projectId: .some(projectId)
+            )
+            return with(
+                s,
+                geminiBackend: .agentapi,
+                antigravityConversationId: conversationId,
+                antigravityProjectId: projectId,
+                runtimeBinding: binding
             )
         }
     }
@@ -222,7 +253,15 @@ public final class AgentSessionRegistry: ObservableObject {
     /// after-evict in Phase 4.5 find the same server-side thread.
     public func setCodexChatThreadId(id: UUID, threadId: String) {
         update(id: id) { s in
-            with(s, codexChatThreadId: threadId)
+            let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
+                agent: s.agent,
+                model: s.model,
+                codexBackend: s.codexChatBackend,
+                geminiBackend: s.geminiBackend,
+                antigravityConversationId: s.antigravityConversationId,
+                antigravityProjectId: s.antigravityProjectId
+            )).updating(externalThreadId: .some(threadId))
+            return with(s, codexChatThreadId: threadId, runtimeBinding: binding)
         }
     }
 
@@ -461,6 +500,10 @@ public final class AgentSessionRegistry: ObservableObject {
         geminiBackend: GeminiBackend?? = nil,
         antigravityConversationId: UUID?? = nil,
         antigravityProjectId: String?? = nil,
+        runtimeCwd: String?? = nil,
+        chatCwd: String?? = nil,
+        runtimeBinding: SessionRuntimeBinding?? = nil,
+        prMirrorState: PRMirrorState?? = nil,
         lastEventSeq: UInt64? = nil,
         frontierGroupId: UUID?? = nil,
         frontierChildIndex: Int?? = nil
@@ -485,6 +528,11 @@ public final class AgentSessionRegistry: ObservableObject {
             terminalPanes: terminalPanes ?? s.terminalPanes,
             scheduledFollowUps: scheduledFollowUps ?? s.scheduledFollowUps,
             parentSessionId: s.parentSessionId,
+            workspaceId: s.workspaceId,
+            runtimeCwd: Self.resolve(runtimeCwd, fallback: s.runtimeCwd),
+            chatCwd: Self.resolve(chatCwd, fallback: s.chatCwd),
+            runtimeBinding: Self.resolve(runtimeBinding, fallback: s.runtimeBinding),
+            prMirrorState: Self.resolve(prMirrorState, fallback: s.prMirrorState),
             effort: Self.resolve(effort, fallback: s.effort),
             abPairSessionId: Self.resolve(abPairSessionId, fallback: s.abPairSessionId),
             abPairDecidedAt: Self.resolve(abPairDecidedAt, fallback: s.abPairDecidedAt),
@@ -512,7 +560,48 @@ public final class AgentSessionRegistry: ObservableObject {
             // Resolve-with-fallback so non-binding mutations preserve.
             geminiBackend: Self.resolve(geminiBackend, fallback: s.geminiBackend),
             antigravityConversationId: Self.resolve(antigravityConversationId, fallback: s.antigravityConversationId),
-            antigravityProjectId: Self.resolve(antigravityProjectId, fallback: s.antigravityProjectId)
+            antigravityProjectId: Self.resolve(antigravityProjectId, fallback: s.antigravityProjectId),
+            deepResearch: s.deepResearch
+        )
+    }
+
+    private static func makeRuntimeBinding(
+        agent: AgentKind,
+        model: String?,
+        codexBackend: CodexChatBackend?,
+        geminiBackend: GeminiBackend?,
+        antigravityConversationId: UUID?,
+        antigravityProjectId: String?
+    ) -> SessionRuntimeBinding {
+        let runtime = SessionRuntimeKind.inferred(
+            agent: agent,
+            codexBackend: codexBackend,
+            geminiBackend: geminiBackend
+        )
+        let billingProvider: String? = {
+            switch agent {
+            case .claude: return "claude"
+            case .codex: return "codex"
+            case .gemini: return "antigravity"
+            case .opencode: return "opencode"
+            case .unknown: return nil
+            }
+        }()
+        let billingConfidence: BillingConfidence = {
+            switch agent {
+            case .opencode: return .providerReported
+            case .gemini: return .estimated
+            case .claude, .codex: return .locallyPriced
+            case .unknown: return .unavailable
+            }
+        }()
+        return SessionRuntimeBinding(
+            runtimeKind: runtime,
+            externalSessionId: antigravityConversationId?.uuidString,
+            projectId: antigravityProjectId,
+            providerModelId: model,
+            billingProvider: billingProvider,
+            billingConfidence: billingConfidence
         )
     }
 

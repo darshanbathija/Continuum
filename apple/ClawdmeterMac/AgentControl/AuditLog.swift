@@ -134,6 +134,37 @@ public actor AuditLog {
         append(entry: entry, kind: "autopilot")
     }
 
+    /// v16 Code V2 mobile outbox: every write request that carries an
+    /// idempotency key gets a hash-only audit row here. The outbox
+    /// replays the last 256 rows of this file on startup so a daemon
+    /// restart still dedups in-flight retries from iOS.
+    ///
+    /// `payloadHash` is the SHA-256 of the request body so we can spot
+    /// a client that's reusing the same key with different payloads
+    /// (which would be a client bug, not a replay).
+    public func recordMobileCommand(
+        idempotencyKey: String,
+        kind: String,
+        sessionId: UUID?,
+        sourcePeer: String,
+        status: String,
+        payloadHash: String,
+        serverReceiptId: String
+    ) {
+        var entry: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: Date()),
+            "kind": "mobile-command",
+            "command": kind,
+            "idempotencyKey": idempotencyKey,
+            "sourcePeer": sourcePeer,
+            "status": status,
+            "payloadHash": payloadHash,
+            "serverReceiptId": serverReceiptId,
+        ]
+        if let sessionId { entry["sessionId"] = sessionId.uuidString }
+        append(entry: entry, kind: "mobile-commands")
+    }
+
     /// v0.7.7: record a sidecar ask_user(...) decision. Source is
     /// `mac` / `ios` / `timeout` so the diagnostics view shows which
     /// surface won the cross-surface race (or that neither did).

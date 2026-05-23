@@ -10,6 +10,11 @@ import ClawdmeterShared
 /// auto-complete that the Mac PlanTrackerPane uses).
 struct iOSPlanTrackerView: View {
     let session: AgentSession
+    /// Called when the user taps "Approve & run". The parent SessionDetail
+    /// routes this through `AgentControlClient.approvePlan(sessionId:)` or
+    /// the iOS `MobileCommandOutbox` so v16 dedup applies. When nil,
+    /// the button is hidden (the stub-only path used during demos).
+    var onApprove: (() async -> Void)? = nil
     @State private var manuallyCompleted: Set<String> = []
     @State private var isApproving: Bool = false
 
@@ -33,7 +38,7 @@ struct iOSPlanTrackerView: View {
                             stepRow(index: index, text: step)
                         }
 
-                        if session.status == .planning {
+                        if session.status == .planning, onApprove != nil {
                             Button {
                                 Task { await approve() }
                             } label: {
@@ -118,10 +123,8 @@ struct iOSPlanTrackerView: View {
 
     @MainActor
     private func approve() async {
-        // Approve is wired through the parent SessionDetailView's existing
-        // approvePlan callback; we just signal isApproving for the spinner.
         isApproving = true
-        try? await Task.sleep(nanoseconds: 200_000_000)
-        isApproving = false
+        defer { isApproving = false }
+        await onApprove?()
     }
 }

@@ -25,15 +25,11 @@ private let interruptLogger = Logger(subsystem: "com.clawdmeter.mac", category: 
 ///   - Anything else (Claude tmux, Codex CLI, opencode, unknown)
 ///     → tmux ESC.
 ///
-/// **Cancel semantics this release**: for SDK + agentapi, "cancel"
-/// means tear down the relay / ingestor subscription. The conversation
-/// state survives (Codex SDK persists via `codexChatThreadId`;
-/// Antigravity persists via `antigravityConversationId` in the SQLite
-/// DB), so the next user prompt resumes the same thread. The in-flight
-/// response is lost — that's the user-visible behavior of Stop. Per-
-/// turn cancel without sidecar respawn lands in v0.23.x once the
-/// sidecar's `{op:"stop", subscriptionId}` path is wired through the
-/// Swift relay (it already exists in `main.mjs:101`, just unplumbed).
+/// **Cancel semantics**: the dispatcher only returns `.interrupted`
+/// after it dispatches a real upstream cancel path (SDK relay stop,
+/// agentapi ingestor stop, or tmux ESC). If a backend has no known
+/// cancel route, callers get `.notSupported` and must not report
+/// success to mobile.
 ///
 /// **Lifecycle transitions emitted on success**: the dispatcher flips
 /// the session's `currentTurnState` to `.interrupted` via
@@ -55,6 +51,9 @@ public final class SessionInterruptDispatcher {
         /// Tmux dispatch failed (sendKeys threw). Caller surfaces
         /// `.internalError` and the daemon logs the underlying error.
         case tmuxFailed
+        /// No upstream cancel path exists for this session/runtime.
+        /// Caller returns 501 `notSupported`.
+        case notSupported
     }
 
     private weak var registry: AgentSessionRegistry?
@@ -90,11 +89,10 @@ public final class SessionInterruptDispatcher {
             return .sessionNotFound
         }
 
-        // Mark interrupted up front so even if the per-backend dispatch
-        // is destructive (full relay teardown), the V2 UI sees the
-        // transition immediately and the Send button restores.
-        if let store = chatStoreRegistry?.snapshotStore(for: session) {
-            store.setCurrentTurnState(.interrupted)
+        func markInterrupted() {
+            if let store = chatStoreRegistry?.snapshotStore(for: session) {
+                store.setCurrentTurnState(.interrupted)
+            }
         }
 
         // Codex SDK: tear down the sidecar; conversation persists via
@@ -103,6 +101,7 @@ public final class SessionInterruptDispatcher {
            session.codexChatBackend == .sdk,
            let relay = codexRelay {
             await relay.stop(sessionId: sessionId)
+            markInterrupted()
             interruptLogger.info("interrupt: codex-sdk relay stopped session=\(sessionId.uuidString, privacy: .public)")
             return .interrupted
         }
@@ -117,25 +116,19 @@ public final class SessionInterruptDispatcher {
                 // AntigravityChatIngestor is an `actor` so `stop()`
                 // is actor-isolated — must hop.
                 await ingestor.stop()
+                markInterrupted()
                 interruptLogger.info("interrupt: agentapi ingestor stopped session=\(sessionId.uuidString, privacy: .public)")
                 return .interrupted
             }
-            // No active ingestor — treat as a no-op cancel. The UI's
-            // currentTurnState already moved to .interrupted above.
             interruptLogger.info("interrupt: agentapi no active ingestor session=\(sessionId.uuidString, privacy: .public)")
-            return .interrupted
+            return .notSupported
         }
 
         // Default path: tmux ESC. Covers Claude (CLI), Codex CLI,
         // opencode, and any unknown agent that happens to have a pane.
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
-            // No pane and not a known sidecar-backed session — treat
-            // as a soft success because the UI already moved to
-            // .interrupted. The actual upstream session may have
-            // already completed; we'd return 404 here only if we'd
-            // failed to find the session at all (handled above).
-            interruptLogger.info("interrupt: no pane id (already done?) session=\(sessionId.uuidString, privacy: .public)")
-            return .interrupted
+            interruptLogger.info("interrupt: no supported cancel path session=\(sessionId.uuidString, privacy: .public)")
+            return .notSupported
         }
         guard let tmux else {
             interruptLogger.warning("interrupt: tmux client unavailable session=\(sessionId.uuidString, privacy: .public)")
@@ -143,6 +136,7 @@ public final class SessionInterruptDispatcher {
         }
         do {
             try await tmux.sendKeys(paneId: paneId, bytes: Data([0x1b])) // ESC
+            markInterrupted()
             interruptLogger.info("interrupt: tmux ESC sent session=\(sessionId.uuidString, privacy: .public) pane=\(paneId, privacy: .public)")
             return .interrupted
         } catch {

@@ -4,6 +4,58 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.26.0 build 129] - 2026-05-23 — Code V2 control plane + persisted workspaces + mobile command outbox + MagicDNS pairing + iOS workbench tabs (`darshanbathija/code-v2`)
+
+Code V2 lands as one coordinated ship. The Mac daemon now owns durable workspace records keyed by canonical repo root, a real idempotency-key outbox that prevents iOS retries from double-sending, and a MagicDNS-first pairing flow that survives sleep/wake and Wi-Fi switching. iOS gets a six-tab workbench (Chat, Plan, Diff, PR, Terminal, Files) embedded inside session detail — the pane views existed before but weren't actually wired into the navigation. Wire protocol bumps v15 → v16; every change is additive so older Macs keep decoding via `decodeIfPresent`.
+
+Persisted workspace store. New `WorkspaceStore` writes `~/Library/Application Support/Clawdmeter/workspaces.json` with atomic writes and a v1 schema. On first launch it migrates from existing `sessions.json` by grouping sessions by canonical repo root and seeding provider defaults from the newest session in each group. The daemon exposes `GET /workspaces` + `PATCH /workspaces/:id`. iOS new-session flow can inherit the per-repo defaults so the user doesn't re-pick the model and effort every time they spawn an agent in the same repo. 10 unit tests cover migration, upsert semantics, deterministic-UUID stability across launches, and concurrent write isolation.
+
+Mobile command outbox with real receipt dedup. Server side: a bounded LRU (256 entries, 24h TTL) of idempotency-key → response receipts. Every write endpoint (send, approve-plan, interrupt, change-model, change-effort, change-mode, autopilot, pick-winner, create-pr, merge) routes through a `tryReplayIdempotent` / `sendCommandResponse` wrapper. A retried request with the same key replays the cached response instead of re-executing the side effect — no double-send, no double-merge. Receipts persist via a new `mobile-commands.jsonl` audit stream that the outbox replays on startup, so a daemon restart still dedups in-flight retries. iOS side: a `MobileCommandOutbox` ObservableObject with persistent queue (`outbox.json`) and exp backoff `[1s, 4s, 15s, 60s, 5min, 30min]` for delivery. Failed envelopes surface in a new `iOSOutboxPane` with swipe Retry / Cancel and a per-session badge in the session detail nav bar.
+
+MagicDNS/TLS pairing preference. `TailscaleHost.resolve()` reordered so MagicDNS hostnames come first when `clawdmeter.pairing.preferMagicDNS` is on (default true). The pairing QR survives IP changes — no more re-scanning after sleep/wake. Settings → Pairing gains two toggles: "Prefer MagicDNS host in pairing QR" and "Use TLS for pairing (advanced)". With TLS preferred + MagicDNS host present, the QR emits `clawdmeters://` scheme; iOS `PairingScannerView` accepts both schemes and persists a `useHTTPS` flag on `PairingChallenge`. Server-side TLS termination is explicitly deferred — daemon still listens on plain HTTP today; the scheme + iOS flag are forward-compat plumbing for when `tailscale cert` wiring ships separately.
+
+Full iOS workbench tabs. `IOSSessionDetailView` refactored from a single ScrollView into a chip-strip tab bar above content. Six tabs — Chat (custom thread + composer), Plan (`iOSPlanTrackerView`), Diff (`iOSDiffView`), PR (`iOSPRPane`), Terminal (`iOSTerminalTabsView`), Files (`iOSArtifactsPane`). The pane views existed as standalone files but were never embedded; this ship wires them up. Tabs have conditional visibility (Plan only when a plan exists, Terminal only when panes are spawned, Files only when artifacts are present) and the last-selected tab persists per session in UserDefaults. `iOSPlanTrackerView` gained an `onApprove` callback so the parent routes through `AgentControlClient`.
+
+Other fixes during review. iOS outbox dispatch was returning `true` unconditionally for `.interrupt`, `.approve`, `.setAutopilot` because the matching client methods were non-throwing `async -> Void` — offline failures were falsely acknowledged. Three client methods upgraded to `@discardableResult async -> Bool`. OpenCode and Codex SDK send paths were bypassing the idempotency record helper, meaning retries would re-execute the side effect; both now route through `sendCommandResponse` so dedup actually applies.
+
+### Added
+
+- **`WorkspaceStore`** ([apple/ClawdmeterMac/AgentControl/WorkspaceStore.swift](apple/ClawdmeterMac/AgentControl/WorkspaceStore.swift)): @MainActor file-backed registry of `CodeWorkspaceRecord` per canonical repo root. Atomic writes, one-shot migration from `sessions.json`, deterministic SHA-256 UUIDs for stable IDs across launches.
+- **`MobileCommandOutbox` (Mac)** ([apple/ClawdmeterMac/AgentControl/MobileCommandOutbox.swift](apple/ClawdmeterMac/AgentControl/MobileCommandOutbox.swift)): server-side actor with bounded LRU cache + 24h TTL + audit-log replay. Wraps every write endpoint via `tryReplayIdempotent` + `sendCommandResponse` helpers.
+- **`MobileCommandOutbox` (iOS)** ([apple/ClawdmeteriOS/AgentControl/MobileCommandOutbox.swift](apple/ClawdmeteriOS/AgentControl/MobileCommandOutbox.swift)): @MainActor queue with persistent `outbox.json`, exp backoff retry, per-kind dispatch through `AgentControlClient`.
+- **`iOSOutboxPane`** ([apple/ClawdmeteriOS/Workspace/iOSOutboxPane.swift](apple/ClawdmeteriOS/Workspace/iOSOutboxPane.swift)): list view of pending + failed envelopes with swipe Retry / Cancel.
+- **`SessionWorkbenchTab`** enum + tab strip in `IOSSessionDetailView`: chip row above content switching between 6 panes, last-selected tab persisted per session.
+- **`AuditLog.recordMobileCommand`**: new JSONL stream at `~/.clawdmeter/audit/mobile-commands.jsonl` with hashed payload fingerprints (no PII).
+- **`GET /workspaces` + `PATCH /workspaces/:id`**: new daemon endpoints; iOS reads via `AgentControlClient.listWorkspaces()` and `updateWorkspaceDefaults(workspaceId:defaults:)`.
+- **`InterruptRequest`** + **`UpdateWorkspaceDefaultsRequest`** + **`WorkspaceListResponse`** in Protocol.swift.
+- **`MobileCommandKind`** cases: `changeModel`, `changeEffort`, `changeMode`, `setAutopilot`, `pickWinner`, `updateWorkspace`.
+- **`PairingChallenge.useHTTPS`**: optional flag indicating the pairing URL used the `clawdmeters://` TLS-preferred scheme.
+- **`WorkspaceStoreTests`** (10 cases): round-trip, migration, upsert, idempotency, deterministic-UUID stability.
+- **`AgentControlClient.createPR`** + **`merge`** + **`listWorkspaces`** + **`updateWorkspaceDefaults`**: typed write methods replacing ad-hoc URL building in iOS panes.
+
+### Changed
+
+- **`TailscaleHost.resolve()`** now prefers MagicDNS hostnames when `clawdmeter.pairing.preferMagicDNS` is true (default).
+- **`PairingQRPopoverContent.pairingURLString()`** emits `clawdmeters://` scheme when `preferTLS` is on AND host is MagicDNS-resolved.
+- **`PairingSettingsView`** gains a Connectivity section with two new toggles.
+- **`PairingScannerView.parse`** accepts both `clawdmeter://` and `clawdmeters://`; the latter sets `PairingChallenge.useHTTPS = true`.
+- **`AgentControlClient`** methods `interruptSession`, `setAutopilot`, `approvePlan` upgraded to `@discardableResult async -> Bool` so the outbox can detect offline failures.
+- **`AgentControlServer.handleSendPrompt`** OpenCode + Codex SDK delegate paths now route through `sendCommandResponse` to record idempotency receipts.
+- **`AgentControlServer.handleInterrupt`** / `handleApprovePlan` now accept an optional `InterruptRequest` body carrying the idempotency key.
+- **Wire version** bumped 15 → 16. `workspacesMinimum = 16` and `mobileOutboxMinimum = 16` gate the new endpoints.
+- **`MobileCommandReceipt`** gains a `jsonDictionary` helper for inlining receipts into ad-hoc JSON response bodies.
+- **`IOSSessionDetailView`** refactored: composer + nav bar preserved, body switches across 6 panes via `SessionWorkbenchTab`.
+- **`iOSPlanTrackerView`** gains `onApprove: (() async -> Void)?` callback.
+
+### Fixed
+
+- **iOS outbox falsely acknowledged offline interrupts / approvals / autopilot toggles** (`apple/ClawdmeteriOS/AgentControl/MobileCommandOutbox.swift:259, 263, 287`): `dispatch()` returned `true` for void client methods. Now reads `Bool` from the upgraded client signatures.
+- **OpenCode + Codex SDK send paths bypassed idempotency record** (`apple/ClawdmeterMac/AgentControl/AgentControlServer.swift:4467, 4611`): retries would re-execute the side effect. Threaded `idempotencyKey` + `payloadHash` through and wired success paths through `sendCommandResponse`.
+
+### Notes
+
+- Originally targeted v0.24.0, but two parallel-worktree ships landed first: broadcast chat at v0.24.0 and the in-app update flow at v0.25.0. Rebumped to v0.26.0 + build 129 during the second merge to preserve linearity.
+
 ## [0.25.0 build 128] - 2026-05-23 — In-app update flow (GitHub Releases API checker) (`darshanbathija/in-app-update-flow`)
 
 The Mac app now surfaces a small "Update X.Y.Z" chip in the titlebar when a newer release ships on GitHub. Click the chip to read the release notes inline and open the release page in Safari, where you download the new DMG and drag it into `/Applications` like before. No silent install in v0.25.0 — that's parked as a phase-2 Sparkle migration once a paid Apple Developer ID account is in play (see `TODOS.md`).
