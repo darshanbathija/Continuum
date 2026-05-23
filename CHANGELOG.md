@@ -4,6 +4,26 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.10 build 125] - 2026-05-23 — Unify Settings → Providers into a single 4-row card and add the OpenCode logo (`darshanbathija/providers-rows-and-opencode-logo`)
+
+v0.23.9 collapsed each provider's chrome but left Codex SDK and Antigravity SDK in their own standalone `SettingsCard`s with separate titles, subtitles, and inline view bodies. That broke the visual rhythm with Claude Code + OpenCode, which sit as rows inside one Providers card. This pass inlines Codex SDK and Antigravity SDK as matching rows so all four providers share the same row shape: glyph + title + one-line status + single trailing toggle.
+
+Also: the OpenCode logo asset was missing from every catalog in the repo. `AgentKindUI.assetName(for: .opencode)` returned `"OpencodeLogo"`, `TahoeProvider.opencode.logoAssetName` returned `"tahoe-opencode-mark"`, but neither asset existed — every OpenCode glyph in Settings, chat, and analytics rendered as a blank rounded tile. This PR adds the missing PNG to all three catalogs so the brand mark renders.
+
+### Changed
+
+- **Settings → Providers card** ([apple/ClawdmeterMac/Tahoe/MacSettingsView.swift](apple/ClawdmeterMac/Tahoe/MacSettingsView.swift)): now one card containing four rows — Claude Code, OpenCode, Codex SDK, Antigravity SDK — separated by `TahoeHair()`. Card subtitle simplified to "External agent runtimes Clawdmeter can drive." The previous standalone "Codex SDK" and "Antigravity SDK" `SettingsCard`s are gone; their toggle logic + provisioning + error handling moved verbatim into new private `CodexSDKProviderRow` and `AntigravitySDKProviderRow` structs that match the row shape of `OpencodeProviderRow` / `ClaudeCLIProviderRow`.
+
+### Added
+
+- **OpenCode logo asset** at three locations: `apple/ClawdmeterShared/Sources/ClawdmeterShared/Tahoe/Tahoe.xcassets/tahoe-opencode-mark.imageset/` (drives `TahoeProviderGlyph` on every platform), `apple/ClawdmeteriOS/Assets.xcassets/OpencodeLogo.imageset/` (drives `ProviderBadgeImage` on iOS chat + analytics), `apple/ClawdmeterMac/Assets.xcassets/OpencodeLogo.imageset/` (drives `ProviderBadgeImage` on Mac analytics). Source PNG was cropped from a 2400×1350 export by detecting the fake-transparent checker pattern (opaque pixels at exact RGB `(19,16,16)` / `(37,33,33)`), converting them to true alpha=0, then auto-bounding-boxing to the actual mark and re-canvasing to 256×256 with 18% padding.
+
+### Removed
+
+- `apple/ClawdmeterMac/CodexSDKSettingsView.swift` and `apple/ClawdmeterMac/AntigravitySDKSettingsView.swift`. Their toggle bodies are now `CodexSDKProviderRow` / `AntigravitySDKProviderRow` inside `MacSettingsView.swift`. The underlying `CodexSDKManager` / `AntigravitySidecarManager` wiring is unchanged.
+
+Bumps `MARKETING_VERSION` 0.23.9 → 0.23.10, `CURRENT_PROJECT_VERSION` 124 → 125. All 635 `ClawdmeterShared` tests pass; Mac scheme builds clean; new asset confirmed in compiled `Assets.car` via `xcrun assetutil --info`.
+
 ## [0.23.9 build 124] - 2026-05-23 — Collapse Settings → Providers chrome to one toggle per row (`darshanbathija/settings-toggle-cleanup`)
 
 Settings → Providers was three rows of engineer-speak: status pills, mono auth-status lines, a 4-item Manage menu on OpenCode, a duplicate inline header + `@openai/codex-sdk` paragraph + Status grid (Mode / Provisioned / SDK version / Install path) + Open install folder / Wipe SDK install buttons + "How auth works" footer on Codex SDK, and the same shape plus a "What changes when SDK mode is on" / "What stays the same" bullet list on Antigravity SDK. Customer can't act on any of that — the actual question on every row is binary: on or off.
