@@ -89,7 +89,15 @@ public final class CodexSource: AISource {
         // Path 2 — fall back to the local JSONL rate_limits payload. This
         // is the CLI-specific bucket — accurate but potentially lower
         // than what the user sees in Codex Desktop.
-        guard let url = mostRecentSessionFile() else {
+        //
+        // v0.26.1: walk the 8 most recent rollouts (newest first) instead
+        // of just the freshest. Codex CLI 0.132 may end the freshest
+        // session with a `limit_id="premium"` event whose primary/secondary
+        // are null; that's a shutdown marker, not real usage. If
+        // parseLatestUsage rejects the freshest file as all-null, fall
+        // through to the next one.
+        let candidates = recentSessionFiles(limit: 8)
+        guard !candidates.isEmpty else {
             logger.warning("No Codex session JSONL found under ~/.codex/sessions")
             throw AISourceError.dataSourceContractViolation(
                 detail: "No Codex sessions at ~/.codex/sessions — run `codex` once to seed."
@@ -97,7 +105,30 @@ public final class CodexSource: AISource {
         }
 
         do {
-            let usage = try parseLatestUsage(from: url)
+            var usage: UsageData?
+            var lastError: Error?
+            for candidate in candidates {
+                do {
+                    usage = try parseLatestUsage(from: candidate)
+                    if candidate != candidates.first {
+                        logger.info("Codex usage: freshest rollout had no usable rate_limits; succeeded on older file \(candidate.lastPathComponent, privacy: .public)")
+                    }
+                    break
+                } catch let err as AISourceError {
+                    // Only the "all null / no rate_limits" case is worth
+                    // walking past; malformed JSON should surface.
+                    if case .dataSourceContractViolation = err {
+                        lastError = err
+                        continue
+                    }
+                    throw err
+                }
+            }
+            guard let usage else {
+                throw lastError ?? AISourceError.dataSourceContractViolation(
+                    detail: "All \(candidates.count) recent Codex rollouts had no usable rate_limits."
+                )
+            }
             logger.info("Codex usage (JSONL fallback): session=\(usage.sessionPct)% (resets \(usage.sessionEpoch)) weekly=\(usage.weeklyPct)% source=jsonl")
             // v0.22.18: tag JSONL-fallback reads with status .unknown so
             // the UI can surface a "Stale" badge. User reported the
@@ -541,29 +572,41 @@ public final class CodexSource: AISource {
     /// Walk `~/.codex/sessions` recursively and return the most recently-modified
     /// `.jsonl` file. Codex writes one rollout per CLI invocation; the most
     /// recent file's tail has the freshest `rate_limits` block.
+    ///
+    /// Kept for source compatibility — internally just returns the first
+    /// entry of `recentSessionFiles(limit: 1)`.
     private func mostRecentSessionFile() -> URL? {
+        recentSessionFiles(limit: 1).first
+    }
+
+    /// Walk `~/.codex/sessions` recursively and return jsonl files sorted by
+    /// mtime DESC (newest first), bounded by `limit`. The freshest file is
+    /// the right starting point, but Codex CLI 0.132+ can append an empty
+    /// `rate_limits` event (limit_id="premium", primary/secondary=null) at
+    /// session shutdown that has no usable data. When that happens we walk
+    /// back to older files until we find one with a non-null primary.
+    func recentSessionFiles(limit: Int = 8) -> [URL] {
         let fm = FileManager.default
         let sessionsRoot = fm.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")
-        guard fm.fileExists(atPath: sessionsRoot.path) else { return nil }
+        guard fm.fileExists(atPath: sessionsRoot.path) else { return [] }
 
         guard let enumerator = fm.enumerator(
             at: sessionsRoot,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
             options: [.skipsHiddenFiles]
-        ) else { return nil }
+        ) else { return [] }
 
-        var newest: (url: URL, mtime: Date)?
+        var entries: [(url: URL, mtime: Date)] = []
         for case let url as URL in enumerator {
             guard url.pathExtension == "jsonl" else { continue }
             guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
                   values.isRegularFile == true,
                   let mtime = values.contentModificationDate
             else { continue }
-            if newest == nil || mtime > newest!.mtime {
-                newest = (url, mtime)
-            }
+            entries.append((url, mtime))
         }
-        return newest?.url
+        entries.sort { $0.mtime > $1.mtime }
+        return entries.prefix(limit).map { $0.url }
     }
 
     // MARK: - JSONL parse
@@ -580,15 +623,31 @@ public final class CodexSource: AISource {
         let plan_type: String?
     }
 
-    /// Scan the JSONL forward, keeping the most recent line that contains a
-    /// `rate_limits` payload. Memory-mapped — even multi-MB session files are
-    /// effectively free to scan.
+    /// Scan the JSONL forward and parse the freshest `rate_limits` event
+    /// that carries a usable `primary` bucket. Memory-mapped — even multi-MB
+    /// session files are effectively free to scan.
+    ///
+    /// v0.26.1: Codex CLI 0.132 emits a `rate_limits` event at session
+    /// shutdown with `limit_id="premium"` and `primary=null, secondary=null`
+    /// (a credits-only marker). The previous "take the textually last line
+    /// containing `rate_limits`" rule picked that empty event and clobbered
+    /// the real usage that came moments earlier in the same file. Now we
+    /// skip lines whose payload's `primary` is null/missing and keep the
+    /// latest line that actually carries usage data.
     private func parseLatestUsage(from url: URL) throws -> UsageData {
         let data = try Data(contentsOf: url, options: .alwaysMapped)
+        return try Self.parseUsageFromJSONLBytes(data, sourceName: url.lastPathComponent, now: Date())
+    }
+
+    /// Testable core of `parseLatestUsage` — takes raw JSONL bytes instead
+    /// of a URL so unit tests can exercise it without filesystem fixtures.
+    /// `sourceName` is only used in error messages.
+    static func parseUsageFromJSONLBytes(_ data: Data, sourceName: String = "<bytes>", now: Date) throws -> UsageData {
         let needle = Data("\"rate_limits\"".utf8)
         let newline: UInt8 = 0x0A
 
-        var latestLine: Data?
+        var latestUsableLine: Data?
+        var sawAnyRateLimits = false
         var cursor = data.startIndex
         while cursor < data.endIndex {
             let lineEnd: Data.Index
@@ -599,14 +658,25 @@ public final class CodexSource: AISource {
             }
             let line = data[cursor..<lineEnd]
             if line.range(of: needle) != nil {
-                latestLine = line
+                sawAnyRateLimits = true
+                if hasUsablePrimary(in: line) {
+                    latestUsableLine = line
+                }
             }
             cursor = lineEnd < data.endIndex ? data.index(after: lineEnd) : data.endIndex
         }
 
-        guard let line = latestLine else {
+        guard let line = latestUsableLine else {
+            // Differentiate the two empty cases so logs are useful: no
+            // rate_limits at all vs. only-null rate_limits (the v0.132
+            // shutdown marker pattern).
+            if sawAnyRateLimits {
+                throw AISourceError.dataSourceContractViolation(
+                    detail: "Session file has rate_limits events but all primary buckets are null (Codex CLI shutdown markers): \(sourceName)"
+                )
+            }
             throw AISourceError.dataSourceContractViolation(
-                detail: "Session file has no rate_limits entries yet: \(url.lastPathComponent)"
+                detail: "Session file has no rate_limits entries yet: \(sourceName)"
             )
         }
 
@@ -628,7 +698,6 @@ public final class CodexSource: AISource {
         let rlData = try JSONSerialization.data(withJSONObject: rateLimits, options: [])
         let rl = try JSONDecoder().decode(RateLimitsPayload.self, from: rlData)
 
-        let now = Date()
         let nowEpoch = Int(now.timeIntervalSince1970)
 
         // Primary = 5-hour session window. `resets_at` is server-time epoch
@@ -682,6 +751,35 @@ public final class CodexSource: AISource {
             representativeClaim: .fiveHour,
             updatedAt: now
         )
+    }
+
+    /// Returns true if the JSONL line's `payload.rate_limits.primary` is a
+    /// non-null JSON object. Uses a quick substring check first to avoid
+    /// JSON-parsing every line; only fully decodes when the substring hit
+    /// suggests primary might be present.
+    ///
+    /// Treats these shapes as NOT usable:
+    ///   - `"primary": null`
+    ///   - `primary` key missing entirely
+    ///
+    /// Treats this shape as usable:
+    ///   - `"primary": {...non-empty object...}` with `used_percent` and
+    ///     `resets_at` (the RateLimitsPayload.Bucket schema).
+    private static func hasUsablePrimary(in line: Data) -> Bool {
+        // Cheap substring check: "\"primary\":null" disqualifies immediately.
+        // The full JSON parse below is the source of truth, but this fast
+        // path lets us avoid `JSONSerialization` on shutdown-marker lines.
+        let primaryNullSnippet = Data("\"primary\":null".utf8)
+        if line.range(of: primaryNullSnippet) != nil {
+            return false
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              let payload = obj["payload"] as? [String: Any],
+              let rateLimits = payload["rate_limits"] as? [String: Any]
+        else { return false }
+        // primary must be a JSON object (dict). NSNull, missing, or a non-dict
+        // value all disqualify.
+        return rateLimits["primary"] is [String: Any]
     }
 }
 #endif // os(macOS)
