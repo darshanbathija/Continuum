@@ -259,6 +259,19 @@ The repo has substantial XCTest coverage under:
 - Release Mac builds are sandboxed; Debug builds keep broader local access for development.
 - App Store/iCloud/CloudKit/notarization paths still depend on Apple account capabilities outside this repo.
 
+## In-app updates
+
+Since v0.24.0 the Mac app checks `https://api.github.com/repos/darshanbathija/Clawdmeter/releases/latest` once 8 seconds after launch and every 24 hours while running. When a newer release ships, a small terra-cotta "Update X.Y.Z" chip appears in the titlebar; click it to read the release notes inline and open the release page in Safari, where you download the new DMG and drag it to `/Applications` the same way you did the first time. Click "Later" to hide the chip for 24 hours per version.
+
+There is no silent in-place install — that would require Sparkle 2.x + paid Developer ID + notarization, and is parked as a phase-2 migration in `TODOS.md`.
+
+Privacy: each daily check sends your IP and a `Clawdmeter/<version>` User-Agent to `api.github.com`. No unique identifier and no app body are transmitted. Equivalent to visiting the GitHub releases page in Safari once a day.
+
+Maintainer notes:
+
+- The repo URL is centralized in `apple/ClawdmeterMac/Updates/GitHubReleaseConstants.swift`. If the GitHub owner/repo ever changes, update the `owner`/`repo` constants there — three URL helpers (browser, API, tag) derive from them automatically. The `tools/build-mac-dmg.sh` script doesn't reference the URL today, but if a future release script does, it has to be updated in lockstep.
+- QA can override the API URL via `defaults write com.clawdmeter.mac ClawdmeterDebugReleasesURL "https://…"` and revert with `defaults delete`.
+
 ## Credits
 
 - Original Clawdmeter ESP32 firmware: gauge concept, color language, `UsageData`
