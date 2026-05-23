@@ -192,8 +192,10 @@ final class WireV14ContractTests: XCTestCase {
     // MARK: - Search response round-trip
 
     func test_chatSessionSearchResponse_round_trip() throws {
+        let groupId = UUID()
         let match = ChatSessionSearchMatch(
             sessionId: UUID(),
+            frontierGroupId: groupId,
             jsonlPath: "/Users/test/.claude/projects/foo/session.jsonl",
             snippet: "…hello world…",
             lastEventAt: Date()
@@ -206,6 +208,7 @@ final class WireV14ContractTests: XCTestCase {
         XCTAssertEqual(round.matches.count, 1)
         XCTAssertTrue(round.truncated)
         XCTAssertEqual(round.matches.first?.snippet, "…hello world…")
+        XCTAssertEqual(round.matches.first?.frontierGroupId, groupId)
     }
 }
 

@@ -109,11 +109,19 @@ public actor OpencodeAuthFile {
 
     /// Move any provider entries from the legacy sandbox-container path
     /// (where v0.23.4 wrote them due to the NSHomeDirectory bug) into
-    /// the real `~/.local/share/opencode/auth.json`. Idempotent — runs
-    /// at most once per process, then sets a marker file.
+    /// the real `~/.local/share/opencode/auth.json`. Idempotent — the
+    /// legacy file is removed after a successful merge so subsequent
+    /// reads short-circuit.
     ///
-    /// Strategy: copy entries that don't already exist in the canonical
-    /// file, then delete the legacy file so we don't migrate twice.
+    /// Contract: any provider entry present in the legacy file but not
+    /// in canonical is copied over. v0.23.4 → v0.23.5 users where the
+    /// canonical file was later created manually (or by a partial
+    /// previous migration) still benefit. v0.23.9 (P2 fix): the older
+    /// fast-path that bailed whenever canonical existed silently
+    /// stranded leftover legacy entries — restore the merge behavior
+    /// while keeping the malformed-canonical safety net (we never
+    /// overwrite a malformed canonical file, since doing so would
+    /// destroy whatever salvageable bytes the user has on disk).
     private func migrateLegacyEntriesIfNeeded() async {
         let legacyURL = Self.legacySandboxDataDirectoryURL.appendingPathComponent("auth.json")
         guard FileManager.default.fileExists(atPath: legacyURL.path),
@@ -126,15 +134,24 @@ public actor OpencodeAuthFile {
             return
         }
         // Read canonical entries without recursing into migrate.
-        var canonical: [String: [String: Any]] = {
+        let canonicalExists = FileManager.default.fileExists(atPath: Self.fileURL.path)
+        var canonical: [String: [String: Any]] = [:]
+        if canonicalExists {
             guard let data = try? Data(contentsOf: Self.fileURL),
                   let obj = try? JSONSerialization.jsonObject(with: data),
                   let dict = obj as? [String: [String: Any]] else {
-                return [:]
+                // Malformed canonical: refuse to merge so we don't
+                // clobber whatever bytes the user has on disk. Leave
+                // the legacy file in place so a future read can retry
+                // after the user fixes (or deletes) canonical.
+                authFileLogger.warning(
+                    "opencode auth canonical exists but is malformed; skipping legacy merge"
+                )
+                return
             }
-            return dict
-        }()
-        var changed = false
+            canonical = dict
+        }
+        var changed = !canonicalExists && !legacyDict.isEmpty
         for (providerId, entry) in legacyDict where canonical[providerId] == nil {
             canonical[providerId] = entry
             changed = true
@@ -143,7 +160,7 @@ public actor OpencodeAuthFile {
             do {
                 try await writeEntries(canonical)
                 authFileLogger.notice(
-                    "opencode auth migrated \(legacyDict.count, privacy: .public) legacy entries from sandbox container to real home"
+                    "opencode auth merged \(legacyDict.count, privacy: .public) legacy entries from sandbox container into real home (canonical existed: \(canonicalExists, privacy: .public))"
                 )
             } catch {
                 authFileLogger.error(
@@ -198,14 +215,19 @@ public actor OpencodeAuthFile {
     public func removeProvider(providerId: String) async throws {
         let normalized = normalize(providerId)
         var entries = await readEntries()
-        let before = entries.count
-        entries.removeValue(forKey: providerId)
-        entries.removeValue(forKey: normalized)
-        guard entries.count != before else {
-            authFileLogger.debug("opencode auth removeProvider no-op provider=\(normalized, privacy: .public)")
+        let removedRaw = entries.removeValue(forKey: providerId) != nil
+        let removedNormalized = providerId == normalized
+            ? false
+            : entries.removeValue(forKey: normalized) != nil
+        guard removedRaw || removedNormalized else {
+            authFileLogger.info("opencode auth remove skipped provider=\(normalized, privacy: .public)")
             return
         }
-        try await writeEntries(entries)
+        if entries.isEmpty {
+            try? FileManager.default.removeItem(at: Self.fileURL)
+        } else {
+            try await writeEntries(entries)
+        }
         authFileLogger.info("opencode auth removed provider=\(normalized, privacy: .public)")
     }
 

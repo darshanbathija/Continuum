@@ -4,9 +4,9 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-## [0.24.0 build 125] - 2026-05-23 — In-app update flow (GitHub Releases API checker) (`darshanbathija/in-app-update-flow`)
+## [0.25.0 build 128] - 2026-05-23 — In-app update flow (GitHub Releases API checker) (`darshanbathija/in-app-update-flow`)
 
-The Mac app now surfaces a small "Update X.Y.Z" chip in the titlebar when a newer release ships on GitHub. Click the chip to read the release notes inline and open the release page in Safari, where you download the new DMG and drag it into `/Applications` like before. No silent install in v0.24.0 — that's parked as a phase-2 Sparkle migration once a paid Apple Developer ID account is in play (see `TODOS.md`).
+The Mac app now surfaces a small "Update X.Y.Z" chip in the titlebar when a newer release ships on GitHub. Click the chip to read the release notes inline and open the release page in Safari, where you download the new DMG and drag it into `/Applications` like before. No silent install in v0.25.0 — that's parked as a phase-2 Sparkle migration once a paid Apple Developer ID account is in play (see `TODOS.md`).
 
 ### Added
 
@@ -23,9 +23,109 @@ The Mac app now surfaces a small "Update X.Y.Z" chip in the titlebar when a newe
 
 ### Notes
 
-- The original plan was Sparkle 2.x auto-update. Outside-voice review surfaced that Sparkle's silent-install value-add is conditional on notarization (Gatekeeper re-prompts on the freshly-installed un-notarized bundle anyway), and personal-team XPC + sandbox on macOS 26 is an unverified combination with a high probability of failure. We pivoted to the lightweight API checker so v0.24.0 ships now; the full Sparkle plan lives in `TODOS.md` for phase 2 when a paid Developer ID account is acquired.
+- Originally targeted v0.24.0, but a parallel-worktree ship landed broadcast chat at v0.24.0 first. Rebumped to v0.25.0 + build 128 during the merge to preserve linearity.
+- The original plan was Sparkle 2.x auto-update. Outside-voice review surfaced that Sparkle's silent-install value-add is conditional on notarization (Gatekeeper re-prompts on the freshly-installed un-notarized bundle anyway), and personal-team XPC + sandbox on macOS 26 is an unverified combination with a high probability of failure. We pivoted to the lightweight API checker so v0.25.0 ships now; the full Sparkle plan lives in `TODOS.md` for phase 2 when a paid Developer ID account is acquired.
 
-Bumps `MARKETING_VERSION` 0.23.9 → 0.24.0, `CURRENT_PROJECT_VERSION` 124 → 125.
+Bumps `MARKETING_VERSION` 0.24.0 → 0.25.0, `CURRENT_PROJECT_VERSION` 127 → 128.
+
+## [0.24.0 build 127] - 2026-05-23 — Broadcast Chat V3: side-by-side Claude / Codex / Antigravity (`darshanbathija/chat-v3`)
+
+Chat tab gets a broadcast mode. Pick 2-3 providers, send one prompt, see
+the answers side-by-side with per-provider tokens and cost. Star the
+better answer per turn. Continue from a winner to demote the broadcast
+group to a Solo chat that keeps the winning transcript.
+
+### Added
+
+- **Broadcast comparison surface** — Mac dashboard now has a left history sidebar, mode toggle (Solo vs Broadcast), provider summary chips above the chat, and a horizontally-scrollable column-per-provider transcript. iOS gets a compact version: provider pills above the selected-reply card, swipe between providers. Both surfaces ship with the Tahoe glass aesthetic from the standalone Clawdmeter redesign.
+- **Frontier wire protocol** (`Protocol.swift`) — `CreateFrontierRequest` / `CreateFrontierResponse` / `FrontierGroupSnapshot` / `FrontierSendRequest` / `FrontierTurnWinner` and new endpoints `POST /chat-sessions/frontier`, `POST /chat-sessions/frontier/:groupId/send`, `POST /chat-sessions/frontier/:groupId/pick-winner`, `POST /chat-sessions/frontier/:groupId/turn-winner`, `POST /chat-sessions/frontier/:groupId/retry-slot`. WebSocket subscription op `frontier-subscribe` streams live per-child turn state on a 100ms debounce.
+- **Per-turn winner metadata** — non-destructive star markings for each turn. Continue-from-winner is the destructive variant: archives losers and promotes the winner out of the Frontier group so follow-ups go through the regular `/sessions/:id/send` path.
+- **Deep Research toggle** — creation-time setting that propagates to every child in a Frontier group (Codex sandbox flag and Claude system prompt).
+- **`/chat-providers` gating** — surfaces per-provider availability so the broadcast mode picker can disable providers that aren't configured (e.g. Antigravity not running, Codex creds missing).
+
+### Changed
+
+- **Pre-landing review fixes** ([apple/ClawdmeterMac/AgentControl/AgentControlServer.swift](apple/ClawdmeterMac/AgentControl/AgentControlServer.swift), [apple/ClawdmeterMac/AgentControl/AgentSessionRegistry.swift](apple/ClawdmeterMac/AgentControl/AgentSessionRegistry.swift), [apple/ClawdmeterMac/Workspace/ChatV2/MacChatV2View.swift](apple/ClawdmeterMac/Workspace/ChatV2/MacChatV2View.swift), [apple/ClawdmeteriOS/Workspace/ChatV2/IOSChatV2View.swift](apple/ClawdmeteriOS/Workspace/ChatV2/IOSChatV2View.swift)):
+  - **Continue-from-winner actually leaves broadcast** — server now clears the winner's `frontierGroupId`/`frontierChildIndex` so the sidebar treats it as a regular Solo chat. UIs flip `openTarget` to `.solo(winner.id)` on the callback. `frontierGroupChildren(includeArchived:)` defaults to live-only so Frontier send fan-out + the WebSocket snapshot can never hit archived losers.
+  - **Broadcast first-send minimum** — `CreateFrontierResponse.hasMinimumBroadcast` (≥ 2 successful spawns) gates the broadcast surface. A single-success response surfaces every failed slot's `reason` instead of silently degrading to a one-agent "broadcast."
+  - **Per-child attachments** — `FrontierSendRequest.perChildText` map lets each Frontier child reference its own daemon-side staging path. Same bytes uploaded once per child via `uploadAndBuildPerChildPrompts`; legacy `SendPromptRequest` shape still accepted for back-compat.
+  - **Search/history hydration** — opening a search hit for a Frontier group that has < 2 live children (e.g. after pick-winner archived the losers) now reopens the matched session as Solo instead of a read-only transcript.
+- **OpenCode legacy auth merge restored** ([apple/ClawdmeterMac/AgentControl/OpencodeAuthFile.swift](apple/ClawdmeterMac/AgentControl/OpencodeAuthFile.swift)) — `migrateLegacyEntriesIfNeeded` no longer bails when the canonical file exists. It reads canonical, merges any legacy provider entries that canonical was missing, and writes back. Malformed canonical files are still left untouched so users with salvageable bytes don't lose them.
+
+### Fixed (adversarial review)
+
+- **Mid-fan-out archive race** — Frontier send fan-out now re-checks `archivedAt` immediately before each per-child send. A concurrent `/pick-winner` archiving a loser during another child's `await` can no longer let the prompt leak to the just-archived loser.
+- **Double-tap continue button** — both Mac `ProviderColumn` and iOS `FrontierTranscript` gate the continue-from-winner button with a `continuing` state, so a fast double-tap can't fire two `/pick-winner` POSTs (the second would 404 against the already-promoted winner).
+
+### Test coverage
+
+- 11 new unit tests: 4 in `WireV9Tests` (broadcast minimum + per-child round-trip), 1 in `OpencodeAuthFileTests` (canonical preservation across migration probe), 6 in new `AgentSessionRegistryFrontierTests` (frontierGroupChildren archived filter + clearFrontierGroupBinding).
+- Total: 643 ClawdmeterShared tests pass, 190 Mac tests pass.
+
+## [0.23.11 build 126] - 2026-05-23 — Real Antigravity token counts from .db step_payload + Keychain SDK key reader + LSP gRPC client (`darshanbathija/usage-page-edits`)
+
+Antigravity analytics went from $0.026/day (a 60×-too-low estimate) to real per-turn token counts. PR #70 had landed the right pricing for `gemini-3.5-flash` but the loader was ignoring 45% of the desktop corpus (SQLite `.db` files), 100% of the agy CLI corpus, and the bytes-÷-4 token estimator was reading 175 KB of `*.md` instead of the actual 10.84 MB of conversation content nested in `.system_generated/messages/*.json` + `transcript.jsonl`. This PR closes every gap.
+
+The dominant fix is reverse-engineered UsageMetadata extraction from `.db` step_payload BLOBs. Phase 0.5 had already proved those payloads are plaintext protobuf; this PR's `AntigravityDBUsageParser` walks the recursive proto structure looking for a strict signature (`f1>0, f2/f3 token-shaped varints, f6 in 1..1000`) and pulls real per-turn input/output/cached/reasoning/tool-use token counts. Validated against the user's real corpus: 22 records summing 371K input + 8K output + 662K cached for one 19-turn conversation. The byte-estimator stays as the fallback for `.pb` files (still encrypted) and for any .db where the signature doesn't match (future schema renumber).
+
+SDK mode is unblocked. `AntigravityLSPClient` talks to the locally-running `language_server` process via gRPC over HTTP/2 with self-signed-cert TLS bypass and CSRF-token auth (the token rotates per LSP restart and is also embedded in the process argv as `--csrf_token`). `discover()` finds the listening port via `lsof`, `ping()` round-trips `HasAuthToken`, `getCascadeTrajectory(conversationID:)` fetches the live trajectory protobuf for an active cascade — same UsageMetadata shape inside.
+
+`AntigravityKeychainKeys` exposes both Keychain items: the Electron Safe Storage 16-byte base64 key (used by the IDE shell for cookies/Local Storage) and the Gemini Safe Storage protobuf bundle (two 32-byte AES keys + active-key ID). The `.pb` decryption capability is ready to wire up; the encryption envelope itself isn't standard Electron safeStorage (no `v10` magic prefix), so reverse-engineering Google's wrapper format is documented as deferred — but the key is now accessible if someone wants to crank.
+
+`tools/refresh-pricing.sh` now merges `tools/pricing-overrides.json` on top of the LiteLLM snapshot. Re-running the refresh no longer blows away `gemini-3.5-flash` / `gemini-3.1-pro` overrides when LiteLLM is still on stale provisional rates.
+
+### Added
+
+- **`AntigravityDBUsageParser`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/AntigravityDBUsageParser.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/AntigravityDBUsageParser.swift)): static SQLite reader + proto walker that extracts real `UsageMetadata` from `.db` step_payload BLOBs. Self-contained `ProtoReader`, strict signature match, fail-soft fallback when zero records found.
+- **`AntigravityLSPClient`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AntigravityLSPClient.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AntigravityLSPClient.swift)): async gRPC client for `localhost:54765`. `discover()` via lsof, CSRF-token auth, TLS skip-verify (localhost-only), generic `unary(fullMethod:requestBody:)`, plus `ping()` and `getCascadeTrajectory(conversationID:)` conveniences.
+- **`AntigravityKeychainKeys`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AntigravityKeychainKeys.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AntigravityKeychainKeys.swift)): reads both Antigravity-owned Keychain items. Parses the Gemini Safe Storage proto bundle into a typed `GeminiKeyBundle` with active-key resolution.
+- **`tools/pricing-overrides.json`**: manual rate overrides applied on top of LiteLLM during `refresh-pricing.sh`. Currently carries the three Google I/O 2026 entries.
+- **`gemini-3.1-pro`** in pricing.json: tiered rate card ($2/$12 ≤200K, $4/$18 >200K, $0.20/M cached).
+- **`MODEL_PLACEHOLDER_M134 → gemini-3.1-pro`** in `AntigravityStateReader.knownModelTokens`.
+- **iOS Analytics tab + Mac dashboard `By Repo` list** now show real Antigravity totals.
+
+### Changed
+
+- **Token estimator** (`ConversationProtoParser.estimatePlaintextTokens`): walks the brain dir recursively, counts `.md/.txt/.json/.jsonl/.log`, excludes `*.metadata.json` sidecars. Measured 10.84 MB total content where the old top-level `*.md`-only scan saw 175 KB.
+- **`UsageHistoryLoader`** desktop walk: ingests both `.pb` (legacy) and `.db` (current) extensions, dedupes by UUID, prefers newer mtime. Adds the agy CLI corpus walk at `~/.gemini/antigravity-cli/conversations/`.
+- **`AntigravityUsageParser.parse`**: routes `.db` files through `AntigravityDBUsageParser` for real token counts, falls back to byte-estimate on zero matches. `.pb` files always use the byte estimate. New `dedupPrefix` parameter (`antigravity` vs `agy`) prevents brain-UUID collision between surfaces.
+- **`AntigravityLSPClient.discover()`**: portable lsof parser (the macOS `lsof -c <name>` flag matches the wrong process — we filter manually).
+- **`tools/refresh-pricing.sh`**: merges manual overrides from `tools/pricing-overrides.json` so re-running doesn't clobber I/O 2026 rates.
+- **`AnalyticsCache.currentVersion`**: bumped 9 → 11 in two phases (.md→all content recursive, then .db real-token-extraction). Forces a one-time cold reparse on first launch so users immediately see the corrected numbers.
+
+### Fixed
+
+- **Antigravity weekly $ figure**: the menubar/dashboard tooltip went from `$0.026/day` to plausible per-turn dollar amounts. Root cause was three independent bugs compounding (47% of desktop corpus invisible + 100% of CLI corpus invisible + estimator measuring wrong file types). PR #70 fixed the pricing; this PR makes the numbers it multiplies against trustworthy.
+- **`MODEL_PLACEHOLDER_M134`** no longer falls through `Pricing.shared.cost` as unknown ($0). Frontier-Pro sessions now price at the correct I/O 2026 rates.
+- **`refresh-pricing.sh`** no longer clobbers manual pricing entries. The override file is the audit trail with `_note` fields and a documented retirement policy.
+
+### Tests
+
+Suite went 635 → 672 (+37 new). New test files: `AntigravityDBUsageParserTests` (8 tests covering proto match, multi-record sum, signature rejection, garbage tolerance, SQLite WAL handling), `AntigravityLSPClientTests` (9 tests covering gRPC framing, varint encoding, live-LSP ping, real-trajectory fetch), `AntigravityKeychainKeysTests` (7 tests covering proto bundle parse, active-key lookup, case-insensitive hex). Extended `AgyConversationReaderTests`, `AntigravityStateReaderTests`, `ConversationProtoParserTests`, `PricingTests`, `UsageHistoryTests` with the new behaviors. Mac scheme builds clean; live LSP tests gracefully skip on CI / fresh machines.
+
+### Deferred
+
+`.pb` decryption format reverse-engineering, .db proto schema-stability monitor, gemini-3.1-pro-thinking variant, and SDK-mode wiring into the analytics loader. All documented in [TODOS.md](TODOS.md) under the new "Antigravity analytics — open follow-ups" section.
+
+## [0.23.10 build 125] - 2026-05-23 — Unify Settings → Providers into a single 4-row card and add the OpenCode logo (`darshanbathija/providers-rows-and-opencode-logo`)
+
+v0.23.9 collapsed each provider's chrome but left Codex SDK and Antigravity SDK in their own standalone `SettingsCard`s with separate titles, subtitles, and inline view bodies. That broke the visual rhythm with Claude Code + OpenCode, which sit as rows inside one Providers card. This pass inlines Codex SDK and Antigravity SDK as matching rows so all four providers share the same row shape: glyph + title + one-line status + single trailing toggle.
+
+Also: the OpenCode logo asset was missing from every catalog in the repo. `AgentKindUI.assetName(for: .opencode)` returned `"OpencodeLogo"`, `TahoeProvider.opencode.logoAssetName` returned `"tahoe-opencode-mark"`, but neither asset existed — every OpenCode glyph in Settings, chat, and analytics rendered as a blank rounded tile. This PR adds the missing PNG to all three catalogs so the brand mark renders.
+
+### Changed
+
+- **Settings → Providers card** ([apple/ClawdmeterMac/Tahoe/MacSettingsView.swift](apple/ClawdmeterMac/Tahoe/MacSettingsView.swift)): now one card containing four rows — Claude Code, OpenCode, Codex SDK, Antigravity SDK — separated by `TahoeHair()`. Card subtitle simplified to "External agent runtimes Clawdmeter can drive." The previous standalone "Codex SDK" and "Antigravity SDK" `SettingsCard`s are gone; their toggle logic + provisioning + error handling moved verbatim into new private `CodexSDKProviderRow` and `AntigravitySDKProviderRow` structs that match the row shape of `OpencodeProviderRow` / `ClaudeCLIProviderRow`.
+
+### Added
+
+- **OpenCode logo asset** at three locations: `apple/ClawdmeterShared/Sources/ClawdmeterShared/Tahoe/Tahoe.xcassets/tahoe-opencode-mark.imageset/` (drives `TahoeProviderGlyph` on every platform), `apple/ClawdmeteriOS/Assets.xcassets/OpencodeLogo.imageset/` (drives `ProviderBadgeImage` on iOS chat + analytics), `apple/ClawdmeterMac/Assets.xcassets/OpencodeLogo.imageset/` (drives `ProviderBadgeImage` on Mac analytics). Source PNG was cropped from a 2400×1350 export by detecting the fake-transparent checker pattern (opaque pixels at exact RGB `(19,16,16)` / `(37,33,33)`), converting them to true alpha=0, then auto-bounding-boxing to the actual mark and re-canvasing to 256×256 with 18% padding.
+
+### Removed
+
+- `apple/ClawdmeterMac/CodexSDKSettingsView.swift` and `apple/ClawdmeterMac/AntigravitySDKSettingsView.swift`. Their toggle bodies are now `CodexSDKProviderRow` / `AntigravitySDKProviderRow` inside `MacSettingsView.swift`. The underlying `CodexSDKManager` / `AntigravitySidecarManager` wiring is unchanged.
+
+Bumps `MARKETING_VERSION` 0.23.9 → 0.23.10, `CURRENT_PROJECT_VERSION` 124 → 125. All 635 `ClawdmeterShared` tests pass; Mac scheme builds clean; new asset confirmed in compiled `Assets.car` via `xcrun assetutil --info`.
 
 ## [0.23.9 build 124] - 2026-05-23 — Collapse Settings → Providers chrome to one toggle per row (`darshanbathija/settings-toggle-cleanup`)
 

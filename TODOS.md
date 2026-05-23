@@ -1,5 +1,74 @@
 # TODOs
 
+> **2026-05-23 update (Antigravity analytics autonomous run)**: PR #70's
+> follow-ups landed plus two new capability surfaces. Antigravity analytics
+> went from $0.026/day (broken) to real per-turn token counts pulled from
+> .db `step_payload` protobuf — see `AntigravityDBUsageParser.swift`. SDK
+> mode unblocked: `AntigravityLSPClient` talks gRPC to the running
+> `language_server` on `localhost:54765` (CSRF auth, TLS skip for the
+> self-signed cert) and `GetCascadeTrajectory` round-trips. `.pb`
+> decryption attempted but format is non-standard (not Electron
+> safeStorage; tried AES-GCM/CBC/CTR/ChaCha20 across multiple nonce
+> placements with both Keychain keys — no scheme produced plausible
+> plaintext). Deferred items below.
+
+## Antigravity analytics — open follow-ups (2026-05-23)
+
+### .pb decryption — DEFERRED indefinitely
+- **What**: legacy `.pb` files in `~/.gemini/antigravity/conversations/`
+  are encrypted with a Gemini-specific scheme. We have the Keychain
+  keys (`AntigravityKeychainKeys.geminiKeyBundle()` returns the two
+  32-byte AES keys + active key ID) but the encryption envelope isn't
+  documented and didn't match any common AEAD pattern.
+- **Why this matters less than it sounds**: `.pb` is the OLD format.
+  All new desktop sessions are `.db` (SQLite + plaintext step_payload),
+  which we now extract real token counts from. `.pb` files only matter
+  for archived legacy sessions, and even there the byte-÷-4 estimator
+  is the fallback.
+- **If you want to crank**: try Tink AEAD with various key-prefix
+  schemes, or extract Google's encryption key derivation from the
+  `language_server` Go binary via objdump / Ghidra. The struct tags
+  for the key envelope are likely findable in the binary.
+
+### .db proto field stability monitor
+- **What**: `AntigravityDBUsageParser.matchUsageMetadata` is reverse-
+  engineered. The signature it checks (`f1>0 && f6 in 1..1000 && f2/f3
+  varint`) is strict enough to reject random data but loose enough that
+  Google could renumber fields in a future Antigravity release.
+- **Watch for**: when Antigravity 2.1+ ships, run the test suite. The
+  `test_parseUsage_realConversation_producesNonZeroCounts` test will
+  skip if no .db has matching UsageMetadata — that's the canary for a
+  schema rewrite.
+- **If it breaks**: rerun `/tmp/find-usage.py` against a fresh
+  trajectory captured from `AntigravityLSPClient.getCascadeTrajectory`
+  and update the field-number table in `AntigravityDBUsageParser.swift`.
+
+### LSP-mode usage extraction (live conversations only)
+- **What**: `AntigravityLSPClient.getCascadeTrajectory(conversationID:)`
+  fetches the live trajectory protobuf for a conversation. The same
+  proto-field walker that handles .db step_payloads finds the
+  UsageMetadata sub-messages in the trajectory response.
+- **Status**: LSP client + getCascadeTrajectory ship in this PR.
+  Usage extraction from the trajectory response is **not wired into
+  UsageHistoryLoader** — adding it is mostly a few lines that route
+  the trajectory bytes through `AntigravityDBUsageParser.extractUsageMetadata`.
+- **Why not in this PR**: the LSP only serves LIVE conversations; old
+  archived ones return `grpc-status: 2` (NotFound). The .db file path
+  already covers historical data, so LSP mode is mostly redundant
+  belt-and-suspenders for the current session. Worth wiring in if we
+  ever want sub-second live refresh of the active session's totals.
+
+### Gemini-3.5-flash thinking + 3.1-pro thinking variants
+- **What**: pricing.json has `gemini-3.5-flash-thinking` but no
+  `gemini-3.1-pro-thinking`. If a frontier-Pro session uses extended
+  thinking the model name might be `gemini-3.1-pro-thinking` and
+  fall through Pricing as unknown.
+- **Cleanup**: add the entry to `tools/pricing-overrides.json` with
+  same rate card as `gemini-3.1-pro` (Google bills thinking tokens at
+  the output rate, not a separate rate). Re-run `tools/refresh-pricing.sh`.
+
+## Sessions v2 follow-ups (carry-over)
+
 Deferred work from Sessions v2 (2026-05-17). Each entry is a self-contained
 follow-up that didn't make the v2.0 ship but is worth picking up.
 
@@ -643,19 +712,19 @@ deferred items the CEO review identified.
 - **Effort**: ~30min for option 1 (recommended), ~2-3hrs for option 2,
   ~1hr for option 3.
 
-### v0.24.0 follow-up — Sparkle auto-update migration (phase 2)
+### v0.25.0 follow-up — Sparkle auto-update migration (phase 2)
 
-- **What**: Replace the GitHub-Releases-API checker shipped in v0.24.0
+- **What**: Replace the GitHub-Releases-API checker shipped in v0.25.0
   (`apple/ClawdmeterMac/Updates/`) with Sparkle 2.x auto-update. Original
   design captured in the eng-review plan file:
   `~/.claude/plans/system-instruction-you-are-working-snoopy-quail.md`
   under "Future work: Sparkle migration".
 - **Why**: The API checker requires the user to drag the new DMG to
   /Applications on each update. Sparkle gives one-click "Update &
-  Restart." v0.24.0 ships the API checker because Sparkle's value-add is
+  Restart." v0.25.0 ships the API checker because Sparkle's value-add is
   conditional on notarization (Gatekeeper re-prompts on un-notarized
   relaunch anyway), and personal-team XPC + sandbox + macOS 26 is an
-  unverified combination that the v0.24.0 outside-voice review flagged
+  unverified combination that the v0.25.0 outside-voice review flagged
   as PRIMARY UNKNOWN with high probability of failure.
 - **Prerequisites (HARD)**:
   1. Paid Apple Developer Program account ($99/yr) — required for
@@ -692,3 +761,76 @@ deferred items the CEO review identified.
   BEFORE shipping Sparkle.
 - **Effort**: 2-3 weeks (1 PoC PR + 1 implementation PR + manual QA
   pass + docs).
+
+### v0.24.0 follow-up — Broadcast Chat V3 adversarial-review deferrals
+
+Adversarial review of `darshanbathija/chat-v3` surfaced 13 findings.
+Two were fixed in the same PR (mid-fan-out archive race + double-tap
+button gate). The rest were classified as edge cases, multi-device
+scenarios, or pre-existing system properties and deferred here.
+
+- **WS reconnect after pick-winner hard-closes second client (HIGH)**:
+  If a second device has the broadcast surface open at the moment
+  pick-winner promotes a winner, `frontierGroupChildren` returns empty
+  on reconnect and the WS channel closes with `.unsupportedData`. UI
+  treats it as a transport error instead of "group dissolved." Fix:
+  emit a final snapshot with `children: []` + a `dissolvedAt` marker
+  so the client navigates away cleanly. Affects multi-device viewing
+  during the brief promotion window only. **Effort**: ~1h CC.
+- **Two-pass FrontierSendRequest decode silently accepts malformed
+  bodies (HIGH)**: A client posting `{"text":"hi","perChildText":42}`
+  fails first-pass `FrontierSendRequest` decode (perChildText wrong
+  type), then succeeds against legacy `SendPromptRequest` (extra
+  fields ignored) and broadcasts shared text — hiding the client bug.
+  Fix: log the first-pass decode error before falling back so
+  malformed clients surface. **Effort**: ~15min CC.
+- **Partial broadcast-attachment upload silently degrades (HIGH)**:
+  When uploading the same attachment to 3 children, if upload fails
+  for one child only, that child's prompt loses the `@<path>`
+  reference while the others keep it. User sees asymmetric replies
+  without realizing why. Fix: detect `paths.count != stagables.count`
+  per child and either retry or refuse the send with a clear error.
+  Currently treated as graceful degradation. **Effort**: ~30min CC.
+- **OpencodeAuthFile inter-process race during legacy migration
+  (HIGH)**: Two daemons (stale + new launch) racing
+  `migrateLegacyEntriesIfNeeded` can clobber each other's writes —
+  one daemon's freshly-merged canonical can be overwritten by
+  another's stale view. Pre-existing system property (the whole
+  OpencodeAuthFile actor lacks inter-process locking). Fix: take
+  `open(O_EXLOCK)` on `~/.local/share/opencode/.auth.lock` around
+  the read-merge-write-delete sequence. **Effort**: ~1h CC.
+- **pick-winner double-invocation returns 404 (MEDIUM)**: After the
+  first /pick-winner succeeds, a second one for the same childIndex
+  returns 404 (winner has been promoted out of the group). UI debounce
+  in v0.24.0 prevents the common case (fast double-tap), but a second
+  device or replayed request still hits this. Fix: server idempotency
+  — look up the already-promoted session and return it. **Effort**:
+  ~30min CC.
+- **setFrontierTurnWinner fails after pick-winner (MEDIUM)**: Once
+  the winner has been promoted, starring the same turn fails because
+  the validation uses live-only `frontierGroupChildren`. Edge case
+  (after picking continue, why would you star?). Fix: accept against
+  `includeArchived: true` or persisted history. **Effort**: ~15min CC.
+- **`open(match:)` race with concurrent pick-winner (MEDIUM)**:
+  Time-of-check vs time-of-use — `frontierChildren(groupId:).count >= 2`
+  passes, but another device's pick-winner lands before the UI
+  renders. User opens broadcast surface only to see it dissolve.
+  Fix: gate broadcast-target assignment on the first WS snapshot
+  rather than the snapshot-time count. **Effort**: ~1h CC.
+- **Empty-text guard rejects valid attachment-only sends (MEDIUM)**:
+  If a user sends only attachments (empty `base` text) AND uploads
+  fail for one child, that child gets `invalid_prompt` while
+  siblings succeed. Fix: validate per-child text non-empty at
+  composer time before issuing the send. **Effort**: ~30min CC.
+- **`includeArchived: Bool = false` naming clarity (LOW)**: Default
+  flip changes implicit behavior. Rename to `liveOnly: Bool = true`
+  for explicit intent at call sites. **Effort**: ~15min CC.
+- **`failedSlots` reasons not surfaced in broadcast header (LOW)**:
+  When 2 of 3 broadcast slots succeed, the UI proceeds silently
+  without showing why the third failed. Fix: warning chip in the
+  broadcast header when `failedSlots.count > 0`. **Effort**: ~30min CC.
+- **OpenCode canonical-stale-token edge case (LOW)**: If canonical
+  has an entry with the same provider id as legacy but a malformed/
+  empty `key` field, merge keeps canonical (which is broken) instead
+  of preferring legacy. Fix: prefer legacy when canonical entry's
+  `key` is missing or empty. **Effort**: ~15min CC.
