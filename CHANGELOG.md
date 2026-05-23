@@ -4,6 +4,51 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.23.11 build 126] - 2026-05-23 — Real Antigravity token counts from .db step_payload + Keychain SDK key reader + LSP gRPC client (`darshanbathija/usage-page-edits`)
+
+Antigravity analytics went from $0.026/day (a 60×-too-low estimate) to real per-turn token counts. PR #70 had landed the right pricing for `gemini-3.5-flash` but the loader was ignoring 45% of the desktop corpus (SQLite `.db` files), 100% of the agy CLI corpus, and the bytes-÷-4 token estimator was reading 175 KB of `*.md` instead of the actual 10.84 MB of conversation content nested in `.system_generated/messages/*.json` + `transcript.jsonl`. This PR closes every gap.
+
+The dominant fix is reverse-engineered UsageMetadata extraction from `.db` step_payload BLOBs. Phase 0.5 had already proved those payloads are plaintext protobuf; this PR's `AntigravityDBUsageParser` walks the recursive proto structure looking for a strict signature (`f1>0, f2/f3 token-shaped varints, f6 in 1..1000`) and pulls real per-turn input/output/cached/reasoning/tool-use token counts. Validated against the user's real corpus: 22 records summing 371K input + 8K output + 662K cached for one 19-turn conversation. The byte-estimator stays as the fallback for `.pb` files (still encrypted) and for any .db where the signature doesn't match (future schema renumber).
+
+SDK mode is unblocked. `AntigravityLSPClient` talks to the locally-running `language_server` process via gRPC over HTTP/2 with self-signed-cert TLS bypass and CSRF-token auth (the token rotates per LSP restart and is also embedded in the process argv as `--csrf_token`). `discover()` finds the listening port via `lsof`, `ping()` round-trips `HasAuthToken`, `getCascadeTrajectory(conversationID:)` fetches the live trajectory protobuf for an active cascade — same UsageMetadata shape inside.
+
+`AntigravityKeychainKeys` exposes both Keychain items: the Electron Safe Storage 16-byte base64 key (used by the IDE shell for cookies/Local Storage) and the Gemini Safe Storage protobuf bundle (two 32-byte AES keys + active-key ID). The `.pb` decryption capability is ready to wire up; the encryption envelope itself isn't standard Electron safeStorage (no `v10` magic prefix), so reverse-engineering Google's wrapper format is documented as deferred — but the key is now accessible if someone wants to crank.
+
+`tools/refresh-pricing.sh` now merges `tools/pricing-overrides.json` on top of the LiteLLM snapshot. Re-running the refresh no longer blows away `gemini-3.5-flash` / `gemini-3.1-pro` overrides when LiteLLM is still on stale provisional rates.
+
+### Added
+
+- **`AntigravityDBUsageParser`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/AntigravityDBUsageParser.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/AntigravityDBUsageParser.swift)): static SQLite reader + proto walker that extracts real `UsageMetadata` from `.db` step_payload BLOBs. Self-contained `ProtoReader`, strict signature match, fail-soft fallback when zero records found.
+- **`AntigravityLSPClient`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AntigravityLSPClient.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AntigravityLSPClient.swift)): async gRPC client for `localhost:54765`. `discover()` via lsof, CSRF-token auth, TLS skip-verify (localhost-only), generic `unary(fullMethod:requestBody:)`, plus `ping()` and `getCascadeTrajectory(conversationID:)` conveniences.
+- **`AntigravityKeychainKeys`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AntigravityKeychainKeys.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AntigravityKeychainKeys.swift)): reads both Antigravity-owned Keychain items. Parses the Gemini Safe Storage proto bundle into a typed `GeminiKeyBundle` with active-key resolution.
+- **`tools/pricing-overrides.json`**: manual rate overrides applied on top of LiteLLM during `refresh-pricing.sh`. Currently carries the three Google I/O 2026 entries.
+- **`gemini-3.1-pro`** in pricing.json: tiered rate card ($2/$12 ≤200K, $4/$18 >200K, $0.20/M cached).
+- **`MODEL_PLACEHOLDER_M134 → gemini-3.1-pro`** in `AntigravityStateReader.knownModelTokens`.
+- **iOS Analytics tab + Mac dashboard `By Repo` list** now show real Antigravity totals.
+
+### Changed
+
+- **Token estimator** (`ConversationProtoParser.estimatePlaintextTokens`): walks the brain dir recursively, counts `.md/.txt/.json/.jsonl/.log`, excludes `*.metadata.json` sidecars. Measured 10.84 MB total content where the old top-level `*.md`-only scan saw 175 KB.
+- **`UsageHistoryLoader`** desktop walk: ingests both `.pb` (legacy) and `.db` (current) extensions, dedupes by UUID, prefers newer mtime. Adds the agy CLI corpus walk at `~/.gemini/antigravity-cli/conversations/`.
+- **`AntigravityUsageParser.parse`**: routes `.db` files through `AntigravityDBUsageParser` for real token counts, falls back to byte-estimate on zero matches. `.pb` files always use the byte estimate. New `dedupPrefix` parameter (`antigravity` vs `agy`) prevents brain-UUID collision between surfaces.
+- **`AntigravityLSPClient.discover()`**: portable lsof parser (the macOS `lsof -c <name>` flag matches the wrong process — we filter manually).
+- **`tools/refresh-pricing.sh`**: merges manual overrides from `tools/pricing-overrides.json` so re-running doesn't clobber I/O 2026 rates.
+- **`AnalyticsCache.currentVersion`**: bumped 9 → 11 in two phases (.md→all content recursive, then .db real-token-extraction). Forces a one-time cold reparse on first launch so users immediately see the corrected numbers.
+
+### Fixed
+
+- **Antigravity weekly $ figure**: the menubar/dashboard tooltip went from `$0.026/day` to plausible per-turn dollar amounts. Root cause was three independent bugs compounding (47% of desktop corpus invisible + 100% of CLI corpus invisible + estimator measuring wrong file types). PR #70 fixed the pricing; this PR makes the numbers it multiplies against trustworthy.
+- **`MODEL_PLACEHOLDER_M134`** no longer falls through `Pricing.shared.cost` as unknown ($0). Frontier-Pro sessions now price at the correct I/O 2026 rates.
+- **`refresh-pricing.sh`** no longer clobbers manual pricing entries. The override file is the audit trail with `_note` fields and a documented retirement policy.
+
+### Tests
+
+Suite went 635 → 672 (+37 new). New test files: `AntigravityDBUsageParserTests` (8 tests covering proto match, multi-record sum, signature rejection, garbage tolerance, SQLite WAL handling), `AntigravityLSPClientTests` (9 tests covering gRPC framing, varint encoding, live-LSP ping, real-trajectory fetch), `AntigravityKeychainKeysTests` (7 tests covering proto bundle parse, active-key lookup, case-insensitive hex). Extended `AgyConversationReaderTests`, `AntigravityStateReaderTests`, `ConversationProtoParserTests`, `PricingTests`, `UsageHistoryTests` with the new behaviors. Mac scheme builds clean; live LSP tests gracefully skip on CI / fresh machines.
+
+### Deferred
+
+`.pb` decryption format reverse-engineering, .db proto schema-stability monitor, gemini-3.1-pro-thinking variant, and SDK-mode wiring into the analytics loader. All documented in [TODOS.md](TODOS.md) under the new "Antigravity analytics — open follow-ups" section.
+
 ## [0.23.10 build 125] - 2026-05-23 — Unify Settings → Providers into a single 4-row card and add the OpenCode logo (`darshanbathija/providers-rows-and-opencode-logo`)
 
 v0.23.9 collapsed each provider's chrome but left Codex SDK and Antigravity SDK in their own standalone `SettingsCard`s with separate titles, subtitles, and inline view bodies. That broke the visual rhythm with Claude Code + OpenCode, which sit as rows inside one Providers card. This pass inlines Codex SDK and Antigravity SDK as matching rows so all four providers share the same row shape: glyph + title + one-line status + single trailing toggle.

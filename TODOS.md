@@ -1,5 +1,74 @@
 # TODOs
 
+> **2026-05-23 update (Antigravity analytics autonomous run)**: PR #70's
+> follow-ups landed plus two new capability surfaces. Antigravity analytics
+> went from $0.026/day (broken) to real per-turn token counts pulled from
+> .db `step_payload` protobuf — see `AntigravityDBUsageParser.swift`. SDK
+> mode unblocked: `AntigravityLSPClient` talks gRPC to the running
+> `language_server` on `localhost:54765` (CSRF auth, TLS skip for the
+> self-signed cert) and `GetCascadeTrajectory` round-trips. `.pb`
+> decryption attempted but format is non-standard (not Electron
+> safeStorage; tried AES-GCM/CBC/CTR/ChaCha20 across multiple nonce
+> placements with both Keychain keys — no scheme produced plausible
+> plaintext). Deferred items below.
+
+## Antigravity analytics — open follow-ups (2026-05-23)
+
+### .pb decryption — DEFERRED indefinitely
+- **What**: legacy `.pb` files in `~/.gemini/antigravity/conversations/`
+  are encrypted with a Gemini-specific scheme. We have the Keychain
+  keys (`AntigravityKeychainKeys.geminiKeyBundle()` returns the two
+  32-byte AES keys + active key ID) but the encryption envelope isn't
+  documented and didn't match any common AEAD pattern.
+- **Why this matters less than it sounds**: `.pb` is the OLD format.
+  All new desktop sessions are `.db` (SQLite + plaintext step_payload),
+  which we now extract real token counts from. `.pb` files only matter
+  for archived legacy sessions, and even there the byte-÷-4 estimator
+  is the fallback.
+- **If you want to crank**: try Tink AEAD with various key-prefix
+  schemes, or extract Google's encryption key derivation from the
+  `language_server` Go binary via objdump / Ghidra. The struct tags
+  for the key envelope are likely findable in the binary.
+
+### .db proto field stability monitor
+- **What**: `AntigravityDBUsageParser.matchUsageMetadata` is reverse-
+  engineered. The signature it checks (`f1>0 && f6 in 1..1000 && f2/f3
+  varint`) is strict enough to reject random data but loose enough that
+  Google could renumber fields in a future Antigravity release.
+- **Watch for**: when Antigravity 2.1+ ships, run the test suite. The
+  `test_parseUsage_realConversation_producesNonZeroCounts` test will
+  skip if no .db has matching UsageMetadata — that's the canary for a
+  schema rewrite.
+- **If it breaks**: rerun `/tmp/find-usage.py` against a fresh
+  trajectory captured from `AntigravityLSPClient.getCascadeTrajectory`
+  and update the field-number table in `AntigravityDBUsageParser.swift`.
+
+### LSP-mode usage extraction (live conversations only)
+- **What**: `AntigravityLSPClient.getCascadeTrajectory(conversationID:)`
+  fetches the live trajectory protobuf for a conversation. The same
+  proto-field walker that handles .db step_payloads finds the
+  UsageMetadata sub-messages in the trajectory response.
+- **Status**: LSP client + getCascadeTrajectory ship in this PR.
+  Usage extraction from the trajectory response is **not wired into
+  UsageHistoryLoader** — adding it is mostly a few lines that route
+  the trajectory bytes through `AntigravityDBUsageParser.extractUsageMetadata`.
+- **Why not in this PR**: the LSP only serves LIVE conversations; old
+  archived ones return `grpc-status: 2` (NotFound). The .db file path
+  already covers historical data, so LSP mode is mostly redundant
+  belt-and-suspenders for the current session. Worth wiring in if we
+  ever want sub-second live refresh of the active session's totals.
+
+### Gemini-3.5-flash thinking + 3.1-pro thinking variants
+- **What**: pricing.json has `gemini-3.5-flash-thinking` but no
+  `gemini-3.1-pro-thinking`. If a frontier-Pro session uses extended
+  thinking the model name might be `gemini-3.1-pro-thinking` and
+  fall through Pricing as unknown.
+- **Cleanup**: add the entry to `tools/pricing-overrides.json` with
+  same rate card as `gemini-3.1-pro` (Google bills thinking tokens at
+  the output rate, not a separate rate). Re-run `tools/refresh-pricing.sh`.
+
+## Sessions v2 follow-ups (carry-over)
+
 Deferred work from Sessions v2 (2026-05-17). Each entry is a self-contained
 follow-up that didn't make the v2.0 ship but is worth picking up.
 
