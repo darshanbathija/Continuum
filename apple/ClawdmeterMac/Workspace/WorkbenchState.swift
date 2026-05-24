@@ -183,7 +183,7 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
     init(
         selectedSessionId: UUID? = nil,
         selectedRightPane: WorkbenchPaneTab = .plan,
-        showingReviewPane: Bool = false,
+        showingReviewPane: Bool = true,
         density: TranscriptDensity = .balanced,
         workspaceWidth: Double = 1400,
         sidebarWidth: Double? = nil,
@@ -224,7 +224,7 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         selectedSessionId = try c.decodeIfPresent(UUID.self, forKey: .selectedSessionId)
         selectedRightPane = try c.decodeIfPresent(WorkbenchPaneTab.self, forKey: .selectedRightPane) ?? .plan
-        showingReviewPane = try c.decodeIfPresent(Bool.self, forKey: .showingReviewPane) ?? false
+        showingReviewPane = try c.decodeIfPresent(Bool.self, forKey: .showingReviewPane) ?? true
         density = try c.decodeIfPresent(TranscriptDensity.self, forKey: .density) ?? .balanced
         workspaceWidth = try c.decodeIfPresent(Double.self, forKey: .workspaceWidth) ?? 1400
         sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth)

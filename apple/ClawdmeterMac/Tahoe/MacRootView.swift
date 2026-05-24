@@ -258,8 +258,32 @@ struct MacTitlebar: View {
     /// currently paired via the agentControlServer's pairingTokens.
     /// Nil runtime (Previews) returns false.
     private var isIPhonePaired: Bool {
-        guard let runtime else { return false }
+        guard runtime != nil else { return false }
         return PairingTokenStore.shared.hasAnyPaired
+    }
+
+    @ViewBuilder
+    private var codeBreadcrumb: some View {
+        if let session = runtime?.sessionsModel.openSession {
+            HStack(spacing: 7) {
+                TahoeIcon("folder", size: 11)
+                    .foregroundStyle(t.fg3)
+                Text(session.repoDisplayName)
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                TahoeIcon("chevR", size: 9)
+                    .foregroundStyle(t.fg4)
+                Text(session.displayLabel)
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg2)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: 420)
+            .help("\(session.repoDisplayName)\n\(session.displayLabel)")
+        }
     }
 
     @State private var syncChipPopoverPresented: Bool = false
@@ -311,30 +335,110 @@ struct MacTitlebar: View {
             // dropped the decorative TahoeTrafficLights chip — it was
             // a non-functional Tahoe-themed clone that visually stacked
             // on top of the real lights.
-            Color.clear.frame(width: 76, height: 1)
-
-            TahoeGlass(radius: 11, tone: .chip) {
-                HStack(spacing: 10) {
-                    TahoeDashTab("Chat",     active: active == .chat)     { onTab(.chat) }
-                    TahoeDashTab("Usage",    active: active == .usage)    { onTab(.usage) }
-                    TahoeDashTab("Code",     active: active == .code)     { onTab(.code) }
-                    TahoeDashTab("Settings", active: active == .settings) { onTab(.settings) }
-                    Spacer(minLength: 0)
-                    // v0.24.0: in-app update chip. Always visible across
-                    // every tab when an update is available OR the bundle
-                    // is translocated. Self-hides via `chipState()` —
-                    // returns EmptyView when there's nothing to surface,
-                    // so the existing per-tab `secondaryRight` content
-                    // continues to render alone on quiet days.
-                    UpdateChip(coordinator: runtime?.updateCoordinator)
-                    secondaryRight
-                }
-                .padding(.horizontal, 14)
-                .frame(height: 30)
+            if active == .code {
+                trafficChip
+            } else {
+                Color.clear.frame(width: 76, height: 1)
             }
-            .frame(maxWidth: .infinity)
+
+            if active == .code {
+                TahoeGlass(radius: 11, tone: .chip) {
+                    tabStrip
+                        .padding(.horizontal, 14)
+                        .frame(height: 30)
+                }
+                .fixedSize()
+
+                TahoeGlass(radius: 11, tone: .chip) {
+                    HStack(spacing: 8) {
+                        codeBreadcrumb
+                        TahoeHair(vertical: true).frame(height: 14)
+                        syncChipCode
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 30)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+                codeActions
+            } else {
+                TahoeGlass(radius: 11, tone: .chip) {
+                    HStack(spacing: 10) {
+                        tabStrip
+                        Spacer(minLength: 0)
+                        // v0.24.0: in-app update chip. Always visible across
+                        // every tab when an update is available OR the bundle
+                        // is translocated. Self-hides via `chipState()` —
+                        // returns EmptyView when there's nothing to surface,
+                        // so the existing per-tab `secondaryRight` content
+                        // continues to render alone on quiet days.
+                        UpdateChip(coordinator: runtime?.updateCoordinator)
+                        secondaryRight
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 30)
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
         .frame(height: 44)
+    }
+
+    private var tabStrip: some View {
+        HStack(spacing: 10) {
+            TahoeDashTab("Chat",     active: active == .chat)     { onTab(.chat) }
+            TahoeDashTab("Usage",    active: active == .usage)    { onTab(.usage) }
+            TahoeDashTab("Code",     active: active == .code)     { onTab(.code) }
+            TahoeDashTab("Settings", active: active == .settings) { onTab(.settings) }
+        }
+    }
+
+    private var trafficChip: some View {
+        TahoeGlass(radius: 11, tone: .chip) {
+            HStack(spacing: 7) {
+                Circle().fill(Color(red: 1.0, green: 0.35, blue: 0.33))
+                    .frame(width: 10, height: 10)
+                Circle().fill(Color(red: 1.0, green: 0.74, blue: 0.18))
+                    .frame(width: 10, height: 10)
+                Circle().fill(Color(red: 0.20, green: 0.78, blue: 0.25))
+                    .frame(width: 10, height: 10)
+            }
+            .frame(width: 44, height: 10)
+            .padding(.horizontal, 11)
+            .frame(height: 30)
+        }
+        .fixedSize()
+        .allowsHitTesting(false)
+    }
+
+    private var codeActions: some View {
+        TahoeGlass(radius: 11, tone: .chip) {
+            HStack(spacing: 2) {
+                codeActionButton(icon: "sliders", help: "Focus Code filters") {
+                    NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)
+                }
+                codeActionButton(icon: "bell", help: "Pair or manage iPhone sync") {
+                    syncChipPopoverPresented = true
+                }
+                codeActionButton(icon: "sidebar", help: "Toggle Code review pane") {
+                    NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil)
+                }
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 30)
+        }
+        .fixedSize()
+    }
+
+    private func codeActionButton(icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            TahoeIcon(icon, size: 12)
+                .foregroundStyle(t.fg3)
+                .frame(width: 24, height: 24)
+                .background(t.hair2.opacity(0.65), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     @ViewBuilder
@@ -366,7 +470,13 @@ struct MacTitlebar: View {
                 syncChipUsage
             }
         case .code:
-            syncChipCode
+            HStack(spacing: 8) {
+                codeBreadcrumb
+                Rectangle()
+                    .fill(t.hairline)
+                    .frame(width: 0.5, height: 14)
+                syncChipCode
+            }
         case .settings:
             Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1") · synced")
                 .font(TahoeFont.body(12))
