@@ -27,7 +27,7 @@ final class WorkbenchStateTests: XCTestCase {
 
         XCTAssertEqual(state.density, .balanced)
         XCTAssertEqual(state.selectedRightPane, .plan)
-        XCTAssertFalse(state.showingReviewPane)
+        XCTAssertTrue(state.showingReviewPane)
         XCTAssertEqual(state.workspaceWidth, 1400)
     }
 
@@ -93,6 +93,7 @@ final class WorkbenchStateTests: XCTestCase {
 
         XCTAssertEqual(state.selectedRightPane, .plan)
         XCTAssertEqual(state.density, .balanced)
+        XCTAssertTrue(state.showingReviewPane)
     }
 
     func test_serviceCachesPersist() {

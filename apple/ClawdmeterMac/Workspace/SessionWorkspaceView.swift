@@ -31,6 +31,7 @@ struct SessionWorkspaceView: View {
     /// renders if the window has room for it without clipping content.
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.tahoe) private var t
 
     /// Minimum width required to render the review pane at its full
     /// content-respecting width (≥440pt) without crushing sidebar + chat.
@@ -51,93 +52,106 @@ struct SessionWorkspaceView: View {
     }
 
     var body: some View {
-        HSplitView {
-            SidebarPane(model: model, workbenchState: workbenchState)
-                .frame(minWidth: 220, idealWidth: 260, maxWidth: 380)
+        ZStack {
+            t.pageBg.opacity(t.dark ? 0.35 : 0.18)
+            HSplitView {
+                TahoeGlass(radius: 20, tone: .panel) {
+                    SidebarPane(model: model, workbenchState: workbenchState)
+                }
+                .frame(width: 260)
+                .padding(.trailing, 5)
 
-            // Center pane carries the chat AND, when the review pane is
-            // collapsed, a thin right-edge gutter that doubles as the
-            // expand CTA. Keeping the gutter inside the center column
-            // (instead of as its own HSplitView child) means the user
-            // can't accidentally drag-resize it.
-            HStack(spacing: 0) {
-                ZStack(alignment: .bottom) {
-                    if let session = model.openSession {
-                        CenterThread(
+                // Center pane carries the chat AND, when the review pane is
+                // collapsed, a thin right-edge gutter that doubles as the
+                // expand CTA. Keeping the gutter inside the center column
+                // (instead of as its own HSplitView child) means the user
+                // can't accidentally drag-resize it.
+                TahoeGlass(radius: 20, tone: .panel) {
+                    HStack(spacing: 0) {
+                        ZStack(alignment: .bottom) {
+                            if let session = model.openSession {
+                                CenterThread(
+                                    session: session,
+                                    isReadOnly: model.openSessionIsReadOnly,
+                                    model: model,
+                                    catalog: launcher.modelCatalog,
+                                    workbenchState: workbenchState,
+                                    density: workbenchState.density,
+                                    onDensityChange: { workbenchState.setDensity($0) },
+                                    onModeSwitch: { newMode in
+                                        Task { await switchMode(session: session, to: newMode) }
+                                    }
+                                )
+                            } else {
+                                centerEmpty
+                            }
+                            if showingModeSwitchOverlay {
+                                modeSwitchOverlay
+                            }
+                            // v0.23 (T11+T16): use the lifted Shared
+                            // PermissionPromptCard + MacPermissionResponder.
+                            // Replaces the deleted LegacyMacPermissionPromptCard
+                            // that used to live in ChatSoloView.swift.
+                            if let session = model.openSession,
+                               let store = model.chatStore(for: session),
+                               let prompt = store.pendingPermissionPrompt {
+                                PermissionPromptCard(
+                                    prompt: prompt,
+                                    sessionId: session.id,
+                                    responder: MacPermissionResponder()
+                                )
+                                .padding(.horizontal, 20)
+                                .padding(.bottom, 16)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        if effectiveShowGutter, model.openSession != nil {
+                            TahoeHairline(vertical: true)
+                            ReviewPaneGutter(
+                                selectedTab: selectedRightPaneBinding,
+                                onExpand: { tab in
+                                    workbenchState.selectRightPane(tab)
+                                    withAnimation(.easeOut(duration: 0.18)) {
+                                        workbenchState.setReviewPaneVisible(true)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+                .frame(minWidth: 420, idealWidth: 600)
+                .padding(.horizontal, 5)
+
+                if effectiveShowReviewPane, let session = model.openSession {
+                    TahoeGlass(radius: 20, tone: .panel) {
+                        ReviewPane(
                             session: session,
-                            isReadOnly: model.openSessionIsReadOnly,
+                            chatStore: model.chatStore(for: session),
                             model: model,
-                            catalog: launcher.modelCatalog,
                             workbenchState: workbenchState,
-                            density: workbenchState.density,
-                            onDensityChange: { workbenchState.setDensity($0) },
-                            onModeSwitch: { newMode in
-                                Task { await switchMode(session: session, to: newMode) }
+                            selectedTab: selectedRightPaneBinding,
+                            onClose: {
+                                withAnimation(.easeOut(duration: 0.18)) {
+                                    workbenchState.setReviewPaneVisible(false)
+                                }
+                            },
+                            onApprove: {
+                                Task {
+                                    guard await createApprovalCheckpoint(for: session) else { return }
+                                    await model.approvePlan(id: session.id)
+                                }
                             }
                         )
-                    } else {
-                        centerEmpty
                     }
-                    if showingModeSwitchOverlay {
-                        modeSwitchOverlay
-                    }
-                    // v0.23 (T11+T16): use the lifted Shared
-                    // PermissionPromptCard + MacPermissionResponder.
-                    // Replaces the deleted LegacyMacPermissionPromptCard
-                    // that used to live in ChatSoloView.swift.
-                    if let session = model.openSession,
-                       let store = model.chatStore(for: session),
-                       let prompt = store.pendingPermissionPrompt {
-                        PermissionPromptCard(
-                            prompt: prompt,
-                            sessionId: session.id,
-                            responder: MacPermissionResponder()
-                        )
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 16)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                if effectiveShowGutter, model.openSession != nil {
-                    Divider()
-                    ReviewPaneGutter(
-                        selectedTab: selectedRightPaneBinding,
-                        onExpand: { tab in
-                            workbenchState.selectRightPane(tab)
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                workbenchState.setReviewPaneVisible(true)
-                            }
-                        }
-                    )
+                    .frame(width: 380)
+                    .padding(.leading, 5)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
-            .frame(minWidth: 420, idealWidth: 600)
-
-            if effectiveShowReviewPane, let session = model.openSession {
-                ReviewPane(
-                    session: session,
-                    chatStore: model.chatStore(for: session),
-                    model: model,
-                    workbenchState: workbenchState,
-                    selectedTab: selectedRightPaneBinding,
-                    onClose: {
-                        withAnimation(.easeOut(duration: 0.18)) {
-                            workbenchState.setReviewPaneVisible(false)
-                        }
-                    },
-                    onApprove: {
-                        Task {
-                            guard await createApprovalCheckpoint(for: session) else { return }
-                            await model.approvePlan(id: session.id)
-                        }
-                    }
-                )
-                .frame(minWidth: 440, idealWidth: 520, maxWidth: 620)
-                .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
+            .padding(10)
         }
-        .background(backgroundColor)
+        .background(Color.clear)
         .background(
             // Measure the actual workspace width. Don't use GeometryReader
             // as the root because HSplitView misbehaves inside it.
@@ -174,30 +188,17 @@ struct SessionWorkspaceView: View {
             }
         }
         .animation(.easeOut(duration: 0.16), value: showingWorkspaceSwitcher)
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button(action: {
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        workbenchState.setReviewPaneVisible(!workbenchState.showingReviewPane)
-                    }
-                }) {
-                    Image(systemName: workbenchState.showingReviewPane
-                        ? "sidebar.right"
-                        : "sidebar.squares.right")
-	                        .help(effectiveShowReviewPane
-	                            ? "Hide review pane"
-	                            : workbenchState.workspaceWidth < Self.reviewPaneThreshold
-	                                ? "Widen the window to show the review pane"
-	                                : "Show review pane")
-	                }
-	                .disabled(workbenchState.workspaceWidth < Self.reviewPaneThreshold)
-            }
-        }
         .onAppear {
             restorePersistedSessionSelectionIfPossible()
         }
         .onChange(of: model.openSessionId) { _, newValue in
             workbenchState.selectSession(newValue)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleCodeReviewPane)) { _ in
+            guard workbenchState.workspaceWidth >= Self.reviewPaneThreshold else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                workbenchState.setReviewPaneVisible(!workbenchState.showingReviewPane)
+            }
         }
         .task {
             await launcher.refreshProviderAvailability()
@@ -343,6 +344,7 @@ private struct SidebarPane: View {
     @ObservedObject var model: SessionsModel
     @ObservedObject var workbenchState: WorkbenchState
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.tahoe) private var t
     @FocusState private var searchFocused: Bool
 
     /// Persisted sidebar grouping + sorting + status-filter preferences.
@@ -380,16 +382,12 @@ private struct SidebarPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            sidebarHeader
-            Divider()
             searchField
-            statusBuckets
-            Divider()
+            sidebarHeader
+            TahoeHairline()
             content
-            Divider()
-            footer
         }
-        .background(sidebarBg)
+        .background(Color.clear)
         // v0.5.4 / v0.5.9 rename sheet. Explicit bool + presenting:
         // payload is the SwiftUI pattern that reliably presents — the
         // earlier Binding(get:set:) form silently no-op'd because the
@@ -455,24 +453,29 @@ private struct SidebarPane: View {
 
     private var sidebarHeader: some View {
         HStack(spacing: 6) {
-            Text("Code")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
+            Text("Projects")
+                .font(TahoeFont.body(11, weight: .bold))
+                .tracking(0.5)
+                .textCase(.uppercase)
+                .foregroundStyle(t.fg3)
                 .lineLimit(1)
             Spacer()
             if model.isRefreshing {
                 ProgressView().controlSize(.mini)
             }
             filterMenu
-            Button(action: { Task { await model.refresh() } }) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10, weight: .semibold))
+            Button(action: { model.showingNewSessionSheet = true }) {
+                TahoeIcon("folderPlus", size: 12)
+                    .foregroundStyle(t.fg3)
+                    .frame(width: 24, height: 24)
+                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(.plain)
-            .help("Refresh repo list")
+            .help("New session")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
     }
 
     /// Linear-style filter / group / sort menu. Active non-default
@@ -506,6 +509,13 @@ private struct SidebarPane: View {
                     }
                 }
             }
+            Section("Projects") {
+                Button {
+                    Task { await model.refresh() }
+                } label: {
+                    Label("Refresh repo list", systemImage: "arrow.clockwise")
+                }
+            }
             if isCustomised {
                 Divider()
                 Button("Reset filters") {
@@ -515,9 +525,10 @@ private struct SidebarPane: View {
                 }
             }
         } label: {
-            Image(systemName: isCustomised ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(isCustomised ? terraCotta : .secondary)
+            TahoeIcon("filter", size: 12)
+                .foregroundStyle(isCustomised ? t.accent : t.fg3)
+                .frame(width: 24, height: 24)
+                .background(isCustomised ? t.accentAlpha(0.15) : t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -527,34 +538,40 @@ private struct SidebarPane: View {
 
     private var searchField: some View {
         HStack(spacing: 4) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            TahoeIcon("search", size: 12)
+                .foregroundStyle(t.fg3)
             TextField("Search…", text: $model.searchQuery)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(TahoeFont.body(12.5))
                 .focused($searchFocused)
             if !model.searchQuery.isEmpty {
                 Button(action: { model.searchQuery = "" }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(t.fg3)
                 }
                 .buttonStyle(.plain)
             }
-            Toggle("", isOn: $model.showArchived)
-                .toggleStyle(.button)
-                .controlSize(.mini)
-                .help(model.showArchived ? "Hide archived" : "Show archived")
+            Text("⌘K")
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .foregroundStyle(t.fg4)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
                 .overlay(
-                    Image(systemName: "archivebox")
-                        .font(.system(size: 9))
-                        .foregroundStyle(model.showArchived ? .primary : .secondary)
-                        .allowsHitTesting(false)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(t.hairline, lineWidth: 0.5)
                 )
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .frame(height: 30)
+        .background(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(t.hairline, lineWidth: 0.5)
+        )
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
         .onReceive(NotificationCenter.default.publisher(for: .focusSidebarSearch)) { _ in
             searchFocused = true
         }
@@ -1132,30 +1149,30 @@ private struct SidebarPane: View {
             if isExpanded { model.expandedRepoKeys.remove(repo.key) }
             else { model.expandedRepoKeys.insert(repo.key) }
         }) {
-            HStack(spacing: 6) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
+                    .foregroundStyle(t.fg3)
                     .frame(width: 10)
+                projectGlyph(repo)
                 Text(repo.displayName)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
                 if sessionCount > 0 {
                     Text("\(sessionCount)")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
+                        .font(TahoeFont.body(10.5, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(.secondary.opacity(0.15), in: Capsule())
+                        .background(t.hair2, in: Capsule())
                 }
                 if repo.liveSessionCount > 0 {
                     HStack(spacing: 2) {
                         Circle().fill(.green).frame(width: 4, height: 4)
                         Text("\(repo.liveSessionCount)")
-                            .font(.system(size: 9, weight: .medium))
+                            .font(TahoeFont.body(9, weight: .bold))
                             .foregroundStyle(.green)
                     }
                     .help("\(repo.liveSessionCount) live JSONL — Conductor / Cursor / Terminal-launched agents writing now.")
@@ -1168,29 +1185,55 @@ private struct SidebarPane: View {
         .buttonStyle(.plain)
     }
 
+    private func projectGlyph(_ repo: AgentRepo) -> some View {
+        let hueSeed = repo.key.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }
+        let hue = Double(hueSeed % 360) / 360.0
+        let tint = Color(hue: hue, saturation: 0.52, brightness: colorScheme == .dark ? 0.86 : 0.78)
+        let initial = repo.displayName.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init)?.uppercased() ?? "*"
+        return RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .fill(tint.opacity(colorScheme == .dark ? 0.28 : 0.20))
+            .overlay(
+                Text(initial)
+                    .font(TahoeFont.body(10, weight: .bold))
+                    .foregroundStyle(tint)
+            )
+            .frame(width: 22, height: 22)
+    }
+
     private func sessionRow(_ session: AgentSession, isOpen: Bool, depth: Int = 0) -> some View {
         Button(action: {
             model.openSessionId = session.id
             model.openOutsideJSONLPath = nil
         }) {
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 if depth > 0 {
                     Image(systemName: "arrow.turn.down.right")
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
                         .padding(.leading, CGFloat(depth - 1) * 12)
                 }
-                StatusPulseDot(color: statusColor(session.status), isLive: session.status == .running)
-                VStack(alignment: .leading, spacing: 1) {
+                TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 20)
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle()
+                            .fill(statusColor(session.status))
+                            .frame(width: 6, height: 6)
+                            .shadow(color: session.status == .running ? statusColor(session.status).opacity(0.75) : .clear, radius: 4)
+                    }
+                VStack(alignment: .leading, spacing: 2) {
                     Text(sessionTitle(session))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.fg)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(sessionSubtitle(session))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(statusColor(session.status))
+                            .frame(width: 5, height: 5)
+                        Text(sessionSubtitle(session))
+                            .font(TahoeFont.body(10.5))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer()
                 if session.archivedAt != nil {
@@ -1223,11 +1266,15 @@ private struct SidebarPane: View {
             }
             .padding(.leading, 24 + CGFloat(depth) * 6)
             .padding(.trailing, 24)
-            .padding(.vertical, 5)
+            .padding(.vertical, 7)
             .background(isOpen
-                ? terraCotta.opacity(0.15)
+                ? t.accentAlpha(colorScheme == .dark ? 0.18 : 0.12)
                 : Color.clear,
-                in: RoundedRectangle(cornerRadius: 5))
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(isOpen ? t.accentAlpha(0.35) : .clear, lineWidth: 0.5)
+            )
             .padding(.horizontal, 6)
             .contentShape(Rectangle())
         }
@@ -1288,14 +1335,19 @@ private struct SidebarPane: View {
     private var footer: some View {
         Button(action: { model.showingNewSessionSheet = true }) {
             HStack(spacing: 6) {
-                Image(systemName: "plus.circle.fill")
+                TahoeIcon("plus", size: 12, weight: .bold)
                 Text("New session")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(TahoeFont.body(12, weight: .semibold))
                 Spacer()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(terraCotta, in: RoundedRectangle(cornerRadius: 7))
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(
+                LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom),
+                in: Capsule(style: .continuous)
+            )
+            .overlay(Capsule(style: .continuous).stroke(t.accentDeepC, lineWidth: 0.5))
+            .shadow(color: t.accentDeep.color(opacity: 0.25), radius: 8, x: 0, y: 5)
             .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
@@ -1639,6 +1691,7 @@ private struct CenterThread: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.tahoe) private var t
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1685,41 +1738,57 @@ private struct CenterThread: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Circle().fill(statusColor).frame(width: 8, height: 8)
+        HStack(spacing: 12) {
+            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 26)
             VStack(alignment: .leading, spacing: 1) {
                 // v0.5.4: user-supplied customName takes precedence
                 // over the session's goal in the chat header.
                 Text(headerLabel(for: session))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(TahoeFont.body(15, weight: .bold))
+                    .foregroundStyle(t.fg)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    Text("\(session.repoDisplayName) · \(session.agent.rawValue.capitalized) · \(session.status.rawValue)")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                    Text("\(session.agent.tahoeProvider.displayName) · \(session.model ?? "default") · \(session.mode.rawValue) mode")
+                        .font(TahoeFont.body(11.5))
+                        .foregroundStyle(t.fg3)
                         .lineLimit(1)
-                    if let branch = branchLabel {
-                        HStack(spacing: 3) {
-                            Image(systemName: prBranchIcon)
-                                .font(.system(size: 9, weight: .semibold))
-                            Text(branch)
-                                .font(.system(size: 10))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        .foregroundStyle(prBranchColor)
-                        .help(branchTooltip)
-                    }
                     if let checkpointStatusText {
                         Text("· \(checkpointStatusText)")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
+                            .font(TahoeFont.body(10.5))
+                            .foregroundStyle(t.fg3)
                             .lineLimit(1)
                     }
                 }
             }
             Spacer()
+            if let branch = branchLabel {
+                TahoePill(tone: .chip) {
+                    HStack(spacing: 5) {
+                        Image(systemName: prBranchIcon)
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(branch)
+                            .font(TahoeFont.mono(11))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .foregroundStyle(prBranchColor)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                }
+                .frame(maxWidth: 190)
+                .help(branchTooltip)
+            }
+            TahoePill(tone: .chip) {
+                HStack(spacing: 5) {
+                    TahoeIcon("bolt", size: 10)
+                        .foregroundStyle(t.fg2)
+                    Text(permissionModeLabel)
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(t.fg2)
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+            }
             // v0.5.2: the prominent "Read-only" pill was dropped per user
             // feedback — the composer's "Continue here" placeholder + the
             // disabled-action menu state already signal read-only mode.
@@ -1798,8 +1867,18 @@ private struct CenterThread: View {
                 .frame(width: 26)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 22)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+    }
+
+    private var permissionModeLabel: String {
+        switch permissionModeStore.currentMode(for: session) {
+        case .ask: return "ask"
+        case .acceptEdits: return "accept edits"
+        case .plan: return "plan"
+        case .bypass: return "bypass"
+        }
     }
 
     private func densityLabel(_ density: TranscriptDensity) -> String {
@@ -1947,6 +2026,17 @@ private struct CenterThread: View {
         }
     }
 
+    private var shouldShowInlinePlanHalo: Bool {
+        guard let plan = session.planText?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        return !plan.isEmpty
+    }
+
+    private func primePlanRefinement() {
+        if composerStore.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            composerStore.text = "Refine the plan above: "
+        }
+    }
+
     private var queuedSendsPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -2045,7 +2135,21 @@ private struct CenterThread: View {
     @ViewBuilder
     private var messageList: some View {
         if let store = model.chatStore(for: session) {
-            ChatThreadScroll(store: store, session: session, model: model, density: density)
+            ChatThreadScroll(
+                store: store,
+                session: session,
+                model: model,
+                density: density,
+                showPlanHalo: shouldShowInlinePlanHalo,
+                canApprovePlan: !isReadOnly,
+                onPlanRefine: primePlanRefinement,
+                onPlanApprove: {
+                    Task {
+                        guard await createLifecycleCheckpoint(summary: "Before plan approval") else { return }
+                        await model.approvePlan(id: session.id)
+                    }
+                }
+            )
                 .onAppear {
                     // T8 wiring: push session.planText into the store so
                     // the staging actor's precompute can mark steps
@@ -2584,6 +2688,139 @@ private struct CenterThread: View {
     }
 }
 
+private struct InlinePlanHalo: View {
+    @Environment(\.tahoe) private var t
+    let session: AgentSession
+    let onRefine: () -> Void
+    let onApprove: () -> Void
+    let canApprove: Bool
+    @State private var auraGlow = false
+
+    private var steps: [String] {
+        guard let plan = session.planText else { return [] }
+        return TahoePlanParser.steps(from: plan, cap: 8)
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 38, style: .continuous)
+                .fill(
+                    RadialGradient(
+                        colors: [t.accentGlow.color(opacity: t.muted ? 0.10 : 0.30), .clear],
+                        center: .init(x: 0.5, y: 0.30),
+                        startRadius: 0,
+                        endRadius: 520
+                    )
+                )
+                .blur(radius: 8)
+                .padding(-28)
+                .opacity(auraGlow ? 1 : 0.82)
+                .allowsHitTesting(false)
+                .animation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: auraGlow)
+                .onAppear { auraGlow = true }
+
+            TahoeGlass(radius: 20, tone: .raised) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(
+                                LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom)
+                            )
+                            .frame(width: 28, height: 28)
+                            .overlay(TahoeIcon("sparkles", size: 14).foregroundStyle(.white))
+                            .shadow(color: t.accentDeep.color(opacity: 0.35), radius: 6, x: 0, y: 4)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Plan ready · review before run")
+                                .font(TahoeFont.body(11.5, weight: .semibold))
+                                .tracking(0.4)
+                                .textCase(.uppercase)
+                                .foregroundStyle(t.fg3)
+                            Text("\(steps.count) steps · est. \(estimatedToolCalls) tool calls · \(estimatedCost)")
+                                .font(TahoeFont.body(14, weight: .bold))
+                                .foregroundStyle(t.fg)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 6)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                            HStack(alignment: .top, spacing: 12) {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(t.hair2)
+                                    .frame(width: 20, height: 20)
+                                    .overlay(
+                                        Text("\(index + 1)")
+                                            .font(TahoeFont.mono(11, weight: .bold))
+                                            .foregroundStyle(t.fg2)
+                                    )
+                                Text(step)
+                                    .font(TahoeFont.body(13))
+                                    .foregroundStyle(t.fg)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 6)
+                    .padding(.bottom, 14)
+
+                    TahoeHairline()
+
+                    HStack(spacing: 8) {
+                        TahoeGhostButton(size: .m, action: onRefine) {
+                            TahoeIcon("chat", size: 11)
+                            Text("Refine")
+                        }
+                        TahoeGhostButton(size: .m, action: onRefine) {
+                            Text("Edit plan")
+                        }
+                        Spacer(minLength: 10)
+                        if let branch = session.worktreePath.map({ URL(fileURLWithPath: $0).lastPathComponent }), !branch.isEmpty {
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text("Will commit to")
+                                    .font(TahoeFont.body(10.5, weight: .semibold))
+                                    .foregroundStyle(t.fg4)
+                                HStack(spacing: 5) {
+                                    TahoeIcon("branch", size: 10)
+                                    Text(branch)
+                                        .font(TahoeFont.mono(11))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                .foregroundStyle(t.fg3)
+                            }
+                            .frame(maxWidth: 190)
+                        }
+                        TahoeAccentButton(size: .m, disabled: !canApprove, action: onApprove) {
+                            Text("Approve & run")
+                            Text("⇧⏎")
+                                .fontWeight(.regular)
+                                .opacity(0.75)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+    }
+
+    private var estimatedToolCalls: Int {
+        max(3, min(12, steps.count + 3))
+    }
+
+    private var estimatedCost: String {
+        if session.agent == .codex { return "~$0.12" }
+        if session.agent == .gemini { return "~$0.08" }
+        return "~$0.18"
+    }
+}
+
 // MARK: - Chat thread scroll
 
 private struct ChatThreadScroll: View {
@@ -2591,6 +2828,11 @@ private struct ChatThreadScroll: View {
     let session: AgentSession
     let model: SessionsModel
     let density: TranscriptDensity
+    let showPlanHalo: Bool
+    let canApprovePlan: Bool
+    let onPlanRefine: () -> Void
+    let onPlanApprove: () -> Void
+    @Environment(\.tahoe) private var t
 
     /// IDs of expanded disclosure groups. Per-row `@State` would be ideal
     /// (A5 codex finding) but with LazyVStack recycling that loses state
@@ -2628,6 +2870,17 @@ private struct ChatThreadScroll: View {
                                 .listRowBackground(Color.clear)
                                 .listRowInsets(rowInsets)
                         }
+                    }
+                    if showPlanHalo {
+                        InlinePlanHalo(
+                            session: session,
+                            onRefine: onPlanRefine,
+                            onApprove: onPlanApprove,
+                            canApprove: canApprovePlan
+                        )
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                     }
                     // v0.7.16: thinking-indicator is now a footer row in
                     // the List instead of a floating overlay. The old
@@ -2794,7 +3047,7 @@ private struct ChatThreadScroll: View {
         switch item {
         case .message(let m):
             messageRow(m)
-        case .toolRun(let id, let pairs):
+        case .toolRun(_, let pairs):
             // v0.5.5/v0.5.6: partition by tool kind:
             //   • Edit/MultiEdit/Write → inline EditDiffRow chips
             //   • AskUserQuestion       → interactive AskUserQuestionTray
@@ -2836,7 +3089,11 @@ private struct ChatThreadScroll: View {
                     }
                 }
                 if !otherPairs.isEmpty {
-                    toolRunGroup(id: id, pairs: otherPairs)
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(otherPairs) { pair in
+                            toolPairRow(pair)
+                        }
+                    }
                 }
             }
         }
@@ -2887,13 +3144,15 @@ private struct ChatThreadScroll: View {
             .padding(.top, 4)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "terminal")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                TahoeIcon("terminal", size: 10)
+                    .foregroundStyle(t.fg3)
                 Text("Ran \(pairs.count) command\(pairs.count == 1 ? "" : "s")")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(t.hair2, in: Capsule(style: .continuous))
             .contentShape(Rectangle())
         }
         .disclosureGroupStyle(QuietDisclosure())
@@ -2950,19 +3209,22 @@ private struct ChatThreadScroll: View {
                     .font(.system(size: 10))
                     .foregroundStyle(toolTint(pair.call.title))
                 Text(pair.call.title)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(TahoeFont.mono(11, weight: .semibold))
                     .foregroundStyle(toolTint(pair.call.title))
                 Text(pair.call.body)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.primary)
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg2)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if isError {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 9))
-                        .foregroundStyle(.red)
+                    .foregroundStyle(.red)
                 }
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(t.hair2, in: Capsule(style: .continuous))
             .contentShape(Rectangle())
         }
         .disclosureGroupStyle(QuietDisclosure())
@@ -3018,8 +3280,8 @@ private struct ChatThreadScroll: View {
             }
         }
         .padding(10)
-        .background((isError ? Color.red : Color.secondary).opacity(0.06),
-                    in: RoundedRectangle(cornerRadius: 6))
+        .background((isError ? Color.red : t.hair2).opacity(isError ? 0.08 : 0.85),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func monoBlock(title: String, text: String, tint: Color) -> some View {
@@ -3042,26 +3304,24 @@ private struct ChatThreadScroll: View {
         HStack {
             Spacer(minLength: 64)
             VStack(alignment: .trailing, spacing: 4) {
-                Text(msg.body)
-                    .font(.system(size: bodyFontSize))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(terraCotta.opacity(0.15),
-                                in: RoundedRectangle(cornerRadius: 10))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                TahoeGlass(radius: 20, tone: .raised) {
+                    Text(msg.body)
+                        .font(TahoeFont.body(bodyFontSize))
+                        .foregroundStyle(t.fg)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: 640, alignment: .trailing)
             }
         }
     }
 
     private func assistantBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "sparkle")
-                .font(.system(size: 11))
-                .foregroundStyle(terraCotta)
-                .frame(width: 18, height: 18)
-                .padding(.top, 3)
+        HStack(alignment: .top, spacing: 12) {
+            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 26)
+                .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
                 MarkdownRenderer(source: msg.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3219,6 +3479,7 @@ private struct ReviewPaneGutter: View {
     let onExpand: (WorkbenchPaneTab) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.tahoe) private var t
 
     var body: some View {
         VStack(spacing: 6) {
@@ -3248,13 +3509,24 @@ private struct ReviewPaneGutter: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 4)
         .frame(width: 52)
-        .background(gutterBg)
+        .background(t.glassTintHi.opacity(0.55))
     }
 
     private var gutterBg: Color {
         colorScheme == .dark
             ? Color(red: 0.10, green: 0.10, blue: 0.10)
             : Color(red: 0.95, green: 0.95, blue: 0.95)
+    }
+}
+
+private struct TahoeHairline: View {
+    @Environment(\.tahoe) private var t
+    var vertical: Bool = false
+
+    var body: some View {
+        Rectangle()
+            .fill(t.hairline)
+            .frame(width: vertical ? 0.5 : nil, height: vertical ? nil : 0.5)
     }
 }
 
@@ -3301,108 +3573,99 @@ private struct ReviewPane: View {
     let onApprove: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.tahoe) private var t
 
     var body: some View {
         VStack(spacing: 0) {
             tabBar
-            Divider()
+            TahoeHairline()
             tabContent
         }
-        .background(paneBg)
+        .background(Color.clear)
     }
 
     private var tabBar: some View {
         HStack(spacing: 4) {
-            // The chip strip scrolls horizontally if there's not enough
-            // room — keeps each chip at natural width instead of letting
-            // SwiftUI squeeze the text into per-character wrapping.
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    ForEach(WorkbenchPaneTab.allCases) { tab in
-                        tabChip(tab)
-                    }
-                }
+            ForEach(Self.primaryTabs) { tab in
+                tabChip(tab)
             }
-            .scrollClipDisabled()
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
+        }
+        .contextMenu {
+            Button {
+                selectedTab = .artifacts
+            } label: {
+                Label("Artifacts", systemImage: WorkbenchPaneTab.artifacts.systemImage)
             }
-            .buttonStyle(.plain)
-            .help("Hide review pane (⌘W)")
+            Button {
+                selectedTab = .browser
+            } label: {
+                Label("Browser", systemImage: WorkbenchPaneTab.browser.systemImage)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
     }
+
+    private static let primaryTabs: [WorkbenchPaneTab] = [.plan, .diff, .sources, .pr, .terminal]
 
     private func tabChip(_ tab: WorkbenchPaneTab) -> some View {
         let isSelected = (selectedTab == tab)
         return Button(action: { selectedTab = tab }) {
             HStack(spacing: 3) {
                 Image(systemName: tab.systemImage)
-                    .font(.system(size: 9))
-                Text(tab.rawValue)
-                    .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 10, weight: .semibold))
+                Text(tabLabel(tab))
+                    .font(TahoeFont.body(11.5, weight: isSelected ? .bold : .semibold))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-            .background(isSelected ? terraCotta.opacity(0.20) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 5))
+            .frame(height: 30)
+            .frame(maxWidth: .infinity)
+            .foregroundStyle(isSelected ? t.fg : t.fg3)
+            .background(isSelected ? (t.dark ? Color.white.opacity(0.10) : Color.white) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .shadow(color: isSelected ? Color.black.opacity(0.10) : .clear, radius: 2, x: 0, y: 1)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isSelected ? t.hairline : .clear, lineWidth: 0.5)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func tabLabel(_ tab: WorkbenchPaneTab) -> String {
+        tab == .terminal ? "Term" : tab.rawValue
     }
 
     @ViewBuilder
     private var tabContent: some View {
         switch selectedTab {
         case .plan:
-            if let chatStore {
-                // v0.7.8: Codex SDK sessions get the dedicated
-                // CodexPlanPane that reads the structured todo_list
-                // events the ingestor stores on the snapshot. Claude
-                // + Antigravity + Codex-CLI keep the existing
-                // PlanTrackerPane (which mines steps from chat text).
-                if session.agent == .codex {
-                    CodexPlanPane(chatStore: chatStore)
-                } else {
-                    PlanTrackerPane(session: session, chatStore: chatStore, onApprove: onApprove)
-                }
-            } else {
-                placeholder(text: "Waiting for agent JSONL…")
-            }
+            TahoeReviewPlanPane(planText: session.planText, chatStore: chatStore)
         case .diff:
-            GitDiffPane(repoCwd: session.effectiveCwd, onBeforeDestructiveChange: {
-                await createCheckpoint(summary: "Before destructive diff action")
-            })
+            TahoeDiffPreviewPane(repoCwd: session.effectiveCwd)
         case .sources:
-            if let chatStore {
-                SourcesPane(session: session, chatStore: chatStore)
-            } else {
-                placeholder(text: "Waiting for agent JSONL…")
-            }
+            TahoeSourcesPreviewPane(chatStore: chatStore)
         case .artifacts:
-            if let chatStore {
-                ArtifactsPane(session: session, chatStore: chatStore)
-            } else {
-                placeholder(text: "Waiting for agent JSONL…")
+            TahoeReviewContentShell(title: "Artifacts", icon: "doc", padded: false) {
+                if let chatStore {
+                    ArtifactsPane(session: session, chatStore: chatStore)
+                } else {
+                    placeholder(text: "Waiting for agent JSONL…")
+                }
             }
         case .browser:
             InAppBrowser(session: session, model: model, workbenchState: workbenchState)
         case .pr:
-            PRReviewPane(
-                session: session,
+            TahoePRCompactPane(
                 coordinator: model.prCoordinator(for: session),
                 onBeforeMerge: {
                     await createCheckpoint(summary: "Before PR merge")
                 }
             )
         case .terminal:
-            terminalTab
+            TahoeTerminalCompactPane(session: session, chatStore: chatStore)
         }
     }
 
@@ -3457,6 +3720,531 @@ private struct ReviewPane: View {
         Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
     }
 }
+
+private struct TahoeReviewContentShell<Content: View>: View {
+    @Environment(\.tahoe) private var t
+    let title: String
+    let icon: String
+    let padded: Bool
+    let content: Content
+
+    init(title: String, icon: String, padded: Bool = true, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.padded = padded
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 7) {
+                TahoeIcon(icon, size: 12)
+                    .foregroundStyle(t.fg3)
+                Text(title)
+                    .font(TahoeFont.body(11, weight: .bold))
+                    .tracking(0.5)
+                    .textCase(.uppercase)
+                    .foregroundStyle(t.fg3)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            TahoeHairline()
+            content
+                .padding(padded ? 16 : 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct TahoeReviewPlanPane: View {
+    @Environment(\.tahoe) private var t
+    let planText: String?
+    let chatStore: SessionChatStore?
+
+    private var steps: [String] {
+        if let planText, !planText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return TahoePlanParser.steps(from: planText, cap: 8)
+        }
+        return chatStore?.snapshot.planSteps.prefix(8).map(\.text) ?? []
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Plan · \(steps.count) steps")
+                    .font(TahoeFont.body(11, weight: .bold))
+                    .tracking(0.5)
+                    .textCase(.uppercase)
+                    .foregroundStyle(t.fg3)
+                    .padding(.bottom, 10)
+                if steps.isEmpty {
+                    TahoeEmptyReviewState(icon: "doc", title: "No plan yet", body: "The agent has not produced a reviewable plan.")
+                } else {
+                    TahoeReviewPlanRows(steps: steps)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
+private struct TahoeReviewPlanRows: View {
+    @Environment(\.tahoe) private var t
+    let steps: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                HStack(alignment: .top, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(index == 0 ? t.accentAlpha(0.18) : t.hair2)
+                        .frame(width: 22, height: 22)
+                        .overlay(
+                            Text("\(index + 1)")
+                                .font(TahoeFont.mono(11, weight: .bold))
+                                .foregroundStyle(index == 0 ? t.accent : t.fg2)
+                        )
+                    Text(step)
+                        .font(TahoeFont.body(12.5))
+                        .foregroundStyle(t.fg)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 10)
+                if index < steps.count - 1 {
+                    TahoeHairline()
+                }
+            }
+        }
+    }
+}
+
+private struct TahoeDiffPreviewPane: View {
+    @Environment(\.tahoe) private var t
+    let repoCwd: String
+    @State private var lines: [DiffLine] = []
+    @State private var isLoading = false
+
+    var body: some View {
+        ScrollView([.vertical, .horizontal]) {
+            VStack(alignment: .leading, spacing: 0) {
+                if isLoading {
+                    HStack(spacing: 7) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading diff…")
+                            .font(TahoeFont.body(11.5))
+                            .foregroundStyle(t.fg3)
+                    }
+                    .padding(16)
+                } else if lines.isEmpty {
+                    TahoeEmptyReviewState(icon: "diff", title: "No local diff", body: "The worktree has no visible git diff.")
+                        .frame(minWidth: 330)
+                        .padding(16)
+                } else {
+                    ForEach(lines) { line in
+                        HStack(spacing: 0) {
+                            Text(line.sign)
+                                .frame(width: 14, alignment: .leading)
+                                .opacity(0.75)
+                            Text(line.text)
+                                .textSelection(.enabled)
+                        }
+                        .font(TahoeFont.mono(11.5))
+                        .foregroundStyle(line.foreground(t))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 1)
+                        .background(line.background(t))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .background(t.dark ? Color.black.opacity(0.18) : Color.black.opacity(0.03))
+        .task(id: repoCwd) { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        let cwd = repoCwd
+        let loaded = await Task.detached(priority: .utility) {
+            Self.loadGitDiff(cwd: cwd)
+        }.value
+        lines = loaded
+        isLoading = false
+    }
+
+    nonisolated private static func loadGitDiff(cwd: String) -> [DiffLine] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", cwd, "diff", "--no-ext-diff", "--unified=3", "--"]
+        let output = Pipe()
+        let error = Pipe()
+        process.standardOutput = output
+        process.standardError = error
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let text = String(data: data, encoding: .utf8) ?? ""
+            return text
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .prefix(220)
+                .map { DiffLine(String($0)) }
+        } catch {
+            return [DiffLine("Unable to load diff: \(error.localizedDescription)", forcedKind: .meta)]
+        }
+    }
+
+    private struct DiffLine: Identifiable {
+        enum Kind { case meta, hunk, add, del, context }
+        let id = UUID()
+        let text: String
+        let kind: Kind
+
+        init(_ text: String, forcedKind: Kind? = nil) {
+            self.text = text
+            if let forcedKind {
+                self.kind = forcedKind
+            } else if text.hasPrefix("@@") {
+                self.kind = .hunk
+            } else if text.hasPrefix("+") && !text.hasPrefix("+++") {
+                self.kind = .add
+            } else if text.hasPrefix("-") && !text.hasPrefix("---") {
+                self.kind = .del
+            } else if text.hasPrefix("diff --git") || text.hasPrefix("+++") || text.hasPrefix("---") {
+                self.kind = .meta
+            } else {
+                self.kind = .context
+            }
+        }
+
+        var sign: String {
+            switch kind {
+            case .add: return "+"
+            case .del: return "-"
+            default: return ""
+            }
+        }
+
+        func foreground(_ t: TahoeTokens) -> Color {
+            switch kind {
+            case .add: return t.dark ? Color.green.opacity(0.86) : Color.green.opacity(0.72)
+            case .del: return t.dark ? Color.red.opacity(0.86) : Color.red.opacity(0.74)
+            case .hunk, .meta: return t.fg3
+            case .context: return t.fg2
+            }
+        }
+
+        func background(_ t: TahoeTokens) -> Color {
+            switch kind {
+            case .add: return Color.green.opacity(t.dark ? 0.16 : 0.10)
+            case .del: return Color.red.opacity(t.dark ? 0.16 : 0.10)
+            case .hunk: return t.hair2
+            default: return .clear
+            }
+        }
+    }
+}
+
+private struct TahoeSourcesPreviewPane: View {
+    @Environment(\.tahoe) private var t
+    let chatStore: SessionChatStore?
+
+    private var entries: [SourceEntry] {
+        Array((chatStore?.snapshot.sourceEntries ?? []).prefix(14))
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if entries.isEmpty {
+                    TahoeEmptyReviewState(icon: "search", title: "No sources yet", body: "Files and URLs referenced by tools will appear here.")
+                        .padding(16)
+                } else {
+                    ForEach(entries) { entry in
+                        Button(action: { open(entry) }) {
+                            HStack(alignment: .top, spacing: 10) {
+                                TahoeIcon(entry.kind == .url ? "link" : "doc", size: 13)
+                                    .foregroundStyle(t.accent)
+                                    .padding(.top, 2)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.label)
+                                        .font(TahoeFont.mono(11.5))
+                                        .foregroundStyle(t.fg)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Text(entry.kind == .url ? "Fetched URL" : "Referenced \(entry.count)x")
+                                        .font(TahoeFont.body(11))
+                                        .foregroundStyle(t.fg3)
+                                }
+                                Spacer(minLength: 6)
+                                if entry.count > 1 {
+                                    Text("×\(entry.count)")
+                                        .font(TahoeFont.mono(10.5, weight: .bold))
+                                        .foregroundStyle(t.fg3)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 10)
+                            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func open(_ entry: SourceEntry) {
+        switch entry.kind {
+        case .url:
+            if let url = URL(string: entry.payload) {
+                NSWorkspace.shared.open(url)
+            }
+        case .file:
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.payload)])
+        }
+    }
+}
+
+private struct TahoePRCompactPane: View {
+    @Environment(\.tahoe) private var t
+    @ObservedObject var coordinator: PRCoordinator
+    let onBeforeMerge: (() async -> Bool)?
+    @State private var localActionError: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if let state = coordinator.snapshot {
+                    Text(state.title)
+                        .font(TahoeFont.body(13, weight: .bold))
+                        .foregroundStyle(t.fg)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("\(state.url.host() ?? "github.com") · #\(state.number) · \(state.state.lowercased())")
+                        .font(TahoeFont.mono(11.5))
+                        .foregroundStyle(t.fg3)
+
+                    TahoeGlass(radius: 12, tone: .chip) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("Checks")
+                                .font(TahoeFont.body(11, weight: .semibold))
+                                .foregroundStyle(t.fg3)
+                                .padding(.bottom, 6)
+                            prStatusRow("review", state.reviewState ?? "pending", state.reviewState == "APPROVED")
+                            prStatusRow("ci", state.checksRollup ?? "unknown", state.checksRollup == "success")
+                            prStatusRow("changes", "+\(state.additions) -\(state.deletions)", true)
+                        }
+                        .padding(12)
+                    }
+
+                    Button(action: { NSWorkspace.shared.open(state.url) }) {
+                        HStack(spacing: 6) {
+                            TahoeIcon("pull", size: 12)
+                            Text("Open PR on GitHub")
+                                .font(TahoeFont.body(12, weight: .bold))
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 9)
+                    .background(
+                        LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .foregroundStyle(.white)
+
+                    if state.state == "OPEN", coordinator.canUseDaemonActions {
+                        HStack(spacing: 8) {
+                            TahoeGhostButton(size: .m, action: { Task { await coordinator.approve() } }) {
+                                Text("Approve")
+                            }
+                            TahoeGhostButton(size: .m, action: { Task { await merge(state) } }) {
+                                Text(PRCoordinator.canMerge(snapshot: state, canUseDaemonActions: true) ? "Merge" : "Merge blocked")
+                            }
+                            .disabled(!PRCoordinator.canMerge(snapshot: state, canUseDaemonActions: true))
+                        }
+                    }
+                } else {
+                    TahoeEmptyReviewState(icon: "pull", title: "No PR detected", body: "Paste a PR URL or let the agent create one.")
+                    TextField("https://github.com/owner/repo/pull/123", text: $coordinator.manualURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(TahoeFont.mono(11.5))
+                    HStack(spacing: 8) {
+                        TahoeGhostButton(size: .m, action: { coordinator.loadFromManualURL() }) {
+                            Text("Load")
+                        }
+                        if coordinator.canUseDaemonActions {
+                            TahoeGhostButton(size: .m, action: { Task { await coordinator.createPR() } }) {
+                                TahoeIcon("pull", size: 11)
+                                Text("Create PR")
+                            }
+                        }
+                    }
+                }
+                if coordinator.isRefreshing || coordinator.isMutating {
+                    ProgressView().controlSize(.small)
+                }
+                if let err = coordinator.lastError ?? localActionError {
+                    Text(err)
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .onAppear { coordinator.startWatching() }
+        .onDisappear { coordinator.stopWatching() }
+    }
+
+    private func prStatusRow(_ name: String, _ status: String, _ passed: Bool) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(passed ? Color.green : Color.yellow)
+                .frame(width: 14, height: 14)
+                .overlay {
+                    if passed {
+                        TahoeIcon("check", size: 8, weight: .bold).foregroundStyle(.white)
+                    }
+                }
+            Text(name)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg)
+            Spacer()
+            Text(status)
+                .font(TahoeFont.mono(11))
+                .foregroundStyle(t.fg3)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func merge(_ state: PRCoordinator.Snapshot) async {
+        guard PRCoordinator.canMerge(snapshot: state, canUseDaemonActions: coordinator.canUseDaemonActions) else { return }
+        if let onBeforeMerge {
+            guard await onBeforeMerge() else {
+                localActionError = "Safety checkpoint failed. Merge cancelled."
+                return
+            }
+        }
+        localActionError = nil
+        await coordinator.merge()
+    }
+}
+
+private struct TahoeTerminalCompactPane: View {
+    @Environment(\.tahoe) private var t
+    let session: AgentSession
+    let chatStore: SessionChatStore?
+
+    private var lines: [TerminalLine] {
+        let pairs = (chatStore?.snapshot.items ?? []).flatMap { item -> [ToolPair] in
+            if case .toolRun(_, let pairs) = item { return pairs }
+            return []
+        }
+        return pairs.suffix(6).flatMap { pair -> [TerminalLine] in
+            let bash = pair.result?.bashResult ?? pair.call.bashResult
+            let command = bash?.command ?? pair.call.detail ?? pair.call.body
+            var out: [TerminalLine] = [TerminalLine(text: "$ \(command)", color: .muted)]
+            if let stdout = bash?.stdout?.split(separator: "\n").prefix(2), !stdout.isEmpty {
+                out.append(contentsOf: stdout.map { TerminalLine(text: String($0), color: .normal) })
+            }
+            if let stderr = bash?.stderr?.split(separator: "\n").prefix(1), !stderr.isEmpty {
+                out.append(contentsOf: stderr.map { TerminalLine(text: String($0), color: .error) })
+            }
+            if let exit = bash?.exitCode {
+                out.append(TerminalLine(text: "exit \(exit)", color: exit == 0 ? .success : .error))
+            }
+            return out
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if lines.isEmpty {
+                    TerminalLine(text: "$ _", color: .muted).view(t)
+                } else {
+                    ForEach(lines) { line in
+                        line.view(t)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .background(t.dark ? Color.black.opacity(0.30) : Color.black.opacity(0.04))
+        .contextMenu {
+            Button("Open live terminal") {
+                NotificationCenter.default.post(name: .showRawTerminal, object: nil, userInfo: ["sessionId": session.id])
+            }
+        }
+    }
+
+    private struct TerminalLine: Identifiable {
+        enum LineColor { case muted, normal, success, error }
+        let id = UUID()
+        let text: String
+        let color: LineColor
+
+        func view(_ t: TahoeTokens) -> some View {
+            Text(text)
+                .font(TahoeFont.mono(11.5))
+                .foregroundStyle(foreground(t))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+                .padding(.vertical, 2)
+        }
+
+        private func foreground(_ t: TahoeTokens) -> Color {
+            switch color {
+            case .muted: return t.fg3
+            case .normal: return t.fg2
+            case .success: return Color.green
+            case .error: return Color.red
+            }
+        }
+    }
+}
+
+private struct TahoeEmptyReviewState: View {
+    @Environment(\.tahoe) private var t
+    let icon: String
+    let title: String
+    let message: String
+
+    init(icon: String, title: String, body: String) {
+        self.icon = icon
+        self.title = title
+        self.message = body
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            TahoeIcon(icon, size: 22)
+                .foregroundStyle(t.fg4)
+            Text(title)
+                .font(TahoeFont.body(13, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text(message)
+                .font(TahoeFont.body(11.5))
+                .foregroundStyle(t.fg3)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
+    }
+}
+
 
 // MARK: - G12 multi-terminal tab strip
 
@@ -3583,6 +4371,7 @@ private struct TerminalTabContainer: View {
 
 extension Notification.Name {
     static let focusSidebarSearch = Notification.Name("clawdmeter.workspace.focusSidebarSearch")
+    static let toggleCodeReviewPane = Notification.Name("clawdmeter.workspace.toggleCodeReviewPane")
     static let popOutSession = Notification.Name("clawdmeter.workspace.popOutSession")
     /// Posted to open the raw tmux Cmd+T overlay on a specific session.
     /// (Wave B: chat-first; terminal demoted to overlay.)

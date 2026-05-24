@@ -72,62 +72,75 @@ struct ComposerInputCore: View {
     /// Project-local skill root, if any (`<repo>/.claude/skills/`).
     var projectSkillsRoot: URL?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.tahoe) private var t
 
     var body: some View {
         // Claude-Code-style stack: input box on top, attachments chip strip,
         // then a single compact bottom bar with all controls + the usage
         // chip on the right. The palette / mention popovers float ABOVE the
         // input row (negative Y offset) as before.
-        VStack(spacing: 6) {
-            if !store.attachments.isEmpty {
-                attachmentChipsRow
-            }
-            inputRow
-                .overlay(alignment: .topLeading) {
-                    if showingPalette {
-                        CommandPaletteView(
-                            catalog: skillCatalog,
-                            agent: store.agent,
-                            query: $paletteQuery,
-                            onSelect: applyPaletteSelection,
-                            onDismiss: { showingPalette = false }
-                        )
-                        .offset(y: -290)
-                        .transition(.opacity)
-                        .zIndex(2)
-                    }
-                    if showingMentions {
-                        let triple = mentionSourceProvider()
-                        MentionPicker(
-                            openSessions: triple.sessions,
-                            sourceEntries: triple.sourceEntries,
-                            recentJSONLs: triple.recents,
-                            query: $mentionQuery,
-                            onSelect: applyMentionSelection,
-                            onDismiss: { showingMentions = false }
-                        )
-                        .offset(y: -290)
-                        .transition(.opacity)
-                        .zIndex(2)
-                    }
+        TahoeGlass(radius: 18, tone: .raised) {
+            VStack(spacing: 6) {
+                if !store.attachments.isEmpty {
+                    attachmentChipsRow
                 }
-            chipRow
-            if let err = store.lastError {
-                Text(err.localizedDescription)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.red)
-                    .padding(.top, 2)
-                    .padding(.horizontal, 4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                inputRow
+                    .opacity(planApprovalMode ? 0.56 : 1)
+                    .disabled(planApprovalMode)
+                    .overlay(alignment: .topLeading) {
+                        if showingPalette {
+                            CommandPaletteView(
+                                catalog: skillCatalog,
+                                agent: store.agent,
+                                query: $paletteQuery,
+                                onSelect: applyPaletteSelection,
+                                onDismiss: { showingPalette = false }
+                            )
+                            .offset(y: -290)
+                            .transition(.opacity)
+                            .zIndex(2)
+                        }
+                        if showingMentions {
+                            let triple = mentionSourceProvider()
+                            MentionPicker(
+                                openSessions: triple.sessions,
+                                sourceEntries: triple.sourceEntries,
+                                recentJSONLs: triple.recents,
+                                query: $mentionQuery,
+                                onSelect: applyMentionSelection,
+                                onDismiss: { showingMentions = false }
+                            )
+                            .offset(y: -290)
+                            .transition(.opacity)
+                            .zIndex(2)
+                        }
+                    }
+                chipRow
+                if let err = store.lastError {
+                    Text(err.localizedDescription)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .padding(.top, 2)
+                        .padding(.horizontal, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if case let .denied(reason) = dictation.state {
+                    Text(reason).font(.system(size: 10)).foregroundStyle(.red)
+                } else if case let .unavailable(reason) = dictation.state {
+                    Text(reason).font(.system(size: 10)).foregroundStyle(.orange)
+                }
             }
-            if case let .denied(reason) = dictation.state {
-                Text(reason).font(.system(size: 10)).foregroundStyle(.red)
-            } else if case let .unavailable(reason) = dictation.state {
-                Text(reason).font(.system(size: 10)).foregroundStyle(.orange)
-            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(sessionIsRunning ? t.accentAlpha(0.45) : .clear, lineWidth: 1)
+                .shadow(color: sessionIsRunning ? t.accentAlpha(0.30) : .clear, radius: 11)
+        )
+        .padding(.horizontal, 18)
+        .padding(.vertical, 18)
         .onReceive(dictation.$partialTranscript) { newPartial in
             guard dictation.state == .recording, !newPartial.isEmpty else { return }
             let base = composerTextBeforeDictation
@@ -216,6 +229,15 @@ struct ComposerInputCore: View {
     @ViewBuilder
     private var chipRow: some View {
         HStack(spacing: 8) {
+            let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
+            ModelEffortChip(
+                info: resolvedInfo,
+                catalog: catalog,
+                agent: { if case .bound = store.modeKind { return agentForModelPicker } else { return store.agent } }(),
+                selectedModelId: $store.modelId,
+                selectedEffort: $store.effort,
+                modelSupportsEffort: modelSupportsEffort
+            )
             if !isReadOnly, onChangePermissionMode != nil {
                 // v0.7.12 revert: `PermissionModeChip` Menu (matches
                 // Claude Code's compact "Auto ▾" pattern — single
@@ -233,9 +255,8 @@ struct ComposerInputCore: View {
                 )
             }
             attachButton
+            codeContextChip
             micButton
-
-            Divider().frame(height: 16).padding(.horizontal, 2)
 
             switch store.modeKind {
             case .bound:
@@ -274,28 +295,7 @@ struct ComposerInputCore: View {
 
             Spacer(minLength: 6)
 
-            if !isReadOnly, showApprovePlan, let onApprovePlan {
-                Button(action: onApprovePlan) {
-                    Label("Approve plan", systemImage: "checkmark.seal.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(terraCotta)
-                .controlSize(.small)
-            }
-            let resolvedInfo = usageStatus ?? Self.placeholderUsage(modelId: store.modelId, effort: store.effort, catalog: catalog)
-            // Two-chip split (left = context/usage, right = model/effort) —
-            // each opens an independent popover so the user can glance at
-            // window utilisation without committing to a model swap.
             ContextUsageChip(info: resolvedInfo)
-            ModelEffortChip(
-                info: resolvedInfo,
-                catalog: catalog,
-                agent: { if case .bound = store.modeKind { return agentForModelPicker } else { return store.agent } }(),
-                selectedModelId: $store.modelId,
-                selectedEffort: $store.effort,
-                modelSupportsEffort: modelSupportsEffort
-            )
         }
     }
 
@@ -356,6 +356,22 @@ struct ComposerInputCore: View {
         .help("Attach a file (drag-drop, paste, or click)")
     }
 
+    private var codeContextChip: some View {
+        Button(action: { showingMentions = true }) {
+            HStack(spacing: 5) {
+                TahoeIcon("code", size: 11)
+                Text("code")
+                    .font(TahoeFont.body(11, weight: .semibold))
+            }
+            .foregroundStyle(t.fg2)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Color.secondary.opacity(0.10), in: Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Attach code context")
+    }
+
     private var micButton: some View {
         Button(action: toggleDictation) {
             Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
@@ -386,18 +402,18 @@ struct ComposerInputCore: View {
             ZStack(alignment: .topLeading) {
                 TextField(textFieldPlaceholder, text: $store.text, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 14))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 14)
-                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
-                    .lineLimit(4...24)
+                    .font(TahoeFont.body(14))
+                    .padding(.horizontal, 0)
+                    .padding(.vertical, 2)
+                    .frame(maxWidth: .infinity, minHeight: 52, alignment: .topLeading)
+                    .lineLimit(2...18)
             }
-            .background(composerBg, in: RoundedRectangle(cornerRadius: 12))
+            .background(Color.clear, in: RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(
-                        dropTargetActive ? terraCotta : terraCotta.opacity(0.45),
-                        style: StrokeStyle(lineWidth: dropTargetActive ? 2 : 1, dash: dropTargetActive ? [] : [4, 4])
+                        dropTargetActive ? t.accent : Color.clear,
+                        style: StrokeStyle(lineWidth: dropTargetActive ? 2 : 0)
                     )
             )
             .onDrop(of: [.fileURL, .image, .png, .jpeg, .pdf, .text], isTargeted: $dropTargetActive) { providers in
@@ -412,12 +428,14 @@ struct ComposerInputCore: View {
     @ViewBuilder
     private var sendOrStopButton: some View {
         if !isReadOnly, sessionIsRunning, let onInterrupt {
-            VStack(spacing: 8) {
+            HStack(spacing: 8) {
                 if let onQueue {
                     Button(action: onQueue) {
                         Image(systemName: store.isSending ? "tray.and.arrow.down" : "tray.and.arrow.down.fill")
-                            .font(.system(size: 20))
-                            .foregroundStyle(store.canSend && !store.isSending ? terraCotta : .secondary)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(store.canSend && !store.isSending ? t.accent : t.fg3)
+                            .frame(width: 28, height: 28)
+                            .background(t.hair2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .keyboardShortcut(.return, modifiers: [.option])
@@ -425,9 +443,37 @@ struct ComposerInputCore: View {
                     .help("Queue follow-up (⌥↩)")
                 }
                 Button(action: onInterrupt) {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(terraCotta)
+                    HStack(spacing: 8) {
+                        ZStack {
+                            Circle()
+                                .fill(t.dark ? Color.white.opacity(0.92) : Color.black.opacity(0.88))
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(t.dark ? Color.black : Color.white)
+                        }
+                        .frame(width: 26, height: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 5) {
+                                Text(liveCostLabel)
+                                    .font(TahoeFont.mono(12.5, weight: .bold))
+                                Text("● live")
+                                    .font(TahoeFont.body(10.5, weight: .semibold))
+                                    .foregroundStyle(t.accent)
+                            }
+                            Text("tap to stop")
+                                .font(TahoeFont.body(10))
+                                .foregroundStyle(t.fg3)
+                        }
+                    }
+                    .padding(.leading, 4)
+                    .padding(.trailing, 10)
+                    .frame(height: 34)
+                    .background(
+                        LinearGradient(colors: [t.accentAlpha(0.18), t.accentAlpha(0.10)], startPoint: .leading, endPoint: .trailing),
+                        in: Capsule(style: .continuous)
+                    )
+                    .overlay(Capsule(style: .continuous).stroke(t.accentAlpha(0.40), lineWidth: 0.75))
+                    .foregroundStyle(t.fg)
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(".", modifiers: [.command])
@@ -435,16 +481,36 @@ struct ComposerInputCore: View {
             }
         } else {
             Button(action: onSend) {
-                Image(systemName: store.isSending ? "arrow.up.circle" : "arrow.up.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(store.canSend && !store.isSending ? terraCotta : .secondary)
+                TahoeIcon("arrowU", size: 15, weight: .bold)
+                    .foregroundStyle(canSendNow ? .white : t.fg4)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        Circle()
+                            .fill(canSendNow
+                                  ? LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom)
+                                  : LinearGradient(colors: [t.hair2, t.hair2], startPoint: .top, endPoint: .bottom))
+                    )
+                    .shadow(color: canSendNow ? t.accentDeep.color(opacity: 0.30) : .clear, radius: 6, x: 0, y: 4)
                     .symbolEffect(.pulse, isActive: store.isSending)
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.return, modifiers: [.command])
-            .disabled(!store.canSend || store.isSending)
-            .help("Send (⌘↩)")
+            .disabled(!canSendNow)
+            .help(planApprovalMode ? "Approve or refine the plan above" : "Send (⌘↩)")
         }
+    }
+
+    private var planApprovalMode: Bool {
+        !isReadOnly && showApprovePlan
+    }
+
+    private var canSendNow: Bool {
+        store.canSend && !store.isSending && !planApprovalMode
+    }
+
+    private var liveCostLabel: String {
+        guard let cost = usageStatus?.costDollar else { return "$0.000" }
+        return String(format: "$%.3f", NSDecimalNumber(decimal: cost).doubleValue)
     }
 
     // MARK: - Voice + import + drop + paste handlers

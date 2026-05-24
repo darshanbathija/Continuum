@@ -11,11 +11,11 @@ struct MacCodeShell: View {
 
     var body: some View {
         SessionWorkspaceView(model: model)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.black.opacity(0.45), lineWidth: 0.5)
             )
-            .shadow(color: Color.black.opacity(0.08), radius: 18, x: 0, y: 10)
+            .shadow(color: Color.black.opacity(0.45), radius: 34, x: 0, y: 22)
     }
 }
