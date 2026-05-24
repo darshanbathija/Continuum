@@ -2793,13 +2793,6 @@ public struct PairingChallenge: Codable, Sendable {
     public let wsPort: Int
     /// 32-byte high-entropy bearer token, base64url-encoded.
     public let token: String
-    /// v0.14.0 (plan v2.1): TCP port on the Mac that fronts the Open Design
-    /// daemon via DesignPortForwarder. Optional — older Mac builds omit it
-    /// and iOS falls back to the empty-state pairing CTA.
-    public let designPort: Int?
-    /// v0.14.0 (plan v2.1 T19): per-pairing HKDF-derived design credential.
-    /// Stable across daemon restarts, revocable via PairingTokenStore.
-    public let designToken: String?
     /// v16: when true, the pairing URL used the `clawdmeters://` scheme,
     /// indicating the Mac will eventually wrap its daemon in TLS. iOS
     /// flips its `AgentControlClient.useHTTPS` flag so a future server
@@ -2808,14 +2801,11 @@ public struct PairingChallenge: Codable, Sendable {
     public let useHTTPS: Bool
 
     public init(host: String, port: Int, wsPort: Int, token: String,
-                designPort: Int? = nil, designToken: String? = nil,
                 useHTTPS: Bool = false) {
         self.host = host
         self.port = port
         self.wsPort = wsPort
         self.token = token
-        self.designPort = designPort
-        self.designToken = designToken
         self.useHTTPS = useHTTPS
     }
 
@@ -2825,16 +2815,18 @@ public struct PairingChallenge: Codable, Sendable {
         self.port = try c.decode(Int.self, forKey: .port)
         self.wsPort = try c.decode(Int.self, forKey: .wsPort)
         self.token = try c.decode(String.self, forKey: .token)
-        self.designPort = try c.decodeIfPresent(Int.self, forKey: .designPort)
-        self.designToken = try c.decodeIfPresent(String.self, forKey: .designToken)
         // useHTTPS is v16-only; older Macs never set it and older iOS
         // builds never persisted it. decodeIfPresent + default false
         // means both pre-v16 paths keep working.
         self.useHTTPS = try c.decodeIfPresent(Bool.self, forKey: .useHTTPS) ?? false
+        // v0.27.0: PairingChallenge.designPort + designToken removed
+        // along with the Design tab. Older Mac builds (pre-v0.27.0) still
+        // emit those fields in the QR payload; iOS decoders silently
+        // ignore unknown keys, so older pairing URLs continue to work.
     }
 
     private enum CodingKeys: String, CodingKey {
-        case host, port, wsPort, token, designPort, designToken, useHTTPS
+        case host, port, wsPort, token, useHTTPS
     }
 }
 

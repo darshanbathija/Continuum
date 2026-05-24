@@ -169,12 +169,9 @@ public struct IOSPairingView: View {
             wsPort: challenge.wsPort,
             token: challenge.token
         )
-        // v0.21.0 (plan v2.1): persist Design routing values when the
-        // pairing payload carries them. Older Mac builds omit these
-        // fields and iOS shows the Design empty-state until re-pair.
-        if let dp = challenge.designPort, let dt = challenge.designToken {
-            client.setDesignPairing(designPort: dp, designToken: dt)
-        }
+        // v0.27.0: setDesignPairing call removed along with the Design
+        // tab + DesignPortForwarder. PairingChallenge no longer exposes
+        // designPort/designToken fields.
         Task { @MainActor in
             await client.refreshAll()
         }

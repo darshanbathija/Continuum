@@ -10,9 +10,12 @@ public struct IOSRootView: View {
     @State private var pushedScreen: Screen? = nil
     @State private var newSessionPresented: Bool = false
     @State private var settingsPresented: Bool = false
+    // v0.27.0: focusedCodeRepoKey state is unused now that the Design
+    // → Code handoff is gone. Kept as a placeholder for future
+    // repo-pre-selection work from other entry points.
     @State private var focusedCodeRepoKey: String?
 
-    public enum Tab: String, CaseIterable { case chat, live, analytics, code, design }
+    public enum Tab: String, CaseIterable { case chat, live, analytics, code }
     /// Routes the modal/pushed screens above the tab bar. `sessionDetail`
     /// carries the opened session's UUID so the detail view can look up
     /// real data instead of rendering a fixture.
@@ -42,8 +45,8 @@ public struct IOSRootView: View {
         // v0.22.5: unpaired banner stays visible across every tab so
         // first-launch users always have an actionable path to
         // pairing. Was: only LiveGaugesHeader (inside Analytics tab)
-        // surfaced a CTA — Chat/Code/Design tabs left users staring
-        // at a blank "not connected" screen with no flow forward.
+        // surfaced a CTA — Chat/Code tabs left users staring at a
+        // blank "not connected" screen with no flow forward.
         let isUnpaired = !agentClient.isConfigured
         // Extra bottom clearance when banner is visible so content
         // doesn't slide under it.
@@ -137,15 +140,6 @@ public struct IOSRootView: View {
                 .refreshable {
                     await agentClient.refreshAll()
                 }
-            case .design:
-                // /review I2: wire Design→Code handoff so the bundled
-                // clawdmeter-bridge plugin's "Open in Code →" button
-                // actually flips the iOS tab. Repo pre-selection deferred
-                // until iOS Code tab learns a repo-key argument.
-                IOSDesignView(agentClient: agentClient, onOpenInCode: { repoKey in
-                    focusedCodeRepoKey = repoKey
-                    tab = .code
-                })
             }
         }
     }
@@ -158,7 +152,8 @@ public struct IOSTabBar: View {
     @Binding var tab: IOSRootView.Tab
 
     // v0.14.0 (plan v2.1 D1): Live folds into Analytics as a permanent
-    // header; tab bar shrinks to Chat / Analytics / Code / Design (4 items).
+    // header; tab bar shrinks to Chat / Analytics / Code (3 items after
+    // v0.27.0's Design strip).
     // The `.live` enum case stays for binary-compat with code that
     // references it; deep-link from elsewhere still routes there but
     // it's no longer surfaced in the tab bar. Full LiveGaugesHeader →
@@ -167,7 +162,6 @@ public struct IOSTabBar: View {
         (.chat,      "Chat",      "sparkles"),
         (.analytics, "Analytics", "diff"),
         (.code,      "Code",      "chat"),
-        (.design,    "Design",    "pencil.and.ruler"),
     ]
 
     public var body: some View {
@@ -268,7 +262,7 @@ public struct IOSRoundIconBtn: View {
 
 /// Glass card pinned above the floating tab bar whenever the
 /// AgentControlClient hasn't received a pairing token yet. Solves the
-/// "Chat/Code/Design tabs are blank with no flow forward" feedback —
+/// "Chat/Code tabs are blank with no flow forward" feedback —
 /// every tab now has a visible "Pair iPhone" CTA the user can act on
 /// without hunting through Settings or the Analytics tab's
 /// LiveGaugesHeader (which is where the only previous CTA lived).

@@ -7,7 +7,7 @@ import ClawdmeterShared
 /// Settings) and the menu bar window. Tab routing is purely local — each
 /// tab is its own view file under `Tahoe/`.
 struct MacRootView: View {
-    enum Tab: String, CaseIterable, Hashable { case chat, usage, code, design, settings }
+    enum Tab: String, CaseIterable, Hashable { case chat, usage, code, settings }
 
     @State private var theme: TahoeThemeStore
     @State private var tab: Tab
@@ -140,20 +140,6 @@ struct MacRootView: View {
                             loopbackClient: runtime.loopbackClient,
                             runtime: runtime
                         )
-	                    case .design:
-	                        MacDesignView(
-	                            daemon: runtime.openDesignDaemon,
-	                            onOpenInCode: { repoKey in
-	                                focusedCodeRepoKey = repoKey
-	                                tab = .code
-	                                if let repoKey, !repoKey.isEmpty {
-	                                    handoffToast = "Opened in Code: \(URL(fileURLWithPath: repoKey).lastPathComponent)"
-	                                } else {
-	                                    handoffToast = "Opened Code"
-	                                }
-	                                scheduleToastDismiss()
-	                            }
-	                        )
                     case .settings:
                         MacSettingsView(
                             theme: theme,
@@ -170,16 +156,6 @@ struct MacRootView: View {
             }
         }
         .frame(minWidth: 1280, minHeight: 820)
-        // v0.14.0 (plan v2.1 T8): Code→Design handoff. When AppRuntime
-        // emits clawdmeterDidOpenInDesign (after bridge mints token +
-        // Open Design returns the projectId), flip to Design tab.
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterDidOpenInDesign)) { note in
-            tab = .design
-            if let projectId = note.userInfo?["projectId"] as? String, !projectId.isEmpty {
-                handoffToast = "Switched to: \(projectId.prefix(40))"
-                scheduleToastDismiss()
-            }
-        }
         // v0.22.9: Cmd+1..Cmd+5 (+ Cmd+,) keyboard shortcuts now live
         // in the View / app menu via `.commands` on the Window scene
         // in ClawdmeterMacApp. The previous hidden-button hack was
@@ -194,7 +170,6 @@ struct MacRootView: View {
             case "chat":     tab = .chat
             case "usage":    tab = .usage
             case "code":     tab = .code
-            case "design":   tab = .design
             case "settings": tab = .settings
             default:         break
             }
@@ -236,8 +211,7 @@ struct MacTitlebar: View {
     /// PR #26 D6: runtime for the secondary-right chips (repo count,
     /// pairing state, sync popover trigger). Nil falls back to static
     /// text for Previews.
-    /// v0.21.0 (Design tab): also drives the .design chip via
-    /// runtime?.openDesignDaemon.
+    /// v0.27.0: .design chip removed along with the Design tab.
     var runtime: AppRuntime?
 
     init(
@@ -324,7 +298,6 @@ struct MacTitlebar: View {
                     TahoeDashTab("Chat",     active: active == .chat)     { onTab(.chat) }
                     TahoeDashTab("Usage",    active: active == .usage)    { onTab(.usage) }
                     TahoeDashTab("Code",     active: active == .code)     { onTab(.code) }
-                    TahoeDashTab("Design",   active: active == .design)   { onTab(.design) }
                     TahoeDashTab("Settings", active: active == .settings) { onTab(.settings) }
                     Spacer(minLength: 0)
                     // v0.24.0: in-app update chip. Always visible across
@@ -374,52 +347,10 @@ struct MacTitlebar: View {
             }
         case .code:
             syncChipCode
-        case .design:
-            // v0.21.0: health-dot + active project name from the daemon.
-            // Nil-runtime (Previews) falls back to a neutral placeholder.
-            if let daemon = runtime?.openDesignDaemon {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(designHealthColor(for: daemon))
-                        .frame(width: 8, height: 8)
-                    Text(designChipText(for: daemon))
-                        .font(TahoeFont.body(12))
-                        .foregroundStyle(t.fg2)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: 200, alignment: .leading)
-                }
-            } else {
-                Text("Design").font(TahoeFont.body(12)).foregroundStyle(t.fg3)
-            }
         case .settings:
             Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1") · synced")
                 .font(TahoeFont.body(12))
                 .foregroundStyle(t.fg2)
-        }
-    }
-
-    private func designHealthColor(for daemon: OpenDesignDaemonManager) -> Color {
-        switch daemon.lifecycle {
-        case .ready:                                 return .green
-        case .starting, .loading, .restarting:       return .orange
-        case .crashed, .failed:                      return .red
-        case .idle:                                  return .gray
-        }
-    }
-
-    private func designChipText(for daemon: OpenDesignDaemonManager) -> String {
-        if let name = daemon.activeProjectName, !name.isEmpty {
-            return name
-        }
-        switch daemon.lifecycle {
-        case .ready:    return "No project open"
-        case .starting: return "Starting…"
-        case .loading:  return "Loading…"
-        case .crashed:  return "Daemon crashed"
-        case .failed:   return "Daemon failed"
-        case .restarting: return "Restarting…"
-        case .idle:     return "Not started"
         }
     }
 }

@@ -4,27 +4,27 @@ Clawdmeter is a native desktop and mobile control surface for coding agents. It
 started as a Claude usage meter, but the current repo is broader: a Mac menu-bar
 meter, a Tahoe-style Mac workbench, iPhone and Apple Watch companions, a Linux
 desktop port, shared usage analytics, and adapters for Claude Code, Codex,
-Antigravity/Gemini, OpenCode, and Open Design.
+Antigravity/Gemini, and OpenCode.
 
 At a high level, Clawdmeter does three jobs:
 
 - Shows live quota and spend for coding-agent providers.
 - Runs and controls local coding-agent sessions from Mac, iPhone, Watch, and Linux.
-- Keeps chat, code, design, usage, device pairing, diagnostics, and provider setup in one app.
+- Keeps chat, code, usage, device pairing, diagnostics, and provider setup in one app.
 
-Current source version: `0.26.0` (`apple/project.yml` build `129`).
+Current source version: `0.27.0` (`apple/project.yml` build `136`).
 
 ## What ships
 
 | Surface | Current role |
 | --- | --- |
-| **Mac app** | Primary app. Menu-bar gauge plus a full Tahoe-style window with Chat, Usage, Code, Design, and Settings tabs. Owns the local daemon, provider runtimes, tmux sessions, Open Design daemon, OpenCode server, usage aggregation, pairing, and diagnostics. |
+| **Mac app** | Primary app. Menu-bar gauge plus a full Tahoe-style window with Chat, Usage, Code, and Settings tabs. Owns the local daemon, provider runtimes, tmux sessions, OpenCode server, usage aggregation, pairing, and diagnostics. (Design tab + Open Design integration stripped in v0.27.0 — slated to be redesigned and rebuilt.) |
 | **iPhone app** | Paired control plane for the Mac. Shows live provider status, analytics, chat/code sessions, new-session creation, plan approvals, diffs, terminal views, and Live Activities. |
 | **Apple Watch app** | Wrist view for live usage and sessions that need attention, including plan approval and interruption flows through the paired iPhone. |
 | **Widgets / complications** | iOS widgets, watchOS complications, and a Mac widget extension backed by the shared app-group cache. |
 | **Linux app** | Native Swift Linux desktop and daemon work under `linux/`, targeting Ubuntu/Zorin GNOME environments with AppIndicator, GTK4/libadwaita, WebKitGTK, VTE, libsecret, and the same shared analytics package. |
 | **Shared package** | `apple/ClawdmeterShared` contains wire DTOs, analytics parsers, pricing, provider models, session protocol types, Tahoe UI primitives, and cross-platform tests. |
-| **Tools** | Build scripts, bundled runtime fetchers, Open Design bridge/plugin code, Codex SDK shim, Antigravity Python sidecar skeleton, and tmux control-mode probes live under `tools/`. |
+| **Tools** | Build scripts, bundled runtime fetchers, Codex SDK shim, Antigravity Python sidecar skeleton, and tmux control-mode probes live under `tools/`. (Open Design bridge + plugin removed in v0.27.0.) |
 
 ## Provider support
 
@@ -34,7 +34,6 @@ Current source version: `0.26.0` (`apple/project.yml` build `129`).
 | **Codex** | Supports CLI-backed sessions and a Codex SDK chat path. Usage parsing reads Codex session JSONL, including cumulative-to-delta conversion. Plan mode maps to read-only sandboxing, and send/interrupt/model/effort flows go through the same daemon surface as other agents. |
 | **Antigravity / Gemini** | Gemini quota and Antigravity 2 native sessions are represented through the shared `.gemini` agent kind in current wire contracts. The newer path talks to Antigravity's `agentapi` / language-server runtime, reads conversation DB and brain-dir state, and exposes plan snapshots. |
 | **OpenCode** | OpenCode is a fourth provider, not a fork target. Clawdmeter manages a shared `opencode serve` process, consumes SSE events, sends prompts through OpenCode's HTTP API, maps OpenCode usage into Clawdmeter analytics, and surfaces setup/auth under Settings -> Providers. |
-| **Open Design** | The Mac Design tab embeds a bundled Open Design web app. Clawdmeter starts the daemon, hosts a bridge sidecar, mints desktop import tokens, supports Code-to-Design handoff, and exposes an authenticated `/design/import-folder` route for paired clients. |
 
 ## App model
 
@@ -44,14 +43,13 @@ HTTP and WebSocket daemon:
 - HTTP listener starts at `21731`, with fallback ports through `21741`.
 - WebSocket listener normally starts at `21732`.
 - Non-loopback access is restricted to Tailscale/loopback peer ranges and bearer-token pairing.
-- The same daemon backs Mac loopback clients, iPhone pairing, Watch relays, terminal streams, chat snapshots, usage, analytics, diffs, PR actions, and design handoff.
+- The same daemon backs Mac loopback clients, iPhone pairing, Watch relays, terminal streams, chat snapshots, usage, analytics, diffs, and PR actions.
 
 The main Mac tabs are:
 
 - **Chat** - solo or broadcast chat over Claude, Codex, and Antigravity, with Frontier-style multi-provider comparison endpoints in the daemon.
 - **Usage** - live quota cards plus historical spend by provider, day, and repo. OpenCode appears as a dollar-cost lane because it does not expose Anthropic-style rolling quota headers.
 - **Code** - repo/session workbench with city-named worktrees, terminal panes, chat transcript, plan/diff/PR/artifact/source panes, archive/reopen flows, and provider filters.
-- **Design** - embedded Open Design canvas with Code <-> Design handoff through the Clawdmeter bridge plugin.
 - **Settings** - visual theme, provider setup, Codex SDK diagnostics, Antigravity SDK diagnostics, pairing, Live Activities, auto-revive, and diagnostics.
 
 ## Analytics
@@ -132,8 +130,8 @@ Package a Mac DMG from the repo root:
 ```
 
 The DMG script regenerates the project when `xcodegen` is available, archives
-the Mac scheme, builds a compressed DMG, verifies the mounted app, checks the
-bundled Open Design tree, and enforces a soft/hard size budget.
+the Mac scheme, builds a compressed DMG, verifies the mounted app, and enforces
+a soft/hard size budget.
 
 Optional bundled runtime staging:
 
@@ -141,7 +139,6 @@ Optional bundled runtime staging:
 ./tools/download-bundled-node.sh
 ./tools/download-bundled-uv.sh
 ./tools/download-bundled-opencode.sh
-./tools/build-bundled-open-design.sh
 ```
 
 For faster local iteration, the Xcode prebuild steps can be skipped where
@@ -150,7 +147,6 @@ supported with:
 ```bash
 CLAWDMETER_SKIP_BUNDLED_NODE=1
 CLAWDMETER_SKIP_BUNDLED_UV=1
-CLAWDMETER_SKIP_BUNDLED_OPEN_DESIGN=1
 CLAWDMETER_SKIP_BUNDLED_OPENCODE=1
 ```
 

@@ -310,12 +310,9 @@ struct PairingSettingsView: View {
     private func copyPairingURL() {
         guard let httpPort = runtime.agentControlServer.boundPort,
               let wsPort = runtime.agentControlServer.boundWsPort else { return }
-        var url = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
-        // v0.14.0 (plan v2.1): append Design routing fields when daemon ready.
-        if let dp = runtime.openDesignDaemon.forwarderPortAtomic.get(),
-           let dt = runtime.openDesignDaemon.deriveDesignToken(forPairingId: tokenForDisplay) {
-            url += "&dp=\(dp)&dt=\(dt)"
-        }
+        // v0.27.0: Design routing fields (`&dp=` and `&dt=`) dropped from
+        // the pairing URL along with the Design tab + DesignPortForwarder.
+        let url = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(url, forType: .string)
         didCopy = true
@@ -335,11 +332,8 @@ struct PairingSettingsView: View {
             qrImage = nil
             return
         }
-        var urlString = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
-        if let dp = runtime.openDesignDaemon.forwarderPortAtomic.get(),
-           let dt = runtime.openDesignDaemon.deriveDesignToken(forPairingId: tokenForDisplay) {
-            urlString += "&dp=\(dp)&dt=\(dt)"
-        }
+        // v0.27.0: Design routing fields dropped from the pairing URL.
+        let urlString = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
         qrImage = generateQR(from: urlString)
     }
 
