@@ -9,7 +9,7 @@ import ClawdmeterShared
 /// cadence.
 ///
 /// Phase 4 build-out: actual `app_indicator_*` calls under `#if os(Linux)`.
-public final class AppIndicatorTray {
+public final class AppIndicatorTray: @unchecked Sendable {
     public enum MenuAction: Sendable {
         case openDashboard
         case forcePollClaude
@@ -55,7 +55,7 @@ public final class AppIndicatorTray {
     /// indicator state. Funnel the call through DispatchQueue.main so
     /// the actor → main hop is structural to this API.
     public func setIcon(at path: URL, label: String) {
-        let body: () -> Void = { [weak self] in
+        let body: @Sendable () -> Void = { [weak self] in
             guard let self else { return }
             #if os(Linux)
             // TODO(Phase 4):
