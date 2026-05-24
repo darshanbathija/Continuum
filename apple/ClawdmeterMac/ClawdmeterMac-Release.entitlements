@@ -42,6 +42,56 @@
 	<array>
 		<string>$(AppIdentifierPrefix)com.clawdmeter</string>
 	</array>
+
+	<!--
+	  v0.26.2: Read-only sandbox exceptions for the provider state dirs
+	  Clawdmeter needs to inspect.
+
+	  Why: The Codex / Gemini-Antigravity / OpenCode CLIs all write auth
+	  bundles, session rollouts, and conversation DBs to the *real*
+	  user home (~/.codex/, ~/.gemini/, ~/.local/share/opencode/,
+	  ~/Library/Application Support/Antigravity/). With sandbox ON, the
+	  app's NSHomeDirectory points at its container — those provider
+	  dirs are unreachable, so polling silently throws .unauthenticated
+	  ("Re-auth required" in logs) and the Usage tab shows 0% / "resets
+	  in —" for every provider except Claude (which has its own
+	  PastedAnthropicTokenProvider flow).
+
+	  Scope: READ-ONLY. We never write to these paths — auth rotation,
+	  session writes, and SQLite writes are all done by the upstream
+	  CLIs running in their own processes outside our sandbox. So even
+	  a worst-case RCE in our process can read these files but can't
+	  modify auth tokens, plant trojans, or alter session state.
+
+	  Why home-relative-path: lets Apple's TCC / sandbox kernel enforce
+	  the prefix at the syscall level (Apple's recommended path for
+	  shipped DMG-distributed apps that need narrow filesystem reach
+	  beyond their container). Each entry must end in '/' to denote a
+	  directory tree.
+
+	  Trade-off vs. full sandbox-off: we lose containment specifically
+	  for these four dirs but keep it for everything else — ~/Documents,
+	  ~/Pictures, ~/Library/Mail, ~/Library/Messages, browser cookies,
+	  SSH keys, etc. all remain outside our blast radius.
+
+	  Trade-off vs. paste-token flow: keeps the UX seamless (no manual
+	  token copying per provider) at the cost of a wider filesystem
+	  attack surface than the sandbox-pure Anthropic path.
+	-->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<!-- Codex CLI: auth.json, sessions/*.jsonl rollouts (rate_limits source),
+		     config.toml, projects/ -->
+		<string>/.codex/</string>
+		<!-- Gemini CLI + Antigravity sidecar: antigravity/conversations DB,
+		     config/projects, tmp/ -->
+		<string>/.gemini/</string>
+		<!-- OpenCode CLI: auth.json + per-provider state. opencode honors
+		     XDG_DATA_HOME but defaults to ~/.local/share/opencode/. -->
+		<string>/.local/share/opencode/</string>
+		<!-- Antigravity 2 desktop app: native conversation DB + brain/ dir. -->
+		<string>/Library/Application Support/Antigravity/</string>
+	</array>
 	<!-- iCloud KV sync — paid Developer Program only. -->
 	<!--
 	<key>com.apple.developer.icloud-services</key>
