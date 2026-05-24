@@ -68,6 +68,12 @@ public final class iOSChatStore: ObservableObject {
     public init(sessionId: UUID, client: AgentControlClient) {
         self.sessionId = sessionId
         self.client = client
+        #if DEBUG
+        if let fixture = client.codeTabVerificationChatSnapshot(sessionId: sessionId) {
+            self.snapshot = fixture
+            return
+        }
+        #endif
         self.snapshot = WireChatSnapshot(
             sessionId: sessionId,
             items: [],
@@ -367,6 +373,11 @@ extension AgentControlClient {
     /// long-lived subscription (Phase 2).
     @MainActor
     public func fetchChatSnapshot(sessionId: UUID) async -> WireChatSnapshot? {
+        #if DEBUG
+        if let fixture = codeTabVerificationChatSnapshot(sessionId: sessionId) {
+            return fixture
+        }
+        #endif
         guard let host, let token else { return nil }
         guard let url = URL(string: "http://\(Self.urlHostLiteral(host)):\(httpPort)/sessions/\(sessionId.uuidString)/chat-snapshot") else { return nil }
         var req = URLRequest(url: url)

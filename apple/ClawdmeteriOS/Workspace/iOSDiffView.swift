@@ -7,6 +7,7 @@ import ClawdmeterShared
 /// Wire: `GET /sessions/:id/diff` returns `[GitDiffFile]`. Truncated file
 /// rows lazy-fetch full hunks through `GET /sessions/:id/diff/:path`.
 struct iOSDiffView: View {
+    @Environment(\.tahoe) private var t
     let session: AgentSession
     @ObservedObject var client: AgentControlClient
 
@@ -26,7 +27,7 @@ struct iOSDiffView: View {
                     Text(errorMessage)
                 }
             } else if files.isEmpty {
-                ContentUnavailableView("No changes yet", systemImage: "doc.text")
+                emptyState
             } else {
                 fileList
             }
@@ -39,33 +40,65 @@ struct iOSDiffView: View {
 
     @ViewBuilder
     private var fileList: some View {
-        List(files) { file in
-            NavigationLink {
-                iOSDiffFileView(session: session, client: client, initialFile: file)
-            } label: {
-                HStack {
-                    statusGlyph(file.status)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(file.path)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                            .font(.callout.monospaced())
-                        HStack(spacing: 6) {
-                            Text("+\(file.additions)")
-                                .foregroundStyle(.green)
-                            Text("-\(file.deletions)")
-                                .foregroundStyle(.red)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(files) { file in
+                    NavigationLink {
+                        iOSDiffFileView(session: session, client: client, initialFile: file)
+                    } label: {
+                        TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+                            HStack(alignment: .top, spacing: 11) {
+                                statusGlyph(file.status)
+                                    .frame(width: 24, height: 24)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(file.path)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
+                                        .font(TahoeFont.mono(12))
+                                        .foregroundStyle(t.fg)
+                                    HStack(spacing: 8) {
+                                        Text("+\(file.additions)")
+                                            .foregroundStyle(.green)
+                                        Text("-\(file.deletions)")
+                                            .foregroundStyle(.red)
+                                        if file.truncated {
+                                            Text("truncated")
+                                                .foregroundStyle(t.fg4)
+                                        }
+                                    }
+                                    .font(TahoeFont.mono(10.5, weight: .semibold))
+                                }
+                                Spacer()
+                                TahoeIcon("chevR", size: 13)
+                                    .foregroundStyle(t.fg4)
+                                    .padding(.top, 3)
+                            }
+                            .padding(12)
                         }
-                        .font(.caption.monospacedDigit())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(rowAccessibilityLabel(file))
+                    .accessibilityHint("Double-tap to view the hunks.")
                 }
-                .frame(minHeight: 44)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(rowAccessibilityLabel(file))
-            .accessibilityHint("Double-tap to view the hunks.")
+            .padding(14)
         }
-        .listStyle(.plain)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            TahoeIcon("diff", size: 24)
+                .foregroundStyle(t.fg4)
+            Text("No local diff")
+                .font(TahoeFont.body(14, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text("The worktree has no visible changes yet.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 
     private func rowAccessibilityLabel(_ file: GitDiffFile) -> String {
@@ -113,6 +146,7 @@ struct iOSDiffView: View {
 
 /// File-level diff view with per-hunk paginated rendering for large diffs.
 struct iOSDiffFileView: View {
+    @Environment(\.tahoe) private var t
     let session: AgentSession
     @ObservedObject var client: AgentControlClient
     let initialFile: GitDiffFile
@@ -142,7 +176,7 @@ struct iOSDiffFileView: View {
                 }
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(Array(file.hunks.enumerated()), id: \.offset) { _, hunk in
                             hunkView(hunk)
                         }
@@ -174,17 +208,23 @@ struct iOSDiffFileView: View {
 
     @ViewBuilder
     private func hunkView(_ hunk: GitDiffHunk) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(hunk.header)
-                .font(.caption.monospaced())
-                .foregroundStyle(SessionsV2Theme.codexBlue)
-            ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
-                Text(line.text)
-                    .font(.system(size: 11).monospaced())
-                    .foregroundStyle(lineColor(line.kind))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(lineBg(line.kind))
+        TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(hunk.header)
+                    .font(TahoeFont.mono(11, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                    .padding(.bottom, 3)
+                ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
+                    Text(line.text)
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(lineColor(line.kind))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(lineBg(line.kind), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                }
             }
+            .padding(10)
         }
     }
 
@@ -209,6 +249,11 @@ extension AgentControlClient {
     /// Fetch the live `git diff HEAD` from the daemon for this session.
     @MainActor
     public func fetchDiff(sessionId: UUID) async -> [GitDiffFile]? {
+        #if DEBUG
+        if let fixture = codeTabVerificationDiff(sessionId: sessionId) {
+            return fixture
+        }
+        #endif
         guard let host, let token else { return nil }
         guard let url = URL(string: "http://\(Self.urlHostLiteral(host)):\(httpPort)/sessions/\(sessionId.uuidString)/diff") else { return nil }
         var req = URLRequest(url: url)

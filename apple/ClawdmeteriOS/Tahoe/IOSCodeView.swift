@@ -7,6 +7,33 @@ import ClawdmeterShared
 /// root injects daemon-derived bindings via the AgentControlClient adapter.
 public struct IOSCodeView: View {
     @Environment(\.tahoe) private var t
+    private enum StatusScope: String, CaseIterable, Identifiable {
+        case all, live, planning, paused, done, recent
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .all: return "All"
+            case .live: return "Live"
+            case .planning: return "Plan"
+            case .paused: return "Paused"
+            case .done: return "Done"
+            case .recent: return "Recent"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .all: return "chat"
+            case .live: return "bolt"
+            case .planning: return "sparkles"
+            case .paused: return "pause"
+            case .done: return "check"
+            case .recent: return "archive"
+            }
+        }
+    }
+
     /// Push the session detail screen for a specific session id. Carries
     /// the id so the detail surface can render real session data instead
     /// of a hardcoded fixture (P1 fix).
@@ -19,20 +46,26 @@ public struct IOSCodeView: View {
     /// call `unarchiveSession(id:)` when the user taps an archived
     /// entry. Nil keeps the row read-only (Previews + cold-launch).
     var agentClient: AgentControlClient?
+    var outbox: MobileCommandOutbox?
 
     public init(
         data: TahoeCodeBindings = .demo,
         onOpenDetail: @escaping (UUID) -> Void = { _ in },
         onNewSession: @escaping () -> Void = {},
-        agentClient: AgentControlClient? = nil
+        agentClient: AgentControlClient? = nil,
+        outbox: MobileCommandOutbox? = nil
     ) {
         self.data = data
         self.onOpenDetail = onOpenDetail
         self.onNewSession = onNewSession
         self.agentClient = agentClient
+        self.outbox = outbox
     }
 
     @State private var searchQuery: String = ""
+    @State private var statusScope: StatusScope = .all
+    @State private var providerFilter: TahoeProvider?
+    @State private var includeRecents: Bool = true
 
     public var body: some View {
         ScrollView {
@@ -64,7 +97,13 @@ public struct IOSCodeView: View {
                     .padding(.horizontal, 14)
                     .frame(height: 38)
                 }
-                .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
+                .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+
+                statusBuckets
+                    .padding(.bottom, 8)
+                filterBar
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
 
                 // Repo sections — apply the search query if non-empty.
                 let visible = filteredRepos
@@ -91,7 +130,8 @@ public struct IOSCodeView: View {
                                 repo: repo,
                                 onOpen: onOpenDetail,
                                 onNewSession: onNewSession,
-                                agentClient: agentClient
+                                agentClient: agentClient,
+                                outbox: outbox
                             )
                         }
                     }
@@ -101,27 +141,181 @@ public struct IOSCodeView: View {
         }
     }
 
+    private var statusCounts: [StatusScope: Int] {
+        let repos = data.repos
+        let sessions = repos.flatMap(\.sessions)
+        let recents = repos.flatMap(\.recents)
+        return [
+            .all: sessions.count + (includeRecents ? recents.count : 0),
+            .live: sessions.filter { $0.status == .running }.count,
+            .planning: sessions.filter { $0.status == .planning }.count,
+            .paused: sessions.filter { $0.status == .paused || $0.status == .degraded }.count,
+            .done: sessions.filter { $0.status == .done }.count,
+            .recent: recents.count,
+        ]
+    }
+
+    private var availableProviders: [TahoeProvider] {
+        let providers = data.repos.flatMap { repo in
+            repo.sessions.map(\.agent) + repo.recents.map(\.provider)
+        }
+        var seen = Set<String>()
+        return providers
+            .filter { seen.insert($0.rawValue).inserted }
+            .sorted { $0.displayName < $1.displayName }
+    }
+
+    private var statusBuckets: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(StatusScope.allCases) { scope in
+                    statusBucket(scope)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func statusBucket(_ scope: StatusScope) -> some View {
+        let selected = statusScope == scope
+        let count = statusCounts[scope] ?? 0
+        return Button {
+            statusScope = scope
+            if scope == .recent {
+                includeRecents = true
+            }
+        } label: {
+            HStack(spacing: 6) {
+                TahoeIcon(scope.icon, size: 12)
+                Text(scope.label)
+                Text("\(count)")
+                    .font(TahoeFont.mono(10.5, weight: .bold))
+                    .foregroundStyle(selected ? .white.opacity(0.82) : t.fg4)
+            }
+            .font(TahoeFont.body(11.5, weight: .bold))
+            .foregroundStyle(selected ? .white : t.fg2)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(
+                selected
+                    ? LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom)
+                    : LinearGradient(colors: [t.glassTintHi, t.glassTintHi], startPoint: .top, endPoint: .bottom),
+                in: Capsule(style: .continuous)
+            )
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(selected ? Color.clear : t.hairline, lineWidth: 0.5)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var filterBar: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Button {
+                    providerFilter = nil
+                } label: {
+                    Label("All providers", systemImage: providerFilter == nil ? "checkmark" : "circle")
+                }
+                ForEach(availableProviders, id: \.id) { provider in
+                    Button {
+                        providerFilter = provider
+                    } label: {
+                        Label(provider.displayName, systemImage: providerFilter?.rawValue == provider.rawValue ? "checkmark" : "circle")
+                    }
+                }
+            } label: {
+                filterChip(
+                    icon: "sliders",
+                    text: providerFilter?.displayName ?? "All providers",
+                    active: providerFilter != nil
+                )
+            }
+            Toggle(isOn: $includeRecents) {
+                filterChip(icon: "archive", text: "Recent", active: includeRecents)
+            }
+            .toggleStyle(.button)
+            .buttonStyle(.plain)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func filterChip(icon: String, text: String, active: Bool) -> some View {
+        HStack(spacing: 6) {
+            TahoeIcon(icon, size: 11)
+            Text(text)
+                .lineLimit(1)
+        }
+        .font(TahoeFont.body(11.5, weight: .semibold))
+        .foregroundStyle(active ? t.fg : t.fg3)
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(active ? t.glassTintHi : t.glassTint, in: Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous).stroke(t.hairline, lineWidth: 0.5)
+        }
+    }
+
     /// PR #26 D5: filter repos + sessions by `searchQuery`. Empty query
     /// is identical to today's behavior (regression-safe).
     private var filteredRepos: [TahoeCodeRepo] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let baseline = data.repos.filter { !$0.sessions.isEmpty || !$0.recents.isEmpty }
+        let baseline = data.repos.compactMap { repo -> TahoeCodeRepo? in
+            var sessions = repo.sessions
+            var recents = includeRecents ? repo.recents : []
+            if let providerFilter {
+                sessions = sessions.filter { $0.agent == providerFilter }
+                recents = recents.filter { $0.provider == providerFilter }
+            }
+            switch statusScope {
+            case .all:
+                break
+            case .live:
+                sessions = sessions.filter { $0.status == .running }
+                recents = []
+            case .planning:
+                sessions = sessions.filter { $0.status == .planning }
+                recents = []
+            case .paused:
+                sessions = sessions.filter { $0.status == .paused || $0.status == .degraded }
+                recents = []
+            case .done:
+                sessions = sessions.filter { $0.status == .done }
+                recents = []
+            case .recent:
+                sessions = []
+            }
+            guard !sessions.isEmpty || !recents.isEmpty else { return nil }
+            return TahoeCodeRepo(
+                key: repo.key,
+                name: repo.name,
+                tint: repo.tint,
+                liveSessionCount: sessions.filter { $0.status == .running || $0.status == .planning }.count,
+                sessions: sessions,
+                recents: recents
+            )
+        }
         guard !query.isEmpty else { return baseline }
         return baseline.compactMap { repo in
             let matchedSessions = repo.sessions.filter { s in
                 s.title.lowercased().contains(query)
             }
+            let matchedRecents = repo.recents.filter { r in
+                r.title.lowercased().contains(query)
+            }
             // Also match the repo name itself — typing "ccwatch" should
             // surface that repo even if no session title matches.
             let repoMatches = repo.name.lowercased().contains(query)
-            if matchedSessions.isEmpty && !repoMatches { return nil }
+            if matchedSessions.isEmpty && matchedRecents.isEmpty && !repoMatches { return nil }
             return TahoeCodeRepo(
                 key: repo.key,
                 name: repo.name,
                 tint: repo.tint,
-                liveSessionCount: repo.liveSessionCount,
+                liveSessionCount: (repoMatches ? repo.sessions : matchedSessions)
+                    .filter { $0.status == .running || $0.status == .planning }.count,
                 sessions: repoMatches ? repo.sessions : matchedSessions,
-                recents: repo.recents
+                recents: repoMatches ? repo.recents : matchedRecents
             )
         }
     }
@@ -135,6 +329,7 @@ private struct IOSRepoCard: View {
     /// PR #35: daemon client used by the recent-row tap handler to
     /// call `unarchiveSession(id:)`. Nil keeps the row read-only.
     var agentClient: AgentControlClient?
+    var outbox: MobileCommandOutbox?
     @State private var restoringSessionId: UUID? = nil
 
     @State private var expanded: Bool = true
@@ -209,6 +404,7 @@ private struct IOSRepoCard: View {
                                         }
                                     }
                                     Spacer()
+                                    statusBadges(for: s)
                                     TahoeIcon("chevR", size: 14).foregroundStyle(t.fg4)
                                 }
                                 .padding(.horizontal, 16).padding(.vertical, 14)
@@ -284,6 +480,35 @@ private struct IOSRepoCard: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func statusBadges(for session: TahoeCodeSession) -> some View {
+        let pending = outbox?.pending.filter { $0.sessionId == session.id }.count ?? 0
+        let failed = outbox?.failed.filter { $0.sessionId == session.id }.count ?? 0
+        HStack(spacing: 5) {
+            if session.status == .planning {
+                smallBadge("Plan", icon: "sparkles", tone: t.accent)
+            }
+            if pending > 0 {
+                smallBadge("\(pending)", icon: "arrowU", tone: t.fg3)
+            }
+            if failed > 0 {
+                smallBadge("\(failed)", icon: "x", tone: .red)
+            }
+        }
+    }
+
+    private func smallBadge(_ text: String, icon: String, tone: Color) -> some View {
+        HStack(spacing: 3) {
+            TahoeIcon(icon, size: 9)
+            Text(text)
+                .font(TahoeFont.mono(10, weight: .bold))
+        }
+        .foregroundStyle(tone)
+        .padding(.horizontal, 6)
+        .frame(height: 20)
+        .background(tone.opacity(0.14), in: Capsule(style: .continuous))
     }
 }
 

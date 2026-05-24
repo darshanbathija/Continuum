@@ -55,6 +55,7 @@ public struct TahoeIcon: View {
         case "user":       return "person.crop.circle"
         case "chat":       return "bubble.left"
         case "bell":       return "bell"
+        case "tray":       return "tray.and.arrow.down"
         case "play2":      return "play"
         case "eye":        return "eye"
         case "sliders":    return "slider.horizontal.3"
