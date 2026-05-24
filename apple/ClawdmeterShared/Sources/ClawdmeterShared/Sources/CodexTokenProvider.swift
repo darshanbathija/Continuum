@@ -55,7 +55,12 @@ public final class CodexTokenProvider: TokenProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var cached: AuthBundle?
 
-    public init(authPath: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex/auth.json")) {
+    public init(authPath: URL = ClawdmeterRealHome.url().appendingPathComponent(".codex/auth.json")) {
+        // v0.26.2: switched from NSHomeDirectory() to ClawdmeterRealHome
+        // so sandboxed Release builds resolve to ~/.codex/auth.json in
+        // the user's actual home (where the Codex CLI writes it) rather
+        // than the empty container path. The Release entitlements grant
+        // read-only access to /.codex/ — see ClawdmeterMac-Release.entitlements.
         self.authPath = authPath
     }
 

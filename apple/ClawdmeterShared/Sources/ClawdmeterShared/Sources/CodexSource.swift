@@ -587,7 +587,11 @@ public final class CodexSource: AISource {
     /// back to older files until we find one with a non-null primary.
     func recentSessionFiles(limit: Int = 8) -> [URL] {
         let fm = FileManager.default
-        let sessionsRoot = fm.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")
+        // v0.26.2: ClawdmeterRealHome instead of homeDirectoryForCurrentUser
+        // so the sandboxed Release build reads /Users/<you>/.codex/sessions
+        // (where the Codex CLI writes rollouts) rather than the empty
+        // container path. Release entitlements grant /.codex/ read access.
+        let sessionsRoot = ClawdmeterRealHome.url().appendingPathComponent(".codex/sessions", isDirectory: true)
         guard fm.fileExists(atPath: sessionsRoot.path) else { return [] }
 
         guard let enumerator = fm.enumerator(

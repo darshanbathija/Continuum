@@ -4,6 +4,31 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.26.2 build 131] - 2026-05-24 — Sandbox read-only exceptions for provider state dirs (`fix/sandbox-readonly-exceptions`)
+
+After v0.26.1, the menu-bar Usage tab still showed Codex / Antigravity / OpenCode at `0% / "resets in —"` even though Claude rendered fine. The Mac unified log surfaced repeated `[AppModel.codex] Re-auth required.` errors. Root cause: the Release build is sandboxed (deliberate, per the security comment in `ClawdmeterMac-Release.entitlements`), which means `NSHomeDirectory()` resolves to the app's container — *not* `/Users/<you>/`. Every provider source then tries to read `~/.codex/auth.json`, `~/.gemini/antigravity/conversations`, `~/.local/share/opencode/auth.json`, or the Antigravity 2 desktop app's data dir, finds nothing in the container, throws `.unauthenticated`, and never reaches the parser. Debug builds masked this because their sibling entitlements file has sandbox OFF; users who only ever launched the Debug-built `.app` from Xcode never saw the bug.
+
+The v0.23.5 OpenCode hotfix already supplies `clawdmeterRealUserHome()` (a `getpwuid` shim that returns the real home path), but the path resolution is only half of the problem — the sandbox kernel still blocks the read syscall when the resolved path is outside the container.
+
+This ship adds narrow, **read-only** `com.apple.security.temporary-exception.files.home-relative-path.read-only` entitlements for exactly the four directories the provider polls need.
+
+### Changed
+
+- **`ClawdmeterMac-Release.entitlements`** ([apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements](apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements)) grants read-only sandbox exceptions for:
+  - `~/.codex/` — Codex CLI auth bundle (`auth.json`), session rollouts (`sessions/*.jsonl` — the `rate_limits` source the v0.26.1 parser fix targets), `config.toml`, `projects/`.
+  - `~/.gemini/` — Gemini CLI + Antigravity sidecar (`antigravity/conversations` SQLite DB, `config/projects`, `tmp/`).
+  - `~/.local/share/opencode/` — OpenCode CLI auth + per-provider state (honors `XDG_DATA_HOME` if set; this is the default).
+  - `~/Library/Application Support/Antigravity/` — Antigravity 2 desktop app's native conversation DB + `brain/`.
+- **Containment scope preserved everywhere else.** ~/Documents, ~/Pictures, ~/Library/Mail, ~/Library/Messages, browser cookies, SSH keys, and the rest of the user home remain outside our blast radius — a worst-case RCE in our process (e.g. via a compromised bundled Node) can read these four provider state dirs but cannot exfil the user's mail, browser session, or shell credentials.
+- **Read-only is enforced.** No write entitlement is granted; auth rotation, session writes, and SQLite mutations are all performed by the upstream CLIs in their own processes. RCE in Clawdmeter can observe provider state but cannot plant trojan auth tokens or alter session history.
+
+### Notes
+
+- The previously documented trade-off (sandbox ON → Claude Keychain reads blocked → users must use `PastedAnthropicTokenProvider`) is unchanged. Pasted Anthropic tokens continue to work; this PR only opens read access to the *other* providers' state dirs.
+- v0.26.1's `CodexSource` parser fix (skip null-primary shutdown markers + walk recent rollouts) was correct and remains intact; it just couldn't help while the sandbox blocked the read entirely. Together with this PR, the full Codex path is now exercised.
+
+Bumps `MARKETING_VERSION` 0.26.1 → 0.26.2, `CURRENT_PROJECT_VERSION` 130 → 131.
+
 ## [0.26.1 build 130] - 2026-05-24 — Codex JSONL parser ignores CLI shutdown markers (`fix/codex-null-rate-limits`)
 
 After installing v0.26.0, the menu-bar Codex tab dropped to `5h session 0% / resets in —` and `Weekly 0% / resets in —` even though earlier rollouts in `~/.codex/sessions` still recorded the user's real usage (96% session, 54% weekly). Root cause: Codex CLI 0.132 started emitting an extra `rate_limits` event at the end of every session with `limit_id: "premium"`, `primary: null`, and `secondary: null` — a credits-only marker that carries no usage data. The previous parser took the textually-last `rate_limits` line in the rollout, which meant the shutdown marker clobbered the real `limit_id: "codex"` event that came moments earlier.
