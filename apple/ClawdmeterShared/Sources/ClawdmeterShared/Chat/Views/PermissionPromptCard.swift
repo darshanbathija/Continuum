@@ -153,6 +153,11 @@ public struct PermissionPromptCard: View {
     private var cardFill: Color {
 #if os(macOS)
         Color(white: 0.12)
+#elseif os(watchOS)
+        // watchOS doesn't expose UIKit's secondarySystemBackground.
+        // Watch is always-dark, so a fixed dark gray matches the iOS
+        // dark-mode rendering of secondarySystemBackground (~RGB 28,28,30).
+        Color(white: 0.11)
 #else
         Color(.secondarySystemBackground)
 #endif

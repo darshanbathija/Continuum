@@ -123,6 +123,18 @@ public actor OpencodeAuthFile {
     /// overwrite a malformed canonical file, since doing so would
     /// destroy whatever salvageable bytes the user has on disk).
     private func migrateLegacyEntriesIfNeeded() async {
+        // Skip migration entirely when XDG_DATA_HOME is set. XDG_DATA_HOME
+        // is an explicit opt-in to a non-standard data location — either a
+        // test isolating its filesystem or a user redirecting data
+        // intentionally. In either case the v0.23.4 sandbox-container
+        // path is not the right source: tests would pull bytes from a
+        // process-wide leftover sandbox into the test's isolated root
+        // (OpencodeAuthFileTests caught this in v0.23.11 as a real test
+        // flake), and an opted-in user expects no transparent migration.
+        if let xdg = ProcessInfo.processInfo.environment["XDG_DATA_HOME"],
+           !xdg.isEmpty {
+            return
+        }
         let legacyURL = Self.legacySandboxDataDirectoryURL.appendingPathComponent("auth.json")
         guard FileManager.default.fileExists(atPath: legacyURL.path),
               legacyURL.path != Self.fileURL.path else {

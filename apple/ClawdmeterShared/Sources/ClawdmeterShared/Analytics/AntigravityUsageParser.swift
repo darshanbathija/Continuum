@@ -85,6 +85,7 @@ public enum AntigravityUsageParser {
         // AntigravityDBUsageParser for the reverse-engineered field
         // mapping.
         let tokens: TokenTotals
+#if os(macOS) || os(iOS)
         if conversationURL.pathExtension == "db" {
             let dbUsage = AntigravityDBUsageParser.parseUsage(dbURL: conversationURL)
             if dbUsage.recordCount > 0 {
@@ -105,6 +106,14 @@ public enum AntigravityUsageParser {
         } else {
             tokens = byteEstimateTokens(probe: probe)
         }
+#else
+        // watchOS / tvOS don't link SQLite3, so AntigravityDBUsageParser
+        // is gated out. Fall back to the byte estimator. The watch app
+        // doesn't ingest Antigravity conversations directly today (it
+        // reads aggregated usage from the paired iPhone), so this path
+        // is unreachable in practice but keeps the cross-platform build.
+        tokens = byteEstimateTokens(probe: probe)
+#endif
 
         return [UsageRecord(
             provider: .gemini,
