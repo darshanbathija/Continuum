@@ -254,6 +254,9 @@ struct ComposerInputCore: View {
                     set: { newAgent in
                         guard newAgent != store.agent else { return }
                         store.resetChipsForAgent(newAgent)
+                        if newAgent == .cursor, store.permissionMode == .plan {
+                            onChangePermissionMode?(.ask)
+                        }
                     }
                 )) {
                     Text("Claude").tag(AgentKind.claude)
@@ -334,7 +337,10 @@ struct ComposerInputCore: View {
     /// (Claude) / `--dangerously-bypass-approvals-and-sandbox` (Codex)
     /// / `--approval-mode yolo` (Gemini).
     private var availablePermissionModes: [PermissionMode] {
-        [.ask, .acceptEdits, .plan, .bypass]
+        if agentForModelPicker == .cursor {
+            return [.ask, .acceptEdits, .bypass]
+        }
+        return [.ask, .acceptEdits, .plan, .bypass]
     }
 
     private var attachButton: some View {

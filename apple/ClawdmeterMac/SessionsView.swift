@@ -627,6 +627,7 @@ public final class SessionsModel: ObservableObject {
     /// via WorktreeManager and spawn the agent there.
     public enum SpawnError: LocalizedError {
         case missingBinary(String)
+        case unsupportedMode(String)
         /// v0.8.0 agy-migration — Antigravity 2 isn't installed / running /
         /// signed in / has-no-project-for-this-repo. Carries the
         /// user-facing CTA string the composer surfaces inline.
@@ -634,6 +635,7 @@ public final class SessionsModel: ObservableObject {
         public var errorDescription: String? {
             switch self {
             case .missingBinary(let m): return m
+            case .unsupportedMode(let m): return m
             case .antigravityNotReady(let m): return m
             }
         }
@@ -680,6 +682,9 @@ public final class SessionsModel: ObservableObject {
                 initialMessage: initialMessage
             )
         }
+        if agent == .cursor, planMode, (resumeSessionId?.isEmpty ?? true) {
+            throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
+        }
         // Fail fast on missing CLIs rather than spawning tmux + the
         // worktree only to error in the agent's pane (where the user
         // can't easily see it without opening the terminal view).
@@ -700,7 +705,7 @@ public final class SessionsModel: ObservableObject {
                 throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
             }
         }
-        let effectivePlanMode = agent == .cursor ? false : planMode
+        let effectivePlanMode = planMode
         try await tmux.start()
         var cwd = repoPath
         var worktreePath: String? = nil
