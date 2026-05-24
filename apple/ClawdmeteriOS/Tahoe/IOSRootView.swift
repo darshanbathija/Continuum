@@ -23,10 +23,16 @@ public struct IOSRootView: View {
     @ObservedObject private var usageModel: UsageModel
     /// Daemon-backed agent client. Drives the Code tab's session list.
     @ObservedObject private var agentClient: AgentControlClient
+    /// v0.26.2 review: outbox is owned by `ClawdmeteriOSApp` and
+    /// observed here. Previously held as `@StateObject` here, which
+    /// was per-WindowGroup-scene on iPad — multiple windows each got
+    /// their own outbox, racing on the persisted `outbox.json`.
+    @ObservedObject private var outbox: MobileCommandOutbox
 
-    public init(usageModel: UsageModel, agentClient: AgentControlClient) {
+    public init(usageModel: UsageModel, agentClient: AgentControlClient, outbox: MobileCommandOutbox) {
         self.usageModel = usageModel
         self.agentClient = agentClient
+        self.outbox = outbox
         _theme = State(initialValue: TahoeThemeStore.loaded())
     }
 
@@ -89,6 +95,7 @@ public struct IOSRootView: View {
         case .sessionDetail(let id):
             IOSSessionDetailView(
                 agentClient: agentClient,
+                outbox: outbox,
                 sessionId: id,
                 data: code,
                 onBack: { pushedScreen = nil }

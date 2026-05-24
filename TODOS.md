@@ -478,7 +478,7 @@ are the explicit deferrals.
 
 ## v2.1 — capability deferrals
 
-### Per-repo model + effort defaults (D7) — SHIPPED 2026-05-23 v0.24.0
+### Per-repo model + effort defaults (D7) — SHIPPED 2026-05-23 v0.26.0
 - **Shipped via**: `WorkspaceStore.workspaces.json` + `AgentControlServer`
   GET /workspaces + PATCH /workspaces/:id. Storage moved from the spec'd
   `~/.clawdmeter/repo-defaults.json` to the unified
@@ -490,7 +490,7 @@ are the explicit deferrals.
   repo" affordance in the iOS new-session sheet is still TODO — the
   storage and wire surface are ready, the picker UI just needs to
   call `AgentControlClient.updateWorkspaceDefaults`.
-- **Completed**: v0.24.0 (2026-05-23)
+- **Completed**: v0.26.0 (2026-05-23, build 129)
 
 ### Voice-first new session creation (D6)
 - **What**: Speak a sentence like "Start a Claude Opus session in

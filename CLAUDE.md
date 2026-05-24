@@ -894,6 +894,204 @@ non-blocking findings (WS reconnect after pick-winner, two-pass
 decode silence, partial-upload degradation, OpencodeAuthFile
 inter-process race, etc.).
 
+## Code V2 control plane (v0.26.0 build 129, 2026-05-23)
+
+Lands as one coordinated ship: the Mac daemon owns durable workspace
+records keyed by canonical repo root, a real idempotency-key outbox
+that prevents iOS retries from double-sending, a MagicDNS-first
+pairing flow that survives sleep/wake and Wi-Fi switching, and the
+six iOS workbench panes finally wired into session detail. Wire
+protocol bumps v15 → v16; every change is additive so older Macs
+keep decoding via `decodeIfPresent`.
+
+### Persisted workspace store
+
+- `apple/ClawdmeterMac/AgentControl/WorkspaceStore.swift` (381 lines).
+  `@MainActor` file-backed registry of `CodeWorkspaceRecord` keyed by
+  canonical repo root. Atomic writes to
+  `~/Library/Application Support/Clawdmeter/workspaces.json` with a v1
+  schema. Stable IDs come from deterministic SHA-256 over the repo
+  path so a record's UUID survives daemon restarts.
+- One-shot migration from `sessions.json`: on first launch with no
+  `workspaces.json`, groups sessions by canonical repo root and seeds
+  `WorkspaceProviderDefaults` from the newest session in each group.
+  Old `sessions.json` is left untouched — the migration is read-only
+  against it.
+- New endpoints: `GET /workspaces` returns the full list,
+  `PATCH /workspaces/:id` updates `WorkspaceProviderDefaults` (model,
+  effort, mode, agent). iOS reads via
+  `AgentControlClient.listWorkspaces()` and
+  `updateWorkspaceDefaults(workspaceId:defaults:)`. The intent: the
+  iOS new-session sheet inherits per-repo defaults so the user
+  doesn't re-pick model+effort every time they spawn an agent in the
+  same repo.
+- `apple/ClawdmeterMacTests/WorkspaceStoreTests.swift` (10 cases)
+  covers round-trip, migration from `sessions.json`, upsert
+  semantics, deterministic-UUID stability across launches, and
+  concurrent write isolation.
+
+### Mobile command outbox with receipt dedup
+
+Server side:
+- `apple/ClawdmeterMac/AgentControl/MobileCommandOutbox.swift` (233
+  lines). Actor with a 256-entry bounded LRU + 24h TTL. Every write
+  endpoint (`/send`, `/approve-plan`, `/interrupt`, `/model`,
+  `/effort`, `/mode`, `/autopilot`, `/ab-pair/pick-winner`,
+  `/create-pr`, `/merge`) routes through
+  `tryReplayIdempotent` / `sendCommandResponse` wrappers. A retried
+  request with the same `MobileCommandEnvelope.idempotencyKey`
+  replays the cached response instead of re-executing the side
+  effect — no double-send, no double-merge.
+- New JSONL audit stream at
+  `~/.clawdmeter/audit/mobile-commands.jsonl` (hashed payload
+  fingerprints, no PII). The outbox replays the last 256 audit
+  entries on daemon startup to re-seed the receipt cache, so a
+  daemon restart still dedups in-flight retries. Replay-hits report
+  `status: .acknowledged` (we already saw this; the side effect
+  already happened) but carry no cached response body — body shape
+  is endpoint-specific and we don't leak content across rotations.
+
+iOS side:
+- `apple/ClawdmeteriOS/AgentControl/MobileCommandOutbox.swift` (411
+  lines). `@MainActor ObservableObject` with a persistent queue at
+  `Application Support/Clawdmeter/outbox.json`. Schema is a flat
+  `{version, pending, failed}` dict; `MobileCommandEnvelope` is
+  Codable so no on-disk migration needed.
+- Exp backoff schedule `[1s, 4s, 15s, 60s, 5min, 30min]`. Beyond
+  index 5 the envelope is parked in `.failed` permanently for user
+  triage. Transient 5xx / network errors retry; 4xx (other than 429)
+  go terminal immediately.
+- `apple/ClawdmeteriOS/Workspace/iOSOutboxPane.swift` (124 lines)
+  surfaces pending + failed envelopes with swipe Retry / Cancel.
+  Reached via a per-session badge in the session detail nav bar.
+- **v0.26 follow-up (this branch):** outbox is now app-scoped
+  `@StateObject` on `IOSRootView`, passed down as `@ObservedObject`
+  to `IOSSessionDetailView`. The original v0.26.0 ship held it as
+  `@StateObject` per-detail-view — on iPad multi-window or rapid
+  session switches two sibling instances could race the persisted
+  `outbox.json`. Hoisting to app scope means one outbox owns the
+  queue for the whole process.
+- **v0.26 follow-up (this branch):** iOS composer / refine / approve
+  callsites now route through `outbox.enqueueSend` /
+  `outbox.enqueueApprovePlan` instead of direct `agentClient` calls.
+  Composer clears immediately on enqueue; offline sends queue +
+  retry with exp backoff; failures surface in the outbox badge
+  instead of getting silently swallowed.
+
+### MagicDNS-first pairing + clawdmeters:// scheme
+
+- `TailscaleHost.resolve()` reordered so MagicDNS hostnames come
+  first when `clawdmeter.pairing.preferMagicDNS` is on (default
+  true). The pairing QR survives IP changes — no more re-scanning
+  after sleep/wake or Wi-Fi switching.
+- Settings → Pairing gains a Connectivity section with two toggles:
+  "Prefer MagicDNS host in pairing QR" and "Use TLS for pairing
+  (advanced)". With `preferTLS` on AND a MagicDNS host present, the
+  QR emits the `clawdmeters://` scheme; iOS `PairingScannerView`
+  accepts both `clawdmeter://` and `clawdmeters://` and persists a
+  `useHTTPS` flag on `PairingChallenge`.
+- Server-side TLS termination is explicitly deferred — the daemon
+  still listens on plain HTTP today. The scheme + iOS flag are
+  forward-compat plumbing for when `tailscale cert` wiring ships
+  separately. Pairing without TLS still works exactly as it did in
+  v0.25.0.
+
+### iOS workbench tabs
+
+- `IOSSessionDetailView` refactored from a single ScrollView into a
+  chip-strip tab bar above content. Six tabs in the new
+  `SessionWorkbenchTab` enum — Chat (custom thread + composer),
+  Plan (`iOSPlanTrackerView`), Diff (`iOSDiffView`), PR
+  (`iOSPRPane`), Terminal (`iOSTerminalTabsView`), Files
+  (`iOSArtifactsPane`).
+- The pane views existed as standalone files since Sessions v2
+  but were never embedded in session navigation. This ship wires
+  them up.
+- Conditional visibility: Plan only when a plan exists, Terminal
+  only when panes are spawned, Files only when artifacts are
+  present. Last-selected tab persists per session in UserDefaults
+  under `clawdmeter.ios.session.<sessionId>.tab`.
+- `iOSPlanTrackerView` gained an `onApprove: (() async -> Void)?`
+  callback so the parent routes through `AgentControlClient`
+  (now via the outbox — see follow-up above).
+
+### Wire v15 → v16 + new client methods
+
+- `AgentControlWireVersion.current` bumped to 16.
+  `workspacesMinimum = 16` gates the workspace endpoints,
+  `mobileOutboxMinimum = 16` gates the idempotent write path. iOS
+  surfaces a banner when paired to a Mac on `< 16` so older daemons
+  degrade visibly instead of failing silently.
+- New DTOs in Protocol.swift: `InterruptRequest`,
+  `UpdateWorkspaceDefaultsRequest`, `WorkspaceListResponse`,
+  `MobileCommandReceipt.jsonDictionary` helper for inlining receipts
+  into ad-hoc JSON response bodies.
+- `MobileCommandKind` cases added: `changeModel`, `changeEffort`,
+  `changeMode`, `setAutopilot`, `pickWinner`, `updateWorkspace`.
+- New typed methods on `AgentControlClient`: `listWorkspaces`,
+  `updateWorkspaceDefaults(workspaceId:defaults:)`, `createPR`,
+  `merge`. These replace ad-hoc URL building in iOS panes.
+- `interruptSession`, `setAutopilot`, `approvePlan` upgraded from
+  `async -> Void` to `@discardableResult async -> Bool` so the
+  outbox can detect offline failures. **The bug this fixed:** the
+  outbox was unconditionally returning `true` for these three
+  commands because the client methods had no return value, so
+  offline interrupts / approvals / autopilot toggles were falsely
+  acknowledged.
+
+### OpenCode + Codex SDK idempotency closures
+
+- `AgentControlServer.handleSendPrompt` OpenCode and Codex SDK
+  delegate paths were bypassing the idempotency record helper —
+  retries would re-execute the side effect even though the
+  framework appeared to dedup. Both now route through
+  `sendCommandResponse` so the recorded receipt actually matches
+  the work that ran.
+
+### Follow-up fixes on this branch (darshanbathija/code-v3)
+
+Five non-v0.26.0-spec'd patches that landed during the post-ship
+review pass:
+
+- **Watch build broken on watchOS — fixed.**
+  `apple/ClawdmeterShared/Sources/ClawdmeterShared/Chat/Views/PermissionPromptCard.swift:157`
+  was selecting `Color(.secondarySystemBackground)` on watchOS where
+  UIKit doesn't expose it. Added `#elseif os(watchOS)` branch with a
+  fixed `Color(white: 0.11)` (matches iOS dark-mode rendering of
+  `secondarySystemBackground`, since watch is always dark).
+  `apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/AntigravityUsageParser.swift:88`
+  was unconditionally calling `AntigravityDBUsageParser.parseUsage`
+  which links SQLite3, also missing on watchOS. Gated behind
+  `#if os(macOS) || os(iOS)` with a byte-estimator fallback for
+  watch/tv builds. The watch app doesn't ingest Antigravity
+  conversations directly today (it reads aggregated usage from the
+  paired iPhone), so the fallback path is unreachable in practice
+  but keeps the cross-platform build clean.
+- **OpencodeAuthFile test flake — fixed.**
+  `OpencodeAuthFile.migrateLegacyEntriesIfNeeded` was scanning the
+  legacy sandbox-container path even when `XDG_DATA_HOME` was set,
+  so `OpencodeAuthFileTests` running with an isolated `XDG_DATA_HOME`
+  could pick up bytes from a process-wide leftover sandbox into the
+  test's "isolated" root. Now: if `XDG_DATA_HOME` is set and
+  non-empty, skip migration entirely. Tests get a clean isolated
+  context; users with explicit XDG opt-out get no transparent
+  migration (their explicit opt-in says they know where their data
+  lives).
+- **App-scoped MobileCommandOutbox + composer routing.**
+  See "iOS side" follow-up bullets above. Both changes are scoped
+  to `IOSRootView.swift` + `IOSSessionDetailView.swift`; the outbox
+  itself is unchanged.
+
+### Tests
+
+- New: `apple/ClawdmeterMacTests/WorkspaceStoreTests.swift` (10),
+  `apple/ClawdmeterMacTests/E2E/WireV14ContractTests.swift` (14),
+  `apple/ClawdmeterMacTests/OpencodeProcessManagerTests.swift` (14).
+- Extended: `apple/ClawdmeterShared/Tests/ClawdmeterSharedTests/AgentControl/WireV11Tests.swift`
+  for wire v16 round-trips (11 cases total).
+- Mac, iOS, and Watch schemes all build clean under
+  `CODE_SIGNING_ALLOWED=NO` after the watchOS gating fix.
+
 ## Style + voice
 
 - Code comments lead with **what + why**, not implementation play-by-play.
