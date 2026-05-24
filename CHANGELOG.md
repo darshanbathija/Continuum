@@ -4,6 +4,16 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.26.5 build 134] - 2026-05-24 — Hotfix: drop macOS-only gate on ClawdmeterRealHome so iOS target builds (`fix/clawdmeter-real-home-ios-compat`)
+
+v0.26.4 shipped the Mac DMG cleanly but the iOS target failed to archive: `UsageHistoryLoader.swift:60: error: cannot find 'ClawdmeterRealHome' in scope`. `UsageHistoryLoader` is in the Shared module so the iOS target compiles it, but `ClawdmeterRealHome.swift` was wrapped in `#if os(macOS)`. iOS users on this version couldn't get a new build at all.
+
+### Fixed
+
+- **`ClawdmeterRealHome.swift`** drops the `#if os(macOS)` gate. `getpwuid` is POSIX and ships on every Darwin platform — on iOS/watchOS it returns the app container home (same value `NSHomeDirectory()` would have returned), which is exactly what we want there (no sandbox container to bypass on iOS, since every iOS app is sandboxed by definition and the user's "real home" isn't a meaningful concept on a phone).
+
+Bumps `MARKETING_VERSION` 0.26.4 → 0.26.5, `CURRENT_PROJECT_VERSION` 133 → 134.
+
 ## [0.26.4 build 133] - 2026-05-24 — Repo count + spend chart wired through ClawdmeterRealHome; suppress libopentui Gatekeeper popup (`fix/usage-tab-completeness`)
 
 After v0.26.2 unblocked the Codex provider tile, the Usage tab still showed three regressions: `0 repos tracked` in the top status bar, an empty `SPEND OVER TIME` chart, and an empty `SPEND BY REPO` panel — even though `~/.claude/projects/` had 112 entries and `~/.codex/sessions/` had hundreds of rollouts on disk. Root cause: two more sandbox-blind call sites that v0.26.2 missed.

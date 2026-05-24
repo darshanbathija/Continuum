@@ -1,4 +1,10 @@
-#if os(macOS)
+// v0.26.5: dropped the `#if os(macOS)` gate.
+// `UsageHistoryLoader` lives in Shared and the iOS target compiles it, so
+// referencing `ClawdmeterRealHome` from there used to fail iOS build with
+// "cannot find 'ClawdmeterRealHome' in scope". `getpwuid` is POSIX and
+// available on every Darwin platform; on iOS / watchOS it returns the
+// app's container home (same as `NSHomeDirectory()`), which is exactly
+// what we want there — there's no "real user home" to bypass.
 import Foundation
 import Darwin
 
@@ -47,4 +53,3 @@ public enum ClawdmeterRealHome {
         URL(fileURLWithPath: path(), isDirectory: true)
     }
 }
-#endif // os(macOS)
