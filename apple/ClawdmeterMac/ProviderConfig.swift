@@ -91,4 +91,22 @@ public struct ProviderConfig: Identifiable, Sendable {
         // bucket exists upstream. Dashboard column hides Weekly limits.
         hasWeeklyWindow: false
     )
+
+    /// v0.28.0: Cursor backed by the api2.cursor.sh gRPC-Web endpoint.
+    /// Auth via the cursor-agent CLI's keychain entries (`cursor-access-token`
+    /// / `cursor-refresh-token`). No reviveModel — Cursor's billing period
+    /// is monthly (not a perpetual 5h rolling window) so AutoReviver
+    /// keep-warm doesn't apply. Dashboard column hides Weekly limits in
+    /// favor of the single billing-period bucket.
+    public static let cursor = ProviderConfig(
+        id: "cursor",
+        displayName: "Cursor",
+        logoAssetName: "CursorLogo",
+        reviveModel: "",
+        reviveEndpoint: URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage")!,
+        reviveAuthVersion: nil,
+        storageKeyPrefix: "clawdmeter.cursor",
+        supportsAutoRevive: AutoReviveSupport.supports("cursor"),
+        hasWeeklyWindow: false
+    )
 }

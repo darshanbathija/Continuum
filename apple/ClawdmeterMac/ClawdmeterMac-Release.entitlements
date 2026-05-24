@@ -102,6 +102,18 @@
 		     forgets every prior session. Read-only is enough; the
 		     migration writer will live in the container going forward. -->
 		<string>/Library/Application Support/Clawdmeter/</string>
+		<!-- v0.28.0: ShellRunner.locateBinary needs to read user-local
+		     CLI installs (cursor-agent, claude, etc.) from ~/.local/bin/
+		     so the Mac app can spawn them. Read-only is enough; we never
+		     install or modify binaries on the user's behalf. -->
+		<string>/.local/bin/</string>
+		<!-- v0.28.0: Cursor agent CLI config + project state. The
+		     CursorTokenProvider reads cursor-agent's keychain entries
+		     (cursor-access-token / cursor-refresh-token) via the
+		     Security framework (not via this entitlement) but future
+		     work that reads ~/.cursor/cli-config.json (for plan auth
+		     metadata) needs the file-system grant here. -->
+		<string>/.cursor/</string>
 	</array>
 	<!-- iCloud KV sync — paid Developer Program only. -->
 	<!--
