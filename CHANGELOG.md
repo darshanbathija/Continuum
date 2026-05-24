@@ -4,7 +4,7 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-## [0.26.4 build 133] - 2026-05-24 — Repo count + spend chart wired through ClawdmeterRealHome (`fix/usage-tab-completeness`)
+## [0.26.4 build 133] - 2026-05-24 — Repo count + spend chart wired through ClawdmeterRealHome; suppress libopentui Gatekeeper popup (`fix/usage-tab-completeness`)
 
 After v0.26.2 unblocked the Codex provider tile, the Usage tab still showed three regressions: `0 repos tracked` in the top status bar, an empty `SPEND OVER TIME` chart, and an empty `SPEND BY REPO` panel — even though `~/.claude/projects/` had 112 entries and `~/.codex/sessions/` had hundreds of rollouts on disk. Root cause: two more sandbox-blind call sites that v0.26.2 missed.
 
@@ -17,6 +17,8 @@ After v0.26.2 unblocked the Codex provider tile, the Usage tab still showed thre
 - **`ClawdmeterMac-Release.entitlements`** adds two more read-only sandbox exceptions:
   - `/.claude/` — Anthropic CLI's `projects/` jsonls (the v0.26.2 entitlement list covered `/.codex/`, `/.gemini/`, `/.local/share/opencode/`, and `/Library/Application Support/Antigravity/` but missed Anthropic entirely because Claude itself had been working — turns out *only* via the `PastedAnthropicTokenProvider` keychain path, while `RepoIndex` and `UsageHistoryLoader` silently lost Claude data).
   - `/Library/Application Support/Clawdmeter/` — Clawdmeter's own pre-sandbox sessions.json + workspaces.json. Users who ran an earlier non-sandboxed build have 90+ tracked sessions in the real path; the new sandboxed app now reads them instead of starting fresh in the container.
+
+- **`apple/ClawdmeterMac/Info.plist`** sets `LSFileQuarantineEnabled = false`. The bundled `Contents/Resources/Vendor/opencode/opencode` is a Bun single-file executable that extracts an ad-hoc-signed `libopentui.dylib` to the app's sandbox tmp dir on every launch (under a content-hashed name like `.bbb6fbfdedbffead-00000000.dylib`). With the default LaunchServices behavior, macOS auto-stamps `com.apple.quarantine: 0086;<ts>;Clawdmeter;` on that file; opencode then dlopens it and Gatekeeper trips with "Apple could not verify '.bbb6fbfdedbffead-00000000.dylib' is free of malware" — fired on every Code-tab session start. Opting out of LSQuarantine is the standard fix for apps that host their own trusted bundled runtime (browsers, IDEs, language runtimes all do this); the app itself stays sandboxed so blast radius is unchanged.
 
 ### Known limitation
 
