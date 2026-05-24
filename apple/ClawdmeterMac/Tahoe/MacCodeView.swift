@@ -2068,12 +2068,10 @@ private struct ReviewPane: View {
     @ViewBuilder
     private var prTab: some View {
         if let runtime, let agentSession = agentSession() {
-            // SessionsModel.prMirror(for:) returns a non-nil PRMirror
-            // singleton per session — it auto-detects PR URLs from the
-            // chat transcript and polls `gh pr view --json`.
             PRReviewPane(
                 session: agentSession,
-                mirror: runtime.sessionsModel.prMirror(for: agentSession)
+                coordinator: runtime.sessionsModel.prCoordinator(for: agentSession),
+                onBeforeMerge: nil
             )
         } else if let transcript = previewTranscript {
             // v0.22.31: JSONL preview — scan transcript for github

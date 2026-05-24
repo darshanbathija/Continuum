@@ -159,6 +159,13 @@ public final class ComposerStore: ObservableObject {
         }
     }
 
+    public func restoreDraft(text: String, attachments: [Attachment], error: SendError? = nil) {
+        self.text = text
+        self.attachments = attachments
+        self.lastError = error
+        self.isSending = false
+    }
+
     /// Reset chip state for a fresh repo. Used by the empty-state composer
     /// when the user changes the repo selector (4A decision).
     public func resetChipsForRepo(_ key: String?, defaults: ChipDefaults) {
@@ -225,8 +232,8 @@ public final class ComposerStore: ObservableObject {
     /// Called when the user toggles the agent picker in the composer —
     /// the model chip + effort dial reset so the user doesn't end up
     /// shipping a Codex turn to Gemini.
-    public func resetChipsForAgent(_ agent: AgentKind) {
-        let defaults = ChipDefaults.for(agent: agent)
+    public func resetChipsForAgent(_ agent: AgentKind, catalog: ModelCatalog = .bundled) {
+        let defaults = ChipDefaults.for(agent: agent, catalog: catalog)
         self.agent = agent
         self.modelId = defaults.modelId
         self.effort = defaults.effort

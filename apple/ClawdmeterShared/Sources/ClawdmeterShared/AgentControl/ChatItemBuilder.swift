@@ -39,6 +39,13 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
     /// interactive tappable tray that replaces the generic "Ran 1
     /// command" card for AskUserQuestion calls. Nil for any other tool.
     public let askUserQuestion: AskUserQuestion?
+    /// Optional structured edit payload. `editStats` stays for the compact
+    /// existing row; this richer shape carries capped preview/diff data for
+    /// detailed rows and future restore/checkpoint flows.
+    public let editDiff: EditDiff?
+    /// Optional structured shell payload. Providers only populate fields
+    /// they actually expose; missing cwd/duration/stderr remain nil.
+    public let bashResult: BashResult?
 
     public init(
         id: String,
@@ -49,7 +56,9 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
         at: Date,
         isError: Bool = false,
         editStats: EditStats? = nil,
-        askUserQuestion: AskUserQuestion? = nil
+        askUserQuestion: AskUserQuestion? = nil,
+        editDiff: EditDiff? = nil,
+        bashResult: BashResult? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -60,6 +69,8 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
         self.isError = isError
         self.editStats = editStats
         self.askUserQuestion = askUserQuestion
+        self.editDiff = editDiff
+        self.bashResult = bashResult
     }
 
     // Custom Decodable init so v0 messages persisted before the editStats
@@ -76,10 +87,12 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
         self.isError = (try? c.decode(Bool.self, forKey: .isError)) ?? false
         self.editStats = try c.decodeIfPresent(EditStats.self, forKey: .editStats)
         self.askUserQuestion = try c.decodeIfPresent(AskUserQuestion.self, forKey: .askUserQuestion)
+        self.editDiff = try c.decodeIfPresent(EditDiff.self, forKey: .editDiff)
+        self.bashResult = try c.decodeIfPresent(BashResult.self, forKey: .bashResult)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, title, body, detail, at, isError, editStats, askUserQuestion
+        case id, kind, title, body, detail, at, isError, editStats, askUserQuestion, editDiff, bashResult
     }
 }
 

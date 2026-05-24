@@ -837,3 +837,13 @@ scenarios, or pre-existing system properties and deferred here.
   empty `key` field, merge keeps canonical (which is broken) instead
   of preferring legacy. Fix: prefer legacy when canonical entry's
   `key` is missing or empty. **Effort**: ~15min CC.
+
+## Not In Scope Follow-Ups (Desktop Code Tab, 2026-05-24)
+
+- [ ] iOS/watch Code tab parity.
+- [ ] Fake cloud or SSH environments.
+- [ ] Cursor plan mode without reliable resumable runtime IDs.
+- [ ] Full historical backfill of old transcript rows that lack raw edit payloads.
+- [ ] Tree-sitter/SwiftSyntax as a Phase 3 blocker.
+- [ ] Replacing `SessionWorkspaceView` with a new workbench shell.
+- [ ] Shipping PR/check/run UI that is not backed by real local or daemon state.

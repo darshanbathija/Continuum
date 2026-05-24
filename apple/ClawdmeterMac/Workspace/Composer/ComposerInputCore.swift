@@ -21,7 +21,11 @@ struct ComposerInputCore: View {
     let catalog: ModelCatalog
     let agentForModelPicker: AgentKind
     let modelSupportsEffort: Bool
+    var availableAgents: [AgentKind] = [.claude, .codex, .gemini, .cursor]
     let onSend: () -> Void
+    /// Queue delegate. Bound running sessions use this to stage a follow-up
+    /// without interrupting the active turn.
+    var onQueue: (() -> Void)?
     /// Stop-or-send delegate. When non-nil and the bound session is running,
     /// the send button transforms into a stop button that calls this.
     var onInterrupt: (() -> Void)?
@@ -253,19 +257,18 @@ struct ComposerInputCore: View {
                     get: { store.agent },
                     set: { newAgent in
                         guard newAgent != store.agent else { return }
-                        store.resetChipsForAgent(newAgent)
+                        store.resetChipsForAgent(newAgent, catalog: catalog)
                         if newAgent == .cursor, store.permissionMode == .plan {
                             onChangePermissionMode?(.ask)
                         }
                     }
                 )) {
-                    Text("Claude").tag(AgentKind.claude)
-                    Text("Codex").tag(AgentKind.codex)
-                    Text("Gemini").tag(AgentKind.gemini)
-                    Text("Cursor").tag(AgentKind.cursor)
+                    ForEach(availableAgents, id: \.self) { agent in
+                        Text(agent.tahoeProvider.displayName).tag(agent)
+                    }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 260)
+                .frame(width: CGFloat(max(3, availableAgents.count)) * 78)
                 .labelsHidden()
             }
 
@@ -409,14 +412,27 @@ struct ComposerInputCore: View {
     @ViewBuilder
     private var sendOrStopButton: some View {
         if !isReadOnly, sessionIsRunning, let onInterrupt {
-            Button(action: onInterrupt) {
-                Image(systemName: "stop.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(terraCotta)
+            VStack(spacing: 8) {
+                if let onQueue {
+                    Button(action: onQueue) {
+                        Image(systemName: store.isSending ? "tray.and.arrow.down" : "tray.and.arrow.down.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(store.canSend && !store.isSending ? terraCotta : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.return, modifiers: [.option])
+                    .disabled(!store.canSend || store.isSending)
+                    .help("Queue follow-up (⌥↩)")
+                }
+                Button(action: onInterrupt) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(terraCotta)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(".", modifiers: [.command])
+                .help("Stop the running prompt (⌘.)")
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut(".", modifiers: [.command])
-            .help("Stop the running prompt (⌘.)")
         } else {
             Button(action: onSend) {
                 Image(systemName: store.isSending ? "arrow.up.circle" : "arrow.up.circle.fill")
@@ -455,6 +471,9 @@ struct ComposerInputCore: View {
     private var textFieldPlaceholder: String {
         switch store.modeKind {
         case .bound:
+            if sessionIsRunning && onQueue != nil {
+                return "Queue a follow-up while this turn runs   (⌥↩)"
+            }
             return "Continue the session here   (⌘↩ to send)"
         case .emptyState:
             if let repo = store.repoKey, !repo.isEmpty {

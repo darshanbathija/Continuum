@@ -188,13 +188,17 @@ public enum CodexJSONLParser {
         // Codex emits a `call_id` field at the payload level for pairing
         // with the matching function_call_output.
         let callId = (payload["call_id"] as? String) ?? baseId
+        let editDiff = inputDict.flatMap { EditDiff.fromCodexInput($0, toolName: name) }
+        let bashResult = inputDict.flatMap { BashResult.fromToolCallInput($0, toolName: name) }
         return [ChatMessage(
             id: "call:\(callId)",
             kind: .toolCall,
             title: name,
             body: summary,
             detail: detail,
-            at: at
+            at: at,
+            editDiff: editDiff,
+            bashResult: bashResult
         )]
     }
 
@@ -209,6 +213,15 @@ public enum CodexJSONLParser {
            let inner = obj["output"] as? String {
             body = inner
         }
+        let bashResult: BashResult? = {
+            guard let data = output.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return nil }
+            guard obj["exit_code"] != nil || obj["exitCode"] != nil || obj["stdout"] != nil || obj["stderr"] != nil else {
+                return nil
+            }
+            return BashResult.fromOutputEnvelope(obj, fallbackOutput: body)
+        }()
         // Cap chat-row body at 4KB; users expand the disclosure for the
         // full thing.
         let fullBody = body
@@ -224,7 +237,8 @@ public enum CodexJSONLParser {
             title: "Tool result",
             body: body,
             detail: detail,
-            at: at
+            at: at,
+            bashResult: bashResult
         )]
     }
 

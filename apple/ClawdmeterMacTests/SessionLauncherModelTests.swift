@@ -1,0 +1,127 @@
+import XCTest
+import ClawdmeterShared
+@testable import Clawdmeter
+
+@MainActor
+final class SessionLauncherModelTests: XCTestCase {
+
+    func test_selectableAgentsOnlyIncludesReadyDynamicProviders() {
+        XCTAssertEqual(
+            SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability()),
+            [.claude, .codex, .gemini]
+        )
+        XCTAssertEqual(
+            SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability(opencodeReady: true)),
+            [.claude, .codex, .gemini, .opencode]
+        )
+        XCTAssertEqual(
+            SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability(cursorReady: true)),
+            [.claude, .codex, .gemini, .cursor]
+        )
+        XCTAssertEqual(
+            SessionLauncherModel.selectableAgents(
+                for: SessionLauncherAvailability(opencodeReady: true, cursorReady: true)
+            ),
+            [.claude, .codex, .gemini, .opencode, .cursor]
+        )
+    }
+
+    func test_liveCursorCatalogDrivesDefaultsAndEffort() {
+        let liveCursor = ModelCatalogEntry(
+            id: "cursor-gpt-5-5",
+            provider: .cursor,
+            displayName: "Cursor GPT-5.5",
+            supportsThinking: true,
+            supportsEffort: false,
+            contextWindow: 200_000,
+            recommendedFor: "Live account",
+            badge: "Live"
+        )
+        let catalog = ModelCatalog.bundled.replacingCursor([liveCursor])
+        let launcher = SessionLauncherModel(
+            modelCatalog: catalog,
+            availability: SessionLauncherAvailability(cursorReady: true)
+        )
+
+        XCTAssertEqual(launcher.defaultModelId(for: .cursor), "cursor-gpt-5-5")
+        XCTAssertFalse(launcher.supportsEffort(modelId: "cursor-gpt-5-5"))
+        XCTAssertEqual(
+            launcher.resolvedModelId(for: .cursor, selectedModelId: "missing-cursor-model"),
+            "cursor-gpt-5-5"
+        )
+    }
+
+    func test_composerAgentResetUsesInjectedCatalog() {
+        let liveCursor = ModelCatalogEntry(
+            id: "cursor-account-default",
+            provider: .cursor,
+            displayName: "Cursor Account Default",
+            supportsThinking: true,
+            supportsEffort: false
+        )
+        let catalog = ModelCatalog.bundled.replacingCursor([liveCursor])
+        let store = ComposerStore(mode: .emptyState(repoKey: nil, agent: .claude))
+
+        store.resetChipsForAgent(.cursor, catalog: catalog)
+
+        XCTAssertEqual(store.agent, .cursor)
+        XCTAssertEqual(store.modelId, "cursor-account-default")
+        XCTAssertNil(store.effort)
+    }
+
+    func test_restoreDraftPreservesPromptForRetry() {
+        let attachment = ComposerStore.Attachment(
+            sourceURL: URL(fileURLWithPath: "/tmp/design.png"),
+            displayName: "design.png",
+            byteSize: 123,
+            isImage: true
+        )
+        let store = ComposerStore(mode: .bound(sessionId: UUID()))
+
+        store.restoreDraft(
+            text: "retry this prompt",
+            attachments: [attachment],
+            error: .daemonError(message: "Session started, but send failed.")
+        )
+
+        XCTAssertEqual(store.text, "retry this prompt")
+        XCTAssertEqual(store.attachments, [attachment])
+        XCTAssertEqual(store.lastError, .daemonError(message: "Session started, but send failed."))
+        XCTAssertFalse(store.isSending)
+    }
+
+    func test_firstSendRecoveryIsScopedToPromotedSession() {
+        let registryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SessionLauncherModelTests-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: registryURL) }
+        let registry = AgentSessionRegistry(storeURL: registryURL)
+        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
+        let model = SessionsModel(
+            repoIndex: RepoIndex(),
+            registry: registry,
+            supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
+        )
+        let promotedSessionId = UUID()
+        let attachment = ComposerStore.Attachment(
+            sourceURL: URL(fileURLWithPath: "/tmp/spec.md"),
+            displayName: "spec.md",
+            byteSize: 48,
+            isImage: false
+        )
+        let error = ComposerStore.SendError.daemonError(message: "Safety checkpoint failed. Prompt was not sent.")
+
+        model.queueFirstSendRecovery(
+            sessionId: promotedSessionId,
+            text: "resume and continue",
+            attachments: [attachment],
+            error: error
+        )
+
+        XCTAssertEqual(model.pendingFirstSendRecoveryVersion, 1)
+        let recovery = model.takeFirstSendRecovery(sessionId: promotedSessionId)
+        XCTAssertEqual(recovery?.text, "resume and continue")
+        XCTAssertEqual(recovery?.attachments, [attachment])
+        XCTAssertEqual(recovery?.error, error)
+        XCTAssertNil(model.takeFirstSendRecovery(sessionId: promotedSessionId))
+    }
+}

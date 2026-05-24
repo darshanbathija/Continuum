@@ -1023,6 +1023,11 @@ struct ParsedLine: Sendable {
                     // "Edited <file> +N -M" chip instead of folding
                     // into the generic "Ran N commands" card.
                     let editStats = EditStats.fromClaudeInput(block["input"], toolName: name)
+                    let editDiff = EditDiff.fromClaudeInput(block["input"], toolName: name)
+                    let bashResult: BashResult? = {
+                        guard let dict = block["input"] as? [String: Any] else { return nil }
+                        return BashResult.fromToolCallInput(dict, toolName: name)
+                    }()
                     // v0.5.6: AskUserQuestion lands as an interactive
                     // tappable tray instead of "Ran 1 command". Parsed
                     // here from the raw input dict so the view doesn't
@@ -1034,7 +1039,9 @@ struct ParsedLine: Sendable {
                         id: "call:\(toolUseId)", kind: .toolCall, title: name,
                         body: inputSummary, detail: inputDetail, at: at,
                         editStats: editStats,
-                        askUserQuestion: askUserQuestion
+                        askUserQuestion: askUserQuestion,
+                        editDiff: editDiff,
+                        bashResult: bashResult
                     ))
                 default:
                     break

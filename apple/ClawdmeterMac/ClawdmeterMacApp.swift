@@ -110,9 +110,9 @@ struct ClawdmeterMacApp: App {
                 // v0.22.19: ⌘K flips to the Code tab and focuses the
                 // sidebar Search field. The button shows "Search Code"
                 // in the View menu so it's discoverable + matches the
-                // existing CommandMenu pattern. The Sidebar listens
-                // for the .clawdmeterFocusCodeSearch notification and
-                // bumps its @FocusState.
+                // existing CommandMenu pattern. MacRootView bridges
+                // this app-level notification to the live workspace
+                // sidebar's focus notification after switching tabs.
                 Button("Search Code") {
                     NotificationCenter.default.post(
                         name: .clawdmeterSwitchTab,

@@ -19,6 +19,31 @@ public struct SessionSidebarGroup: Identifiable, Hashable {
     public var isEmpty: Bool { sessions.isEmpty && recents.isEmpty }
 }
 
+public enum SessionSidebarStatusBucket: String, CaseIterable, Sendable {
+    case active
+    case inReview
+    case done
+    case archived
+
+    public var title: String {
+        switch self {
+        case .active: return "Active"
+        case .inReview: return "In Review"
+        case .done: return "Done"
+        case .archived: return "Archived"
+        }
+    }
+
+    public var sortRank: Int {
+        switch self {
+        case .active: return 0
+        case .inReview: return 1
+        case .done: return 2
+        case .archived: return 3
+        }
+    }
+}
+
 /// Bucketing + sorting helpers that map the registry's flat session list
 /// (+ per-repo recent JSONLs) into the sidebar's section structure.
 /// Pure logic, no SwiftUI — testable from the shared package.
@@ -33,16 +58,18 @@ public enum SessionSidebarGrouper {
         repos: [AgentRepo],
         grouping: SessionGrouping,
         sorting: SessionSorting,
-        statusFilter: SessionStatusFilter
+        statusFilter: SessionStatusFilter,
+        reviewSessionIds: Set<UUID> = [],
+        now: Date = Date()
     ) -> [SessionSidebarGroup] {
-        let filtered = sessions.filter { passes(statusFilter, $0) }
+        let filtered = sessions.filter { passes(statusFilter, $0, reviewSessionIds: reviewSessionIds, now: now) }
         switch grouping {
         case .repo:
             return groupByRepo(sessions: filtered, repos: repos, sorting: sorting)
         case .date:
             return groupByDate(sessions: filtered, repos: repos, sorting: sorting)
         case .status:
-            return groupByStatus(sessions: filtered, sorting: sorting)
+            return groupByStatus(sessions: filtered, sorting: sorting, reviewSessionIds: reviewSessionIds, now: now)
         case .agent:
             return groupByAgent(sessions: filtered, repos: repos, sorting: sorting)
         case .none:
@@ -57,16 +84,42 @@ public enum SessionSidebarGrouper {
         }
     }
 
-    private static func passes(_ filter: SessionStatusFilter, _ session: AgentSession) -> Bool {
+    public static func bucket(
+        for session: AgentSession,
+        reviewSessionIds: Set<UUID> = [],
+        now: Date = Date()
+    ) -> SessionSidebarStatusBucket {
+        if session.archivedAt != nil {
+            return .archived
+        }
+        if session.planText != nil || reviewSessionIds.contains(session.id) {
+            return .inReview
+        }
+        if session.status == .done {
+            return .done
+        }
+        if session.status == .running || now.timeIntervalSince(session.lastEventAt) < 30 {
+            return .active
+        }
+        return .active
+    }
+
+    private static func passes(
+        _ filter: SessionStatusFilter,
+        _ session: AgentSession,
+        reviewSessionIds: Set<UUID>,
+        now: Date
+    ) -> Bool {
         switch filter {
         case .all: return true
         case .active:
-            return [.planning, .running, .paused].contains(session.status)
-                && session.archivedAt == nil
+            return bucket(for: session, reviewSessionIds: reviewSessionIds, now: now) == .active
+        case .inReview:
+            return bucket(for: session, reviewSessionIds: reviewSessionIds, now: now) == .inReview
         case .done:
-            return session.status == .done && session.archivedAt == nil
+            return bucket(for: session, reviewSessionIds: reviewSessionIds, now: now) == .done
         case .archived:
-            return session.archivedAt != nil
+            return bucket(for: session, reviewSessionIds: reviewSessionIds, now: now) == .archived
         }
     }
 
@@ -167,24 +220,21 @@ public enum SessionSidebarGrouper {
 
     private static func groupByStatus(
         sessions: [AgentSession],
-        sorting: SessionSorting
+        sorting: SessionSorting,
+        reviewSessionIds: Set<UUID>,
+        now: Date
     ) -> [SessionSidebarGroup] {
-        let order: [(AgentSessionStatus, Int)] = [
-            (.running, 0), (.planning, 1), (.paused, 2),
-            (.degraded, 3), (.done, 4)
-        ]
-        var buckets: [AgentSessionStatus: [AgentSession]] = [:]
+        var buckets: [SessionSidebarStatusBucket: [AgentSession]] = [:]
         for s in sessions {
-            buckets[s.status, default: []].append(s)
+            buckets[bucket(for: s, reviewSessionIds: reviewSessionIds, now: now), default: []].append(s)
         }
-        return order.compactMap { (status, rank) in
-            guard let items = buckets[status], !items.isEmpty else { return nil }
-            return SessionSidebarGroup(
-                id: "status:\(status.rawValue)",
-                title: status.rawValue.capitalized,
+        return SessionSidebarStatusBucket.allCases.map { bucket in
+            SessionSidebarGroup(
+                id: "status:\(bucket.rawValue)",
+                title: bucket.title,
                 repoKey: nil,
-                sortRank: rank,
-                sessions: sorted(items, by: sorting),
+                sortRank: bucket.sortRank,
+                sessions: sorted(buckets[bucket] ?? [], by: sorting),
                 recents: []  // recents have no status field
             )
         }

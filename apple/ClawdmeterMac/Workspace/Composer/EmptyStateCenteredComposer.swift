@@ -11,14 +11,16 @@ import ClawdmeterShared
 struct EmptyStateCenteredComposer: View {
 
     @ObservedObject var model: SessionsModel
+    @ObservedObject var launcher: SessionLauncherModel
     @StateObject private var store: ComposerStore = {
         let s = ComposerStore(mode: .emptyState(repoKey: nil, agent: .claude))
         s.resetChipsForRepo(nil, defaults: .default)
         return s
     }()
 
-    init(model: SessionsModel) {
+    init(model: SessionsModel, launcher: SessionLauncherModel) {
         self.model = model
+        self.launcher = launcher
     }
 
     var body: some View {
@@ -34,14 +36,16 @@ struct EmptyStateCenteredComposer: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
+            quickChips
             VStack(spacing: 0) {
                 repoPickerRow
                 Divider()
                 ComposerInputCore(
                     store: store,
-                    catalog: .bundled,
+                    catalog: launcher.modelCatalog,
                     agentForModelPicker: store.agent,
                     modelSupportsEffort: modelSupportsEffort,
+                    availableAgents: launcher.selectableAgents,
                     onSend: { Task { await firstSend() } },
                     onChangePermissionMode: { newMode in
                         store.permissionMode = newMode
@@ -63,8 +67,15 @@ struct EmptyStateCenteredComposer: View {
         .onAppear {
             // Seed repo to the most recently active one if available.
             if store.repoKey == nil, let firstRepo = model.repos.first {
-                store.resetChipsForRepo(firstRepo.key, defaults: .default)
+                store.resetChipsForRepo(firstRepo.key, defaults: launcher.chipDefaults(for: .claude))
             }
+            launcher.normalize(store)
+        }
+        .onChange(of: launcher.availability) { _, _ in
+            launcher.normalize(store)
+        }
+        .onChange(of: launcher.modelCatalog.updatedAt) { _, _ in
+            launcher.normalize(store)
         }
         .onReceive(NotificationCenter.default.publisher(for: .composeDraftIncoming)) { note in
             applyIncomingDraft(note: note)
@@ -87,7 +98,7 @@ struct EmptyStateCenteredComposer: View {
                 get: { store.repoKey ?? "" },
                 set: { newKey in
                     let key = newKey.isEmpty ? nil : newKey
-                    store.resetChipsForRepo(key, defaults: .default)
+                    store.resetChipsForRepo(key, defaults: launcher.chipDefaults(for: .claude))
                 }
             )) {
                 Text("(custom path)").tag("")
@@ -106,11 +117,43 @@ struct EmptyStateCenteredComposer: View {
         .padding(.vertical, 10)
     }
 
+    private var quickChips: some View {
+        HStack(spacing: 6) {
+            quickChip("Plan a feature", systemImage: "list.bullet.rectangle", template: "Plan a feature: ")
+            quickChip("Fix a bug", systemImage: "exclamationmark.triangle", template: "Fix a bug: ")
+            quickChip("Refactor", systemImage: "wrench.and.screwdriver", template: "Refactor: ")
+            quickChip("Ask a question", systemImage: "questionmark.bubble", template: "Question: ")
+            if let lastPrompt {
+                quickChip("Use last prompt", systemImage: "clock.arrow.circlepath", template: lastPrompt)
+            }
+        }
+        .frame(maxWidth: 760, alignment: .center)
+    }
+
+    private var lastPrompt: String? {
+        model.registry.sessions
+            .sorted { $0.lastEventAt > $1.lastEventAt }
+            .compactMap { $0.goal?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private func quickChip(_ title: String, systemImage: String, template: String) -> some View {
+        Button {
+            store.text = template
+        } label: {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+    }
+
     private var modelSupportsEffort: Bool {
-        guard let id = store.modelId,
-              let entry = ModelCatalog.bundled.entry(forId: id)
-        else { return true }
-        return entry.supportsEffort
+        launcher.supportsEffort(modelId: store.modelId)
     }
 
     private var panelBg: Color {
@@ -122,6 +165,10 @@ struct EmptyStateCenteredComposer: View {
     @MainActor
     private func firstSend() async {
         store.beginSend()
+        launcher.normalize(store)
+        let draftText = store.text
+        let draftAttachments = store.attachments
+        var spawnedSession: AgentSession?
         guard let runtime = AppDelegate.runtime else {
             store.endSend(error: .offline)
             return
@@ -169,10 +216,13 @@ struct EmptyStateCenteredComposer: View {
                 goal: goal,
                 mode: store.mode,
                 tmux: runtime.tmuxClient,
+                model: store.modelId,
+                effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil,
                 acceptEdits: store.permissionMode == .acceptEdits,
                 autopilot: bypassPicked,
                 initialMessage: initialBody.isEmpty ? nil : initialBody
             )
+            spawnedSession = session
             // Record the empty-state composer's mode pick on the session
             // so the chip in the bound view reflects it without needing
             // an extra round-trip.
@@ -207,10 +257,47 @@ struct EmptyStateCenteredComposer: View {
             }
             store.endSend()
         } catch let err as MacComposerSender.Error {
-            store.endSend(error: .daemonError(message: err.localizedDescription))
+            let error = ComposerStore.SendError.daemonError(
+                message: "Session started, but the first message did not send: \(err.localizedDescription)"
+            )
+            recoverDraftIfNeeded(
+                session: spawnedSession,
+                text: draftText,
+                attachments: draftAttachments,
+                error: error
+            )
         } catch {
-            store.endSend(error: .spawnFailed(message: error.localizedDescription))
+            if let spawnedSession {
+                recoverDraftIfNeeded(
+                    session: spawnedSession,
+                    text: draftText,
+                    attachments: draftAttachments,
+                    error: .daemonError(
+                        message: "Session started, but the first message did not send: \(error.localizedDescription)"
+                    )
+                )
+            } else {
+                store.endSend(error: .spawnFailed(message: error.localizedDescription))
+            }
         }
+    }
+
+    @MainActor
+    private func recoverDraftIfNeeded(
+        session: AgentSession?,
+        text: String,
+        attachments: [ComposerStore.Attachment],
+        error: ComposerStore.SendError
+    ) {
+        if let session {
+            model.queueFirstSendRecovery(
+                sessionId: session.id,
+                text: text,
+                attachments: attachments,
+                error: error
+            )
+        }
+        store.endSend(error: error)
     }
 
     private func applyIncomingDraft(note: Notification) {
@@ -220,5 +307,6 @@ struct EmptyStateCenteredComposer: View {
         if let agent = draft.suggestedAgent { store.agent = agent }
         if let model = draft.suggestedModel { store.modelId = model }
         if let effort = draft.suggestedEffort { store.effort = effort }
+        launcher.normalize(store)
     }
 }

@@ -902,6 +902,7 @@ public enum SessionSorting: String, Codable, CaseIterable, Sendable {
 public enum SessionStatusFilter: String, Codable, CaseIterable, Sendable {
     case all
     case active
+    case inReview
     case done
     case archived
 
@@ -909,6 +910,7 @@ public enum SessionStatusFilter: String, Codable, CaseIterable, Sendable {
         switch self {
         case .all:      return "All"
         case .active:   return "Active"
+        case .inReview: return "In Review"
         case .done:     return "Done"
         case .archived: return "Archived"
         }
