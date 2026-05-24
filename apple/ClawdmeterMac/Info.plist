@@ -20,6 +20,31 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<!--
+	  v0.26.4: Opt OUT of LaunchServices auto-quarantining files we write.
+
+	  Why: Clawdmeter bundles `opencode` (a Bun single-file executable) at
+	  Contents/Resources/Vendor/opencode/opencode. On every launch, opencode
+	  extracts an ad-hoc-signed `libopentui.dylib` to the app's sandbox tmp
+	  dir under a content-hashed name (e.g. `.bbb6fbfdedbffead-00000000.dylib`).
+	  By default macOS stamps `com.apple.quarantine: 0086;<ts>;Clawdmeter;`
+	  on any executable code a sandboxed app writes — so when opencode then
+	  dlopens that dylib, Gatekeeper sees (quarantine xattr) + (ad-hoc
+	  signature, no team identifier) + (filename `.bbb6...dylib`) and shows
+	  the "Apple could not verify '.bbb6fbfdedbffead-00000000.dylib' is free
+	  of malware" alert on every Code-tab session start.
+
+	  Setting LSFileQuarantineEnabled = false tells LaunchServices NOT to
+	  auto-quarantine files this app creates. This is the standard opt-out
+	  for apps that act as trusted runtime hosts for their own bundled
+	  binaries (browsers, IDEs, package managers, language runtimes do
+	  this — opencode/Bun/Node all expect it). The app itself remains
+	  sandboxed (see ClawdmeterMac-Release.entitlements), so the blast
+	  radius of any code we spawn is still bounded by our entitlements;
+	  this key only changes the default xattr on freshly-written files.
+	-->
+	<key>LSFileQuarantineEnabled</key>
+	<false/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Clawdmeter contributors.</string>
 	<key>NSMicrophoneUsageDescription</key>

@@ -51,7 +51,13 @@ public actor UsageHistoryLoader {
         cacheURL: URL? = nil,
         pricing: Pricing = .shared
     ) {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
+        // v0.26.3: ClawdmeterRealHome (getpwuid) rather than NSHomeDirectory()
+        // so the sandboxed Release build resolves spend-history source
+        // paths (~/.claude/projects/, ~/.codex/sessions/, ~/.gemini/...) to
+        // the user's real home instead of the empty sandbox container. The
+        // Release entitlements grant read-only access to /.claude/,
+        // /.codex/, /.gemini/ — see ClawdmeterMac-Release.entitlements.
+        let home = ClawdmeterRealHome.url()
         self.claudeDir = claudeDir ?? home.appendingPathComponent(".claude/projects", isDirectory: true)
         self.codexDir = codexDir ?? home.appendingPathComponent(".codex/sessions", isDirectory: true)
         // v0.6.0: Antigravity 2 native. Replaces Gemini CLI v0.42's

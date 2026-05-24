@@ -107,7 +107,13 @@ public actor RepoIndex {
             os_signpost(.end, log: chatPerfLog, name: "repo-refresh",
                         signpostID: signpostID)
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        // v0.26.3: ClawdmeterRealHome (getpwuid) rather than
+        // homeDirectoryForCurrentUser so the sandboxed Release build
+        // reads /Users/<you>/.claude/projects + /Users/<you>/.codex/sessions
+        // (where the CLIs actually write rollouts) instead of the empty
+        // container path. The Release entitlements grant read-only access
+        // to /.claude/ and /.codex/ — see ClawdmeterMac-Release.entitlements.
+        let home = ClawdmeterRealHome.url()
         var keysSeen = Set<String>()
         var displayNames: [String: String] = [:]
         /// Per repo: how many JSONL files have been touched in the last

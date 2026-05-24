@@ -83,6 +83,10 @@
 		<!-- Codex CLI: auth.json, sessions/*.jsonl rollouts (rate_limits source),
 		     config.toml, projects/ -->
 		<string>/.codex/</string>
+		<!-- v0.26.3: Anthropic CLI projects directory — RepoIndex and
+		     UsageHistoryLoader walk ~/.claude/projects/<encoded-cwd>/*.jsonl
+		     for the "X repos tracked" count + the SPEND OVER TIME chart. -->
+		<string>/.claude/</string>
 		<!-- Gemini CLI + Antigravity sidecar: antigravity/conversations DB,
 		     config/projects, tmp/ -->
 		<string>/.gemini/</string>
@@ -91,6 +95,13 @@
 		<string>/.local/share/opencode/</string>
 		<!-- Antigravity 2 desktop app: native conversation DB + brain/ dir. -->
 		<string>/Library/Application Support/Antigravity/</string>
+		<!-- v0.26.3: Clawdmeter's own pre-sandbox state — sessions.json,
+		     workspaces.json. Users who ran an older non-sandboxed build
+		     have 90+ sessions in the real path; without this exception
+		     the new sandboxed app writes to the container instead and
+		     forgets every prior session. Read-only is enough; the
+		     migration writer will live in the container going forward. -->
+		<string>/Library/Application Support/Clawdmeter/</string>
 	</array>
 	<!-- iCloud KV sync — paid Developer Program only. -->
 	<!--
