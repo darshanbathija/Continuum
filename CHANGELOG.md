@@ -4,6 +4,33 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.27.1 build 137] - 2026-05-24 - Cursor provider sessions (`darshanbathija/cursor-cli-sdk`)
+
+Adds Cursor as a first-class provider for Code sessions while keeping the launch semantics tied to the user's own Cursor subscription and authenticated Cursor Agent CLI.
+
+### Added
+
+- **Cursor Code sessions on Mac** - starts new Cursor coding sessions through the Cursor Agent CLI, preferring `cursor-agent` and falling back to `agent`, with `--workspace <repoPath>` and `--model <cursorModelId>` when a concrete Cursor model is selected.
+- **Cursor resume support** - resumes only when Clawdmeter has a real Cursor chat/session id and passes it through `--resume <cursorChatId>`. Cursor approval, respawn, and model-swap paths now require that proven resume id instead of silently starting a fresh session.
+- **iOS-to-Mac Cursor start/resume** - iOS exposes Cursor in provider pickers and sends start/resume requests to the paired Mac; the Mac owns the actual Cursor CLI launch in the repo/worktree.
+- **Dynamic Cursor model catalog** - probes authenticated Cursor CLI model visibility, caches account-visible models, includes Cursor default / Auto as the fallback, and stores the chosen model on the Clawdmeter session/runtime binding.
+- **Cursor usage and Tahoe wiring** - Cursor now appears in provider labels, picker styling, analytics totals, live/session surfaces, and Tahoe provider mappings.
+- **Cursor transcript mirror** - Cursor CLI sessions do not expose a Claude/Codex JSONL, so the daemon mirrors sent prompts and terminal snapshots into the main chat until native Cursor transcript import can attach a proven Cursor chat id.
+
+### Fixed
+
+- **Unsupported plan mode is fail-closed** - Cursor new Code sessions no longer enter a fake plan mode. The Mac and daemon reject `planMode=true` Cursor starts with `cursor_plan_mode_not_supported`, and Mac/iOS plan controls are gated where Cursor cannot safely resume.
+- **Preflight before provisional worktrees** - local Mac Cursor starts now verify the CLI binary, auth state, and selected model before creating a worktree.
+- **Spawn cleanup** - failed local and daemon Cursor spawns release provisional worktrees and generated city names.
+- **Imported Cursor model honesty** - imported Cursor IDE sessions preserve a discovered model only when it can be proven; otherwise the UI reports Cursor default / Auto.
+
+### Verification
+
+- `xcodebuild test -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" -destination "platform=macOS" -only-testing:ClawdmeterMacTests/AgentSpawnerChatArgvTests` -> **TEST SUCCEEDED** (10 tests).
+- `swift test` in `apple/ClawdmeterShared` -> **700 tests passed, 3 skipped**.
+- `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (iOS)" -destination "platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5"` -> **BUILD SUCCEEDED**.
+- `git diff --check` -> clean.
+
 ## [0.27.0 build 136] - 2026-05-24 — Strip Design tab + Open Design integration (`strip/design-tab`)
 
 The Design tab has been removed across every surface so it can be designed and built fresh from scratch. The current implementation didn't work in practice — the bundled Open Design Node daemon ate ~80 MB of the DMG, the WKWebView never reliably loaded, the Tailscale-forwarded iOS proxy broke whenever the daemon restarted, and the Code↔Design handoff opened blank screens.
