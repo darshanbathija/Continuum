@@ -7,14 +7,16 @@ import ClawdmeterShared
 /// body + an Approve button that shells out to `gh pr review --approve`.
 struct PRReviewPane: View {
     let session: AgentSession
-    @ObservedObject var mirror: PRMirror
+    @ObservedObject var coordinator: PRCoordinator
+    let onBeforeMerge: (() async -> Bool)?
+    @State private var localActionError: String?
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             ScrollView {
-                if let state = mirror.state {
+                if let state = coordinator.snapshot {
                     prContent(state)
                         .padding(14)
                 } else {
@@ -25,8 +27,8 @@ struct PRReviewPane: View {
         // T10 opt-in poll lifecycle: only run the 30s `gh pr view` loop
         // while the user is looking at the PR tab. Snapshot subscription
         // (PRMirror.attach) keeps URL detection alive in the background.
-        .onAppear { mirror.startWatching() }
-        .onDisappear { mirror.stopWatching() }
+        .onAppear { coordinator.startWatching() }
+        .onDisappear { coordinator.stopWatching() }
     }
 
     private var header: some View {
@@ -34,11 +36,11 @@ struct PRReviewPane: View {
             Text("PR")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
-            if mirror.isPolling {
+            if coordinator.isRefreshing || coordinator.isMutating {
                 ProgressView().controlSize(.mini)
             }
             Spacer()
-            if let state = mirror.state {
+            if let state = coordinator.snapshot {
                 Button(action: {
                     NSWorkspace.shared.open(state.url)
                 }) {
@@ -48,13 +50,19 @@ struct PRReviewPane: View {
                 .buttonStyle(.plain)
                 .help("Open in browser")
             }
+            Button(action: { coordinator.refreshNow() }) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.plain)
+            .help("Refresh PR state")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 
     @ViewBuilder
-    private func prContent(_ state: PRMirror.PRState) -> some View {
+    private func prContent(_ state: PRCoordinator.Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
                 stateBadge(state.state)
@@ -65,6 +73,9 @@ struct PRReviewPane: View {
                 if let review = state.reviewState {
                     reviewBadge(review)
                 }
+                if let checks = state.checksRollup {
+                    checksBadge(checks)
+                }
             }
             Text(state.title)
                 .font(.system(size: 14, weight: .semibold))
@@ -73,7 +84,7 @@ struct PRReviewPane: View {
             HStack(spacing: 6) {
                 Image(systemName: "person.fill")
                     .font(.system(size: 10))
-                Text(state.author)
+                Text(state.author ?? state.source.rawValue)
                     .font(.system(size: 11))
                 Text("+\(state.additions)")
                     .font(.system(size: 11, design: .monospaced))
@@ -94,9 +105,9 @@ struct PRReviewPane: View {
             }
             if state.state == "OPEN" {
                 HStack(spacing: 8) {
-                    Button(action: { Task { await mirror.approve() } }) {
-                        Label("Approve PR", systemImage: "checkmark.seal.fill")
-                            .font(.system(size: 11, weight: .semibold))
+                            Button(action: { Task { await coordinator.approve() } }) {
+                                Label("Approve PR", systemImage: "checkmark.seal.fill")
+                                    .font(.system(size: 11, weight: .semibold))
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
@@ -105,10 +116,48 @@ struct PRReviewPane: View {
                             .font(.system(size: 11))
                     }
                     .buttonStyle(.bordered)
+                    if coordinator.canUseDaemonActions {
+                        if PRCoordinator.canMerge(
+                            snapshot: state,
+                            canUseDaemonActions: coordinator.canUseDaemonActions
+                        ) {
+                            Button(action: {
+                                Task {
+                                    if let onBeforeMerge {
+                                        guard await onBeforeMerge() else {
+                                            localActionError = "Safety checkpoint failed. Merge cancelled."
+                                            return
+                                        }
+                                    }
+                                    localActionError = nil
+                                    await coordinator.merge()
+                                }
+                            }) {
+                                Label("Merge", systemImage: "arrow.triangle.merge")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            Button(action: {}) {
+                                Label("Merge blocked", systemImage: "shield.slash")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(true)
+                            .help(state.checksRollup == nil
+                                ? "No CI checks were reported."
+                                : "Checks must pass before merging.")
+                        }
+                    }
                 }
             }
-            if let err = mirror.lastError {
+            if let err = coordinator.lastError {
                 Text(err)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+            }
+            if let localActionError {
+                Text(localActionError)
                     .font(.system(size: 11))
                     .foregroundStyle(.red)
             }
@@ -134,15 +183,23 @@ struct PRReviewPane: View {
                 .padding(.horizontal, 24)
             HStack(spacing: 6) {
                 TextField("https://github.com/owner/repo/pull/123",
-                          text: $mirror.manualURL)
+                          text: $coordinator.manualURL)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11, design: .monospaced))
-                Button("Load") { mirror.loadFromManualURL() }
+                Button("Load") { coordinator.loadFromManualURL() }
                     .buttonStyle(.borderless)
                     .font(.system(size: 11, weight: .semibold))
             }
             .padding(.horizontal, 18)
-            if let err = mirror.lastError {
+            if coordinator.canUseDaemonActions {
+                Button(action: { Task { await coordinator.createPR() } }) {
+                    Label("Create PR", systemImage: "arrow.triangle.pull")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            if let err = coordinator.lastError {
                 Text(err)
                     .font(.system(size: 10))
                     .foregroundStyle(.red)
@@ -175,6 +232,22 @@ struct PRReviewPane: View {
             case "CHANGES_REQUESTED": return (.orange, "Changes requested")
             case "COMMENTED": return (.blue, "Commented")
             default: return (.secondary, review.capitalized)
+            }
+        }()
+        return Text(label)
+            .font(.system(size: 10, weight: .semibold))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(tint.opacity(0.15), in: Capsule())
+            .foregroundStyle(tint)
+    }
+
+    private func checksBadge(_ checks: String) -> some View {
+        let (tint, label): (Color, String) = {
+            switch checks {
+            case "success": return (.green, "Checks passed")
+            case "failure": return (.red, "Checks failing")
+            case "pending": return (.orange, "Checks pending")
+            default: return (.secondary, checks.capitalized)
             }
         }()
         return Text(label)

@@ -94,7 +94,7 @@ final class SessionsV2Tests: XCTestCase {
 
     func testSessionStatusFilterCases() {
         let names = SessionStatusFilter.allCases.map(\.displayName)
-        XCTAssertEqual(names, ["All", "Active", "Done", "Archived"])
+        XCTAssertEqual(names, ["All", "Active", "In Review", "Done", "Archived"])
     }
 
     // MARK: - Model catalog

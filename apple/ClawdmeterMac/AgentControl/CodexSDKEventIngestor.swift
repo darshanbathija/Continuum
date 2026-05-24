@@ -173,7 +173,8 @@ public final class CodexSDKEventIngestor {
                             title: "Bash",
                             body: cmd,
                             detail: cmd,
-                            at: timestamp)
+                            at: timestamp,
+                            bashResult: BashResult(command: cmd))
             ], at: timestamp)
 
             // tool_result on completion
@@ -193,7 +194,12 @@ public final class CodexSDKEventIngestor {
                                 title: "Bash",
                                 body: body,
                                 at: timestamp,
-                                isError: status == "failed")
+                                isError: status == "failed",
+                                bashResult: BashResult(
+                                    command: cmd,
+                                    exitCode: exitCode,
+                                    stdout: stdout.isEmpty ? nil : stdout
+                                ))
                 ], at: timestamp)
             }
         case "file_change":

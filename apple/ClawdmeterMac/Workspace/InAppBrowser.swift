@@ -16,9 +16,11 @@ private let browserLogger = Logger(subsystem: "com.clawdmeter.mac", category: "I
 struct InAppBrowser: View {
     let session: AgentSession
     @ObservedObject var model: SessionsModel
+    @ObservedObject var workbenchState: WorkbenchState
+    @StateObject private var runProfile: RunProfileManager
 
-    @State private var urlText: String = "http://localhost:3000"
-    @State private var loadedURL: URL? = URL(string: "http://localhost:3000")
+    @State private var urlText: String = ""
+    @State private var loadedURL: URL?
     @State private var canGoBack: Bool = false
     @State private var canGoForward: Bool = false
     @State private var isLoading: Bool = false
@@ -27,23 +29,60 @@ struct InAppBrowser: View {
     @State private var commentSnippet: String = ""
     @State private var commentText: String = ""
     @State private var showingCommentSheet: Bool = false
+    @State private var lastSendError: String?
+    @State private var showingRunOutput = false
+
+    init(session: AgentSession, model: SessionsModel, workbenchState: WorkbenchState) {
+        self.session = session
+        self.model = model
+        self.workbenchState = workbenchState
+        _runProfile = StateObject(wrappedValue: RunProfileManager(
+            sessionId: session.id,
+            chatStore: model.chatStore(for: session),
+            initialState: workbenchState.runProfile(for: session.id)
+        ))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             chrome
+            runControlBar
             Divider()
-            WebView(
-                loadURL: loadedURL,
-                onNavigationChange: { canGoBack = $0.canGoBack; canGoForward = $0.canGoForward; isLoading = $0.isLoading },
-                onCommentRequested: { selector, snippet in
-                    commentSelector = selector
-                    commentSnippet = snippet
-                    commentText = ""
-                    showingCommentSheet = true
-                }
-            )
+            if loadedURL == nil {
+                previewEmptyState
+            } else {
+                WebView(
+                    loadURL: loadedURL,
+                    onNavigationChange: { canGoBack = $0.canGoBack; canGoForward = $0.canGoForward; isLoading = $0.isLoading },
+                    onCommentRequested: { selector, snippet in
+                        commentSelector = selector
+                        commentSnippet = snippet
+                        commentText = ""
+                        showingCommentSheet = true
+                    }
+                )
+            }
         }
         .sheet(isPresented: $showingCommentSheet) { commentSheet }
+        .onAppear {
+            if urlText.isEmpty, let snapshot = runProfile.snapshot {
+                urlText = snapshot.url.absoluteString
+            }
+            runProfile.start()
+            workbenchState.recordRunProfile(runProfile.stateSnapshot)
+        }
+        .onDisappear {
+            runProfile.stop()
+            workbenchState.recordRunProfile(runProfile.stateSnapshot)
+        }
+        .onChange(of: runProfile.snapshot?.url) { _, url in
+            guard loadedURL == nil, let url else { return }
+            loadedURL = url
+            urlText = url.absoluteString
+        }
+        .onChange(of: runProfile.stateSnapshot) { _, state in
+            workbenchState.recordRunProfile(state)
+        }
     }
 
     private var chrome: some View {
@@ -74,12 +113,202 @@ struct InAppBrowser: View {
                 .font(.system(size: 11, design: .monospaced))
                 .onSubmit(loadCurrentURL)
 
-            Button("Go", action: loadCurrentURL)
+            if let snapshot = runProfile.snapshot {
+                Button(action: {
+                    loadedURL = snapshot.url
+                    urlText = snapshot.url.absoluteString
+                }) {
+                    Image(systemName: runHealthIcon(snapshot.health))
+                        .font(.system(size: 11))
+                }
                 .buttonStyle(.borderless)
-                .font(.system(size: 11, weight: .semibold))
+                .help("Open detected run URL")
+            }
+
+            Button(action: loadCurrentURL) {
+                Image(systemName: "arrow.right.circle")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.borderless)
+            .help("Load URL")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
+    }
+
+    private var runControlBar: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "play.rectangle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                TextField("Run command", text: $runProfile.runCommand)
+                    .font(.system(size: 11, design: .monospaced))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { startRun() }
+                Button(action: startRun) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .disabled(!canStartRun)
+                .help("Start run profile")
+                Button(action: { runProfile.stopRun(); workbenchState.recordRunProfile(runProfile.stateSnapshot) }) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .disabled(runProfile.status != .running && runProfile.status != .starting)
+                .help("Stop run profile")
+                Button(action: {
+                    runProfile.restartRun(cwd: session.effectiveCwd)
+                    workbenchState.recordRunProfile(runProfile.stateSnapshot)
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .disabled(runProfile.runCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Restart run profile")
+                Button(action: { showingRunOutput.toggle() }) {
+                    Image(systemName: showingRunOutput ? "terminal.fill" : "terminal")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .help("Show run output")
+            }
+            runStatusRow
+            if showingRunOutput {
+                runOutputPreview
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+    }
+
+    private var canStartRun: Bool {
+        !runProfile.runCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && runProfile.status != .running
+            && runProfile.status != .starting
+    }
+
+    private var runStatusRow: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(runStatusColor)
+                .frame(width: 6, height: 6)
+            Text(runStatusLabel)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            if let snapshot = runProfile.snapshot {
+                Text(snapshot.url.absoluteString)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(snapshot.source)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+            }
+            Spacer()
+            if let exitCode = runProfile.lastExitCode {
+                Text("exit \(exitCode)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(exitCode == 0 ? .green : .red)
+            }
+        }
+    }
+
+    /// JS shim: Cmd-Click on any element → compute a CSS selector for it +
+    /// short snippet, post back via `window.webkit.messageHandlers.clawdmeterComment.postMessage`.
+    static let commentBridgeJS = """
+    (function() {
+      function cssPath(el) {
+        if (!(el instanceof Element)) return '';
+        if (el.id) return '#' + el.id;
+        var path = [];
+        while (el && el.nodeType === 1 && path.length < 6) {
+          var sel = el.nodeName.toLowerCase();
+          if (el.classList.length > 0) {
+            sel += '.' + Array.from(el.classList).slice(0,2).join('.');
+          } else {
+            var siblings = el.parentNode ? Array.from(el.parentNode.children).filter(function(c){ return c.nodeName === el.nodeName; }) : [el];
+            if (siblings.length > 1) {
+              sel += ':nth-of-type(' + (siblings.indexOf(el) + 1) + ')';
+            }
+          }
+          path.unshift(sel);
+          el = el.parentElement;
+        }
+        return path.join(' > ');
+      }
+      document.addEventListener('click', function(e) {
+        if (!(e.metaKey || e.ctrlKey)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var sel = cssPath(e.target);
+        var snippet = (e.target.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 140);
+        window.webkit.messageHandlers.clawdmeterComment.postMessage({
+          selector: sel,
+          snippet: snippet
+        });
+      }, true);
+    })();
+    """
+
+    private var runOutputPreview: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if runProfile.stdoutLines.isEmpty && runProfile.stderrLines.isEmpty {
+                Text("Waiting for output…")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(Array(runProfile.stdoutLines.suffix(6).enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                ForEach(Array(runProfile.stderrLines.suffix(4).enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var runStatusColor: Color {
+        switch runProfile.status {
+        case .idle: return .secondary
+        case .starting, .running: return .green
+        case .exited: return .blue
+        case .failed: return .red
+        }
+    }
+
+    private var runStatusLabel: String {
+        switch runProfile.status {
+        case .idle: return "Idle"
+        case .starting: return "Starting"
+        case .running: return "Running"
+        case .exited: return "Exited"
+        case .failed: return "Failed"
+        }
+    }
+
+    private func startRun() {
+        runProfile.startRun(cwd: session.effectiveCwd)
+        workbenchState.recordRunProfile(runProfile.stateSnapshot)
     }
 
     private func loadCurrentURL() {
@@ -90,6 +319,52 @@ struct InAppBrowser: View {
               scheme == "http" || scheme == "https"
         else { return }
         loadedURL = url
+    }
+
+    private func runHealthIcon(_ health: RunProfileManager.Health) -> String {
+        switch health {
+        case .healthy:
+            return "checkmark.circle.fill"
+        case .unhealthy:
+            return "exclamationmark.triangle.fill"
+        case .unknown:
+            return "circle.dashed"
+        }
+    }
+
+    private var previewEmptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: runProfile.isChecking ? "network" : "safari")
+                .font(.system(size: 24))
+                .foregroundStyle(.secondary)
+            if let snapshot = runProfile.snapshot {
+                Button(action: {
+                    loadedURL = snapshot.url
+                    urlText = snapshot.url.absoluteString
+                }) {
+                    Label(snapshot.url.absoluteString, systemImage: runHealthIcon(snapshot.health))
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Text("No local run URL detected")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("Start a run profile or enter a URL above.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+            if let error = runProfile.lastError {
+                Text(error)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var commentSheet: some View {
@@ -110,6 +385,12 @@ struct InAppBrowser: View {
             TextField("Your note for the agent", text: $commentText, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(2...6)
+            if let lastSendError {
+                Text(lastSendError)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { showingCommentSheet = false }
@@ -129,16 +410,56 @@ struct InAppBrowser: View {
     }
 
     private func sendComment() {
-        let safeSelector = Self.sanitizeForPaste(commentSelector, maxLength: 240)
-        let safeText = Self.sanitizeForPaste(commentText, maxLength: 4_000)
-        let prompt = "[BROWSER COMMENT @ \(safeSelector)] \(safeText)"
-        guard let runtime = AppDelegate.runtime,
-              let pane = session.tmuxPaneId ?? session.tmuxWindowId
-        else { return }
-        let bytes = Data((prompt + "\n").utf8)
-        Task {
-            try? await runtime.tmuxClient.pasteBytes(paneId: pane, bytes: bytes)
+        let prompt = Self.browserCommentPrompt(
+            url: loadedURL ?? runProfile.snapshot?.url,
+            selector: commentSelector,
+            snippet: commentSnippet,
+            comment: commentText
+        )
+        if session.status == .running {
+            workbenchState.queueSend(QueuedWorkbenchSend(sessionId: session.id, text: prompt))
+            lastSendError = nil
+            return
         }
+        guard let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort
+        else {
+            lastSendError = "Daemon offline. Restart Clawdmeter to send browser context."
+            return
+        }
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        let sessionId = session.id
+        Task {
+            do {
+                try await sender.send(sessionId: sessionId, body: prompt, asFollowUp: true)
+                lastSendError = nil
+            } catch {
+                lastSendError = error.localizedDescription
+                browserLogger.error("browser comment send failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    static func browserCommentPrompt(
+        url: URL?,
+        selector: String,
+        snippet: String,
+        comment: String
+    ) -> String {
+        let safeURL = sanitizeForPaste(url?.absoluteString ?? "(unknown URL)", maxLength: 500)
+        let safeSelector = sanitizeForPaste(selector, maxLength: 240)
+        let safeSnippet = sanitizeForPaste(snippet, maxLength: 1_000)
+        let safeComment = sanitizeForPaste(comment, maxLength: 4_000)
+        return """
+        [BROWSER CONTEXT]
+        URL: \(safeURL)
+        Selector: \(safeSelector)
+        Snippet: \(safeSnippet)
+
+        User comment:
+        \(safeComment)
+        """
+        + "\n"
     }
 
     /// Drop CR/LF and ASCII control bytes so DOM-injected text cannot
@@ -184,7 +505,7 @@ private struct WebView: NSViewRepresentable {
         let userContent = WKUserContentController()
         userContent.add(context.coordinator, name: "clawdmeterComment")
         userContent.addUserScript(WKUserScript(
-            source: Self.commentBridgeJS,
+            source: InAppBrowser.commentBridgeJS,
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: false
         ))
@@ -259,42 +580,6 @@ private struct WebView: NSViewRepresentable {
         }
     }
 
-    /// JS shim: Cmd-Click on any element → compute a CSS selector for it +
-    /// short snippet, post back via `window.webkit.messageHandlers.clawdmeterComment.postMessage`.
-    static let commentBridgeJS = """
-    (function() {
-      function cssPath(el) {
-        if (!(el instanceof Element)) return '';
-        if (el.id) return '#' + el.id;
-        var path = [];
-        while (el && el.nodeType === 1 && path.length < 6) {
-          var sel = el.nodeName.toLowerCase();
-          if (el.classList.length > 0) {
-            sel += '.' + Array.from(el.classList).slice(0,2).join('.');
-          } else {
-            var siblings = el.parentNode ? Array.from(el.parentNode.children).filter(function(c){ return c.nodeName === el.nodeName; }) : [el];
-            if (siblings.length > 1) {
-              sel += ':nth-of-type(' + (siblings.indexOf(el) + 1) + ')';
-            }
-          }
-          path.unshift(sel);
-          el = el.parentElement;
-        }
-        return path.join(' > ');
-      }
-      document.addEventListener('click', function(e) {
-        if (!(e.metaKey || e.ctrlKey)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        var sel = cssPath(e.target);
-        var snippet = (e.target.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 140);
-        window.webkit.messageHandlers.clawdmeterComment.postMessage({
-          selector: sel,
-          snippet: snippet
-        });
-      }, true);
-    })();
-    """
 }
 
 /// A tiny event bus so the chrome row's back/forward/reload buttons can

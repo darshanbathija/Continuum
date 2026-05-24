@@ -416,6 +416,9 @@ final class UsageHistoryTests: XCTestCase {
         let loader = UsageHistoryLoader(
             claudeDir: claudeDir.deletingLastPathComponent(),
             codexDir: codexDir,
+            geminiDir: temp.appendingPathComponent("gemini-missing"),
+            agyDir: temp.appendingPathComponent("agy-missing"),
+            opencodeDBURL: temp.appendingPathComponent("missing-opencode.db"),
             cacheURL: cacheURL
         )
         let snapshot = await loader.loadAll()
@@ -449,7 +452,11 @@ final class UsageHistoryTests: XCTestCase {
 
         let loader = UsageHistoryLoader(
             claudeDir: claudeDir.deletingLastPathComponent(),
-            codexDir: codexDir
+            codexDir: codexDir,
+            geminiDir: temp.appendingPathComponent("gemini-missing"),
+            agyDir: temp.appendingPathComponent("agy-missing"),
+            opencodeDBURL: temp.appendingPathComponent("missing-opencode.db"),
+            cacheURL: temp.appendingPathComponent("cache.json")
         )
         let snapshot = await loader.loadAll()
 
@@ -481,7 +488,11 @@ final class UsageHistoryTests: XCTestCase {
 
         let loader = UsageHistoryLoader(
             claudeDir: claudeDir.deletingLastPathComponent(),
-            codexDir: codexDir
+            codexDir: codexDir,
+            geminiDir: temp.appendingPathComponent("gemini-missing"),
+            agyDir: temp.appendingPathComponent("agy-missing"),
+            opencodeDBURL: temp.appendingPathComponent("missing-opencode.db"),
+            cacheURL: temp.appendingPathComponent("cache.json")
         )
         let snapshot = await loader.loadAll()
 
@@ -497,7 +508,11 @@ final class UsageHistoryTests: XCTestCase {
 
         let loader = UsageHistoryLoader(
             claudeDir: claudeDir,
-            codexDir: codexDir
+            codexDir: codexDir,
+            geminiDir: temp.appendingPathComponent("gemini-missing"),
+            agyDir: temp.appendingPathComponent("agy-missing"),
+            opencodeDBURL: temp.appendingPathComponent("missing-opencode.db"),
+            cacheURL: temp.appendingPathComponent("cache.json")
         )
 
         // Fire two concurrent loadAll() — they should share state and not

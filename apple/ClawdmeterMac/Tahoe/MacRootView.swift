@@ -16,7 +16,7 @@ struct MacRootView: View {
     /// `tahoeLive` adapter in `MacTahoeAdapter.swift`. Other surfaces
     /// (Chat / Code / Settings) don't depend on it for v1.
     @ObservedObject private var runtime: AppRuntime
-    /// Observed directly so MacCodeView re-renders when sessions appear,
+    /// Observed directly so MacCodeShell re-renders when sessions appear,
     /// change status, or are archived. AppRuntime intentionally does NOT
     /// forward child publishers (see AppRuntime.swift:72), so we have to
     /// subscribe per-publisher here.
@@ -33,16 +33,9 @@ struct MacRootView: View {
     // state via `ChatV2Store` (T10). MacTitlebar's `secondaryRight`
     // branch for `.chat` is `EmptyView()` so it doesn't need bindings.
 
-    /// New-session sheet state — `nil` means closed; an empty string means
-    /// "no repo preselected"; a non-empty value pre-selects the repo on
-    /// open. Hosted at the root so both MacCodeView (per-repo `+` and
-    /// sidebar `folderPlus`) and the future Chat-tab sidebar can present it.
-    @State private var newSessionPreselectedRepo: String? = nil
-    @State private var newSessionPresented: Bool = false
-    @State private var focusedCodeRepoKey: String? = nil
-
     // v0.14.0 (plan v2.1 D6 + D7): handoff toast + reduce-motion guard.
     @State private var handoffToast: String? = nil
+    @State private var toastStartedAt: Date = Date()
     @State private var toastDismissTask: Task<Void, Never>? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -78,7 +71,6 @@ struct MacRootView: View {
         _ = agentSessionRegistry.sessions
 
         let live = runtime.tahoeLive
-        let code = runtime.tahoeCode
         return ZStack {
             TahoeWallpaperView()
             VStack(spacing: 0) {
@@ -131,15 +123,7 @@ struct MacRootView: View {
                             usageHistoryStore: runtime.usageHistoryStore
                         )
                     case .code:
-                        MacCodeView(
-                            data: code,
-                            onNewSession: { repoKey in
-                                newSessionPreselectedRepo = repoKey
-                                newSessionPresented = true
-                            },
-                            loopbackClient: runtime.loopbackClient,
-                            runtime: runtime
-                        )
+                        MacCodeShell(model: sessionsModel)
                     case .settings:
                         MacSettingsView(
                             theme: theme,
@@ -174,27 +158,63 @@ struct MacRootView: View {
             default:         break
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterFocusCodeSearch)) { _ in
+            tab = .code
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)
+            }
+        }
         // v0.14.0 (D7): handoff toast overlay — top-anchored Tahoe chip
         // that autodismisses after 2s. Visible across all tabs.
         .overlay(alignment: .top) {
             if let handoffToast {
-                Text(handoffToast)
-                    .font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
-                    .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
-                    .padding(.top, 56)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .accessibilityLabel(handoffToast)
+                HStack(spacing: 8) {
+                    Text(handoffToast)
+                        .font(.system(size: 12, weight: .semibold))
+                    ToastCountdownRing(startedAt: toastStartedAt, duration: 2)
+                        .frame(width: 14, height: 14)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
+                .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
+                .padding(.top, 56)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .accessibilityLabel(handoffToast)
             }
+        }
+        .onChange(of: handoffToast) { _, newValue in
+            guard newValue != nil else { return }
+            toastStartedAt = Date()
+            scheduleToastDismiss()
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: handoffToast)
         .tahoeTheme(theme)
         .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 0.94, green: 0.97, blue: 0.98))
-        .sheet(isPresented: $newSessionPresented) {
-            NewSessionMacSheet(model: sessionsModel, preselectedRepoKey: newSessionPreselectedRepo)
+    }
+}
+
+private struct ToastCountdownRing: View {
+    let startedAt: Date
+    let duration: TimeInterval
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let elapsed = context.date.timeIntervalSince(startedAt)
+            let progress = max(0, min(1, 1 - elapsed / max(duration, 0.1)))
+            ZStack {
+                Circle()
+                    .stroke(Color.secondary.opacity(0.25), lineWidth: 1.5)
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(
+                        Color.primary.opacity(0.75),
+                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+            }
         }
+        .accessibilityHidden(true)
     }
 }
 

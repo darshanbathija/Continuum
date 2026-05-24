@@ -6,12 +6,28 @@ private let diffLogger = Logger(subsystem: "com.clawdmeter.mac", category: "GitD
 
 // MARK: - Model
 
+enum GitDiffChangeState: String, Hashable, Sendable {
+    case unstaged
+    case staged
+    case untracked
+
+    var label: String {
+        switch self {
+        case .unstaged: return "Unstaged"
+        case .staged: return "Staged"
+        case .untracked: return "Untracked"
+        }
+    }
+}
+
 /// Single-file unified-diff representation.
-struct GitDiffFile: Identifiable, Hashable {
+struct GitDiffFile: Identifiable, Hashable, Sendable {
     let id = UUID()
     let path: String         // post-image path (a/foo/bar.swift → foo/bar.swift)
     let isNewFile: Bool
     let isDeleted: Bool
+    let isUntracked: Bool
+    let changeState: GitDiffChangeState
     let oldPath: String?     // pre-image path for renames; nil otherwise
     let hunks: [GitDiffHunk]
     /// The verbatim diff text for THIS file (headers + all hunks). Lets us
@@ -19,12 +35,13 @@ struct GitDiffFile: Identifiable, Hashable {
     let rawPatch: String
 }
 
-struct GitDiffHunk: Identifiable, Hashable {
+struct GitDiffHunk: Identifiable, Hashable, Sendable {
     let id = UUID()
     /// `@@ -L1,N1 +L2,N2 @@ context` line text.
     let header: String
     /// Lines including the prefix char (` `, `+`, `-`).
     let lines: [String]
+    let changeState: GitDiffChangeState
     /// Self-contained patch for this hunk — file headers + this hunk only.
     /// Pipe-able into `git apply --cached`.
     let rawPatch: String
@@ -41,12 +58,20 @@ final class GitDiffStore: ObservableObject {
     @Published private(set) var lastRefresh: Date?
 
     let repoCwd: String
+    private let runner: ShellRunning
+    private let gitLocator: @Sendable () -> String?
     private var watcher: DispatchSourceFileSystemObject?
     private var watchedFD: Int32 = -1
     private var refreshTask: Task<Void, Never>?
 
-    init(repoCwd: String) {
+    init(
+        repoCwd: String,
+        runner: ShellRunning = ShellRunner.shared,
+        gitLocator: @escaping @Sendable () -> String? = { ShellRunner.locateBinary("git") }
+    ) {
         self.repoCwd = repoCwd
+        self.runner = runner
+        self.gitLocator = gitLocator
     }
 
     deinit {
@@ -66,12 +91,12 @@ final class GitDiffStore: ObservableObject {
     func stop() {
         watcher?.cancel()
         watcher = nil
-        if watchedFD != -1 { close(watchedFD); watchedFD = -1 }
+        watchedFD = -1
         refreshTask?.cancel()
         refreshTask = nil
     }
 
-    /// Re-run `git diff HEAD`. Coalesces overlapping refreshes (vnode events
+    /// Re-run staged, unstaged, and untracked diff scans. Coalesces overlapping refreshes (vnode events
     /// can come in bursts — multiple edits within the same 100ms window
     /// shouldn't re-spawn git N times).
     func refresh() {
@@ -83,8 +108,13 @@ final class GitDiffStore: ObservableObject {
         }
     }
 
+    func reloadNowForTesting() async {
+        refreshTask?.cancel()
+        await runDiff()
+    }
+
     private func runDiff() async {
-        guard let git = ShellRunner.locateBinary("git") else {
+        guard let git = gitLocator() else {
             lastError = "git not found"
             return
         }
@@ -101,19 +131,35 @@ final class GitDiffStore: ObservableObject {
                         "files=%d", files.count)
         }
         do {
-            // Combine staged + unstaged diff. `HEAD` covers both because the
-            // index gets normalized into the comparison.
-            let result = try await ShellRunner.shared.run(
+            // Keep staged and unstaged deltas as separate action domains.
+            // `git diff HEAD` flattens both into one patch; reverse-applying
+            // that patch to the worktree can hide staged changes in the UI
+            // while leaving them commit-ready in the index.
+            let unstagedResult = try await runner.run(
                 executable: git,
-                arguments: ["-C", repoCwd, "diff", "--unified=3", "HEAD"],
+                arguments: ["-C", repoCwd, "diff", "--unified=3"],
+                cwd: nil,
+                environment: nil,
+                timeout: 10
+            )
+            let stagedResult = try await runner.run(
+                executable: git,
+                arguments: ["-C", repoCwd, "diff", "--cached", "--unified=3"],
+                cwd: nil,
+                environment: nil,
                 timeout: 10
             )
             // Treat as error only when git exited non-zero AND produced
             // no diff output. `git diff HEAD` returns 0 even with deltas,
             // so a non-zero exit with no stdout is a real failure (missing
             // repo, lock contention, etc.).
-            if result.exitStatus != 0 && result.stdoutString.isEmpty {
-                lastError = result.stderrString.trimmingCharacters(in: .whitespacesAndNewlines)
+            if unstagedResult.exitStatus != 0 && unstagedResult.stdoutString.isEmpty {
+                lastError = unstagedResult.stderrString.trimmingCharacters(in: .whitespacesAndNewlines)
+                files = []
+                return
+            }
+            if stagedResult.exitStatus != 0 && stagedResult.stdoutString.isEmpty {
+                lastError = stagedResult.stderrString.trimmingCharacters(in: .whitespacesAndNewlines)
                 files = []
                 return
             }
@@ -121,11 +167,32 @@ final class GitDiffStore: ObservableObject {
             // walks a potentially huge string (5,000-line diffs hit the
             // 10s timeout previously). Run on a detached task to keep
             // the @MainActor responsive; commit the result back here.
-            let stdout = result.stdoutString
+            let untrackedResult = try await runner.run(
+                executable: git,
+                arguments: ["-C", repoCwd, "ls-files", "--others", "--exclude-standard"],
+                cwd: nil,
+                environment: nil,
+                timeout: 10
+            )
+            let untrackedPaths: [String]
+            if untrackedResult.exitStatus == 0 {
+                untrackedPaths = untrackedResult.stdoutString
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .map(String.init)
+            } else {
+                untrackedPaths = []
+                diffLogger.warning("git ls-files failed: \(untrackedResult.stderrString, privacy: .public)")
+            }
+            let unstagedStdout = unstagedResult.stdoutString
+            let stagedStdout = stagedResult.stdoutString
             let parsed = await Task.detached(priority: .userInitiated) {
-                GitDiffStore.parse(unified: stdout)
+                GitDiffStore.parse(unified: stagedStdout, changeState: .staged)
+                    + GitDiffStore.parse(unified: unstagedStdout, changeState: .unstaged)
             }.value
-            self.files = parsed
+            let untracked = untrackedPaths.compactMap {
+                Self.syntheticUntrackedPatch(path: $0, repoCwd: repoCwd)
+            }
+            self.files = parsed + untracked
             self.lastError = nil
             self.lastRefresh = Date()
         } catch {
@@ -146,22 +213,61 @@ final class GitDiffStore: ObservableObject {
     // MARK: - Actions (stage / revert / commit)
 
     func stage(_ hunk: GitDiffHunk) async {
+        guard hunk.changeState == .unstaged else {
+            lastError = hunk.changeState == .staged
+                ? "hunk is already staged"
+                : "stage the whole untracked file"
+            return
+        }
         await applyPatch(hunk.rawPatch, cached: true, reverse: false, label: "stage hunk")
     }
 
     func revert(_ hunk: GitDiffHunk) async {
-        // Reverse-apply to the working tree. Removes the change without
-        // affecting the index. (Caller can re-stage if they change their
-        // mind — `git checkout` would be more dangerous.)
-        await applyPatch(hunk.rawPatch, cached: false, reverse: true, label: "revert hunk")
+        switch hunk.changeState {
+        case .unstaged:
+            // Reverse-apply to the working tree. Removes only the unstaged
+            // change without affecting the index.
+            await applyPatch(hunk.rawPatch, cached: false, reverse: true, label: "revert hunk")
+        case .staged:
+            // Reverse-apply to the index. This is an unstage operation, not
+            // a destructive file revert.
+            await applyPatch(hunk.rawPatch, cached: true, reverse: true, label: "unstage hunk")
+        case .untracked:
+            lastError = "stage or trash the whole untracked file"
+        }
     }
 
     func stageFile(_ file: GitDiffFile) async {
-        await applyPatch(file.rawPatch, cached: true, reverse: false, label: "stage file")
+        switch file.changeState {
+        case .untracked:
+            await runGit(arguments: ["add", "--", file.path], label: "stage file")
+        case .unstaged:
+            await applyPatch(file.rawPatch, cached: true, reverse: false, label: "stage file")
+        case .staged:
+            lastError = nil
+        }
+    }
+
+    func revertFile(_ file: GitDiffFile) async {
+        switch file.changeState {
+        case .untracked:
+            let fileURL = URL(fileURLWithPath: repoCwd).appendingPathComponent(file.path)
+            do {
+                var trashedURL: NSURL?
+                try FileManager.default.trashItem(at: fileURL, resultingItemURL: &trashedURL)
+                refresh()
+            } catch {
+                lastError = "move to Trash failed: \(error)"
+            }
+        case .unstaged:
+            await applyPatch(file.rawPatch, cached: false, reverse: true, label: "revert file")
+        case .staged:
+            await applyPatch(file.rawPatch, cached: true, reverse: true, label: "unstage file")
+        }
     }
 
     private func applyPatch(_ patch: String, cached: Bool, reverse: Bool, label: String) async {
-        guard let git = ShellRunner.locateBinary("git") else {
+        guard let git = gitLocator() else {
             lastError = "git not found"
             return
         }
@@ -182,8 +288,36 @@ final class GitDiffStore: ObservableObject {
         if reverse { args.append("--reverse") }
         args.append(tmp.path)
         do {
-            let result = try await ShellRunner.shared.run(
-                executable: git, arguments: args, timeout: 10
+            let result = try await runner.run(
+                executable: git,
+                arguments: args,
+                cwd: nil,
+                environment: nil,
+                timeout: 10
+            )
+            if result.exitStatus != 0 {
+                lastError = "\(label) failed: \(result.stderrString.prefix(200))"
+                diffLogger.error("\(label, privacy: .public) failed: \(result.stderrString, privacy: .public)")
+            } else {
+                refresh()
+            }
+        } catch {
+            lastError = "\(label) failed: \(error)"
+        }
+    }
+
+    private func runGit(arguments: [String], label: String) async {
+        guard let git = gitLocator() else {
+            lastError = "git not found"
+            return
+        }
+        do {
+            let result = try await runner.run(
+                executable: git,
+                arguments: ["-C", repoCwd] + arguments,
+                cwd: nil,
+                environment: nil,
+                timeout: 10
             )
             if result.exitStatus != 0 {
                 lastError = "\(label) failed: \(result.stderrString.prefix(200))"
@@ -197,16 +331,18 @@ final class GitDiffStore: ObservableObject {
     }
 
     func commit(message: String) async -> Bool {
-        guard let git = ShellRunner.locateBinary("git") else {
+        guard let git = gitLocator() else {
             lastError = "git not found"
             return false
         }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { lastError = "commit message empty"; return false }
         do {
-            let result = try await ShellRunner.shared.run(
+            let result = try await runner.run(
                 executable: git,
                 arguments: ["-C", repoCwd, "commit", "-m", trimmed],
+                cwd: nil,
+                environment: nil,
                 timeout: 15
             )
             if result.exitStatus != 0 {
@@ -221,13 +357,88 @@ final class GitDiffStore: ObservableObject {
         }
     }
 
+    nonisolated static func syntheticUntrackedPatch(path: String, repoCwd: String) -> GitDiffFile? {
+        let fileURL = URL(fileURLWithPath: repoCwd).appendingPathComponent(path)
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue
+        else { return nil }
+
+        let attributes = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)) ?? [:]
+        let permissions = attributes[.posixPermissions] as? NSNumber
+        let isExecutable = permissions.map { ($0.intValue & 0o111) != 0 } ?? false
+        let mode = isExecutable ? "100755" : "100644"
+
+        var header = [
+            "diff --git a/\(path) b/\(path)",
+            "new file mode \(mode)",
+            "index 0000000..0000000",
+            "--- /dev/null",
+            "+++ b/\(path)",
+        ].joined(separator: "\n") + "\n"
+
+        guard let data = try? Data(contentsOf: fileURL) else {
+            return GitDiffFile(
+                path: path,
+                isNewFile: true,
+                isDeleted: false,
+                isUntracked: true,
+                changeState: .untracked,
+                oldPath: nil,
+                hunks: [],
+                rawPatch: header
+            )
+        }
+        guard data.count <= 64 * 1024,
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return GitDiffFile(
+                path: path,
+                isNewFile: true,
+                isDeleted: false,
+                isUntracked: true,
+                changeState: .untracked,
+                oldPath: nil,
+                hunks: [],
+                rawPatch: header
+            )
+        }
+
+        var lines = text.components(separatedBy: "\n")
+        let endedWithNewline = text.hasSuffix("\n")
+        if endedWithNewline, !lines.isEmpty {
+            lines.removeLast()
+        }
+        if !lines.isEmpty {
+            header += "@@ -0,0 +1,\(lines.count) @@\n"
+            header += lines.map { "+\($0)" }.joined(separator: "\n")
+            header += "\n"
+            if !endedWithNewline {
+                header += "\\ No newline at end of file\n"
+            }
+        }
+
+        guard var file = parse(unified: header, changeState: .untracked).first else { return nil }
+        file = GitDiffFile(
+            path: file.path,
+            isNewFile: file.isNewFile,
+            isDeleted: file.isDeleted,
+            isUntracked: true,
+            changeState: .untracked,
+            oldPath: file.oldPath,
+            hunks: file.hunks,
+            rawPatch: file.rawPatch
+        )
+        return file
+    }
+
     // MARK: - File-change watch
 
     private func installIndexWatch() {
         // Watch .git/index (changes on every stage / unstage) and HEAD (commits).
         // A single watcher on the .git directory is the simplest reliable
         // signal — anything that changes index, HEAD, or refs lands there.
-        let dotGit = (repoCwd as NSString).appendingPathComponent(".git")
+        let dotGit = Self.gitWatchDirectory(repoCwd: repoCwd)
         let fd = open(dotGit, O_EVTONLY)
         guard fd >= 0 else {
             diffLogger.warning("Can't open \(dotGit, privacy: .public) for watch")
@@ -253,15 +464,45 @@ final class GitDiffStore: ObservableObject {
         // weak-self path so stop()'s post-cancel close is a no-op.
         source.setCancelHandler { [weak self] in
             close(fd)
-            self?.watchedFD = -1
+            if self?.watchedFD == fd {
+                self?.watchedFD = -1
+            }
         }
         source.resume()
         self.watcher = source
     }
 
+    nonisolated static func gitWatchDirectory(repoCwd: String) -> String {
+        let dotGit = URL(fileURLWithPath: repoCwd).appendingPathComponent(".git")
+        var isDirectory = ObjCBool(false)
+        if FileManager.default.fileExists(atPath: dotGit.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return dotGit.path
+        }
+        guard let contents = try? String(contentsOf: dotGit, encoding: .utf8) else {
+            return dotGit.path
+        }
+        let trimmed = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("gitdir:") else {
+            return dotGit.path
+        }
+        let rawPath = String(trimmed.dropFirst("gitdir:".count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let url: URL
+        if rawPath.hasPrefix("/") {
+            url = URL(fileURLWithPath: rawPath)
+        } else {
+            url = URL(fileURLWithPath: repoCwd).appendingPathComponent(rawPath)
+        }
+        return url.standardizedFileURL.path
+    }
+
     // MARK: - Unified diff parser
 
-    nonisolated static func parse(unified: String) -> [GitDiffFile] {
+    nonisolated static func parse(
+        unified: String,
+        changeState: GitDiffChangeState = .unstaged
+    ) -> [GitDiffFile] {
         var files: [GitDiffFile] = []
         var lines = unified.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
 
@@ -272,7 +513,7 @@ final class GitDiffStore: ObservableObject {
                                             where: { $0.hasPrefix("diff --git ") })
                 ?? lines.endIndex
             let fileSlice = Array(lines[headerIdx..<trailing])
-            if let file = parseFile(fileSlice) {
+            if let file = parseFile(fileSlice, changeState: changeState) {
                 files.append(file)
             }
             lines = Array(lines[trailing..<lines.endIndex])
@@ -280,7 +521,10 @@ final class GitDiffStore: ObservableObject {
         return files
     }
 
-    private nonisolated static func parseFile(_ lines: [String]) -> GitDiffFile? {
+    private nonisolated static func parseFile(
+        _ lines: [String],
+        changeState: GitDiffChangeState
+    ) -> GitDiffFile? {
         guard let first = lines.first, first.hasPrefix("diff --git ") else { return nil }
         // Header parse: "diff --git a/path b/path"
         //
@@ -338,7 +582,12 @@ final class GitDiffStore: ObservableObject {
                 let body = Array(lines[(i + 1)..<j])
                 let hunkText = ([hunkHeader] + body).joined(separator: "\n") + "\n"
                 let patch = headerText + hunkText
-                hunks.append(GitDiffHunk(header: hunkHeader, lines: body, rawPatch: patch))
+                hunks.append(GitDiffHunk(
+                    header: hunkHeader,
+                    lines: body,
+                    changeState: changeState,
+                    rawPatch: patch
+                ))
                 i = j
             }
         }
@@ -348,6 +597,8 @@ final class GitDiffStore: ObservableObject {
             path: postPath,
             isNewFile: isNew,
             isDeleted: isDel,
+            isUntracked: changeState == .untracked,
+            changeState: changeState,
             oldPath: oldPath,
             hunks: hunks,
             rawPatch: rawPatch
@@ -370,14 +621,18 @@ private extension Array where Element == String {
 
 struct GitDiffPane: View {
     @StateObject private var store: GitDiffStore
+    let onBeforeDestructiveChange: (() async -> Bool)?
     @State private var expandedFiles: Set<UUID> = []
     @State private var showingCommitSheet = false
     @State private var commitMessage = ""
     @State private var isCommitting = false
+    @State private var pendingTrashFile: GitDiffFile?
+    @State private var safetyCheckpointError: String?
 
     @Environment(\.colorScheme) private var colorScheme
 
-    init(repoCwd: String) {
+    init(repoCwd: String, onBeforeDestructiveChange: (() async -> Bool)? = nil) {
+        self.onBeforeDestructiveChange = onBeforeDestructiveChange
         _store = StateObject(wrappedValue: GitDiffStore(repoCwd: repoCwd))
     }
 
@@ -392,6 +647,23 @@ struct GitDiffPane: View {
         .onAppear { store.start() }
         .onDisappear { store.stop() }
         .sheet(isPresented: $showingCommitSheet) { commitSheet }
+        .alert(
+            "Move untracked file to Trash?",
+            isPresented: Binding(
+                get: { pendingTrashFile != nil },
+                set: { if !$0 { pendingTrashFile = nil } }
+            ),
+            presenting: pendingTrashFile
+        ) { file in
+            Button("Cancel", role: .cancel) {}
+            Button("Move to Trash", role: .destructive) {
+                runDestructiveChange {
+                    await store.revertFile(file)
+                }
+            }
+        } message: { file in
+            Text(file.path)
+        }
     }
 
     private var header: some View {
@@ -426,6 +698,17 @@ struct GitDiffPane: View {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
                 Text(err)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let safetyCheckpointError {
+            VStack(spacing: 8) {
+                Image(systemName: "shield.slash")
+                    .foregroundStyle(.orange)
+                Text(safetyCheckpointError)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -474,6 +757,12 @@ struct GitDiffPane: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    Text(file.changeState.label)
+                        .font(.system(size: 9, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                        .foregroundStyle(.secondary)
                     Spacer()
                     Text("+\(file.hunks.reduce(0) { $0 + $1.addedCount })")
                         .font(.system(size: 10, design: .monospaced))
@@ -481,12 +770,7 @@ struct GitDiffPane: View {
                     Text("-\(file.hunks.reduce(0) { $0 + $1.removedCount })")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.red)
-                    Button("Stage") {
-                        Task { await store.stageFile(file) }
-                    }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 10))
-                    .help("Stage all hunks in this file")
+                    fileActionButtons(file)
                 }
                 .padding(.horizontal, 4)
                 .padding(.vertical, 5)
@@ -501,6 +785,49 @@ struct GitDiffPane: View {
             }
         }
         .background(Color.secondary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private func fileActionButtons(_ file: GitDiffFile) -> some View {
+        switch file.changeState {
+        case .unstaged:
+            Button("Stage") {
+                Task { await store.stageFile(file) }
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10))
+            .help("Stage all hunks in this file")
+            Button("Revert") {
+                runDestructiveChange {
+                    await store.revertFile(file)
+                }
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10))
+            .foregroundStyle(.red)
+            .help("Revert unstaged hunks in this file")
+        case .staged:
+            Button("Unstage") {
+                Task { await store.revertFile(file) }
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10))
+            .help("Move this staged file back to unstaged changes")
+        case .untracked:
+            Button("Stage") {
+                Task { await store.stageFile(file) }
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10))
+            .help("Stage this untracked file")
+            Button("Trash") {
+                pendingTrashFile = file
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10))
+            .foregroundStyle(.red)
+            .help("Move this untracked file to Trash")
+        }
     }
 
     private func fileBadgeIcon(_ file: GitDiffFile) -> String {
@@ -525,13 +852,7 @@ struct GitDiffPane: View {
                     .foregroundStyle(.purple)
                     .lineLimit(1)
                 Spacer()
-                Button("Stage") { Task { await store.stage(hunk) } }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 10))
-                Button("Revert") { Task { await store.revert(hunk) } }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.red)
+                hunkActionButtons(hunk)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -543,6 +864,43 @@ struct GitDiffPane: View {
         }
         .padding(.horizontal, 6)
         .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func hunkActionButtons(_ hunk: GitDiffHunk) -> some View {
+        switch hunk.changeState {
+        case .unstaged:
+            Button("Stage") { Task { await store.stage(hunk) } }
+                .buttonStyle(.borderless)
+                .font(.system(size: 10))
+            Button("Revert") {
+                runDestructiveChange {
+                    await store.revert(hunk)
+                }
+            }
+                .buttonStyle(.borderless)
+                .font(.system(size: 10))
+                .foregroundStyle(.red)
+        case .staged:
+            Button("Unstage") { Task { await store.revert(hunk) } }
+                .buttonStyle(.borderless)
+                .font(.system(size: 10))
+        case .untracked:
+            EmptyView()
+        }
+    }
+
+    private func runDestructiveChange(_ action: @escaping () async -> Void) {
+        Task {
+            if let onBeforeDestructiveChange {
+                guard await onBeforeDestructiveChange() else {
+                    safetyCheckpointError = "Safety checkpoint failed. Destructive diff action cancelled."
+                    return
+                }
+            }
+            safetyCheckpointError = nil
+            await action()
+        }
     }
 
     private func hunkLineView(_ line: String) -> some View {

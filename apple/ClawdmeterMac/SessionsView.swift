@@ -27,9 +27,7 @@ struct NewSessionMacSheet: View {
     @State private var agent: AgentKind = .claude
     @State private var goal: String = ""
     @State private var planMode: Bool = true
-    @State private var opencodeReady: Bool = false
-    @State private var cursorReady: Bool = false
-    @State private var modelCatalog: ModelCatalog = .bundled
+    @StateObject private var launcher = SessionLauncherModel()
     @State private var selectedModelId: String?
     // v0.7.9: worktree by default. Local stays in the enum for
     // back-compat but the mode chip is no longer in the New Session UI.
@@ -68,7 +66,7 @@ struct NewSessionMacSheet: View {
                           prompt: Text("/Users/.../my-repo"))
 
                 Picker("Agent", selection: $agent) {
-                    ForEach(selectableAgents, id: \.self) { kind in
+                    ForEach(launcher.selectableAgents, id: \.self) { kind in
                         Text(kind.tahoeProvider.displayName).tag(kind)
                     }
                 }
@@ -79,7 +77,7 @@ struct NewSessionMacSheet: View {
                     Spacer()
                     ModelPicker(
                         selectedModelId: selectedModelId,
-                        catalog: modelCatalog,
+                        catalog: launcher.modelCatalog,
                         agent: agent
                     ) { entry in
                         selectedModelId = entry.id
@@ -136,72 +134,45 @@ struct NewSessionMacSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 460)
+        .frame(width: 500)
         .onAppear {
             if let selected = model.selectedRepoKey { repoPath = selected }
             ensureSelectedModelIsAvailable()
         }
-        .task { await refreshProviderAvailability() }
+        .task {
+            await launcher.refreshProviderAvailability()
+            normalizeAgentAvailability()
+            ensureSelectedModelIsAvailable()
+        }
         .onChange(of: agent) { _, _ in
-            selectedModelId = defaultModelId(for: agent)
+            selectedModelId = launcher.defaultModelId(for: agent)
             if agent == .cursor { planMode = false }
         }
-        .onChange(of: modelCatalog.updatedAt) { _, _ in
+        .onChange(of: launcher.availability) { _, _ in
+            normalizeAgentAvailability()
+            ensureSelectedModelIsAvailable()
+        }
+        .onChange(of: launcher.modelCatalog.updatedAt) { _, _ in
             ensureSelectedModelIsAvailable()
         }
     }
 
-    private var selectableAgents: [AgentKind] {
-        var agents: [AgentKind] = [.claude, .codex, .gemini]
-        if opencodeReady {
-            agents.append(.opencode)
-        }
-        if cursorReady {
-            agents.append(.cursor)
-        }
-        return agents
-    }
-
-    private func refreshProviderAvailability() async {
-        await OpencodeProcessManager.shared.refreshAuthStatus()
-        let hasBinary = OpencodeProcessManager.shared.binaryPath != nil
-        let hasProvider = !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
-        opencodeReady = hasBinary && hasProvider
-        let cursorState = await CursorModelProbe.shared.currentState()
-        modelCatalog = ModelCatalog.bundled.replacingCursor(cursorState.models)
-        cursorReady = cursorState.binaryPath != nil && cursorState.authenticated
-        if !opencodeReady, agent == .opencode {
-            agent = .claude
-        }
-        if !cursorReady, agent == .cursor {
-            agent = .claude
-        }
-        ensureSelectedModelIsAvailable()
-    }
-
-    private func defaultModelId(for agent: AgentKind) -> String? {
-        modelCatalog.entries(for: agent).first?.id
-    }
-
     private func ensureSelectedModelIsAvailable() {
-        let models = modelCatalog.entries(for: agent)
-        guard !models.isEmpty else {
-            selectedModelId = nil
-            return
+        selectedModelId = launcher.resolvedModelId(for: agent, selectedModelId: selectedModelId)
+    }
+
+    private func normalizeAgentAvailability() {
+        let normalized = launcher.availableAgentOrDefault(agent)
+        if normalized != agent {
+            agent = normalized
         }
-        if let selectedModelId,
-           models.contains(where: { $0.id == selectedModelId || $0.cliAlias == selectedModelId }) {
-            return
+        if agent == .cursor {
+            planMode = false
         }
-        selectedModelId = models.first?.id
     }
 
     private func supportsEffort(modelId: String?) -> Bool {
-        guard let modelId,
-              let entry = modelCatalog.entry(forId: modelId) else {
-            return true
-        }
-        return entry.supportsEffort
+        launcher.supportsEffort(modelId: modelId)
     }
 
     private func startSession() async {
@@ -215,8 +186,8 @@ struct NewSessionMacSheet: View {
         // Seed effort from ComposerStore.ChipDefaults while model comes from
         // this sheet's picker. Cursor models are the live account-visible
         // probe result with Cursor default / Auto as the fallback.
-        let defaults = ComposerStore.ChipDefaults.default
-        let selectedModel = selectedModelId ?? defaultModelId(for: agent)
+        let defaults = launcher.chipDefaults(for: agent)
+        let selectedModel = selectedModelId ?? launcher.defaultModelId(for: agent)
         switch agent {
         case .unknown:
             // X3: unreachable from the picker (allCases excludes .unknown)
@@ -254,6 +225,12 @@ struct NewSessionMacSheet: View {
     }
 }
 
+struct PendingFirstSendRecovery: Equatable {
+    let text: String
+    let attachments: [ComposerStore.Attachment]
+    let error: ComposerStore.SendError
+}
+
 // MARK: - Model
 
 @MainActor
@@ -286,6 +263,9 @@ public final class SessionsModel: ObservableObject {
 
     /// When true, archived sessions are visible in the sidebar (G7).
     @Published public var showArchived: Bool = false
+
+    @Published var pendingFirstSendRecoveryVersion: Int = 0
+    private var pendingFirstSendRecoveries: [UUID: PendingFirstSendRecovery] = [:]
 
     /// Currently surfaced as a session in the workspace's center pane.
     /// Resolves the registry first, then synthetic outside-Clawdmeter
@@ -347,6 +327,24 @@ public final class SessionsModel: ObservableObject {
         openOutsideJSONLPath = nil
     }
 
+    func queueFirstSendRecovery(
+        sessionId: UUID,
+        text: String,
+        attachments: [ComposerStore.Attachment],
+        error: ComposerStore.SendError
+    ) {
+        pendingFirstSendRecoveries[sessionId] = PendingFirstSendRecovery(
+            text: text,
+            attachments: attachments,
+            error: error
+        )
+        pendingFirstSendRecoveryVersion += 1
+    }
+
+    func takeFirstSendRecovery(sessionId: UUID) -> PendingFirstSendRecovery? {
+        pendingFirstSendRecoveries.removeValue(forKey: sessionId)
+    }
+
     public let repoIndex: RepoIndex
     public let registry: AgentSessionRegistry
     public let supervisor: TmuxSupervisor
@@ -376,6 +374,7 @@ public final class SessionsModel: ObservableObject {
     /// agent's `gh pr create` output. Paired with `chatStores` — evicted
     /// together so we don't leak polling tasks.
     private var prMirrors: [UUID: PRMirror] = [:]
+    private var prCoordinators: [UUID: PRCoordinator] = [:]
 
     /// Register a session as protected from LRU eviction. Called by
     /// PoppedOutSessionView.onAppear so the pop-out's chat store survives
@@ -485,6 +484,8 @@ public final class SessionsModel: ObservableObject {
             chatStores.removeValue(forKey: evictId)
             prMirrors[evictId]?.detach()
             prMirrors.removeValue(forKey: evictId)
+            prCoordinators[evictId]?.stopWatching()
+            prCoordinators.removeValue(forKey: evictId)
         }
     }
 
@@ -494,6 +495,8 @@ public final class SessionsModel: ObservableObject {
         chatStoreLRU.removeAll { $0 == sessionId }
         prMirrors[sessionId]?.detach()
         prMirrors.removeValue(forKey: sessionId)
+        prCoordinators[sessionId]?.stopWatching()
+        prCoordinators.removeValue(forKey: sessionId)
     }
 
     /// G16: lazy PR mirror, attached to this session's chat store on first
@@ -506,6 +509,19 @@ public final class SessionsModel: ObservableObject {
         }
         prMirrors[session.id] = mirror
         return mirror
+    }
+
+    func prCoordinator(for session: AgentSession) -> PRCoordinator {
+        if let existing = prCoordinators[session.id] { return existing }
+        let mirror = prMirror(for: session)
+        let coordinator = PRCoordinator(
+            sessionId: session.id,
+            client: AppDelegate.runtime?.loopbackClient,
+            fallback: mirror
+        )
+        coordinator.attach(chatStore: chatStore(for: session))
+        prCoordinators[session.id] = coordinator
+        return coordinator
     }
 
     public func sessions(for repoKey: String, includeArchived: Bool = false) -> [AgentSession] {

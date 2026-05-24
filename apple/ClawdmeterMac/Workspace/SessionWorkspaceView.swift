@@ -18,17 +18,17 @@ import ClawdmeterShared
 struct SessionWorkspaceView: View {
     @ObservedObject var model: SessionsModel
 
-    @State private var rightPaneTab: RightPaneTab = .plan
     /// User's explicit toggle for the review pane. Default OFF so Sessions
     /// + chat get the full window by default; the user opts into the
     /// review pane via the right-edge gutter (CTA) or the toolbar button.
-    @State private var showingReviewPane: Bool = false
     @State private var showingModeSwitchOverlay: Bool = false
     @State private var modeSwitchLabel: String = ""
+    @State private var showingWorkspaceSwitcher: Bool = false
+    @StateObject private var launcher = SessionLauncherModel()
+    @StateObject private var workbenchState = WorkbenchState()
     /// Workspace-level width, measured via GeometryReader. Drives responsive
     /// pane collapsing so even when the user opens the review pane it only
     /// renders if the window has room for it without clipping content.
-    @State private var workspaceWidth: CGFloat = 1400
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -43,39 +43,16 @@ struct SessionWorkspaceView: View {
     private static let gutterThreshold: CGFloat = 900
 
     private var effectiveShowReviewPane: Bool {
-        showingReviewPane && workspaceWidth >= Self.reviewPaneThreshold
+        workbenchState.showingReviewPane && workbenchState.workspaceWidth >= Self.reviewPaneThreshold
     }
 
     private var effectiveShowGutter: Bool {
-        !effectiveShowReviewPane && workspaceWidth >= Self.gutterThreshold
-    }
-
-    enum RightPaneTab: String, CaseIterable, Identifiable {
-        case plan = "Plan"
-        case diff = "Diff"
-        case sources = "Sources"
-        case artifacts = "Artifacts"
-        case browser = "Browser"
-        case pr = "PR"
-        case terminal = "Terminal"
-        var id: String { rawValue }
-
-        var systemImage: String {
-            switch self {
-            case .plan:      return "list.bullet.rectangle"
-            case .diff:      return "arrow.triangle.swap"
-            case .sources:   return "doc.text.magnifyingglass"
-            case .artifacts: return "paperclip"
-            case .browser:   return "safari"
-            case .pr:        return "arrow.triangle.pull"
-            case .terminal:  return "terminal"
-            }
-        }
+        !effectiveShowReviewPane && workbenchState.workspaceWidth >= Self.gutterThreshold
     }
 
     var body: some View {
         HSplitView {
-            SidebarPane(model: model)
+            SidebarPane(model: model, workbenchState: workbenchState)
                 .frame(minWidth: 220, idealWidth: 260, maxWidth: 380)
 
             // Center pane carries the chat AND, when the review pane is
@@ -90,6 +67,10 @@ struct SessionWorkspaceView: View {
                             session: session,
                             isReadOnly: model.openSessionIsReadOnly,
                             model: model,
+                            catalog: launcher.modelCatalog,
+                            workbenchState: workbenchState,
+                            density: workbenchState.density,
+                            onDensityChange: { workbenchState.setDensity($0) },
                             onModeSwitch: { newMode in
                                 Task { await switchMode(session: session, to: newMode) }
                             }
@@ -121,11 +102,11 @@ struct SessionWorkspaceView: View {
                 if effectiveShowGutter, model.openSession != nil {
                     Divider()
                     ReviewPaneGutter(
-                        selectedTab: $rightPaneTab,
+                        selectedTab: selectedRightPaneBinding,
                         onExpand: { tab in
-                            rightPaneTab = tab
+                            workbenchState.selectRightPane(tab)
                             withAnimation(.easeOut(duration: 0.18)) {
-                                showingReviewPane = true
+                                workbenchState.setReviewPaneVisible(true)
                             }
                         }
                     )
@@ -138,14 +119,18 @@ struct SessionWorkspaceView: View {
                     session: session,
                     chatStore: model.chatStore(for: session),
                     model: model,
-                    selectedTab: $rightPaneTab,
+                    workbenchState: workbenchState,
+                    selectedTab: selectedRightPaneBinding,
                     onClose: {
                         withAnimation(.easeOut(duration: 0.18)) {
-                            showingReviewPane = false
+                            workbenchState.setReviewPaneVisible(false)
                         }
                     },
                     onApprove: {
-                        Task { await model.approvePlan(id: session.id) }
+                        Task {
+                            guard await createApprovalCheckpoint(for: session) else { return }
+                            await model.approvePlan(id: session.id)
+                        }
                     }
                 )
                 .frame(minWidth: 440, idealWidth: 520, maxWidth: 620)
@@ -161,38 +146,94 @@ struct SessionWorkspaceView: View {
                     .preference(key: WorkspaceWidthKey.self, value: proxy.size.width)
             }
         )
-        .onPreferenceChange(WorkspaceWidthKey.self) { workspaceWidth = $0 }
+        .onPreferenceChange(WorkspaceWidthKey.self) { workbenchState.updateWorkspaceWidth($0) }
         .sheet(isPresented: $model.showingNewSessionSheet) {
             NewSessionMacSheet(model: model)
         }
+        .overlay {
+            if showingWorkspaceSwitcher {
+                ZStack {
+                    Color.black.opacity(0.22)
+                        .ignoresSafeArea()
+                        .onTapGesture { showingWorkspaceSwitcher = false }
+                    WorkspaceSwitcherSheet(
+                        model: model,
+                        focusedSession: model.openSession,
+                        isPresented: $showingWorkspaceSwitcher
+                    )
+                    .frame(width: 620, height: 520)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.black.opacity(0.10), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.22), radius: 28, x: 0, y: 18)
+                    .transition(.scale(scale: 0.98).combined(with: .opacity))
+                }
+                .zIndex(20)
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: showingWorkspaceSwitcher)
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button(action: {
                     withAnimation(.easeOut(duration: 0.18)) {
-                        showingReviewPane.toggle()
+                        workbenchState.setReviewPaneVisible(!workbenchState.showingReviewPane)
                     }
                 }) {
-                    Image(systemName: showingReviewPane
+                    Image(systemName: workbenchState.showingReviewPane
                         ? "sidebar.right"
                         : "sidebar.squares.right")
 	                        .help(effectiveShowReviewPane
 	                            ? "Hide review pane"
-	                            : workspaceWidth < Self.reviewPaneThreshold
+	                            : workbenchState.workspaceWidth < Self.reviewPaneThreshold
 	                                ? "Widen the window to show the review pane"
 	                                : "Show review pane")
 	                }
-	                .disabled(workspaceWidth < Self.reviewPaneThreshold)
+	                .disabled(workbenchState.workspaceWidth < Self.reviewPaneThreshold)
             }
         }
-        .background(KeyboardShortcuts(model: model))
+        .onAppear {
+            restorePersistedSessionSelectionIfPossible()
+        }
+        .onChange(of: model.openSessionId) { _, newValue in
+            workbenchState.selectSession(newValue)
+        }
+        .task {
+            await launcher.refreshProviderAvailability()
+        }
+        .background(KeyboardShortcuts(
+            model: model,
+            onWorkspaceSwitcher: { showingWorkspaceSwitcher = true }
+        ))
     }
 
-    /// Hidden buttons that own the Cmd+1..9 + Cmd+Shift+F + Cmd+;
+    private var selectedRightPaneBinding: Binding<WorkbenchPaneTab> {
+        Binding(
+            get: { workbenchState.selectedRightPane },
+            set: { workbenchState.selectRightPane($0) }
+        )
+    }
+
+    private func restorePersistedSessionSelectionIfPossible() {
+        guard model.openSessionId == nil,
+              let selected = workbenchState.selectedSessionId,
+              model.registry.sessions.contains(where: { $0.id == selected && $0.archivedAt == nil })
+        else {
+            return
+        }
+        model.openSessionId = selected
+    }
+
+    /// Hidden buttons that own Option+Cmd+1..9 + Cmd+Shift+F + Cmd+;
     /// keyboard shortcuts. SwiftUI's `.keyboardShortcut` only fires when
     /// the view is in the focus chain; attaching to `Color.clear` in a
     /// background layer keeps them globally active without stealing focus.
+    /// The number chords intentionally include Option because the app-level
+    /// View menu reserves Cmd+1..5 for top-level tab switching.
     private struct KeyboardShortcuts: View {
         @ObservedObject var model: SessionsModel
+        let onWorkspaceSwitcher: () -> Void
         var body: some View {
             ZStack {
                 ForEach(1...9, id: \.self) { index in
@@ -200,7 +241,7 @@ struct SessionWorkspaceView: View {
                         model.openVisibleSession(at: index)
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(index)")),
-                                      modifiers: [.command])
+                                      modifiers: [.command, .option])
                     .opacity(0)
                     .frame(width: 0, height: 0)
                 }
@@ -220,6 +261,12 @@ struct SessionWorkspaceView: View {
                 .keyboardShortcut(";", modifiers: [.command])
                 .opacity(0)
                 .frame(width: 0, height: 0)
+                Button("") {
+                    onWorkspaceSwitcher()
+                }
+                .keyboardShortcut("o", modifiers: [.command])
+                .opacity(0)
+                .frame(width: 0, height: 0)
             }
             .allowsHitTesting(false)
         }
@@ -228,7 +275,7 @@ struct SessionWorkspaceView: View {
     // MARK: - Center empty state — Codex-style centered composer
 
     private var centerEmpty: some View {
-        EmptyStateCenteredComposer(model: model)
+        EmptyStateCenteredComposer(model: model, launcher: launcher)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -266,6 +313,17 @@ struct SessionWorkspaceView: View {
         await model.switchMode(sessionId: session.id, to: newMode)
     }
 
+    private func createApprovalCheckpoint(for session: AgentSession) async -> Bool {
+        let service = CheckpointService()
+        do {
+            let checkpoint = try await service.createCheckpoint(session: session, summary: "Before plan approval")
+            workbenchState.recordCheckpoint(checkpoint)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - Theme
 
     private var backgroundColor: Color {
@@ -283,12 +341,13 @@ struct SessionWorkspaceView: View {
 
 private struct SidebarPane: View {
     @ObservedObject var model: SessionsModel
+    @ObservedObject var workbenchState: WorkbenchState
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var searchFocused: Bool
 
     /// Persisted sidebar grouping + sorting + status-filter preferences.
     /// All three are local to the Mac UI — iOS has its own equivalents.
-    @AppStorage("clawdmeter.sidebar.grouping") private var groupingRaw: String = SessionGrouping.repo.rawValue
+    @AppStorage("clawdmeter.sidebar.grouping") private var groupingRaw: String = SessionGrouping.status.rawValue
     @AppStorage("clawdmeter.sidebar.sorting")  private var sortingRaw: String  = SessionSorting.recency.rawValue
     @AppStorage("clawdmeter.sidebar.status")   private var statusRaw: String   = SessionStatusFilter.all.rawValue
 
@@ -305,6 +364,9 @@ private struct SidebarPane: View {
     @State private var renameJSONLTarget: RecentSession?
     @State private var renameJSONLInput: String = ""
     @State private var showingRenameJSONLAlert: Bool = false
+    @State private var collapsedStatusGroupIDs: Set<String> = []
+    @State private var sidebarViewportHeight: CGFloat = 0
+    @State private var sidebarContentHeight: CGFloat = 0
 
     private var grouping: SessionGrouping {
         SessionGrouping(rawValue: groupingRaw) ?? .repo
@@ -321,6 +383,7 @@ private struct SidebarPane: View {
             sidebarHeader
             Divider()
             searchField
+            statusBuckets
             Divider()
             content
             Divider()
@@ -418,7 +481,7 @@ private struct SidebarPane: View {
     @ViewBuilder
     private var filterMenu: some View {
         let isCustomised =
-            grouping != .repo
+            grouping != .status
             || sorting != .recency
             || statusFilter != .all
         Menu {
@@ -447,7 +510,7 @@ private struct SidebarPane: View {
                 Divider()
                 Button("Reset filters") {
                     statusRaw = SessionStatusFilter.all.rawValue
-                    groupingRaw = SessionGrouping.repo.rawValue
+                    groupingRaw = SessionGrouping.status.rawValue
                     sortingRaw = SessionSorting.recency.rawValue
                 }
             }
@@ -497,6 +560,87 @@ private struct SidebarPane: View {
         }
     }
 
+    private var statusBuckets: some View {
+        HStack(spacing: 4) {
+            sidebarBucket(
+                title: "Active",
+                count: statusCount(.active),
+                active: statusFilter == .active,
+                color: .green
+            ) { toggleStatusFilter(.active) }
+            sidebarBucket(
+                title: "Review",
+                count: statusCount(.inReview),
+                active: statusFilter == .inReview,
+                color: .orange
+            ) { toggleStatusFilter(.inReview) }
+            sidebarBucket(
+                title: "Done",
+                count: statusCount(.done),
+                active: statusFilter == .done,
+                color: terraCotta
+            ) { toggleStatusFilter(.done) }
+            sidebarBucket(
+                title: "Archive",
+                count: statusCount(.archived),
+                active: statusFilter == .archived,
+                color: .secondary
+            ) { toggleStatusFilter(.archived) }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 6)
+    }
+
+    private func toggleStatusFilter(_ filter: SessionStatusFilter) {
+        statusRaw = statusFilter == filter ? SessionStatusFilter.all.rawValue : filter.rawValue
+        if grouping != .status {
+            groupingRaw = SessionGrouping.status.rawValue
+        }
+    }
+
+    private func sidebarBucket(
+        title: String,
+        count: Int,
+        active: Bool,
+        color: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 10, weight: .semibold))
+                Text("\(count)")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(active ? .white.opacity(0.85) : .secondary)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity)
+            .foregroundStyle(active ? .white : color)
+            .background(
+                active ? color.opacity(0.82) : Color.secondary.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func statusCount(_ filter: SessionStatusFilter) -> Int {
+        let sessions = model.filter(sessions: model.registry.sessions)
+        switch filter {
+        case .all:
+            return sessions.count
+        case .active:
+            return sessions.filter { SessionSidebarGrouper.bucket(for: $0, reviewSessionIds: reviewSessionIds) == .active }.count
+        case .inReview:
+            return sessions.filter { SessionSidebarGrouper.bucket(for: $0, reviewSessionIds: reviewSessionIds) == .inReview }.count
+        case .done:
+            return sessions.filter { SessionSidebarGrouper.bucket(for: $0, reviewSessionIds: reviewSessionIds) == .done }.count
+        case .archived:
+            return sessions.filter { SessionSidebarGrouper.bucket(for: $0, reviewSessionIds: reviewSessionIds) == .archived }.count
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         if model.filteredRepos.isEmpty && model.registry.sessions.isEmpty {
@@ -519,7 +663,8 @@ private struct SidebarPane: View {
                             repos: filteredReposForGrouping,
                             grouping: grouping,
                             sorting: sorting,
-                            statusFilter: statusFilter
+                            statusFilter: statusFilter,
+                            reviewSessionIds: reviewSessionIds
                         )
                         ForEach(groups) { group in
                             groupSection(group)
@@ -527,7 +672,39 @@ private struct SidebarPane: View {
                     }
                 }
                 .padding(.vertical, 6)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: SidebarContentHeightKey.self, value: proxy.size.height)
+                    }
+                )
             }
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: SidebarViewportHeightKey.self, value: proxy.size.height)
+                }
+            )
+            .onPreferenceChange(SidebarContentHeightKey.self) { sidebarContentHeight = $0 }
+            .onPreferenceChange(SidebarViewportHeightKey.self) { sidebarViewportHeight = $0 }
+            .mask(sidebarMask)
+        }
+    }
+
+    @ViewBuilder
+    private var sidebarMask: some View {
+        if sidebarContentHeight > sidebarViewportHeight + 8 {
+            sidebarFadeMask
+        } else {
+            Rectangle().fill(.black)
+        }
+    }
+
+    private var sidebarFadeMask: some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: 14)
+            Rectangle().fill(.black)
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: 14)
         }
     }
 
@@ -543,10 +720,25 @@ private struct SidebarPane: View {
             // Match the existing search behaviour: search filters apply
             // to both sessions AND repos. SessionsModel.filter handles
             // archive visibility based on `showArchived`.
-            if !model.showArchived, s.archivedAt != nil { return false }
+            if grouping != .status && statusFilter != .archived && !model.showArchived && s.archivedAt != nil { return false }
             return true
         }
         return model.filter(sessions: all)
+    }
+
+    private var reviewSessionIds: Set<UUID> {
+        Set(model.registry.sessions.compactMap { session in
+            if session.planText != nil { return session.id }
+            if let state = session.prMirrorState?.state,
+               state == .open || state == .draft {
+                return session.id
+            }
+            if let state = workbenchState.snapshot.prCache[session.id]?.state?.lowercased(),
+               state == "open" || state == "draft" || state == "pending" {
+                return session.id
+            }
+            return nil
+        })
     }
 
     /// Generic group renderer for non-Repo groupings. Header is a plain
@@ -554,54 +746,119 @@ private struct SidebarPane: View {
     /// rows reuse `sessionRow`; recent rows reuse `recentSessionRow`.
     @ViewBuilder
     private func groupSection(_ group: SessionSidebarGroup) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Text(group.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                let count = group.sessions.count + group.recents.count
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                }
+        if group.id.hasPrefix("status:") {
+            DisclosureGroup(isExpanded: statusGroupExpandedBinding(group.id)) {
+                groupRows(group)
+            } label: {
+                statusGroupHeader(group)
             }
+            .disclosureGroupStyle(QuietDisclosure())
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 4)
-            ForEach(group.sessions) { s in
-                sessionRow(s, isOpen: model.openSessionId == s.id, depth: 0)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                plainGroupHeader(group)
+                groupRows(group)
             }
-            ForEach(group.recents) { recent in
-                Button(action: {
-                    // Resolve the repo display name from the recent's path.
-                    let repo = model.repos.first(where: { $0.recentSessions.contains(recent) })
-                    model.openOutsideSession(
-                        recent: recent,
-                        repoKey: repo?.key ?? recent.path,
-                        repoDisplayName: repo?.displayName ?? "Recent"
-                    )
-                }) {
-                    // Non-Repo grouping (Date / Status / Agent / None):
-                    // no repo section header above this row, so surface
-                    // the repo as an inline chip in the subtitle.
-                    recentSessionRow(
-                        recent,
-                        isOpen: model.openOutsideJSONLPath == recent.path,
-                        repo: model.repos.first(where: { $0.recentSessions.contains(recent) })
-                            ?? AgentRepo(key: recent.path, displayName: "Recent", hasActiveSessions: false),
-                        showRepoChip: true
-                    )
+        }
+    }
+
+    private func statusGroupExpandedBinding(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { !collapsedStatusGroupIDs.contains(id) },
+            set: { isExpanded in
+                if isExpanded {
+                    collapsedStatusGroupIDs.remove(id)
+                } else {
+                    collapsedStatusGroupIDs.insert(id)
                 }
-                .buttonStyle(.plain)
             }
+        )
+    }
+
+    private func plainGroupHeader(_ group: SessionSidebarGroup) -> some View {
+        HStack(spacing: 6) {
+            Text(group.title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            let count = group.sessions.count + group.recents.count
+            if count > 0 {
+                Text("\(count)")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    private func statusGroupHeader(_ group: SessionSidebarGroup) -> some View {
+        let count = group.sessions.count + group.recents.count
+        return HStack(spacing: 6) {
+            StatusPulseDot(
+                color: statusGroupTint(group),
+                isLive: group.id == "status:active" && count > 0
+            )
+            Text(group.title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text("\(count)")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(count == 0 ? .tertiary : .secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Color.secondary.opacity(count == 0 ? 0.06 : 0.12), in: Capsule())
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func statusGroupTint(_ group: SessionSidebarGroup) -> Color {
+        switch group.id {
+        case "status:active": return .green
+        case "status:inReview": return .orange
+        case "status:done": return terraCotta
+        case "status:archived": return .secondary
+        default: return .secondary
+        }
+    }
+
+    @ViewBuilder
+    private func groupRows(_ group: SessionSidebarGroup) -> some View {
+        ForEach(group.sessions) { s in
+            sessionRow(s, isOpen: model.openSessionId == s.id, depth: 0)
+        }
+        ForEach(group.recents) { recent in
+            Button(action: {
+                // Resolve the repo display name from the recent's path.
+                let repo = model.repos.first(where: { $0.recentSessions.contains(recent) })
+                model.openOutsideSession(
+                    recent: recent,
+                    repoKey: repo?.key ?? recent.path,
+                    repoDisplayName: repo?.displayName ?? "Recent"
+                )
+            }) {
+                // Non-Repo grouping (Date / Status / Agent / None):
+                // no repo section header above this row, so surface
+                // the repo as an inline chip in the subtitle.
+                recentSessionRow(
+                    recent,
+                    isOpen: model.openOutsideJSONLPath == recent.path,
+                    repo: model.repos.first(where: { $0.recentSessions.contains(recent) })
+                        ?? AgentRepo(key: recent.path, displayName: "Recent", hasActiveSessions: false),
+                    showRepoChip: true
+                )
+            }
+            .buttonStyle(.plain)
         }
     }
 
     private func repoSection(_ repo: AgentRepo) -> some View {
         let allSessions = model.sessions(for: repo.key, includeArchived: model.showArchived)
-        let visibleSessions = model.filter(sessions: allSessions)
+        let visibleSessions = model.filter(sessions: allSessions).filter(sidebarStatusPasses)
         let rootSessions = visibleSessions.filter { $0.parentSessionId == nil }
         let isExpanded = model.expandedRepoKeys.contains(repo.key)
         let recentSessions = repo.recentSessions
@@ -652,6 +909,21 @@ private struct SidebarPane: View {
                     .buttonStyle(.plain)
                 }
             }
+        }
+    }
+
+    private func sidebarStatusPasses(_ session: AgentSession) -> Bool {
+        switch statusFilter {
+        case .all:
+            return true
+        case .active:
+            return SessionSidebarGrouper.bucket(for: session, reviewSessionIds: reviewSessionIds) == .active
+        case .inReview:
+            return SessionSidebarGrouper.bucket(for: session, reviewSessionIds: reviewSessionIds) == .inReview
+        case .done:
+            return SessionSidebarGrouper.bucket(for: session, reviewSessionIds: reviewSessionIds) == .done
+        case .archived:
+            return SessionSidebarGrouper.bucket(for: session, reviewSessionIds: reviewSessionIds) == .archived
         }
     }
 
@@ -817,6 +1089,23 @@ private struct SidebarPane: View {
             let (s, d) = pair
             sessionRow(s, isOpen: model.openSessionId == s.id, depth: d)
                 .contextMenu {
+                    Button("Pop out", systemImage: "rectangle.portrait.on.rectangle.portrait") {
+                        NotificationCenter.default.post(
+                            name: .popOutSession,
+                            object: nil,
+                            userInfo: ["sessionId": s.id]
+                        )
+                    }
+                    Button("Copy session ID", systemImage: "doc.on.doc") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(s.id.uuidString, forType: .string)
+                    }
+                    Button("Reveal JSONL in Finder", systemImage: "doc.text.magnifyingglass") {
+                        if let url = model.chatStore(for: s)?.currentFileURL {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                    }
+                    Divider()
                     Button("Rename…") {
                         renameTarget = s
                         renameInput = s.customName ?? ""
@@ -891,9 +1180,7 @@ private struct SidebarPane: View {
                         .foregroundStyle(.tertiary)
                         .padding(.leading, CGFloat(depth - 1) * 12)
                 }
-                Circle()
-                    .fill(statusColor(session.status))
-                    .frame(width: 6, height: 6)
+                StatusPulseDot(color: statusColor(session.status), isLive: session.status == .running)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(sessionTitle(session))
                         .font(.system(size: 11, weight: .medium))
@@ -915,6 +1202,23 @@ private struct SidebarPane: View {
                     Image(systemName: "doc.text.fill")
                         .font(.system(size: 10))
                         .foregroundStyle(terraCotta)
+                        .help("Plan approval pending")
+                }
+                if model.chatStore(for: session)?.pendingPermissionPrompt != nil {
+                    Image(systemName: "hand.raised.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                        .help("User input required")
+                }
+                let queued = workbenchState.queuedSendCount(for: session.id)
+                if queued > 0 {
+                    Text("\(queued)")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(terraCotta, in: Capsule())
+                        .help("\(queued) queued follow-up\(queued == 1 ? "" : "s")")
                 }
             }
             .padding(.leading, 24 + CGFloat(depth) * 6)
@@ -929,6 +1233,7 @@ private struct SidebarPane: View {
         }
         .buttonStyle(.plain)
         .opacity(session.archivedAt != nil ? 0.6 : 1.0)
+        .animation(.easeOut(duration: 0.18), value: session.status)
     }
 
     private func sessionTitle(_ session: AgentSession) -> String {
@@ -1009,12 +1314,272 @@ private struct SidebarPane: View {
     }
 }
 
+private struct StatusPulseDot: View {
+    let color: Color
+    let isLive: Bool
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            if isLive {
+                Circle()
+                    .stroke(color.opacity(0.35), lineWidth: 1.5)
+                    .frame(width: pulse ? 14 : 7, height: pulse ? 14 : 7)
+                    .opacity(pulse ? 0 : 1)
+            }
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+        }
+        .frame(width: 14, height: 14)
+        .onAppear {
+            guard isLive else { return }
+            withAnimation(.easeOut(duration: 1.3).repeatForever(autoreverses: false)) {
+                pulse = true
+            }
+        }
+        .onChange(of: isLive) { _, newValue in
+            pulse = false
+            guard newValue else { return }
+            withAnimation(.easeOut(duration: 1.3).repeatForever(autoreverses: false)) {
+                pulse = true
+            }
+        }
+    }
+}
+
+private struct WorkspaceSwitcherSheet: View {
+    @ObservedObject var model: SessionsModel
+    let focusedSession: AgentSession?
+    @Binding var isPresented: Bool
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+
+    private var filteredSessions: [AgentSession] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let sessions = model.registry.sessions
+            .filter { $0.archivedAt == nil }
+            .sorted { $0.lastEventAt > $1.lastEventAt }
+        guard !q.isEmpty else { return Array(sessions.prefix(50)) }
+        return sessions.filter { session in
+            session.displayLabel.lowercased().contains(q)
+                || session.repoDisplayName.lowercased().contains(q)
+                || session.agent.rawValue.lowercased().contains(q)
+        }
+    }
+
+    private var filteredRepos: [AgentRepo] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let repos = model.repos
+        guard !q.isEmpty else { return Array(repos.prefix(20)) }
+        return repos.filter { repo in
+            repo.displayName.lowercased().contains(q)
+                || repo.key.lowercased().contains(q)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Switch workspace or session", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .focused($searchFocused)
+                    .onSubmit { activateDefaultResult() }
+                Button("New") {
+                    model.showingNewSessionSheet = true
+                    isPresented = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(12)
+            Divider()
+            List {
+                if let focusedSession,
+                   let repoKey = focusedSession.repoKey {
+                    Section("Current Repo") {
+                        Button {
+                            model.selectedRepoKey = repoKey
+                            model.showingNewSessionSheet = true
+                            isPresented = false
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundStyle(.green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Start new session in \(focusedSession.repoDisplayName)")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .lineLimit(1)
+                                    Text(repoKey)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                if !filteredSessions.isEmpty {
+                    Section("Sessions") {
+                        ForEach(filteredSessions) { session in
+                            Button {
+                                model.openOutsideJSONLPath = nil
+                                model.openSessionId = session.id
+                                isPresented = false
+                            } label: {
+                                workspaceSessionRow(session)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                if !filteredRepos.isEmpty {
+                    Section("Repos") {
+                        ForEach(filteredRepos, id: \.key) { repo in
+                            Button {
+                                model.selectedRepoKey = repo.key
+                                model.showingNewSessionSheet = true
+                                isPresented = false
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "folder.fill")
+                                        .foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(repo.displayName)
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .lineLimit(1)
+                                        Text(repo.key)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "plus.circle")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            Button("Open") {
+                activateDefaultResult()
+            }
+            .keyboardShortcut(.defaultAction)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            Button("Cancel") {
+                isPresented = false
+            }
+            .keyboardShortcut(.cancelAction)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+        }
+        .frame(minWidth: 520, minHeight: 460)
+        .onAppear {
+            searchFocused = true
+        }
+    }
+
+    private func activateDefaultResult() {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.isEmpty,
+           let focusedSession,
+           let repoKey = focusedSession.repoKey {
+            openRepo(repoKey)
+            return
+        }
+        if let session = filteredSessions.first {
+            openSession(session)
+            return
+        }
+        if let repo = filteredRepos.first {
+            openRepo(repo.key)
+        }
+    }
+
+    private func openSession(_ session: AgentSession) {
+        model.openOutsideJSONLPath = nil
+        model.openSessionId = session.id
+        isPresented = false
+    }
+
+    private func openRepo(_ repoKey: String) {
+        model.selectedRepoKey = repoKey
+        model.showingNewSessionSheet = true
+        isPresented = false
+    }
+
+    private func workspaceSessionRow(_ session: AgentSession) -> some View {
+        HStack(spacing: 8) {
+            StatusPulseDot(
+                color: session.status == .running ? .green : .secondary,
+                isLive: session.status == .running
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.displayLabel)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Text("\(session.repoDisplayName) · \(session.agent.rawValue.capitalized) · \(session.status.rawValue)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Text(session.lastEventAt.formatted(date: .omitted, time: .shortened))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 3)
+    }
+}
+
+private struct ConnectingTranscriptState: View {
+    let session: AgentSession
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ZStack {
+                StatusPulseDot(color: .green, isLive: true)
+                    .scaleEffect(1.8)
+                Image(systemName: "sparkle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 48, height: 48)
+            Text("Connecting to \(session.agent.rawValue.capitalized)")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+            Text(session.effectiveCwd)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 440)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 // MARK: - Center thread
 
 private struct CenterThread: View {
     let session: AgentSession
     let isReadOnly: Bool
     @ObservedObject var model: SessionsModel
+    let catalog: ModelCatalog
+    @ObservedObject var workbenchState: WorkbenchState
+    let density: TranscriptDensity
+    let onDensityChange: (TranscriptDensity) -> Void
     let onModeSwitch: (SessionMode) -> Void
 
     @StateObject private var composerStore: ComposerStore
@@ -1031,16 +1596,35 @@ private struct CenterThread: View {
     @State private var showingScheduler = false
     @State private var showingTerminalOverlay = false
     @State private var showingAutopilotConfirm = false
+    @State private var isDispatchingQueuedSend = false
+    @State private var dispatchedQueuedTurnForCurrentIdle = false
+    @State private var checkpointStatusText: String?
+    @State private var restorePlan: CheckpointRestorePlan?
+    @State private var isPreparingCheckpointRestore = false
+    @State private var isRestoringCheckpoint = false
     /// Captured target mode for the bypass-mode trust-grant confirm sheet.
     /// When the user picks `.bypass` from the chip we stash it here and
     /// surface the existing autopilot confirm sheet, then commit on
     /// approval.
     @State private var pendingBypassMode = false
 
-    init(session: AgentSession, isReadOnly: Bool, model: SessionsModel, onModeSwitch: @escaping (SessionMode) -> Void) {
+    init(
+        session: AgentSession,
+        isReadOnly: Bool,
+        model: SessionsModel,
+        catalog: ModelCatalog,
+        workbenchState: WorkbenchState,
+        density: TranscriptDensity,
+        onDensityChange: @escaping (TranscriptDensity) -> Void,
+        onModeSwitch: @escaping (SessionMode) -> Void
+    ) {
         self.session = session
         self.isReadOnly = isReadOnly
         self.model = model
+        self.catalog = catalog
+        self.workbenchState = workbenchState
+        self.density = density
+        self.onDensityChange = onDensityChange
         self.onModeSwitch = onModeSwitch
         let store = ComposerStore(mode: .bound(sessionId: session.id))
         store.modelId = session.model
@@ -1062,6 +1646,12 @@ private struct CenterThread: View {
             Divider()
             chatPane
         }
+        .onAppear {
+            applyPendingFirstSendRecovery()
+        }
+        .onChange(of: model.pendingFirstSendRecoveryVersion) { _, _ in
+            applyPendingFirstSendRecovery()
+        }
         .sheet(isPresented: $showingScheduler) {
             FollowUpSchedulerSheet(session: session, registry: model.registry)
         }
@@ -1071,10 +1661,26 @@ private struct CenterThread: View {
         .sheet(isPresented: $showingAutopilotConfirm) {
             autopilotConfirm
         }
+        .sheet(item: $restorePlan) { plan in
+            CheckpointRestoreSheet(
+                plan: plan,
+                isRestoring: isRestoringCheckpoint,
+                onCancel: { restorePlan = nil },
+                onRestore: { Task { await restoreCheckpoint(plan) } }
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: .showRawTerminal)) { note in
             if let id = note.userInfo?["sessionId"] as? UUID, id == session.id {
                 showingTerminalOverlay = true
             }
+        }
+        .onChange(of: session.status) { _, newValue in
+            if newValue == .running {
+                dispatchedQueuedTurnForCurrentIdle = false
+            }
+        }
+        .task(id: queueDrainKey) {
+            await drainQueuedSendsIfPossible()
         }
     }
 
@@ -1105,6 +1711,12 @@ private struct CenterThread: View {
                         .foregroundStyle(prBranchColor)
                         .help(branchTooltip)
                     }
+                    if let checkpointStatusText {
+                        Text("· \(checkpointStatusText)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             Spacer()
@@ -1117,10 +1729,37 @@ private struct CenterThread: View {
                 EmptyView()
             } else {
                 Menu {
+                    ForEach(TranscriptDensity.allCases, id: \.self) { option in
+                        Button {
+                            onDensityChange(option)
+                        } label: {
+                            if option == density {
+                                Label(densityLabel(option), systemImage: "checkmark")
+                            } else {
+                                Text(densityLabel(option))
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .font(.system(size: 14))
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 26)
+                .help("Transcript density")
+                Menu {
                     Button("Show raw terminal (⌘T)") { showingTerminalOverlay = true }
                         .keyboardShortcut("t", modifiers: [.command])
                     Button("Schedule follow-up…", systemImage: "clock") {
                         showingScheduler = true
+                    }
+                    Button("Create checkpoint", systemImage: "bookmark") {
+                        Task { await createCheckpoint() }
+                    }
+                    if let latest = workbenchState.latestCheckpoint(for: session.id) {
+                        Button("Restore latest checkpoint…", systemImage: "arrow.uturn.backward") {
+                            Task { await prepareCheckpointRestore(latest) }
+                        }
                     }
                     Button("Pop out window", systemImage: "rectangle.portrait.on.rectangle.portrait") {
                         NotificationCenter.default.post(
@@ -1134,6 +1773,7 @@ private struct CenterThread: View {
                     if session.archivedAt == nil {
                         Button("Archive") {
                             model.registry.archive(id: session.id)
+                            workbenchState.clearSessionState(sessionId: session.id)
                             AttachmentStaging.cleanup(sessionId: session.id)
                             if let wt = session.worktreePath {
                                 AttachmentStaging.cleanupWorktree(at: wt)
@@ -1143,6 +1783,7 @@ private struct CenterThread: View {
                     Button("End session", role: .destructive) {
                         Task {
                             await model.endSession(id: session.id)
+                            workbenchState.clearSessionState(sessionId: session.id)
                             AttachmentStaging.cleanup(sessionId: session.id)
                             if let wt = session.worktreePath {
                                 AttachmentStaging.cleanupWorktree(at: wt)
@@ -1159,6 +1800,14 @@ private struct CenterThread: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    private func densityLabel(_ density: TranscriptDensity) -> String {
+        switch density {
+        case .compact: return "Compact"
+        case .balanced: return "Balanced"
+        case .detailed: return "Detailed"
+        }
     }
 
     /// v0.5.4 header-label helper. User-set `customName` wins over the
@@ -1281,6 +1930,14 @@ private struct CenterThread: View {
                 Divider()
                 SessionActivityStrip(session: session, chatStore: store)
             }
+            if !workbenchState.queuedSends(for: session.id).isEmpty {
+                Divider()
+                queuedSendsPanel
+            }
+            if let latest = workbenchState.latestCheckpoint(for: session.id) {
+                Divider()
+                checkpointStrip(latest)
+            }
             // Always render the composer — even for read-only synthetic
             // Recent-JSONL rows. Sending text on a read-only row
             // implicitly promotes it to a live `--resume`/`resume` spawn
@@ -1290,10 +1947,105 @@ private struct CenterThread: View {
         }
     }
 
+    private var queuedSendsPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Label("Queued follow-ups", systemImage: "tray.and.arrow.down.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear") {
+                    workbenchState.clearQueuedSends(sessionId: session.id)
+                }
+                .font(.system(size: 10, weight: .medium))
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+            ForEach(workbenchState.queuedSends(for: session.id)) { draft in
+                queuedDraftRow(draft)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.secondary.opacity(0.035))
+    }
+
+    private func queuedDraftRow(_ draft: QueuedWorkbenchSend) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            TextField(
+                "Queued prompt",
+                text: Binding(
+                    get: { draft.text },
+                    set: { workbenchState.updateQueuedSend(id: draft.id, text: $0) }
+                ),
+                axis: .vertical
+            )
+            .font(.system(size: 11))
+            .textFieldStyle(.plain)
+            .lineLimit(1...4)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            if !draft.attachmentPaths.isEmpty {
+                Label("\(draft.attachmentPaths.count)", systemImage: "paperclip")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 6)
+                    .help(draft.attachmentPaths.joined(separator: "\n"))
+            }
+            Button {
+                Task { await dispatchQueuedDraft(draft, manual: true) }
+            } label: {
+                Image(systemName: "paperplane.fill")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .disabled(session.status == .running || isDispatchingQueuedSend)
+            .help(session.status == .running ? "Dispatches when the current turn finishes" : "Send queued follow-up now")
+            .padding(.top, 6)
+            Button(role: .destructive) {
+                workbenchState.removeQueuedSend(id: draft.id)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .help("Delete queued follow-up")
+            .padding(.top, 6)
+        }
+    }
+
+    private func checkpointStrip(_ checkpoint: CheckpointStateSnapshot) -> some View {
+        HStack(spacing: 8) {
+            Label("Checkpoint", systemImage: "bookmark.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(checkpoint.createdAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.tertiary)
+            if let summary = checkpoint.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button("Restore") {
+                Task { await prepareCheckpointRestore(checkpoint) }
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .buttonStyle(.plain)
+            .help("Preview and restore this checkpoint")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(Color.secondary.opacity(0.03))
+    }
+
     @ViewBuilder
     private var messageList: some View {
         if let store = model.chatStore(for: session) {
-            ChatThreadScroll(store: store, session: session, model: model)
+            ChatThreadScroll(store: store, session: session, model: model, density: density)
                 .onAppear {
                     // T8 wiring: push session.planText into the store so
                     // the staging actor's precompute can mark steps
@@ -1304,29 +2056,30 @@ private struct CenterThread: View {
                     store.setPlanText(newValue)
                 }
         } else {
-            ContentUnavailableView {
-                Label("No JSONL yet", systemImage: "ellipsis.bubble")
-            } description: {
-                Text("Waiting for the agent to write its first message…")
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ConnectingTranscriptState(session: session)
         }
     }
 
     private var composerArea: some View {
         ComposerInputCore(
             store: composerStore,
-            catalog: .bundled,
+            catalog: catalog,
             agentForModelPicker: session.agent,
             modelSupportsEffort: modelSupportsEffort,
             onSend: { Task { await performBoundSend() } },
+            onQueue: { queueCurrentDraft() },
             onInterrupt: { Task { await performInterrupt() } },
             onToggleAutopilot: { showingAutopilotConfirm = true },
             onChangePermissionMode: { newMode in
                 Task { await changePermissionMode(to: newMode) }
             },
             permissionMode: PermissionModeStore.shared.currentMode(for: session),
-            onApprovePlan: { Task { await model.approvePlan(id: session.id) } },
+            onApprovePlan: {
+                Task {
+                    guard await createLifecycleCheckpoint(summary: "Before plan approval") else { return }
+                    await model.approvePlan(id: session.id)
+                }
+            },
             showApprovePlan: session.planText != nil,
             sessionIsRunning: session.status == .running && !composerStore.isSending,
             isReadOnly: isReadOnly,
@@ -1348,7 +2101,7 @@ private struct CenterThread: View {
         // synthetic into a real session. Keeps typing zero-overhead.
         .onChange(of: composerStore.modelId) { _, new in
             guard !isReadOnly, let new, new != session.model else { return }
-            if let entry = ModelCatalog.bundled.entry(forId: new) {
+            if let entry = catalog.entry(forId: new) {
                 Task { await model.switchModel(sessionId: session.id, to: entry, effort: composerStore.effort) }
             }
         }
@@ -1364,21 +2117,175 @@ private struct CenterThread: View {
 
     // MARK: - Send / interrupt / autopilot via daemon (P0 fixes)
 
+    private var queueDrainKey: String {
+        "\(session.id.uuidString):\(session.status.rawValue):\(workbenchState.queuedSendCount(for: session.id))"
+    }
+
+    private func queueCurrentDraft() {
+        guard composerStore.canSend else { return }
+        let draft = QueuedWorkbenchSend(
+            sessionId: session.id,
+            text: composerStore.text,
+            attachmentPaths: composerStore.attachments.map { $0.sourceURL.path }
+        )
+        workbenchState.queueSend(draft)
+        composerStore.clearAfterSend()
+    }
+
+    private func drainQueuedSendsIfPossible() async {
+        guard session.status != .running,
+              !isDispatchingQueuedSend,
+              !dispatchedQueuedTurnForCurrentIdle,
+              let draft = workbenchState.nextQueuedSend(for: session.id)
+        else { return }
+        dispatchedQueuedTurnForCurrentIdle = true
+        await dispatchQueuedDraft(draft, manual: false)
+    }
+
+    private func dispatchQueuedDraft(_ draft: QueuedWorkbenchSend, manual: Bool) async {
+        guard session.status != .running else { return }
+        guard !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachmentPaths.isEmpty else {
+            workbenchState.removeQueuedSend(id: draft.id)
+            return
+        }
+        guard let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort
+        else {
+            composerStore.endSend(error: .offline)
+            if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+            return
+        }
+        isDispatchingQueuedSend = true
+        composerStore.beginSend()
+        defer {
+            isDispatchingQueuedSend = false
+        }
+
+        let target = session
+        var stagedPaths: [URL] = []
+        if !draft.attachmentPaths.isEmpty {
+            guard let dir = AttachmentStaging.stagingDir(for: target) else {
+                composerStore.endSend(error: .daemonError(message: "Couldn't create attachment staging directory."))
+                if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+                return
+            }
+            for path in draft.attachmentPaths {
+                do {
+                    let staged = try AttachmentStaging.stage(
+                        source: URL(fileURLWithPath: path),
+                        into: dir,
+                        attachmentId: UUID()
+                    )
+                    stagedPaths.append(staged)
+                } catch {
+                    composerStore.endSend(error: .daemonError(message: "Couldn't stage queued attachment: \(error.localizedDescription)"))
+                    if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+                    return
+                }
+            }
+        }
+
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        let body = QueuedPromptRenderer.render(text: draft.text, attachmentPaths: stagedPaths)
+        do {
+            guard await createLifecycleCheckpoint(summary: "Before queued prompt") else {
+                composerStore.endSend(error: .daemonError(message: "Safety checkpoint failed. Prompt was not sent."))
+                if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+                return
+            }
+            try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
+            workbenchState.removeQueuedSend(id: draft.id)
+            composerStore.endSend()
+        } catch MacComposerSender.Error.http(let status, let retry) {
+            switch status {
+            case 401: composerStore.endSend(error: .unauthorized)
+            case 404: composerStore.endSend(error: .sessionGone)
+            case 429: composerStore.endSend(error: .rateLimited(retryAfter: retry))
+            default: composerStore.endSend(error: .daemonError(message: "HTTP \(status)"))
+            }
+            if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+        } catch MacComposerSender.Error.transport(let message) {
+            composerStore.endSend(error: .daemonError(message: message))
+            if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+        } catch {
+            composerStore.endSend(error: .daemonError(message: error.localizedDescription))
+            if !manual { dispatchedQueuedTurnForCurrentIdle = false }
+        }
+    }
+
+    private func createCheckpoint() async {
+        let service = CheckpointService()
+        do {
+            let checkpoint = try await service.createCheckpoint(
+                session: session,
+                summary: "Manual checkpoint"
+            )
+            workbenchState.recordCheckpoint(checkpoint)
+            checkpointStatusText = "checkpoint saved"
+        } catch {
+            checkpointStatusText = error.localizedDescription
+        }
+    }
+
+    private func prepareCheckpointRestore(_ checkpoint: CheckpointStateSnapshot) async {
+        let service = CheckpointService()
+        isPreparingCheckpointRestore = true
+        checkpointStatusText = "preparing restore preview"
+        defer { isPreparingCheckpointRestore = false }
+        do {
+            let plan = try await service.prepareRestore(checkpoint, session: session)
+            workbenchState.recordCheckpoint(plan.safety)
+            restorePlan = plan
+            checkpointStatusText = plan.isBlocked ? "restore blocked" : "restore preview ready"
+        } catch {
+            checkpointStatusText = error.localizedDescription
+        }
+    }
+
+    private func restoreCheckpoint(_ plan: CheckpointRestorePlan) async {
+        let service = CheckpointService()
+        isRestoringCheckpoint = true
+        defer { isRestoringCheckpoint = false }
+        do {
+            try await service.restore(plan, in: session.effectiveCwd)
+            restorePlan = nil
+            checkpointStatusText = "checkpoint restored"
+        } catch {
+            checkpointStatusText = error.localizedDescription
+        }
+    }
+
+    private func createLifecycleCheckpoint(summary: String, for targetSession: AgentSession? = nil) async -> Bool {
+        let service = CheckpointService()
+        let checkpointSession = targetSession ?? session
+        do {
+            let checkpoint = try await service.createCheckpoint(session: checkpointSession, summary: summary)
+            workbenchState.recordCheckpoint(checkpoint)
+            checkpointStatusText = "checkpoint saved"
+            return true
+        } catch {
+            checkpointStatusText = "checkpoint failed: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     private func performBoundSend() async {
         composerStore.beginSend()
+        let draftText = composerStore.text
+        let draftAttachments = composerStore.attachments
         guard let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort
         else {
             composerStore.endSend(error: .offline)
             return
         }
-
         // Read-only Recent-JSONL rows: implicitly promote the synthetic
         // session to a live --resume spawn before sending. The model
         // updates `openSessionId` to the new live session, the parent view
         // re-renders, and the existing post-send `endSend()` clears this
         // store. The new CenterThread mounts with a fresh empty composer.
         let target: AgentSession
+        var promotedReadOnlyTarget: AgentSession?
         if isReadOnly {
             guard let live = await model.continueCurrentReadOnly() else {
                 // v0.5.0 — surface the JSONL path in the error message so
@@ -1398,9 +2305,20 @@ private struct CenterThread: View {
             // needs a beat to wire up the pane and the CLI to swallow the
             // resume argv before paste-buffer hits.
             try? await Task.sleep(nanoseconds: 600_000_000)
+            promotedReadOnlyTarget = live
             target = live
         } else {
             target = session
+        }
+
+        guard await createLifecycleCheckpoint(summary: "Before prompt", for: target) else {
+            finishBoundSendWithError(
+                .daemonError(message: "Safety checkpoint failed. Prompt was not sent."),
+                promotedTarget: promotedReadOnlyTarget,
+                draftText: draftText,
+                draftAttachments: draftAttachments
+            )
+            return
         }
 
         let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
@@ -1411,7 +2329,12 @@ private struct CenterThread: View {
                     let staged = try AttachmentStaging.stage(source: att.sourceURL, into: dir, attachmentId: att.id)
                     stagedPaths.append(staged)
                 } catch {
-                    composerStore.endSend(error: .daemonError(message: "Couldn't stage \(att.displayName): \(error.localizedDescription)"))
+                    finishBoundSendWithError(
+                        .daemonError(message: "Couldn't stage \(att.displayName): \(error.localizedDescription)"),
+                        promotedTarget: promotedReadOnlyTarget,
+                        draftText: draftText,
+                        draftAttachments: draftAttachments
+                    )
                     return
                 }
             }
@@ -1421,17 +2344,53 @@ private struct CenterThread: View {
             try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
             composerStore.endSend()
         } catch MacComposerSender.Error.http(let status, let retry) {
-            switch status {
-            case 401: composerStore.endSend(error: .unauthorized)
-            case 404: composerStore.endSend(error: .sessionGone)
-            case 429: composerStore.endSend(error: .rateLimited(retryAfter: retry))
-            default: composerStore.endSend(error: .daemonError(message: "HTTP \(status)"))
-            }
+            finishBoundSendWithError(
+                sendError(forHTTPStatus: status, retryAfter: retry),
+                promotedTarget: promotedReadOnlyTarget,
+                draftText: draftText,
+                draftAttachments: draftAttachments
+            )
         } catch MacComposerSender.Error.transport(let m) {
-            composerStore.endSend(error: .daemonError(message: m))
+            finishBoundSendWithError(
+                .daemonError(message: m),
+                promotedTarget: promotedReadOnlyTarget,
+                draftText: draftText,
+                draftAttachments: draftAttachments
+            )
         } catch {
-            composerStore.endSend(error: .daemonError(message: error.localizedDescription))
+            finishBoundSendWithError(
+                .daemonError(message: error.localizedDescription),
+                promotedTarget: promotedReadOnlyTarget,
+                draftText: draftText,
+                draftAttachments: draftAttachments
+            )
         }
+    }
+
+    private func sendError(forHTTPStatus status: Int, retryAfter retry: Int?) -> ComposerStore.SendError {
+        switch status {
+        case 401: return .unauthorized
+        case 404: return .sessionGone
+        case 429: return .rateLimited(retryAfter: retry)
+        default: return .daemonError(message: "HTTP \(status)")
+        }
+    }
+
+    private func finishBoundSendWithError(
+        _ error: ComposerStore.SendError,
+        promotedTarget: AgentSession?,
+        draftText: String,
+        draftAttachments: [ComposerStore.Attachment]
+    ) {
+        if let promotedTarget {
+            model.queueFirstSendRecovery(
+                sessionId: promotedTarget.id,
+                text: draftText,
+                attachments: draftAttachments,
+                error: error
+            )
+        }
+        composerStore.endSend(error: error)
     }
 
     private func performInterrupt() async {
@@ -1477,7 +2436,7 @@ private struct CenterThread: View {
     private var usageStatusInfo: UsageStatusInfo? {
         let modelId = session.model ?? model.chatStore(for: session)?.snapshot.modelHint
         guard let modelId, !modelId.isEmpty else { return nil }
-        let entry = ModelCatalog.bundled.entry(forId: modelId)
+        let entry = catalog.entry(forId: modelId)
         let snap = model.chatStore(for: session)?.snapshot
         let used = snap?.contextWindowUsedTokens ?? 0
         let totals = TokenTotals(
@@ -1601,14 +2560,23 @@ private struct CenterThread: View {
         return pieces.joined(separator: "\n")
     }
 
-    /// Whether the current model supports an effort dial. Haiku 4.5 does
-    /// not (supportsEffort=false in the bundled catalog); the dial renders
-    /// disabled with an explanatory tooltip when this is false.
+    /// Whether the current model supports an effort dial. Uses the live
+    /// launcher catalog so account-scoped Cursor models get the same
+    /// effort semantics in bound sessions as they do at launch.
     private var modelSupportsEffort: Bool {
         guard let id = session.model,
-              let entry = ModelCatalog.bundled.entry(forId: id)
+              let entry = catalog.entry(forId: id)
         else { return true }
         return entry.supportsEffort
+    }
+
+    private func applyPendingFirstSendRecovery() {
+        guard let recovery = model.takeFirstSendRecovery(sessionId: session.id) else { return }
+        composerStore.restoreDraft(
+            text: recovery.text,
+            attachments: recovery.attachments,
+            error: recovery.error
+        )
     }
 
     private var terraCotta: Color {
@@ -1622,6 +2590,7 @@ private struct ChatThreadScroll: View {
     @ObservedObject var store: SessionChatStore
     let session: AgentSession
     let model: SessionsModel
+    let density: TranscriptDensity
 
     /// IDs of expanded disclosure groups. Per-row `@State` would be ideal
     /// (A5 codex finding) but with LazyVStack recycling that loses state
@@ -1657,7 +2626,7 @@ private struct ChatThreadScroll: View {
                             itemRow(item)
                                 .listRowSeparator(.hidden)
                                 .listRowBackground(Color.clear)
-                                .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                                .listRowInsets(rowInsets)
                         }
                     }
                     // v0.7.16: thinking-indicator is now a footer row in
@@ -1680,7 +2649,7 @@ private struct ChatThreadScroll: View {
                     }
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    .listRowInsets(rowInsets)
                     // Single-row pin sentinel — replaces the per-row
                     // .onAppear/.onDisappear pin tracking that fired on
                     // every chat-item row. One callback per scroll-edge
@@ -1749,6 +2718,33 @@ private struct ChatThreadScroll: View {
 
     @State private var lastScrollItemCount: Int = 0
 
+    private var rowInsets: EdgeInsets {
+        switch density {
+        case .compact:
+            return EdgeInsets(top: 2, leading: 14, bottom: 2, trailing: 14)
+        case .balanced:
+            return EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16)
+        case .detailed:
+            return EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18)
+        }
+    }
+
+    private var bodyFontSize: CGFloat {
+        switch density {
+        case .compact: return 12
+        case .balanced: return 13
+        case .detailed: return 14
+        }
+    }
+
+    private var toolOutputLineLimit: Int? {
+        switch density {
+        case .compact: return 16
+        case .balanced: return 40
+        case .detailed: return nil
+        }
+    }
+
     private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, items: Int) {
         let delta = items - lastScrollItemCount
         lastScrollItemCount = items
@@ -1811,7 +2807,12 @@ private struct ChatThreadScroll: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(editPairs) { pair in
                     if let stats = pair.call.editStats {
-                        EditDiffRow(stats: stats, resultBody: pair.result?.body)
+                        EditDiffRow(
+                            stats: stats,
+                            editDiff: pair.call.editDiff,
+                            resultBody: pair.result?.body,
+                            density: density
+                        )
                     }
                 }
                 ForEach(askPairs) { pair in
@@ -1905,9 +2906,12 @@ private struct ChatThreadScroll: View {
             set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } }
         )
         let isError = pair.result?.isError ?? false
+        let bashResult = pair.result?.bashResult ?? pair.call.bashResult
         return DisclosureGroup(isExpanded: isOpen) {
             VStack(alignment: .leading, spacing: 6) {
-                if let detail = pair.call.detail, !detail.isEmpty {
+                if let bashResult {
+                    bashResultView(bashResult, isError: isError)
+                } else if let detail = pair.call.detail, !detail.isEmpty {
                     Text(detail)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.primary)
@@ -1917,12 +2921,14 @@ private struct ChatThreadScroll: View {
                         .background(Color.secondary.opacity(0.08),
                                     in: RoundedRectangle(cornerRadius: 6))
                 }
-                if let result = pair.result, !result.body.isEmpty {
+                if let result = pair.result,
+                   !result.body.isEmpty,
+                   bashResult == nil || (bashResult?.stdout == nil && bashResult?.stderr == nil) {
                     Text(result.body)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(isError ? .red : .secondary)
                         .textSelection(.enabled)
-                        .lineLimit(40)
+                        .lineLimit(toolOutputLineLimit)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
                         .background(Color.secondary.opacity(0.05),
@@ -1962,12 +2968,82 @@ private struct ChatThreadScroll: View {
         .disclosureGroupStyle(QuietDisclosure())
     }
 
+    @ViewBuilder
+    private func bashResultView(_ bash: BashResult, isError: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if let command = bash.command, !command.isEmpty {
+                    Label(command, systemImage: "terminal")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 8)
+                if let exitCode = bash.exitCode {
+                    Text("exit \(exitCode)")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(exitCode == 0 ? .green : .red)
+                }
+                if let durationMS = bash.durationMS {
+                    Text("\(durationMS) ms")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let cwd = bash.cwd, !cwd.isEmpty {
+                Text(cwd)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            if let stdout = bash.stdout, !stdout.isEmpty {
+                monoBlock(title: "stdout", text: stdout, tint: .secondary)
+            }
+            if let stderr = bash.stderr, !stderr.isEmpty {
+                monoBlock(title: "stderr", text: stderr, tint: .red)
+            }
+            if bash.isTruncated {
+                Text("Output truncated")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            if bash.stdout == nil, bash.stderr == nil, bash.exitCode == nil {
+                Text("Waiting for result...")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(10)
+        .background((isError ? Color.red : Color.secondary).opacity(0.06),
+                    in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func monoBlock(title: String, text: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(tint)
+            Text(text)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(tint)
+                .textSelection(.enabled)
+                .lineLimit(toolOutputLineLimit)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 5))
+    }
+
     private func userBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
         HStack {
             Spacer(minLength: 64)
             VStack(alignment: .trailing, spacing: 4) {
                 Text(msg.body)
-                    .font(.system(size: 13))
+                    .font(.system(size: bodyFontSize))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
@@ -2010,29 +3086,124 @@ private struct ChatThreadScroll: View {
     }
 
     private func toolIcon(_ name: String) -> String {
-        switch name {
-        case "Read", "Glob", "Grep": return "doc.text.magnifyingglass"
-        case "Write": return "pencil"
-        case "Edit": return "pencil.line"
-        case "Bash": return "terminal"
-        case "WebFetch", "WebSearch": return "globe"
-        case "Task": return "person.fill.questionmark"
-        default: return "wrench.adjustable"
-        }
+        ToolPresentationCatalog.presentation(for: name).systemImageName
     }
 
     private func toolTint(_ name: String) -> Color {
-        switch name {
-        case "Read", "Glob", "Grep": return .blue
-        case "Write", "Edit": return terraCotta
-        case "Bash": return .green
-        case "WebFetch", "WebSearch": return .purple
-        default: return .secondary
+        switch ToolPresentationCatalog.presentation(for: name).tone {
+        case .read: return .blue
+        case .write: return terraCotta
+        case .shell: return .green
+        case .web: return .purple
+        case .agent: return .orange
+        case .warning: return .red
+        case .neutral: return .secondary
         }
     }
 
     private var terraCotta: Color {
         Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
+    }
+}
+
+private struct CheckpointRestoreSheet: View {
+    let plan: CheckpointRestorePlan
+    let isRestoring: Bool
+    let onCancel: () -> Void
+    let onRestore: () -> Void
+
+    private var diffBody: String {
+        let stat = plan.diffStat.isEmpty ? "No tracked file changes." : plan.diffStat
+        let patch = plan.diffPatch.isEmpty ? "" : "\n\n\(plan.diffPatch)"
+        let suffix = plan.patchTruncated ? "\n\n[Diff preview truncated]" : ""
+        return stat + patch + suffix
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: plan.isBlocked ? "exclamationmark.triangle.fill" : "arrow.uturn.backward.circle.fill")
+                    .foregroundStyle(plan.isBlocked ? .orange : .blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Restore Checkpoint")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(plan.target.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                labeledRef("Target", plan.target.refName)
+                labeledRef("Safety", plan.safety.refName)
+                if !plan.untrackedSnapshotPaths.isEmpty {
+                    Text("Restores \(plan.untrackedSnapshotPaths.count) untracked file\(plan.untrackedSnapshotPaths.count == 1 ? "" : "s") from the checkpoint sidecar.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if !plan.blockingReasons.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(plan.blockingReasons, id: \.self) { reason in
+                        Label(reason, systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.orange)
+                    }
+                    if !plan.dirtyStatusLines.isEmpty {
+                        Text(plan.dirtyStatusLines.joined(separator: "\n"))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+            }
+
+            Text("Preview")
+                .font(.system(size: 12, weight: .semibold))
+            ScrollView {
+                Text(diffBody)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .frame(minHeight: 240)
+            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button(role: .destructive, action: onRestore) {
+                    Text(isRestoring ? "Restoring…" : "Restore to checkpoint")
+                }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(plan.isBlocked || isRestoring)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 620, minHeight: 520)
+    }
+
+    private func labeledRef(_ label: String, _ ref: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .leading)
+            Text(ref)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
     }
 }
 
@@ -2044,14 +3215,14 @@ private struct ChatThreadScroll: View {
 /// pane is expanded the gutter hides; the pane's own × button collapses
 /// it back to this strip.
 private struct ReviewPaneGutter: View {
-    @Binding var selectedTab: SessionWorkspaceView.RightPaneTab
-    let onExpand: (SessionWorkspaceView.RightPaneTab) -> Void
+    @Binding var selectedTab: WorkbenchPaneTab
+    let onExpand: (WorkbenchPaneTab) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 6) {
-            ForEach(SessionWorkspaceView.RightPaneTab.allCases) { tab in
+            ForEach(WorkbenchPaneTab.allCases) { tab in
                 Button(action: { onExpand(tab) }) {
                     VStack(spacing: 2) {
                         Image(systemName: tab.systemImage)
@@ -2124,7 +3295,8 @@ private struct ReviewPane: View {
     let session: AgentSession
     let chatStore: SessionChatStore?
     @ObservedObject var model: SessionsModel
-    @Binding var selectedTab: SessionWorkspaceView.RightPaneTab
+    @ObservedObject var workbenchState: WorkbenchState
+    @Binding var selectedTab: WorkbenchPaneTab
     let onClose: () -> Void
     let onApprove: () -> Void
 
@@ -2146,7 +3318,7 @@ private struct ReviewPane: View {
             // SwiftUI squeeze the text into per-character wrapping.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
-                    ForEach(SessionWorkspaceView.RightPaneTab.allCases) { tab in
+                    ForEach(WorkbenchPaneTab.allCases) { tab in
                         tabChip(tab)
                     }
                 }
@@ -2164,7 +3336,7 @@ private struct ReviewPane: View {
         .padding(.vertical, 6)
     }
 
-    private func tabChip(_ tab: SessionWorkspaceView.RightPaneTab) -> some View {
+    private func tabChip(_ tab: WorkbenchPaneTab) -> some View {
         let isSelected = (selectedTab == tab)
         return Button(action: { selectedTab = tab }) {
             HStack(spacing: 3) {
@@ -2204,7 +3376,9 @@ private struct ReviewPane: View {
                 placeholder(text: "Waiting for agent JSONL…")
             }
         case .diff:
-            GitDiffPane(repoCwd: session.effectiveCwd)
+            GitDiffPane(repoCwd: session.effectiveCwd, onBeforeDestructiveChange: {
+                await createCheckpoint(summary: "Before destructive diff action")
+            })
         case .sources:
             if let chatStore {
                 SourcesPane(session: session, chatStore: chatStore)
@@ -2218,9 +3392,15 @@ private struct ReviewPane: View {
                 placeholder(text: "Waiting for agent JSONL…")
             }
         case .browser:
-            InAppBrowser(session: session, model: model)
+            InAppBrowser(session: session, model: model, workbenchState: workbenchState)
         case .pr:
-            PRReviewPane(session: session, mirror: model.prMirror(for: session))
+            PRReviewPane(
+                session: session,
+                coordinator: model.prCoordinator(for: session),
+                onBeforeMerge: {
+                    await createCheckpoint(summary: "Before PR merge")
+                }
+            )
         case .terminal:
             terminalTab
         }
@@ -2254,6 +3434,17 @@ private struct ReviewPane: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func createCheckpoint(summary: String) async -> Bool {
+        let service = CheckpointService()
+        do {
+            let checkpoint = try await service.createCheckpoint(session: session, summary: summary)
+            workbenchState.recordCheckpoint(checkpoint)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private var paneBg: Color {
@@ -2405,6 +3596,22 @@ extension Notification.Name {
 /// review pane (and at very narrow widths, the sidebar).
 private struct WorkspaceWidthKey: PreferenceKey {
     static var defaultValue: CGFloat = 1400
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
+}
+
+private struct SidebarViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
+}
+
+private struct SidebarContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         let next = nextValue()
         if next > 0 { value = next }

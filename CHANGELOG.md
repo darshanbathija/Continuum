@@ -4,6 +4,34 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.0 build 139] - 2026-05-24 — Desktop Code tab Conductor parity (`darshanbathija/conductor-parity`)
+
+The desktop Code tab now behaves like a real workbench instead of a read-only session viewer. Agents can be launched and resumed from a denser composer, queued while running, reviewed through Plan/Diff/PR/Browser/Terminal panes, protected by checkpoints, and organized through Conductor-style status buckets.
+
+### Added
+
+- **Production Code workbench shell** — adds the Mac Code shell, launch model, persistent workbench state, and session/workspace right-pane memory so the Code tab can preserve repo context, density, selected pane, queued sends, PR cache, and run profiles across sessions.
+- **Run/Preview loop** — adds real local run process management, stdout/stderr capture, localhost URL detection, URL health checks, auto-preview loading, run controls, and browser-context prompts generated from command-clicked page elements.
+- **Safety checkpoints and restore UX** — adds checkpoint creation before prompt sends, plan approval, queued sends, diff destructive actions, and PR merge, with restore previews that show the target ref, safety ref, diff stat, patch preview, dirty tracked state, untracked sidecar files, and explicit restore confirmation.
+- **Conductor-style sidebar buckets** — adds Active, In Review, Done, and Archived grouping with status chips, counts, collapsible groups, review-state classification, activity pulse treatment, overflow fade polish, and richer session-row actions.
+- **PR/check/run workbench plumbing** — adds local command runners, PR coordination, PR review/merge controls backed by daemon or local state, and code-shell integration rather than placeholder UI.
+- **Tool and edit-diff presentation models** — adds structured tool presentation and capped edit-diff previews so transcript rows can show meaningful changed-file context without overwhelming the chat.
+
+### Changed
+
+- **Composer and first-run UX** — tightens the desktop composer, adds quick-start prompt chips, improves reconnect/empty states, and moves workspace switching into a focused overlay palette with keyboard affordances.
+- **Session transcript rendering** — improves tool rows, bash output, edit-diff rows, and plan/diff handoffs so Chat stays readable while Plan/Diff/PR/Terminal remain dense enough for real coding work.
+- **Status and session filters** — adds the shared `inReview` status filter and updates Sessions v2 expectations for the full desktop bucket model.
+
+### Fixed
+
+- **Queue while running** — prompts sent while a session is running are now retained as editable queued work instead of being dropped or pretending to send immediately.
+- **Destructive-action safety** — diff revert/delete, PR merge, prompt send, queued send, and plan approval now fail closed if a safety checkpoint cannot be created.
+- **Read-only resume recovery** — resumed transcript sends now recover the original prompt and attachments into the promoted live session if the safety checkpoint or send path fails before delivery.
+- **Run/Preview E2E confidence** — tests now cover real local HTTP process startup, detected URL health, browser context prompt generation, and the WKWebView command-click bridge payload.
+
+Bumps `MARKETING_VERSION` 0.28.0 → 0.29.0, `CURRENT_PROJECT_VERSION` 138 → 139.
+
 ## [0.28.0 build 138] - 2026-05-24 — Live Cursor usage source + sandbox/path fix for CLI discovery (`feat/cursor-source`)
 
 The Cursor tile on the Usage tab now shows REAL billing-period usage and reset time from `api2.cursor.sh`, instead of the static `Cursor Auto 0%` placeholder PR #96 shipped. Plus the sandbox/path issue that hid Cursor from the Chat/Code composer agent picker is fixed — `cursor-agent` is now discoverable from the sandboxed Release build.

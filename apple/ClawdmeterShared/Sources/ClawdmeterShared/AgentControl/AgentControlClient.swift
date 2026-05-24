@@ -1092,6 +1092,32 @@ public final class AgentControlClient: ObservableObject {
 
     // MARK: - v16 PR + merge
 
+    /// `GET /sessions/:id/pr`. Returns nil when the daemon reports no PR
+    /// for the session's current branch.
+    @MainActor
+    public func getPRStatus(sessionId: UUID) async -> PRStatus? {
+        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/pr") else { return nil }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            if let status = try? decoder.decode(PRStatus.self, from: data) {
+                self.lastError = nil
+                return status
+            }
+            if let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               dict["pr"] is NSNull {
+                self.lastError = nil
+                return nil
+            }
+            self.lastError = "couldn't parse PR status"
+            return nil
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     /// `POST /sessions/:id/create-pr`. Returns the PR URL (created or
     /// already existing) on success. v16+ supports the idempotency key
     /// so a retry doesn't create a duplicate PR.
