@@ -4,6 +4,43 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.28.0 build 138] - 2026-05-24 — Live Cursor usage source + sandbox/path fix for CLI discovery (`feat/cursor-source`)
+
+The Cursor tile on the Usage tab now shows REAL billing-period usage and reset time from `api2.cursor.sh`, instead of the static `Cursor Auto 0%` placeholder PR #96 shipped. Plus the sandbox/path issue that hid Cursor from the Chat/Code composer agent picker is fixed — `cursor-agent` is now discoverable from the sandboxed Release build.
+
+### Added — full live CursorSource (mirrors CodexSource/AntigravitySource)
+
+- **`CursorTokenProvider`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorTokenProvider.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorTokenProvider.swift)) reads `cursor-access-token` and `cursor-refresh-token` from the macOS Keychain via `SecItemCopyMatching`. `cursor-agent login` stores both items as generic-password entries in the user's login keychain with a permissive ACL, so the sandboxed Clawdmeter can read them after a one-time "Always Allow" prompt. 5-minute in-memory cache TTL matches cursor-agent's own refresh cadence. `refreshIfNeeded()` drops the cache and re-reads — we don't call Cursor's refresh endpoint ourselves, trusting cursor-agent's own background rotation to update the on-disk copy.
+- **`CursorSource`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorSource.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CursorSource.swift)) POSTs a gRPC-Web framed empty request to `https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` with the keychain JWT bearer. Parses the proto response (hand-rolled `CursorProtoReader`, fileprivate) to extract:
+  - `field 2` — billing-period end (unix epoch ms) → `sessionEpoch` + `resetMins`.
+  - `field 5` — included usage count (e.g. 200 for Free) → `organizationID` plan badge ("200 included / period").
+  - `field 7` — percent-used summary string ("You've used 12% of your included usage") → parsed via regex → `sessionPct`. Cursor returns the percent server-side as a pre-formatted string; we extract the integer.
+  - Mirrors `sessionPct` / `sessionResetMins` into the weekly bucket so the Usage tile's Weekly row reads the same value instead of zero (Cursor only exposes one billing window).
+- **`CursorSourceTests`** (5 cases) pins the parser against `Fixtures/cursor-GetCurrentPeriodUsage.bin` — a real free-tier capture saved during Phase 1 of this ship. Covers the happy path, trailer-only error responses, totally-empty bodies, past-billing-period clamping, and gRPC-Web frame unwrapping. CI catches Cursor backend schema drift here instead of letting the Usage tile silently flap to 0%.
+- **`ProviderConfig.cursor`** added to `ProviderConfig.swift` — `id: "cursor"`, `displayName: "Cursor"`, `logoAssetName: "CursorLogo"`, no `reviveModel` (Cursor's monthly billing period doesn't fit AutoReviver's perpetual-5h-window model), `hasWeeklyWindow: false`.
+- **`AppRuntime.cursorModel`** added as a sibling to `claudeModel` / `codexModel` / `geminiModel`. Wired through `start()` so the poller fires on the same 60s cadence as the others.
+- **`MacTahoeAdapter.tahoeLive.cursor`** now calls `tahoeRow(model: cursorModel, provider: .cursor)` — the same code path Claude/Codex/Antigravity use. The static `Cursor Auto 0%` placeholder is gone.
+
+### Fixed — sandbox/path discovery for CLI binaries (PR #96 follow-up)
+
+- **`ShellRunner.locateBinary`** ([apple/ClawdmeterMac/AgentControl/ShellRunner.swift](apple/ClawdmeterMac/AgentControl/ShellRunner.swift):272) now uses `ClawdmeterRealHome.path()` (getpwuid) instead of `FileManager.default.homeDirectoryForCurrentUser.path`. Inside the sandboxed Release build, the previous path resolved to `~/Library/Containers/com.clawdmeter.mac/Data/.local/bin/` (empty) instead of the user's actual `~/.local/bin/` — so `cursor-agent` (and `claude`, and any other user-installed CLI) were unfindable. Same fix pattern v0.26.2/v0.26.3 applied to CodexTokenProvider / GeminiTokenProvider / CodexSource. The follow-up unblocks PR #96's Cursor agent picker, which was correct code but never had a discoverable binary in Release.
+- **`ClawdmeterMac-Release.entitlements`** adds two more read-only `temporary-exception.files.home-relative-path.read-only` paths:
+  - `/.local/bin/` — for `ShellRunner.locateBinary` to read cursor-agent + future CLI siblings.
+  - `/.cursor/` — for future work that reads `~/.cursor/cli-config.json` (plan auth metadata, IDE state). The Keychain reads go through `Security.framework` and don't need a filesystem entitlement, but adding `/.cursor/` now avoids a future entitlement re-shuffle.
+
+### Known limitations
+
+- **Token rotation:** we don't call Cursor's `/refresh` endpoint ourselves. When the access token JWT expires (~7 day life), `CursorSource` will surface `.unauthenticated` until `cursor-agent` itself rotates the keychain entry (cursor-agent runs a background refresh loop, but only when invoked). If the tile reads 0% for many days, run `cursor-agent status` once to nudge the refresh.
+- **Free-tier capture only:** the fixture is from a Free-tier account that has 0% usage in the current period, so the percent-extraction path is exercised against `"You've used 0% of your included usage"`. A future Pro-tier capture with non-zero usage should be added to broaden parser coverage.
+- **Schema drift risk:** Cursor ships weekly+, and the reverse-engineered field numbers (1/2/5/7) could change. `CursorSourceTests` catches drift in CI, but you're the on-call for re-capturing the fixture when the wire format moves.
+- **First-launch keychain prompt:** the very first time CursorSource polls in a freshly-installed Clawdmeter build, macOS may surface a "Clawdmeter wants to use confidential information stored in the keychain" dialog. Click Always Allow once — subsequent reads are silent.
+
+### TOS posture
+
+`api2.cursor.sh/aiserver.v1.DashboardService/*` is the same internal Connect-protocol surface cursor-agent itself uses. We hit it with the user's own JWT, do only `Get*` reads (no mutations), and surface counts the user can already see in `cursor.com/dashboard`. Same risk class as Codex against `chatgpt.com/backend-api/wham/usage` and Antigravity against `cloudcode-pa.googleapis.com`.
+
+Bumps `MARKETING_VERSION` 0.27.1 → 0.28.0, `CURRENT_PROJECT_VERSION` 137 → 138.
+
 ## [0.27.1 build 137] - 2026-05-24 - Cursor provider sessions (`darshanbathija/cursor-cli-sdk`)
 
 Adds Cursor as a first-class provider for Code sessions while keeping the launch semantics tied to the user's own Cursor subscription and authenticated Cursor Agent CLI.

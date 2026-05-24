@@ -269,9 +269,16 @@ public actor ShellRunner {
             return envOverride
         }
         // 3. Known candidate paths.
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        // v0.28.0: ClawdmeterRealHome (getpwuid) rather than
+        // FileManager.default.homeDirectoryForCurrentUser so the sandboxed
+        // Release build searches the user's actual `~/.local/bin/` (where
+        // cursor-agent, claude, etc. typically install) instead of the
+        // app container's empty `.local/bin/`. The Release entitlements
+        // grant read-only access to /.local/bin/ — see
+        // ClawdmeterMac-Release.entitlements.
+        let home = ClawdmeterRealHome.path()
         let candidates = [
-            "\(home)/.local/bin/\(name)",   // Claude Code's user install (claude)
+            "\(home)/.local/bin/\(name)",   // Claude Code, cursor-agent, etc. — user-local installs
             "/opt/homebrew/bin/\(name)",    // Apple Silicon Homebrew (default for codex, gh, git)
             "/usr/local/bin/\(name)",       // Intel Homebrew / legacy
             "\(home)/.claude/local/\(name)",// alternate Claude install location

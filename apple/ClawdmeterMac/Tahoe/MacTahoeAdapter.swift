@@ -19,17 +19,13 @@ extension AppRuntime {
             claude: tahoeRow(model: claudeModel, provider: .claude),
             codex:  tahoeRow(model: codexModel,  provider: .codex),
             gemini: tahoeRow(model: geminiModel, provider: .gemini),
-            cursor: TahoeLiveRow(
-                sessionPercent: 0,
-                weeklyPercent: 0,
-                sessionResetIn: "-",
-                weeklyResetIn: "",
-                modelName: "Cursor Auto",
-                autoReviveOn: false,
-                supportsAutoRevive: false,
-                hasWeekly: false,
-                stale: true
-            )
+            // v0.28.0: Cursor now driven by a real AppModel (CursorSource
+            // → api2.cursor.sh GetCurrentPeriodUsage) instead of the
+            // static "Cursor Auto" placeholder. The same fallback path
+            // tahoeRow renders for un-authed providers handles the
+            // "cursor-agent not logged in" case (sessionPercent: 0,
+            // resetIn: "—", modelName: "Cursor").
+            cursor: tahoeRow(model: cursorModel, provider: .cursor)
         )
     }
 

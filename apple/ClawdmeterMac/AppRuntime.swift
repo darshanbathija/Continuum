@@ -26,6 +26,9 @@ final class AppRuntime: ObservableObject {
     let claudeModel: AppModel
     let codexModel: AppModel
     let geminiModel: AppModel
+    /// v0.28.0: Cursor as a first-class provider. Reads cursor-agent's
+    /// keychain JWT and polls api2.cursor.sh's GetCurrentPeriodUsage.
+    let cursorModel: AppModel
     let usageHistoryStore: UsageHistoryStore
 
     // Sessions feature (Phase 1 + 2 + supervisor):
@@ -108,6 +111,18 @@ final class AppRuntime: ObservableObject {
             tokenProvider: geminiTokenProvider
         )
 
+        // v0.28.0: Cursor via cursor-agent's keychain JWT (read by
+        // CursorTokenProvider) → POST gRPC-Web to api2.cursor.sh's
+        // DashboardService/GetCurrentPeriodUsage. Returns billing-period
+        // % used + reset epoch. Falls through to .unauthenticated when
+        // cursor-agent isn't logged in (no keychain entry yet).
+        let cursorTokenProvider = CursorTokenProvider()
+        self.cursorModel = AppModel(
+            config: .cursor,
+            source: CursorSource(tokenProvider: cursorTokenProvider),
+            tokenProvider: cursorTokenProvider
+        )
+
         // Don't forward objectWillChange — it was saturating main thread with
         // SwiftUI invalidations and starving the per-poller main-queue hops
         // for the slower provider. Let each MenuBarGaugeView observe its own
@@ -117,6 +132,7 @@ final class AppRuntime: ObservableObject {
         claudeModel.start()
         codexModel.start()
         geminiModel.start()
+        cursorModel.start()
 
         // Analytics history: walks the on-disk JSONL caches, computes
         // calendar-day-aligned totals, mirrors the snapshot into iCloud KV
