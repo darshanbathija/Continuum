@@ -4,6 +4,23 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.26.1 build 130] - 2026-05-24 — Codex JSONL parser ignores CLI shutdown markers (`fix/codex-null-rate-limits`)
+
+After installing v0.26.0, the menu-bar Codex tab dropped to `5h session 0% / resets in —` and `Weekly 0% / resets in —` even though earlier rollouts in `~/.codex/sessions` still recorded the user's real usage (96% session, 54% weekly). Root cause: Codex CLI 0.132 started emitting an extra `rate_limits` event at the end of every session with `limit_id: "premium"`, `primary: null`, and `secondary: null` — a credits-only marker that carries no usage data. The previous parser took the textually-last `rate_limits` line in the rollout, which meant the shutdown marker clobbered the real `limit_id: "codex"` event that came moments earlier.
+
+### Fixed
+
+- **`CodexSource.parseLatestUsage`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CodexSource.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/CodexSource.swift)) now skips JSONL lines whose `payload.rate_limits.primary` is null or missing and keeps the latest line that actually carries usage data. The parsing logic moved to a new static `parseUsageFromJSONLBytes(_:sourceName:now:)` so it can be exercised by unit tests without filesystem fixtures.
+- **`CodexSource.poll` JSONL fallback** now walks up to 8 recent rollouts (via the new `recentSessionFiles(limit:)` helper) instead of only the freshest one. If the newest file is entirely shutdown markers, the parser drops back to the next-newest rollout and surfaces real usage from there. The previous "most-recent-mtime-only" rule lost data whenever the freshest session was a short shell that wrote one null event and exited.
+- **Distinct contract-violation messages** for the two empty cases: "rate_limits events but all primary buckets are null" (shutdown-marker-only file) vs. "no rate_limits entries yet" (brand-new session that hasn't yet hit the model). Makes the macOS unified log usable for diagnosing whether the issue is "CLI never reported" or "CLI reported, but we filtered the line out".
+
+### Added
+
+- **`CodexSourceJSONLNullRateLimitsTests`** (5 cases): pins the bug with a real two-event fixture (codex usage → premium null marker → expect 96% session / 54% weekly), an interleaved variant, the all-null and no-rate_limits contract-violation paths, and a single-event happy-path sanity check.
+- **`CodexSource.recentSessionFiles(limit:)`**: `internal` helper that returns the N most-recently-modified jsonl files sorted DESC. Open for tests + future Path 2 enhancements that need to walk the rollout history.
+
+Bumps `MARKETING_VERSION` 0.26.0 → 0.26.1, `CURRENT_PROJECT_VERSION` 129 → 130.
+
 ## [0.26.0 build 129] - 2026-05-23 — Code V2 control plane + persisted workspaces + mobile command outbox + MagicDNS pairing + iOS workbench tabs (`darshanbathija/code-v2`)
 
 Code V2 lands as one coordinated ship. The Mac daemon now owns durable workspace records keyed by canonical repo root, a real idempotency-key outbox that prevents iOS retries from double-sending, and a MagicDNS-first pairing flow that survives sleep/wake and Wi-Fi switching. iOS gets a six-tab workbench (Chat, Plan, Diff, PR, Terminal, Files) embedded inside session detail — the pane views existed before but weren't actually wired into the navigation. Wire protocol bumps v15 → v16; every change is additive so older Macs keep decoding via `decodeIfPresent`.
