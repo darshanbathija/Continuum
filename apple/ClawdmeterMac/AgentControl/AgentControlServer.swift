@@ -1517,6 +1517,9 @@ public final class AgentControlServer {
             }
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
+            if session.agent == .cursor {
+                appendCursorTranscriptEcho(session: session, prompt: req.text, paneId: paneId)
+            }
             await sendCommandResponse(
                 body: ["ok": true],
                 key: req.idempotencyKey,
@@ -1528,6 +1531,61 @@ public final class AgentControlServer {
         } catch {
             serverLogger.error("send-prompt failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func appendCursorTranscriptEcho(session: AgentSession, prompt: String, paneId: String) {
+        guard let store = chatStoreRegistry.snapshotStore(for: session) else { return }
+        let now = Date()
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        var messages: [ChatMessage] = []
+        if !trimmedPrompt.isEmpty {
+            messages.append(ChatMessage(
+                id: "cursor-user-\(UUID().uuidString)",
+                kind: .userText,
+                title: "You",
+                body: trimmedPrompt,
+                at: now
+            ))
+        }
+        let hasMirror = !SDKChatTranscriptMirror.readAll(sessionId: session.id).isEmpty
+        if !hasMirror && store.snapshot.items.isEmpty {
+            messages.append(ChatMessage(
+                id: "cursor-meta-\(UUID().uuidString)",
+                kind: .meta,
+                title: "Cursor",
+                body: "Cursor Agent is running in the Terminal pane. Clawdmeter mirrors sends and terminal snapshots here until native Cursor transcript import can attach a proven Cursor chat id.",
+                at: now
+            ))
+        }
+        store.appendSDKMessages(messages, at: now)
+        store.setCurrentTurnState(.streaming)
+
+        Task { @MainActor [weak self, sessionId = session.id] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self,
+                  let refreshed = self.registry.session(id: sessionId),
+                  let refreshedStore = self.chatStoreRegistry.snapshotStore(for: refreshed),
+                  let captured = try? await self.tmux.command(["capture-pane", "-p", "-t", paneId, "-S", "-80"])
+            else { return }
+            let body = captured.lines
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else {
+                refreshedStore.setCurrentTurnState(.completed)
+                return
+            }
+            let cappedBody = String(body.suffix(6_000))
+            refreshedStore.appendSDKMessages([
+                ChatMessage(
+                    id: "cursor-terminal-\(UUID().uuidString)",
+                    kind: .assistantText,
+                    title: "Cursor terminal",
+                    body: cappedBody,
+                    at: Date()
+                )
+            ])
+            refreshedStore.setCurrentTurnState(.completed)
         }
     }
 

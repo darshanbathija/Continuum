@@ -83,9 +83,10 @@ public final class SessionFileResolver: @unchecked Sendable {
             // transcript events directly off the SSE stream.
             return nil
         case .cursor:
-            // Cursor CLI resume/import needs Cursor chat ids rather than a
-            // Claude/Codex JSONL path. The importer will attach a Cursor
-            // transcript source once it can prove those ids.
+            // Cursor code sessions do not expose a Claude/Codex-style JSONL.
+            // The Mac daemon creates an sdkOnly SessionChatStore and feeds it
+            // from sent prompts + terminal snapshots until native Cursor
+            // transcript import can attach a proven Cursor chat id.
             return nil
         case .unknown:
             // X3: forward-compat unknown agent — no transcript file we

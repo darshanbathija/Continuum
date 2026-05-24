@@ -504,6 +504,12 @@ public final class DaemonChatStoreRegistry {
             SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
             return store
         }
+        if session.agent == .cursor {
+            let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
+            store.start()
+            SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
+            return store
+        }
         guard let url = resolveURL(session.id, session) else {
             registryLogger.warning("could not resolve JSONL for session \(session.id.uuidString, privacy: .public)")
             return nil
