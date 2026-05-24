@@ -4,6 +4,54 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.26.6 build 135] - 2026-05-24 — Antigravity Tier-1 LS-local probe (framework + schema; sandbox-blocked discovery) (`fix/antigravity-ls-probe`)
+
+The Antigravity card has read `0% / "resets in —"` for every user whose only Gemini surface is the Antigravity 2 desktop app — `AntigravitySource` Tier 2 (`cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota`) requires `~/.gemini/oauth_creds.json`, which only `gemini auth login` from a terminal creates. Antigravity 2 signs in via the GUI without ever writing that file. The `AntigravitySource.poll()` had a `lsQuotaProbe` hook for a Tier-1 LS-local probe, but the production constructor in `AppRuntime.swift:149` left it defaulted to nil — Tier 1 was code that never ran.
+
+This ship wires it.
+
+### Added
+
+- **`AntigravityLSQuotaProbe`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/AntigravityLSQuotaProbe.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Sources/AntigravityLSQuotaProbe.swift)) — discovers the running Antigravity 2 `language_server` via the existing `AntigravityLSPClient.discover()` (uses `lsof -nP -iTCP -sTCP:LISTEN | grep language_`), calls `/exa.language_server_pb.LanguageServerService/GetUserStatus` with an empty body, decompresses the gzip-wrapped response, and walks the protobuf to extract:
+  - `field 13.1.2` → plan name (`"Pro"`, `"Plus"`, …) — surfaced through the `organizationID` slot so the UI badge can read it.
+  - `field 13.8` + `field 13.9` → daily messages used + remaining. Session% = `used / (used + remaining) * 100`.
+  - `field 33.1.*.15.2.1` → daily reset epoch (drills into the first repeated model entry under the field-33 wrapper that carries a `ModelUsage` submessage).
+- **Schema is reverse-engineered** from a live Antigravity 2.0.6 LSP — no `.proto` file is published. The capture rig is `AntigravityLSQuotaProbeIntegrationTests`; run it with `CLAWDMETER_PROBE_LS=1 swift test --filter AntigravityLSQuotaProbeIntegrationTests` against a live Antigravity 2 install to re-derive the bytes when the schema changes.
+- **`AntigravityLSQuotaProbeTests`** (4 cases) pins the parser against a captured `Fixtures/antigravity-GetUserStatus.bin`. CI catches a schema regression here instead of silently dropping the tile back to 0%. Covers the happy path, non-gzip passthrough, malformed-gzip rejection, and the "LSP responded but no quota" → nil → Tier-2-fallthrough branch.
+- **Self-contained gzip decoder** (`AntigravityLSQuotaProbe.decompressIfGzip`) — Antigravity gzips responses even when we request `grpc-encoding: identity`. Strips the 10-byte gzip header (handling FEXTRA / FNAME / FCOMMENT / FHCRC variants), the 8-byte trailer, and feeds the bare deflate stream to libcompression's `COMPRESSION_ZLIB`.
+- **`LSProtoReader`** — file-private minimal forward-only protobuf walker. Targets only the wire types this probe needs (varint, length-delimited, fixed32) plus a `findLengthDelimited(field:)` that can be called repeatedly to iterate over repeated submessages. Deliberately not a full proto runtime — keeping the maintenance surface to the four fields this probe reads.
+
+### Changed
+
+- **`AppRuntime.swift`** ([apple/ClawdmeterMac/AppRuntime.swift](apple/ClawdmeterMac/AppRuntime.swift):149) now passes `lsQuotaProbe: { await AntigravityLSQuotaProbe.probe() }` to the production `AntigravitySource`. When Antigravity 2 desktop is open, the tile reflects real `used / cap` daily quota with the actual reset countdown. When it isn't, the probe returns nil and Tier 2 (cloudcode-pa) takes over exactly as before.
+
+### Known limitation — sandbox blocks port discovery
+
+**The Antigravity tile still reads 0% / "resets in —" in this shipped build.** Verified post-install via the unified log:
+
+```
+[com.clawdmeter.shared:AntigravityLSQuotaProbe] AntigravityLSQuotaProbe: probe() called — attempting LSP discovery
+[com.clawdmeter.shared:AntigravityLSQuotaProbe] AntigravityLSQuotaProbe: discover() returned nil — no running language_server (or lsof inaccessible in sandbox)
+```
+
+Root cause: `AntigravityLSPClient.discover()` spawns `/usr/sbin/lsof` via `Process()`. macOS App Sandbox blocks the execution of binaries outside the app bundle by default, and there's no clean `temporary-exception` entitlement that re-allows it (the only file-related ones permit *reading* the binary, not *executing* it). So `lsof` never runs and discovery returns nil even though the same `lsof` command from a shell finds the running `language_server` on port 54129.
+
+Three viable follow-up paths, none of which fit in this ship's scope:
+
+1. **Bundle a copy of `lsof` inside `Contents/Resources/`** — sandboxed apps can exec binaries inside their own bundle. ~5 MB binary footprint, signature management overhead.
+2. **Port-scanning fallback in Swift** — iterate the ephemeral range (49152–65535) attempting an HTTPS handshake + CSRF scrape on each. Slow (~10–30s per poll) but no entitlement work.
+3. **Disable sandbox in Release** — restores discovery but also re-opens the bundled-Node RCE surface the v0.26.2 entitlements ship was designed to keep contained. Hard "no" without a separate threat-model review.
+
+This ship lands the **framework** so the next iteration just has to replace the discovery primitive:
+
+### Notes
+
+- **TOS posture**: the LSP is an internal Google interface (`exa.language_server_pb.*`). We accept the same risk class as `CodexSource` against `chatgpt.com/backend-api/wham/usage`. The probe is strictly read-only — no method we call mutates LSP state.
+- **The schema may shift**. Antigravity 2 ships major updates on a monthly cadence; if the LSP renumbers or removes a field, the probe returns nil and the tile cleanly falls back to Tier 2 / Tier 3 instead of crashing. The fixture test pins the field numbers explicitly so CI catches the drift.
+- **Why ship this at all**: the protobuf reverse-engineering (4 candidate gRPC method names trialed against a live LSP, 8 sibling services scanned for usage-related verbs, schema decoded down to the `field 15.2.1` resets_at level) is the hard part. Pinning it to a fixture in CI means the next person to address sandbox-discovery doesn't repeat that work.
+
+Bumps `MARKETING_VERSION` 0.26.5 → 0.26.6, `CURRENT_PROJECT_VERSION` 134 → 135.
+
 ## [0.26.5 build 134] - 2026-05-24 — Hotfix: drop macOS-only gate on ClawdmeterRealHome so iOS target builds (`fix/clawdmeter-real-home-ios-compat`)
 
 v0.26.4 shipped the Mac DMG cleanly but the iOS target failed to archive: `UsageHistoryLoader.swift:60: error: cannot find 'ClawdmeterRealHome' in scope`. `UsageHistoryLoader` is in the Shared module so the iOS target compiles it, but `ClawdmeterRealHome.swift` was wrapped in `#if os(macOS)`. iOS users on this version couldn't get a new build at all.
