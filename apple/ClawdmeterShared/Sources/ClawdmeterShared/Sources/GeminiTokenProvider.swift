@@ -53,7 +53,12 @@ public final class GeminiTokenProvider: TokenProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var cached: AuthBundle?
 
-    public init(authPath: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".gemini/oauth_creds.json")) {
+    public init(authPath: URL = ClawdmeterRealHome.url().appendingPathComponent(".gemini/oauth_creds.json")) {
+        // v0.26.2: switched from NSHomeDirectory() to ClawdmeterRealHome
+        // so sandboxed Release builds resolve to the real ~/.gemini/
+        // (where Gemini CLI / Antigravity sidecar writes OAuth creds)
+        // rather than the empty container path. Release entitlements
+        // grant read-only access to /.gemini/.
         self.authPath = authPath
     }
 
