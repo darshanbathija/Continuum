@@ -7,6 +7,7 @@ import ClawdmeterShared
 /// session worktree, downloads bytes from the Mac daemon on tap, and
 /// previews via QLPreviewController.
 struct iOSArtifactsPane: View {
+    @Environment(\.tahoe) private var t
     @ObservedObject var client: AgentControlClient
     let session: AgentSession
     @ObservedObject var chatStore: iOSChatStore
@@ -20,12 +21,14 @@ struct iOSArtifactsPane: View {
             if chatStore.snapshot.artifactEntries.isEmpty {
                 emptyState
             } else {
-                List {
-                    ForEach(chatStore.snapshot.artifactEntries) { entry in
-                        row(for: entry)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(chatStore.snapshot.artifactEntries) { entry in
+                            row(for: entry)
+                        }
                     }
+                    .padding(14)
                 }
-                .listStyle(.insetGrouped)
             }
         }
         .quickLookPreview($previewURL)
@@ -41,14 +44,14 @@ struct iOSArtifactsPane: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "paperclip")
-                .font(.largeTitle)
-                .foregroundStyle(.tertiary)
+            TahoeIcon("paperclip", size: 24)
+                .foregroundStyle(t.fg4)
             Text("No artifacts yet")
-                .foregroundStyle(.secondary)
+                .font(TahoeFont.body(14, weight: .semibold))
+                .foregroundStyle(t.fg2)
             Text("When the agent writes a PDF, image, or spreadsheet, it'll appear here.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
         }
@@ -60,35 +63,36 @@ struct iOSArtifactsPane: View {
         return Button {
             Task { await open(entry) }
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: icon(for: entry.filename))
-                    .font(.title3)
-                    .foregroundStyle(SessionsV2Theme.accent)
-                    .frame(width: 32)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.filename)
-                        .font(.callout)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(entry.path)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-                Spacer()
-                if isDownloading {
-                    ProgressView()
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+            TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+                HStack(spacing: 12) {
+                    Image(systemName: icon(for: entry.filename))
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                        .frame(width: 28, height: 28)
                         .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.filename)
+                            .font(TahoeFont.body(12.5, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(entry.path)
+                            .font(TahoeFont.mono(10.5))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                    Spacer()
+                    if isDownloading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        TahoeIcon("chevR", size: 12)
+                            .foregroundStyle(t.fg4)
+                            .accessibilityHidden(true)
+                    }
                 }
+                .padding(12)
             }
-            .padding(.vertical, 4)
-            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -147,4 +151,3 @@ struct iOSArtifactsPane: View {
         PathValidator.isSafeArtifactPath(path)
     }
 }
-

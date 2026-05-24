@@ -1,12 +1,37 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// iOS Code (Sessions) tab — search + per-repo expandable cards with a
-/// new-session "+" button per repo. Ports `ios-live.jsx::IOSSessions`.
+/// iOS Code (Sessions) tab — search + production session cards.
+/// Ports `ios-live.jsx::IOSSessions`.
 /// Accepts a `TahoeCodeBindings` value (defaults to demo); ContentView/iOS
 /// root injects daemon-derived bindings via the AgentControlClient adapter.
 public struct IOSCodeView: View {
     @Environment(\.tahoe) private var t
+    private enum StatusScope: String, CaseIterable, Identifiable {
+        case all, active, review, done, archived
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .all: return "All"
+            case .active: return "Active"
+            case .review: return "Review"
+            case .done: return "Done"
+            case .archived: return "Archived"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .all: return "chat"
+            case .active: return "bolt"
+            case .review: return "sparkles"
+            case .done: return "check"
+            case .archived: return "archive"
+            }
+        }
+    }
+
     /// Push the session detail screen for a specific session id. Carries
     /// the id so the detail surface can render real session data instead
     /// of a hardcoded fixture (P1 fix).
@@ -19,27 +44,40 @@ public struct IOSCodeView: View {
     /// call `unarchiveSession(id:)` when the user taps an archived
     /// entry. Nil keeps the row read-only (Previews + cold-launch).
     var agentClient: AgentControlClient?
+    var outbox: MobileCommandOutbox?
 
     public init(
         data: TahoeCodeBindings = .demo,
         onOpenDetail: @escaping (UUID) -> Void = { _ in },
         onNewSession: @escaping () -> Void = {},
-        agentClient: AgentControlClient? = nil
+        agentClient: AgentControlClient? = nil,
+        outbox: MobileCommandOutbox? = nil
     ) {
         self.data = data
         self.onOpenDetail = onOpenDetail
         self.onNewSession = onNewSession
         self.agentClient = agentClient
+        self.outbox = outbox
     }
 
     @State private var searchQuery: String = ""
+    @State private var statusScope: StatusScope = .all
+    @State private var providerFilter: TahoeProvider?
+    @State private var includeRecents: Bool = true
+    @State private var filtersDialogPresented: Bool = false
+    @State private var workspaceSwitcherPresented: Bool = false
 
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                IOSLargeTitle(title: "Code") {
+                HStack(spacing: 10) {
+                    IOSRoundIconBtn("folder", action: { workspaceSwitcherPresented = true })
+                    Spacer()
                     IOSRoundIconBtn("plus", action: onNewSession)
                 }
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 10)
 
                 // Search — PR #26 D5. Real TextField that filters
                 // sessions by title + goal across visible repos.
@@ -60,11 +98,25 @@ public struct IOSCodeView: View {
                             }
                             .buttonStyle(.plain)
                         }
+                        Button {
+                            filtersDialogPresented = true
+                        } label: {
+                            TahoeIcon("sliders", size: 13)
+                                .foregroundStyle(filtersAreActive ? t.accent : t.fg3)
+                        }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 14)
                     .frame(height: 38)
                 }
-                .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
+                .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
+
+                // Desktop parity: a visible four-bucket status model
+                // (Active / Review / Done / Archived) with a summary
+                // "All" scope, rather than hiding status state entirely
+                // behind the filter menu.
+                statusBuckets
+                    .padding(.bottom, 16)
 
                 // Repo sections — apply the search query if non-empty.
                 let visible = filteredRepos
@@ -90,8 +142,8 @@ public struct IOSCodeView: View {
                             IOSRepoCard(
                                 repo: repo,
                                 onOpen: onOpenDetail,
-                                onNewSession: onNewSession,
-                                agentClient: agentClient
+                                agentClient: agentClient,
+                                outbox: outbox
                             )
                         }
                     }
@@ -99,31 +151,258 @@ public struct IOSCodeView: View {
                 }
             }
         }
+        .confirmationDialog("Filter sessions", isPresented: $filtersDialogPresented, titleVisibility: .visible) {
+            ForEach(StatusScope.allCases) { scope in
+                Button("\(scope.label) \(statusCounts[scope] ?? 0)") {
+                    statusScope = scope
+                    if scope == .archived {
+                        includeRecents = true
+                    }
+                }
+            }
+            Button(includeRecents ? "Hide recent sessions" : "Show recent sessions") {
+                includeRecents.toggle()
+                if statusScope == .archived {
+                    statusScope = .all
+                }
+            }
+            Button("All providers") {
+                providerFilter = nil
+            }
+            ForEach(availableProviders, id: \.id) { provider in
+                Button(provider.displayName) {
+                    providerFilter = provider
+                }
+            }
+        }
+        .sheet(isPresented: $workspaceSwitcherPresented) {
+            Group {
+                if let agentClient {
+                    iOSWorkspaceSwitcherSheet(
+                        client: agentClient,
+                        onOpenSession: onOpenDetail,
+                        onNewSession: onNewSession
+                    )
+                } else {
+                    NavigationStack {
+                        ContentUnavailableView(
+                            "Workspace switcher unavailable",
+                            systemImage: "macbook.and.iphone",
+                            description: Text("Pair this iPhone with the Mac daemon to switch real workspaces and sessions.")
+                        )
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private var filtersAreActive: Bool {
+        statusScope != .all || providerFilter != nil || !includeRecents
+    }
+
+    private var statusCounts: [StatusScope: Int] {
+        let repos = data.repos
+        let sessions = repos.flatMap(\.sessions)
+        let recents = repos.flatMap(\.recents)
+        return [
+            .all: sessions.count + (includeRecents ? recents.count : 0),
+            .active: sessions.filter { Self.isActive($0) }.count,
+            .review: sessions.filter { Self.isInReview($0) }.count,
+            .done: sessions.filter { $0.status == .done }.count,
+            .archived: recents.count,
+        ]
+    }
+
+    private var availableProviders: [TahoeProvider] {
+        let providers = data.repos.flatMap { repo in
+            repo.sessions.map(\.agent) + repo.recents.map(\.provider)
+        }
+        var seen = Set<String>()
+        return providers
+            .filter { seen.insert($0.rawValue).inserted }
+            .sorted { $0.displayName < $1.displayName }
+    }
+
+    private var statusBuckets: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(StatusScope.allCases) { scope in
+                    statusBucket(scope)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.05),
+                    .init(color: .black, location: 0.95),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
+    }
+
+    private func statusBucket(_ scope: StatusScope) -> some View {
+        let selected = statusScope == scope
+        let count = statusCounts[scope] ?? 0
+        return Button {
+            statusScope = scope
+            if scope == .archived {
+                includeRecents = true
+            }
+        } label: {
+            HStack(spacing: 6) {
+                TahoeIcon(scope.icon, size: 12)
+                Text(scope.label)
+                Text("\(count)")
+                    .font(TahoeFont.mono(10.5, weight: .bold))
+                    .foregroundStyle(selected ? .white.opacity(0.82) : t.fg4)
+            }
+            .font(TahoeFont.body(11.5, weight: .bold))
+            .foregroundStyle(selected ? .white : t.fg2)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(
+                selected
+                    ? LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom)
+                    : LinearGradient(colors: [t.glassTintHi, t.glassTintHi], startPoint: .top, endPoint: .bottom),
+                in: Capsule(style: .continuous)
+            )
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(selected ? Color.clear : t.hairline, lineWidth: 0.5)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var filterBar: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Button {
+                    providerFilter = nil
+                } label: {
+                    Label("All providers", systemImage: providerFilter == nil ? "checkmark" : "circle")
+                }
+                ForEach(availableProviders, id: \.id) { provider in
+                    Button {
+                        providerFilter = provider
+                    } label: {
+                        Label(provider.displayName, systemImage: providerFilter?.rawValue == provider.rawValue ? "checkmark" : "circle")
+                    }
+                }
+            } label: {
+                filterChip(
+                    icon: "sliders",
+                    text: providerFilter?.displayName ?? "All providers",
+                    active: providerFilter != nil
+                )
+            }
+            Toggle(isOn: $includeRecents) {
+                filterChip(icon: "archive", text: "Recent", active: includeRecents)
+            }
+            .toggleStyle(.button)
+            .buttonStyle(.plain)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func filterChip(icon: String, text: String, active: Bool) -> some View {
+        HStack(spacing: 6) {
+            TahoeIcon(icon, size: 11)
+            Text(text)
+                .lineLimit(1)
+        }
+        .font(TahoeFont.body(11.5, weight: .semibold))
+        .foregroundStyle(active ? t.fg : t.fg3)
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(active ? t.glassTintHi : t.glassTint, in: Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous).stroke(t.hairline, lineWidth: 0.5)
+        }
     }
 
     /// PR #26 D5: filter repos + sessions by `searchQuery`. Empty query
     /// is identical to today's behavior (regression-safe).
     private var filteredRepos: [TahoeCodeRepo] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let baseline = data.repos.filter { !$0.sessions.isEmpty || !$0.recents.isEmpty }
+        let baseline = data.repos.compactMap { repo -> TahoeCodeRepo? in
+            var sessions = repo.sessions
+            var recents = includeRecents ? repo.recents : []
+            if let providerFilter {
+                sessions = sessions.filter { $0.agent == providerFilter }
+                recents = recents.filter { $0.provider == providerFilter }
+            }
+            switch statusScope {
+            case .all:
+                break
+            case .active:
+                sessions = sessions.filter { Self.isActive($0) }
+                recents = []
+            case .review:
+                sessions = sessions.filter { Self.isInReview($0) }
+                recents = []
+            case .done:
+                sessions = sessions.filter { $0.status == .done }
+                recents = []
+            case .archived:
+                sessions = []
+            }
+            guard !sessions.isEmpty || !recents.isEmpty else { return nil }
+            return TahoeCodeRepo(
+                key: repo.key,
+                name: repo.name,
+                tint: repo.tint,
+                liveSessionCount: sessions.filter { $0.status == .running || $0.status == .planning }.count,
+                sessions: sessions,
+                recents: recents
+            )
+        }
         guard !query.isEmpty else { return baseline }
         return baseline.compactMap { repo in
             let matchedSessions = repo.sessions.filter { s in
                 s.title.lowercased().contains(query)
             }
+            let matchedRecents = repo.recents.filter { r in
+                r.title.lowercased().contains(query)
+            }
             // Also match the repo name itself — typing "ccwatch" should
             // surface that repo even if no session title matches.
             let repoMatches = repo.name.lowercased().contains(query)
-            if matchedSessions.isEmpty && !repoMatches { return nil }
+            if matchedSessions.isEmpty && matchedRecents.isEmpty && !repoMatches { return nil }
             return TahoeCodeRepo(
                 key: repo.key,
                 name: repo.name,
                 tint: repo.tint,
-                liveSessionCount: repo.liveSessionCount,
+                liveSessionCount: (repoMatches ? repo.sessions : matchedSessions)
+                    .filter { $0.status == .running || $0.status == .planning }.count,
                 sessions: repoMatches ? repo.sessions : matchedSessions,
-                recents: repo.recents
+                recents: repoMatches ? repo.recents : matchedRecents
             )
         }
+    }
+
+    private static func isActive(_ session: TahoeCodeSession) -> Bool {
+        switch session.status {
+        case .running, .paused, .degraded:
+            return true
+        case .planning, .done:
+            return false
+        }
+    }
+
+    private static func isInReview(_ session: TahoeCodeSession) -> Bool {
+        if session.status == .planning { return true }
+        if let plan = session.runtimePlanText?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty {
+            return true
+        }
+        return false
     }
 }
 
@@ -131,159 +410,138 @@ private struct IOSRepoCard: View {
     @Environment(\.tahoe) private var t
     var repo: TahoeCodeRepo
     var onOpen: (UUID) -> Void
-    var onNewSession: () -> Void
     /// PR #35: daemon client used by the recent-row tap handler to
     /// call `unarchiveSession(id:)`. Nil keeps the row read-only.
     var agentClient: AgentControlClient?
+    var outbox: MobileCommandOutbox?
     @State private var restoringSessionId: UUID? = nil
 
-    @State private var expanded: Bool = true
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Button {
-                    expanded.toggle()
-                } label: {
-                    HStack(spacing: 8) {
-                        TahoeIcon(expanded ? "chevD" : "chevR", size: 11).foregroundStyle(t.fg3)
-                        TahoeProjectGlyph(name: repo.name, tint: repo.tint, size: 22)
-                        Text(repo.name)
-                            .font(TahoeFont.body(14, weight: .bold))
-                            .tracking(-0.1)
-                            .foregroundStyle(t.fg)
-                        if repo.liveSessionCount > 0 {
-                            HStack(spacing: 4) {
-                                Circle().fill(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
-                                    .frame(width: 6, height: 6)
-                                    .shadow(color: Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0), radius: 3, x: 0, y: 0)
-                                Text("\(repo.liveSessionCount) live")
-                                    .font(TahoeFont.body(11, weight: .bold))
-                                    .foregroundStyle(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0))
-                            }
-                        }
-                        Spacer()
-                        Text("\(repo.sessions.count) session\(repo.sessions.count == 1 ? "" : "s")")
-                            .font(TahoeFont.mono(11))
-                            .foregroundStyle(t.fg4)
+        TahoeGlass(radius: 22, tone: .raised) {
+            VStack(spacing: 0) {
+                ForEach(Array(repo.sessions.enumerated()), id: \.offset) { i, s in
+                    if i > 0 {
+                        TahoeHair().padding(.leading, 58)
                     }
-                    .padding(.vertical, 4)
+                    Button(action: { onOpen(s.id) }) {
+                        HStack(spacing: 12) {
+                            TahoeProviderGlyph(provider: s.agent, size: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(s.title)
+                                    .font(TahoeFont.body(14, weight: .semibold))
+                                    .foregroundStyle(t.fg)
+                                    .lineLimit(1)
+                                HStack(spacing: 6) {
+                                    StatusDot(status: s.status)
+                                    Text(s.subtitle)
+                                        .font(TahoeFont.body(11.5))
+                                        .foregroundStyle(t.fg3)
+                                }
+                            }
+                            Spacer()
+                            statusBadges(for: s)
+                            TahoeIcon("chevR", size: 14).foregroundStyle(t.fg4)
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 14)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-
-                Button(action: onNewSession) {
-                    TahoeIcon("plus", size: 15).foregroundStyle(t.fg2)
-                        .frame(width: 38, height: 38)
-                        .background {
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.06) : Color(.sRGB, white: 15.0/255, opacity: 0.05))
+                if !repo.recents.isEmpty {
+                    TahoeHair()
+                    Text("RECENT")
+                        .font(TahoeFont.body(10.5, weight: .bold))
+                        .tracking(0.5)
+                        .foregroundStyle(t.fg4)
+                        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(Array(repo.recents.enumerated()), id: \.offset) { i, r in
+                        if i > 0 {
+                            TahoeHair().padding(.leading, 58)
                         }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(t.hairline, lineWidth: 0.5)
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 4).padding(.bottom, 8)
-
-            if expanded {
-                TahoeGlass(radius: 20, tone: .raised) {
-                    VStack(spacing: 0) {
-                        ForEach(Array(repo.sessions.enumerated()), id: \.offset) { i, s in
-                            if i > 0 {
-                                TahoeHair().padding(.leading, 58)
+                        // PR #35: archived sessions carry a real
+                        // sessionId so tapping calls the daemon's
+                        // unarchive RPC + pushes the session
+                        // detail screen on success. Recents
+                        // without a sessionId stay non-tappable
+                        // (read-only history entries).
+                        let restoreInFlight = (restoringSessionId == r.sessionId)
+                        let canRestore = (r.sessionId != nil && agentClient != nil)
+                        Button {
+                            guard let sid = r.sessionId,
+                                  let client = agentClient,
+                                  !restoreInFlight else { return }
+                            restoringSessionId = sid
+                            Task { @MainActor in
+                                await client.unarchiveSession(id: sid)
+                                await client.refreshSessions()
+                                restoringSessionId = nil
+                                onOpen(sid)
                             }
-                            Button(action: { onOpen(s.id) }) {
-                                HStack(spacing: 12) {
-                                    TahoeProviderGlyph(provider: s.agent, size: 32)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(s.title)
-                                            .font(TahoeFont.body(14, weight: .semibold))
-                                            .foregroundStyle(t.fg)
-                                            .lineLimit(1)
-                                        HStack(spacing: 6) {
-                                            StatusDot(status: s.status)
-                                            Text(s.subtitle)
-                                                .font(TahoeFont.body(11.5))
-                                                .foregroundStyle(t.fg3)
-                                        }
+                        } label: {
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    TahoeProviderGlyph(provider: r.provider, size: 28)
+                                    if r.live {
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0), lineWidth: 1.5)
+                                            .padding(-2)
                                     }
-                                    Spacer()
-                                    TahoeIcon("chevR", size: 14).foregroundStyle(t.fg4)
                                 }
-                                .padding(.horizontal, 16).padding(.vertical, 14)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(r.title)
+                                        .font(TahoeFont.body(14))
+                                        .foregroundStyle(t.fg2)
+                                        .lineLimit(1)
+                                    Text("\(r.provider.displayName) · \(r.ago)")
+                                        .font(TahoeFont.body(11))
+                                        .foregroundStyle(t.fg4)
+                                }
+                                Spacer()
+                                if restoreInFlight {
+                                    ProgressView().controlSize(.mini)
+                                } else {
+                                    TahoeIcon("chevR", size: 13)
+                                        .foregroundStyle(canRestore ? t.fg2 : t.fg4)
+                                }
                             }
-                            .buttonStyle(.plain)
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                            .opacity(canRestore ? 1.0 : 0.7)
                         }
-                        if !repo.recents.isEmpty {
-                            TahoeHair()
-                            Text("RECENT")
-                                .font(TahoeFont.body(10.5, weight: .bold))
-                                .tracking(0.5)
-                                .foregroundStyle(t.fg4)
-                                .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            ForEach(Array(repo.recents.enumerated()), id: \.offset) { i, r in
-                                if i > 0 {
-                                    TahoeHair().padding(.leading, 58)
-                                }
-                                // PR #35: archived sessions carry a real
-                                // sessionId so tapping calls the daemon's
-                                // unarchive RPC + pushes the session
-                                // detail screen on success. Recents
-                                // without a sessionId stay non-tappable
-                                // (read-only history entries).
-                                let restoreInFlight = (restoringSessionId == r.sessionId)
-                                let canRestore = (r.sessionId != nil && agentClient != nil)
-                                Button {
-                                    guard let sid = r.sessionId,
-                                          let client = agentClient,
-                                          !restoreInFlight else { return }
-                                    restoringSessionId = sid
-                                    Task { @MainActor in
-                                        await client.unarchiveSession(id: sid)
-                                        await client.refreshSessions()
-                                        restoringSessionId = nil
-                                        onOpen(sid)
-                                    }
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        ZStack {
-                                            TahoeProviderGlyph(provider: r.provider, size: 28)
-                                            if r.live {
-                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                                    .stroke(Color(.sRGB, red: 0x28/255.0, green: 0xC8/255.0, blue: 0x40/255.0), lineWidth: 1.5)
-                                                    .padding(-2)
-                                            }
-                                        }
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            Text(r.title)
-                                                .font(TahoeFont.body(14))
-                                                .foregroundStyle(t.fg2)
-                                                .lineLimit(1)
-                                            Text("\(r.provider.displayName) · \(r.ago)")
-                                                .font(TahoeFont.body(11))
-                                                .foregroundStyle(t.fg4)
-                                        }
-                                        Spacer()
-                                        if restoreInFlight {
-                                            ProgressView().controlSize(.mini)
-                                        } else {
-                                            TahoeIcon("chevR", size: 13)
-                                                .foregroundStyle(canRestore ? t.fg2 : t.fg4)
-                                        }
-                                    }
-                                    .padding(.horizontal, 16).padding(.vertical, 12)
-                                    .opacity(canRestore ? 1.0 : 0.7)
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(!canRestore || restoreInFlight)
-                            }
-                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canRestore || restoreInFlight)
                     }
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func statusBadges(for session: TahoeCodeSession) -> some View {
+        let pending = outbox?.pending.filter { $0.sessionId == session.id }.count ?? 0
+        let failed = outbox?.failed.filter { $0.sessionId == session.id }.count ?? 0
+        HStack(spacing: 5) {
+            if session.status == .planning {
+                smallBadge("Plan", icon: "sparkles", tone: t.accent)
+            }
+            if pending > 0 {
+                smallBadge("\(pending)", icon: "arrowU", tone: t.fg3)
+            }
+            if failed > 0 {
+                smallBadge("\(failed)", icon: "x", tone: .red)
+            }
+        }
+    }
+
+    private func smallBadge(_ text: String, icon: String, tone: Color) -> some View {
+        HStack(spacing: 3) {
+            TahoeIcon(icon, size: 9)
+            Text(text)
+                .font(TahoeFont.mono(10, weight: .bold))
+        }
+        .foregroundStyle(tone)
+        .padding(.horizontal, 6)
+        .frame(height: 20)
+        .background(tone.opacity(0.14), in: Capsule(style: .continuous))
     }
 }
 

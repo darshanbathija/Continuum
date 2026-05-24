@@ -56,6 +56,12 @@ public final class AgentControlServer {
     /// from `mobile-commands.jsonl` on startup so a daemon restart
     /// still dedups in-flight retries.
     let mobileCommandOutbox: MobileCommandOutbox
+    /// v18 Code workbench parity: remote iOS Run/Preview is hosted by the
+    /// paired Mac daemon, because iOS cannot execute local repo commands.
+    private let codeRunProfiles = CodeRunProfileService()
+    /// Prepared checkpoint restore plans are intentionally short-lived:
+    /// iOS must preview a restore before it can confirm it.
+    private var checkpointRestorePlans: [UUID: CheckpointRestorePlan] = [:]
     /// Phase 0a: long-lived per-session chat-store registry. Replaces the
     /// "reparse JSONL on every /chat-snapshot request" path. Used by the
     /// HTTP handler (snapshotStore) and, in Phase 2, by the WS dispatcher
@@ -1035,6 +1041,21 @@ public final class AgentControlServer {
         t.register(method: "GET", pattern: "/sessions/:id/chat-snapshot") { [weak self] req, conn, params in
             await self?.handleGetChatSnapshot(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
+        t.register(method: "GET", pattern: "/sessions/:id/run-profile") { [weak self] _, conn, params in
+            await self?.handleGetRunProfile(sessionId: params["id"] ?? "", connection: conn)
+        }
+        for method in ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"] {
+            t.register(method: method, pattern: "/sessions/:id/run-profile/proxy/*") { [weak self] req, conn, params in
+                await self?.handleRunProfileProxy(
+                    sessionId: params["id"] ?? "",
+                    request: req,
+                    connection: conn
+                )
+            }
+        }
+        t.register(method: "GET", pattern: "/sessions/:id/checkpoints") { [weak self] _, conn, params in
+            self?.handleListCheckpoints(sessionId: params["id"] ?? "", connection: conn)
+        }
         t.register(method: "GET", pattern: "/sessions/:id/diff") { [weak self] _, conn, params in
             await self?.handleGetDiff(sessionId: params["id"] ?? "", connection: conn)
         }
@@ -1101,6 +1122,33 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions/:id/send") { [weak self] req, conn, params in
             await self?.handleSendPrompt(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
+        t.register(method: "POST", pattern: "/sessions/:id/run-profile/start") { [weak self] req, conn, params in
+            await self?.handleStartRunProfile(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/run-profile/stop") { [weak self] _, conn, params in
+            await self?.handleStopRunProfile(sessionId: params["id"] ?? "", connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/checkpoints") { [weak self] req, conn, params in
+            await self?.handleCreateCheckpoint(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/checkpoints/:checkpointId/prepare-restore") { [weak self] _, conn, params in
+            await self?.handlePrepareCheckpointRestore(
+                sessionId: params["id"] ?? "",
+                checkpointId: params["checkpointId"] ?? "",
+                connection: conn
+            )
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/checkpoints/:checkpointId/restore") { [weak self] req, conn, params in
+            await self?.handleRestoreCheckpoint(
+                sessionId: params["id"] ?? "",
+                checkpointId: params["checkpointId"] ?? "",
+                request: req,
+                connection: conn
+            )
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/diff-action/*") { [weak self] req, conn, params in
+            await self?.handleDiffAction(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
         // v0.7.7: SidecarAskCoordinator route. iPhone surface POSTs
         // decisions here for cross-surface ask_user(...) prompts the
         // Antigravity SDK sidecar fires. Mac inline path calls the
@@ -1126,6 +1174,9 @@ public final class AgentControlServer {
         }
         t.register(method: "POST", pattern: "/sessions/:id/create-pr") { [weak self] req, conn, params in
             await self?.handleCreatePR(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/sessions/:id/pr/review") { [weak self] req, conn, params in
+            await self?.handleReviewPR(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
         t.register(method: "POST", pattern: "/sessions/:id/merge") { [weak self] req, conn, params in
             await self?.handleMerge(sessionId: params["id"] ?? "", request: req, connection: conn)
@@ -2336,39 +2387,11 @@ public final class AgentControlServer {
         guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
         }
-        let cwd = session.effectiveCwd
         guard let gitBin = ShellRunner.locateBinary("git") else {
             sendResponse(.internalError, on: connection); return
         }
-        // Refuse to diff mid-rebase/merge (Codex #11 / T11).
-        if FileManager.default.fileExists(atPath: (cwd as NSString).appendingPathComponent(".git/rebase-merge"))
-            || FileManager.default.fileExists(atPath: (cwd as NSString).appendingPathComponent(".git/MERGE_HEAD")) {
-            sendResponse(HTTPResponse(
-                status: 409, reason: "Conflict",
-                contentType: "application/json",
-                body: Data(#"{"error":"Repo is in rebase/merge state, finish on Mac"}"#.utf8)
-            ), on: connection)
-            return
-        }
         do {
-            let numstat = try await ShellRunner.shared.run(
-                executable: gitBin,
-                arguments: ["diff", "--numstat", "HEAD"],
-                cwd: cwd,
-                timeout: 10
-            )
-            var files: [ClawdmeterShared.GitDiffFile] = []
-            for line in numstat.stdoutString.split(separator: "\n") {
-                let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
-                guard parts.count == 3,
-                      let additions = Int(parts[0]),
-                      let deletions = Int(parts[1]) else { continue }
-                files.append(ClawdmeterShared.GitDiffFile(
-                    path: parts[2], status: "M",
-                    additions: additions, deletions: deletions,
-                    hunks: [], truncated: true
-                ))
-            }
+            let files = try await loadDiffFiles(session: session, gitBin: gitBin)
             let encoder = JSONEncoder()
             if let body = try? encoder.encode(files) {
                 sendResponse(.ok(contentType: "application/json", body: body), on: connection)
@@ -2377,6 +2400,14 @@ public final class AgentControlServer {
             }
         } catch {
             serverLogger.error("git diff failed: \(error.localizedDescription, privacy: .public)")
+            if (error as NSError).code == 409 {
+                sendResponse(HTTPResponse(
+                    status: 409, reason: "Conflict",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"Repo is in rebase/merge state, finish on Mac"}"#.utf8)
+                ), on: connection)
+                return
+            }
             sendResponse(.internalError, on: connection)
         }
     }
@@ -2413,7 +2444,8 @@ public final class AgentControlServer {
                 additions: counts.additions,
                 deletions: counts.deletions,
                 hunks: parseUnifiedDiffHunks(diff.stdoutString),
-                truncated: false
+                truncated: false,
+                changeState: nil
             )
             let encoder = JSONEncoder()
             if let body = try? encoder.encode(file) {
@@ -2427,9 +2459,135 @@ public final class AgentControlServer {
         }
     }
 
+    private func handleDiffAction(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let gitBin = ShellRunner.locateBinary("git") else {
+            sendResponse(.internalError, on: connection); return
+        }
+        guard let relPath = diffActionRelativePath(sessionId: sessionId, requestPath: request.path),
+              isSafeGitRelativePath(relPath) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        let req = (try? JSONDecoder().decode(GitDiffActionRequest.self, from: request.body))
+            ?? GitDiffActionRequest(action: .stageFile)
+        do {
+            switch req.action {
+            case .stageFile:
+                try await runGitDiffAction(gitBin: gitBin, cwd: session.effectiveCwd, arguments: ["add", "--", relPath])
+            case .unstageFile:
+                try await runGitDiffAction(gitBin: gitBin, cwd: session.effectiveCwd, arguments: ["restore", "--staged", "--", relPath])
+            case .discardFile:
+                if try await isUntracked(gitBin: gitBin, cwd: session.effectiveCwd, relPath: relPath) {
+                    try trashUntrackedFile(cwd: session.effectiveCwd, relPath: relPath)
+                } else {
+                    try await runGitDiffAction(
+                        gitBin: gitBin,
+                        cwd: session.effectiveCwd,
+                        arguments: ["restore", "--staged", "--worktree", "--", relPath]
+                    )
+                }
+            }
+            let files = try await loadDiffFiles(session: session, gitBin: gitBin)
+            let receipt = req.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+            }
+            sendCodable(GitDiffActionResponse(ok: true, files: files, receipt: receipt), on: connection)
+        } catch {
+            sendCodable(GitDiffActionResponse(ok: false, error: "\(error)"), on: connection)
+        }
+    }
+
+    private func loadDiffFiles(
+        session: AgentSession,
+        gitBin: String
+    ) async throws -> [ClawdmeterShared.GitDiffFile] {
+        let cwd = session.effectiveCwd
+        // Refuse to diff mid-rebase/merge (Codex #11 / T11).
+        if FileManager.default.fileExists(atPath: (cwd as NSString).appendingPathComponent(".git/rebase-merge"))
+            || FileManager.default.fileExists(atPath: (cwd as NSString).appendingPathComponent(".git/MERGE_HEAD")) {
+            throw NSError(
+                domain: "AgentControlServer.Diff",
+                code: 409,
+                userInfo: [NSLocalizedDescriptionKey: "Repo is in rebase/merge state, finish on Mac"]
+            )
+        }
+        let head = try await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["diff", "--numstat", "HEAD"],
+            cwd: cwd,
+            timeout: 10
+        )
+        let unstaged = try? await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["diff", "--numstat"],
+            cwd: cwd,
+            timeout: 10
+        )
+        let staged = try? await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["diff", "--cached", "--numstat"],
+            cwd: cwd,
+            timeout: 10
+        )
+        let status = try? await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["status", "--porcelain=v1", "-z"],
+            cwd: cwd,
+            timeout: 10
+        )
+        let unstagedPaths = Set(parseNumstatFiles(unstaged?.stdoutString ?? "").map(\.path))
+        let stagedPaths = Set(parseNumstatFiles(staged?.stdoutString ?? "").map(\.path))
+        let statusMap = parsePorcelainStatus(status?.stdout ?? Data())
+
+        var seen = Set<String>()
+        var files: [ClawdmeterShared.GitDiffFile] = parseNumstatFiles(head.stdoutString).map { item in
+            seen.insert(item.path)
+            let staged = stagedPaths.contains(item.path)
+            let unstaged = unstagedPaths.contains(item.path)
+            return ClawdmeterShared.GitDiffFile(
+                path: item.path,
+                status: statusMap[item.path] ?? "M",
+                additions: item.additions,
+                deletions: item.deletions,
+                hunks: [],
+                truncated: true,
+                changeState: diffChangeState(staged: staged, unstaged: unstaged)
+            )
+        }
+
+        let untracked = try? await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["ls-files", "--others", "--exclude-standard", "-z"],
+            cwd: cwd,
+            timeout: 10
+        )
+        for path in parseNulSeparatedPaths(untracked?.stdout ?? Data()) where !seen.contains(path) {
+            files.append(ClawdmeterShared.GitDiffFile(
+                path: path,
+                status: "A",
+                additions: countTextLines(cwd: cwd, relPath: path),
+                deletions: 0,
+                hunks: [],
+                truncated: true,
+                changeState: "untracked"
+            ))
+        }
+        return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
     private func diffRelativePath(sessionId: String, requestPath: String) -> String? {
         let pathOnly = requestPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? requestPath
         let prefix = "/sessions/\(sessionId)/diff/"
+        guard pathOnly.hasPrefix(prefix) else { return nil }
+        let encoded = String(pathOnly.dropFirst(prefix.count))
+        return encoded.removingPercentEncoding
+    }
+
+    private func diffActionRelativePath(sessionId: String, requestPath: String) -> String? {
+        let pathOnly = requestPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? requestPath
+        let prefix = "/sessions/\(sessionId)/diff-action/"
         guard pathOnly.hasPrefix(prefix) else { return nil }
         let encoded = String(pathOnly.dropFirst(prefix.count))
         return encoded.removingPercentEncoding
@@ -2449,6 +2607,134 @@ public final class AgentControlServer {
             return 80
         }
         return min(max(value, 0), 500)
+    }
+
+    private func runGitDiffAction(gitBin: String, cwd: String, arguments: [String]) async throws {
+        let result = try await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: arguments,
+            cwd: cwd,
+            timeout: 15
+        )
+        guard result.exitStatus == 0 else {
+            throw NSError(
+                domain: "AgentControlServer.DiffAction",
+                code: Int(result.exitStatus),
+                userInfo: [NSLocalizedDescriptionKey: result.stderrString]
+            )
+        }
+    }
+
+    private func isUntracked(gitBin: String, cwd: String, relPath: String) async throws -> Bool {
+        let result = try await ShellRunner.shared.run(
+            executable: gitBin,
+            arguments: ["ls-files", "--error-unmatch", "--", relPath],
+            cwd: cwd,
+            timeout: 10
+        )
+        return result.exitStatus != 0
+    }
+
+    private func trashUntrackedFile(cwd: String, relPath: String) throws {
+        guard let fileURL = safeFileURL(cwd: cwd, relPath: relPath) else {
+            throw NSError(
+                domain: "AgentControlServer.DiffAction",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "unsafe path"]
+            )
+        }
+        var trashedURL: NSURL?
+        try FileManager.default.trashItem(at: fileURL, resultingItemURL: &trashedURL)
+    }
+
+    private func safeFileURL(cwd: String, relPath: String) -> URL? {
+        guard isSafeGitRelativePath(relPath) else { return nil }
+        let root = URL(fileURLWithPath: cwd, isDirectory: true).standardizedFileURL
+        let candidate = root.appendingPathComponent(relPath).standardizedFileURL
+        guard candidate.path == root.path || candidate.path.hasPrefix(root.path + "/") else {
+            return nil
+        }
+        return candidate
+    }
+
+    private func parseNulSeparatedPaths(_ data: Data) -> [String] {
+        data.split(separator: 0).compactMap { String(data: Data($0), encoding: .utf8) }
+    }
+
+    private struct DiffNumstatItem {
+        let path: String
+        let additions: Int
+        let deletions: Int
+    }
+
+    private func parseNumstatFiles(_ stdout: String) -> [DiffNumstatItem] {
+        stdout.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+            guard parts.count == 3 else { return nil }
+            return DiffNumstatItem(
+                path: normalizeNumstatPath(parts[2]),
+                additions: Int(parts[0]) ?? 0,
+                deletions: Int(parts[1]) ?? 0
+            )
+        }
+    }
+
+    private func normalizeNumstatPath(_ path: String) -> String {
+        // Rename numstat can emit "{old => new}/file"; fall back to the
+        // post-image path when the compact rename syntax is obvious.
+        guard let arrow = path.range(of: " => ") else { return path }
+        var normalized = path
+        normalized.removeSubrange(path.startIndex..<arrow.upperBound)
+        normalized.removeAll { $0 == "{" || $0 == "}" }
+        return normalized
+    }
+
+    private func parsePorcelainStatus(_ data: Data) -> [String: String] {
+        let entries = parseNulSeparatedPaths(data)
+        var out: [String: String] = [:]
+        var index = 0
+        while index < entries.count {
+            let entry = entries[index]
+            guard entry.count >= 4 else {
+                index += 1
+                continue
+            }
+            let xy = String(entry.prefix(2))
+            var path = String(entry.dropFirst(3))
+            if (xy.contains("R") || xy.contains("C")), index + 1 < entries.count {
+                index += 1
+                path = entries[index]
+            }
+            out[path] = gitStatus(from: xy)
+            index += 1
+        }
+        return out
+    }
+
+    private func gitStatus(from xy: String) -> String {
+        if xy == "??" { return "A" }
+        if xy.contains("R") { return "R" }
+        if xy.contains("C") { return "C" }
+        if xy.contains("A") { return "A" }
+        if xy.contains("D") { return "D" }
+        return "M"
+    }
+
+    private func diffChangeState(staged: Bool, unstaged: Bool) -> String {
+        if staged && unstaged { return "mixed" }
+        if staged { return "staged" }
+        return "unstaged"
+    }
+
+    private func countTextLines(cwd: String, relPath: String) -> Int {
+        guard let url = safeFileURL(cwd: cwd, relPath: relPath),
+              let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+              data.count <= 512_000,
+              !data.contains(0) else {
+            return 0
+        }
+        if data.isEmpty { return 0 }
+        return data.reduce(0) { $1 == 10 ? $0 + 1 : $0 } + (data.last == 10 ? 0 : 1)
     }
 
     private func parseDiffCounts(_ stdout: String) -> (additions: Int, deletions: Int) {
@@ -2543,6 +2829,15 @@ public final class AgentControlServer {
             default: return .open
             }
         }()
+        let checksRollup = Self.checksRollup(from: obj["statusCheckRollup"])
+        let mergeability: PRMergeability = {
+            if state == .closed { return .blocked }
+            if state == .merged { return .mergeable }
+            switch checksRollup {
+            case "failure", "pending": return .blocked
+            default: return .mergeable
+            }
+        }()
         return PRStatus(
             url: obj["url"] as? String ?? "",
             number: obj["number"] as? Int ?? 0,
@@ -2553,7 +2848,10 @@ public final class AgentControlServer {
             deletions: obj["deletions"] as? Int ?? 0,
             changedFiles: obj["changedFiles"] as? Int ?? 0,
             reviewDecision: obj["reviewDecision"] as? String,
-            checksRollup: Self.checksRollup(from: obj["statusCheckRollup"])
+            checksRollup: checksRollup,
+            checks: Self.checkMirrors(from: obj["statusCheckRollup"]),
+            mergeability: mergeability,
+            lastCheckedAt: Date()
         )
     }
 
@@ -2571,6 +2869,34 @@ public final class AgentControlServer {
             }
         }
         return sawPending ? "pending" : "success"
+    }
+
+    private static func checkMirrors(from value: Any?) -> [PRCheckMirror] {
+        guard let checks = value as? [[String: Any]], !checks.isEmpty else { return [] }
+        let formatter = ISO8601DateFormatter()
+        return checks.enumerated().map { index, check in
+            let name = (check["name"] as? String)
+                ?? (check["workflowName"] as? String)
+                ?? (check["context"] as? String)
+                ?? "Check \(index + 1)"
+            let status = ((check["status"] as? String) ?? "").lowercased()
+            let conclusion = ((check["conclusion"] as? String) ?? "").lowercased()
+            let state: PRCheckState
+            if ["success", "passed"].contains(conclusion) {
+                state = .success
+            } else if ["failure", "failed", "timed_out", "cancelled", "action_required"].contains(conclusion) {
+                state = .failure
+            } else if ["skipped", "neutral"].contains(conclusion) {
+                state = .skipped
+            } else if conclusion.isEmpty || ["queued", "in_progress", "pending"].contains(status) {
+                state = .pending
+            } else {
+                state = .unknown
+            }
+            let completedAt = (check["completedAt"] as? String).flatMap { formatter.date(from: $0) }
+            let url = (check["detailsUrl"] as? String) ?? (check["targetUrl"] as? String)
+            return PRCheckMirror(name: name, state: state, url: url, completedAt: completedAt)
+        }
     }
 
     private func handleGetPR(sessionId: String, connection: NWConnection) async {
@@ -2633,6 +2959,48 @@ public final class AgentControlServer {
             sendJSON(payload, on: connection)
         } catch {
             sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func handleReviewPR(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let ghBin = ShellRunner.locateBinary("gh") else {
+            sendJSON(["error": "gh CLI not found on Mac. Install: brew install gh"], on: connection, status: 503)
+            return
+        }
+        let req = (try? JSONDecoder().decode(PRReviewRequest.self, from: request.body)) ?? PRReviewRequest()
+        var args = ["pr", "review"]
+        switch req.action {
+        case .approve:
+            args.append("--approve")
+        case .comment:
+            args.append("--comment")
+        case .requestChanges:
+            args.append("--request-changes")
+        }
+        if let body = req.body?.trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty {
+            args += ["--body", body]
+        }
+        do {
+            let result = try await ShellRunner.shared.run(
+                executable: ghBin,
+                arguments: args,
+                cwd: session.effectiveCwd,
+                timeout: 45
+            )
+            guard result.exitStatus == 0 else {
+                sendCodable(PRReviewResponse(ok: false, error: result.stderrString), on: connection)
+                return
+            }
+            let refreshed = try? await fetchPRStatus(cwd: session.effectiveCwd)
+            let receipt = req.idempotencyKey.map {
+                MobileCommandReceipt(idempotencyKey: $0, status: .acknowledged, processedAt: Date())
+            }
+            sendCodable(PRReviewResponse(ok: true, pr: refreshed ?? nil, receipt: receipt), on: connection)
+        } catch {
+            sendCodable(PRReviewResponse(ok: false, error: "\(error)"), on: connection)
         }
     }
 
@@ -3598,6 +3966,303 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    // MARK: - v18 remote Code workbench
+
+    private func handleGetRunProfile(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let snapshot = await codeRunProfiles.snapshot(
+            session: session,
+            messages: chatMessages(for: session)
+        )
+        sendCodable(CodeRunProfileResponse(profile: snapshot), on: connection)
+    }
+
+    private func handleStartRunProfile(
+        sessionId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let body = request.body.isEmpty
+            ? CodeRunProfileStartRequest()
+            : (try? decoder.decode(CodeRunProfileStartRequest.self, from: request.body))
+        guard let body else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        let snapshot = await codeRunProfiles.start(
+            session: session,
+            command: body.command,
+            messages: chatMessages(for: session)
+        )
+        sendCodable(CodeRunProfileResponse(profile: snapshot), on: connection)
+    }
+
+    private func handleStopRunProfile(sessionId: String, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let snapshot = await codeRunProfiles.stop(
+            session: session,
+            messages: chatMessages(for: session)
+        )
+        sendCodable(CodeRunProfileResponse(profile: snapshot), on: connection)
+    }
+
+    private func handleRunProfileProxy(
+        sessionId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let snapshot = await codeRunProfiles.snapshot(
+            session: session,
+            messages: chatMessages(for: session)
+        )
+        guard let target = proxiedRunProfileURL(
+            from: request.path,
+            sessionId: sessionId,
+            detectedURL: snapshot.detectedURL
+        ) else {
+            sendResponse(.badRequest(detail: "no detected preview URL for run-profile proxy"), on: connection)
+            return
+        }
+        do {
+            var upstream = URLRequest(url: target)
+            upstream.httpMethod = request.method
+            upstream.httpBody = request.body.isEmpty ? nil : request.body
+            if let accept = request.headers["accept"] {
+                upstream.setValue(accept, forHTTPHeaderField: "Accept")
+            }
+            if let contentType = request.headers["content-type"] {
+                upstream.setValue(contentType, forHTTPHeaderField: "Content-Type")
+            }
+            if let userAgent = request.headers["user-agent"] {
+                upstream.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+            }
+            let (data, response) = try await URLSession.shared.data(for: upstream)
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode ?? 200
+            let contentType = http?.value(forHTTPHeaderField: "Content-Type") ?? "application/octet-stream"
+            sendResponse(
+                HTTPResponse(
+                    status: status,
+                    reason: HTTPURLResponse.localizedString(forStatusCode: status),
+                    contentType: contentType,
+                    body: request.method.uppercased() == "HEAD" ? Data() : data
+                ),
+                on: connection
+            )
+        } catch {
+            sendJSON(["error": error.localizedDescription], on: connection, status: 502)
+        }
+    }
+
+    private func handleListCheckpoints(sessionId: String, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: sessionId),
+              registry.session(id: uuid) != nil else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        sendCodable(
+            CodeCheckpointListResponse(checkpoints: storedCheckpoints(for: uuid).map(codeCheckpoint)),
+            on: connection
+        )
+    }
+
+    private func handleCreateCheckpoint(
+        sessionId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let body = request.body.isEmpty
+            ? CodeCheckpointCreateRequest()
+            : (try? decoder.decode(CodeCheckpointCreateRequest.self, from: request.body))
+        guard let body else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        do {
+            let trimmedSummary = body.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let checkpoint = try await CheckpointService().createCheckpoint(
+                session: session,
+                summary: (trimmedSummary?.isEmpty == false) ? trimmedSummary : "Manual checkpoint"
+            )
+            recordCheckpoint(checkpoint)
+            sendCodable(CodeCheckpointCreateResponse(checkpoint: codeCheckpoint(checkpoint)), on: connection)
+        } catch {
+            sendJSON(["error": error.localizedDescription], on: connection, status: 409)
+        }
+    }
+
+    private func handlePrepareCheckpointRestore(
+        sessionId: String,
+        checkpointId: String,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let checkpointUUID = UUID(uuidString: checkpointId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        guard let checkpoint = storedCheckpoint(sessionId: uuid, checkpointId: checkpointUUID) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        do {
+            let plan = try await CheckpointService().prepareRestore(checkpoint, session: session)
+            recordCheckpoint(plan.safety)
+            checkpointRestorePlans[plan.id] = plan
+            sendCodable(
+                CodeCheckpointRestorePreviewResponse(preview: codeRestorePreview(plan)),
+                on: connection
+            )
+        } catch {
+            sendJSON(["error": error.localizedDescription], on: connection, status: 409)
+        }
+    }
+
+    private func handleRestoreCheckpoint(
+        sessionId: String,
+        checkpointId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let uuid = UUID(uuidString: sessionId),
+              let checkpointUUID = UUID(uuidString: checkpointId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let body = try? decoder.decode(CodeCheckpointRestoreRequest.self, from: request.body),
+              let plan = checkpointRestorePlans[body.previewId],
+              plan.target.id == checkpointUUID,
+              plan.target.sessionId == uuid else {
+            sendResponse(.badRequest(detail: "restore requires a current previewId for this checkpoint"), on: connection)
+            return
+        }
+        do {
+            try await CheckpointService().restore(plan, in: session.effectiveCwd)
+            checkpointRestorePlans.removeValue(forKey: body.previewId)
+            sendCodable(
+                CodeCheckpointRestoreResponse(
+                    restored: true,
+                    checkpoint: codeCheckpoint(plan.target),
+                    safety: codeCheckpoint(plan.safety)
+                ),
+                on: connection
+            )
+        } catch {
+            sendJSON(["error": error.localizedDescription], on: connection, status: 409)
+        }
+    }
+
+    private func chatMessages(for session: AgentSession) -> [ChatMessage] {
+        chatStoreRegistry.snapshotStore(for: session)?.snapshot.messages ?? []
+    }
+
+    private func storedCheckpoints(for sessionId: UUID) -> [CheckpointStateSnapshot] {
+        WorkbenchStateStore().load().checkpoints[sessionId] ?? []
+    }
+
+    private func storedCheckpoint(sessionId: UUID, checkpointId: UUID) -> CheckpointStateSnapshot? {
+        storedCheckpoints(for: sessionId).first { $0.id == checkpointId }
+    }
+
+    private func recordCheckpoint(_ checkpoint: CheckpointStateSnapshot) {
+        let store = WorkbenchStateStore()
+        var snapshot = store.load()
+        var checkpoints = snapshot.checkpoints[checkpoint.sessionId] ?? []
+        checkpoints.removeAll { $0.id == checkpoint.id }
+        checkpoints.append(checkpoint)
+        snapshot.checkpoints[checkpoint.sessionId] = checkpoints
+        store.save(snapshot)
+    }
+
+    private func codeCheckpoint(_ checkpoint: CheckpointStateSnapshot) -> CodeCheckpointSnapshot {
+        CodeCheckpointSnapshot(
+            id: checkpoint.id,
+            sessionId: checkpoint.sessionId,
+            refName: checkpoint.refName,
+            turnId: checkpoint.turnId,
+            createdAt: checkpoint.createdAt,
+            summary: checkpoint.summary
+        )
+    }
+
+    private func codeRestorePreview(_ plan: CheckpointRestorePlan) -> CodeCheckpointRestorePreview {
+        CodeCheckpointRestorePreview(
+            id: plan.id,
+            target: codeCheckpoint(plan.target),
+            safety: codeCheckpoint(plan.safety),
+            diffStat: plan.diffStat,
+            diffPatch: plan.diffPatch,
+            patchTruncated: plan.patchTruncated,
+            dirtyStatusLines: plan.dirtyStatusLines,
+            untrackedOverwritePaths: plan.untrackedOverwritePaths,
+            untrackedSnapshotPaths: plan.untrackedSnapshotPaths,
+            blockingReasons: plan.blockingReasons
+        )
+    }
+
+    private func proxiedRunProfileURL(
+        from requestPath: String,
+        sessionId: String,
+        detectedURL: String?
+    ) -> URL? {
+        guard let detectedURL,
+              var target = URLComponents(string: detectedURL) else {
+            return nil
+        }
+        let pieces = requestPath.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let pathOnly = pieces.first.map(String.init) ?? requestPath
+        let query = pieces.count > 1 ? String(pieces[1]) : nil
+        let prefix = "/sessions/\(sessionId)/run-profile/proxy"
+        guard pathOnly.hasPrefix(prefix) else { return target.url }
+        var suffix = String(pathOnly.dropFirst(prefix.count))
+        if suffix.isEmpty || suffix == "/" {
+            if target.percentEncodedPath.isEmpty {
+                target.percentEncodedPath = "/"
+            }
+            if query != nil {
+                target.percentEncodedQuery = query
+            }
+        } else {
+            if !suffix.hasPrefix("/") {
+                suffix = "/" + suffix
+            }
+            target.percentEncodedPath = suffix
+            target.percentEncodedQuery = query
+        }
+        return target.url
     }
 
     private func handlePostSession(request: HTTPRequest, connection: NWConnection) async {

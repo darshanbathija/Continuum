@@ -6,8 +6,8 @@ import ClawdmeterShared
 /// `ios-shell.jsx::IOSTabBar` floating glass capsule.
 public struct IOSRootView: View {
     @State private var theme: TahoeThemeStore
-    @State private var tab: Tab = .chat
-    @State private var pushedScreen: Screen? = nil
+    @State private var tab: Tab
+    @State private var pushedScreen: Screen?
     @State private var newSessionPresented: Bool = false
     @State private var settingsPresented: Bool = false
     // v0.27.0: focusedCodeRepoKey state is unused now that the Design
@@ -31,23 +31,40 @@ public struct IOSRootView: View {
     /// was per-WindowGroup-scene on iPad — multiple windows each got
     /// their own outbox, racing on the persisted `outbox.json`.
     @ObservedObject private var outbox: MobileCommandOutbox
+    private let screenshotDemo: Bool
 
     public init(usageModel: UsageModel, agentClient: AgentControlClient, outbox: MobileCommandOutbox) {
         self.usageModel = usageModel
         self.agentClient = agentClient
         self.outbox = outbox
+        let args = ProcessInfo.processInfo.arguments
+        let demo = args.contains("--ios-code-demo")
+        self.screenshotDemo = demo
         _theme = State(initialValue: TahoeThemeStore.loaded())
+        _tab = State(initialValue: demo ? .code : .chat)
+        if demo, args.contains("--ios-code-demo-detail") {
+            #if DEBUG
+            _pushedScreen = State(initialValue: .sessionDetail(AgentControlClient.codeTabVerificationSessionId))
+            #else
+            _pushedScreen = State(initialValue: nil)
+            #endif
+        } else {
+            _pushedScreen = State(initialValue: nil)
+        }
     }
 
     public var body: some View {
         let live = usageModel.tahoeLive
         let code = agentClient.tahoeCode
+        let useCodeReferenceTheme = usesCodeReferenceTheme
+        let activeTheme = useCodeReferenceTheme ? Self.iosCodeReferenceTheme : theme
+        let activeTokens = TahoeTokens.make(from: activeTheme)
         // v0.22.5: unpaired banner stays visible across every tab so
         // first-launch users always have an actionable path to
         // pairing. Was: only LiveGaugesHeader (inside Analytics tab)
         // surfaced a CTA — Chat/Code tabs left users staring at a
         // blank "not connected" screen with no flow forward.
-        let isUnpaired = !agentClient.isConfigured
+        let isUnpaired = !screenshotDemo && !agentClient.isConfigured
         // Extra bottom clearance when banner is visible so content
         // doesn't slide under it.
         let bottomClearance: CGFloat = isUnpaired ? 168 : 92
@@ -71,8 +88,8 @@ public struct IOSRootView: View {
             }
         }
         .ignoresSafeArea(.container, edges: .bottom)
-        .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 244.0/255, green: 246.0/255, blue: 250.0/255))
-        .tahoeTheme(theme)
+        .background(activeTokens.dark ? Color.black : Color(.sRGB, red: 244.0/255, green: 246.0/255, blue: 250.0/255))
+        .tahoeTheme(activeTheme)
         // P1 fix: pull live session data on first appearance and whenever
         // we return to the foreground. Without this, the daemon-mirrored
         // session list stays empty until the user interacts with the Mac.
@@ -85,6 +102,29 @@ public struct IOSRootView: View {
             // Pair-with-Mac (Scan QR + Paste URL + Forget pairing).
             SettingsView(model: usageModel, agentClient: agentClient)
         }
+    }
+
+    private var usesCodeReferenceTheme: Bool {
+        switch pushedScreen {
+        case .sessionDetail:
+            return true
+        case .pairing:
+            return false
+        case nil:
+            return tab == .code
+        }
+    }
+
+    @MainActor
+    private static var iosCodeReferenceTheme: TahoeThemeStore {
+        TahoeThemeStore(
+            appearance: .light,
+            surface: .translucent,
+            accent: .halo,
+            wallpaper: .graphite,
+            glassIntensity: 95,
+            providerFocus: .claude
+        )
     }
 
     @ViewBuilder
@@ -135,7 +175,8 @@ public struct IOSRootView: View {
                         pushedScreen = .sessionDetail(sessionId)
                     },
                     onNewSession: { newSessionPresented = true },
-                    agentClient: agentClient
+                    agentClient: agentClient,
+                    outbox: outbox
                 )
                 .refreshable {
                     await agentClient.refreshAll()
@@ -160,6 +201,7 @@ public struct IOSTabBar: View {
     // Analytics integration is tracked as a follow-up (see plan T6).
     private let items: [(IOSRootView.Tab, String, String)] = [
         (.chat,      "Chat",      "sparkles"),
+        (.live,      "Live",      "moon"),
         (.analytics, "Analytics", "diff"),
         (.code,      "Code",      "chat"),
     ]

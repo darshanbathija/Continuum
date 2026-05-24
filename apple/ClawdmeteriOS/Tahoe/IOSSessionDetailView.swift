@@ -1,5 +1,9 @@
 import SwiftUI
+import PhotosUI
 import ClawdmeterShared
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// iOS Session Detail — pushed from the Code list. Nav bar chip + thread +
 /// PlanHaloMini + composer. Ports `ios-other.jsx::IOSSessionDetail`.
@@ -14,7 +18,7 @@ import ClawdmeterShared
 /// Persisted per-session in `UserDefaults` so re-opening a session
 /// returns to the last viewed tab.
 enum SessionWorkbenchTab: String, CaseIterable, Identifiable {
-    case chat, plan, diff, pr, terminal, artifacts
+    case chat, plan, diff, sources, browser, pr, terminal, artifacts
     var id: String { rawValue }
 
     var label: String {
@@ -22,6 +26,8 @@ enum SessionWorkbenchTab: String, CaseIterable, Identifiable {
         case .chat: return "Chat"
         case .plan: return "Plan"
         case .diff: return "Diff"
+        case .sources: return "Sources"
+        case .browser: return "Run"
         case .pr: return "PR"
         case .terminal: return "Term"
         case .artifacts: return "Files"
@@ -33,10 +39,26 @@ enum SessionWorkbenchTab: String, CaseIterable, Identifiable {
         case .chat: return "bubble.left.and.bubble.right"
         case .plan: return "list.bullet.rectangle"
         case .diff: return "doc.text.magnifyingglass"
+        case .sources: return "link"
+        case .browser: return "safari"
         case .pr: return "arrow.triangle.merge"
         case .terminal: return "terminal"
         case .artifacts: return "doc.richtext"
         }
+    }
+}
+
+private struct IOSQueuedCodeDraft: Codable, Equatable, Identifiable {
+    let id: UUID
+    let sessionId: UUID
+    var text: String
+    let createdAt: Date
+
+    init(id: UUID = UUID(), sessionId: UUID, text: String, createdAt: Date = Date()) {
+        self.id = id
+        self.sessionId = sessionId
+        self.text = text
+        self.createdAt = createdAt
     }
 }
 
@@ -67,8 +89,14 @@ public struct IOSSessionDetailView: View {
     @State private var refineText: String = ""
     @State private var lastError: String?
     @State private var configSheetPresented: Bool = false
+    @State private var checkpointsSheetPresented: Bool = false
     @State private var outboxSheetPresented: Bool = false
     @State private var selectedTab: SessionWorkbenchTab
+    @State private var queuedDrafts: [IOSQueuedCodeDraft]
+    @State private var isDispatchingQueuedDraft: Bool = false
+    @State private var dispatchedQueuedTurnForCurrentIdle: Bool = false
+    @State private var attachments: [ComposerAttachment] = []
+    @State private var photoPickerItems: [PhotosPickerItem] = []
     @StateObject private var chatStore: iOSChatStore
 
     public init(
@@ -83,11 +111,14 @@ public struct IOSSessionDetailView: View {
         self.sessionId = sessionId
         self.data = data
         self.onBack = onBack
+        let args = ProcessInfo.processInfo.arguments
         _chatStore = StateObject(wrappedValue: iOSChatStore(sessionId: sessionId, client: agentClient))
         // Restore last-selected tab per session. Chat is the default for
         // a freshly opened session.
         let stored = UserDefaults.standard.string(forKey: "clawdmeter.ios.session.\(sessionId).tab")
-        _selectedTab = State(initialValue: SessionWorkbenchTab(rawValue: stored ?? "chat") ?? .chat)
+        let requestedTab = Self.screenshotTab(from: args)
+        _selectedTab = State(initialValue: requestedTab ?? SessionWorkbenchTab(rawValue: stored ?? "chat") ?? .chat)
+        _queuedDrafts = State(initialValue: Self.loadQueuedDrafts(sessionId: sessionId))
     }
 
     /// Find the session this screen represents. Returns nil if it was
@@ -110,11 +141,20 @@ public struct IOSSessionDetailView: View {
         return data.isDemo ? TahoeDemo.plan : []
     }
 
-    /// True when this session has a real plan that can be approved.
-    /// Disables Approve & run otherwise so users don't fire a no-op.
+    /// True when this session has a daemon-backed planning state that can be
+    /// approved. Claude/Gemini usually provide `planText`; Codex exposes
+    /// structured todos and the daemon accepts approval for planning Codex
+    /// sessions even when `planText` is empty.
     private var hasRealPlan: Bool {
-        guard let raw = session?.runtimePlanText else { return false }
-        return !raw.isEmpty && session?.status == .planning
+        guard let realAgentSession, realAgentSession.status == .planning else { return false }
+        if realAgentSession.agent == .codex { return true }
+        if let raw = realAgentSession.planText, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if let raw = session?.runtimePlanText, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return false
     }
 
     private var realAgentSession: AgentSession? {
@@ -179,22 +219,11 @@ public struct IOSSessionDetailView: View {
                     .buttonStyle(.plain)
                 }
 
-                if session != nil && !data.isDemo {
-                    IOSRoundIconBtn("sliders", action: openConfigSheet)
-                } else if data.isDemo {
-                    IOSRoundIconBtn("sliders")
+                if session != nil {
+                    sessionMenuButton
                 }
             }
             .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
-
-            // v16 workbench tab strip. Hidden in demo mode (the demo
-            // bindings only stub the chat thread) and when no session
-            // is found (we just show the empty state in the chat tab).
-            if !data.isDemo, session != nil {
-                tabChipStrip
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-            }
 
             // v16 tab body. Each branch renders the pane for the current
             // tab. Chat keeps its custom thread + composer; the other
@@ -207,32 +236,56 @@ public struct IOSSessionDetailView: View {
             // their own write actions (plan: approve; PR: merge;
             // terminal: keystroke; artifacts: download).
             if selectedTab == .chat {
-                TahoeGlass(radius: 22, tone: .raised) {
-                    HStack(spacing: 8) {
-                        TextField(composerPlaceholder, text: $composerText, axis: .vertical)
-                            .font(TahoeFont.body(14))
-                            .foregroundStyle(t.fg)
-                            .lineLimit(1...4)
-                            .textInputAutocapitalization(.sentences)
-                            .submitLabel(.send)
-                            .disabled(session == nil && !data.isDemo)
-                        Spacer(minLength: 4)
-                        Button(action: { Task { await sendComposer() } }) {
-                            ZStack {
-                                Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
-                                                             startPoint: .top, endPoint: .bottom))
-                                TahoeIcon("arrowU", size: 16, weight: .bold).foregroundStyle(.white)
-                            }
-                            .frame(width: 38, height: 38)
-                            .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
-                            .opacity(canSend ? 1.0 : 0.45)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canSend)
-                    }
-                    .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 10)
+                if !queuedDrafts.isEmpty {
+                    queuedDraftsPanel
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
                 }
-                .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 14)
+                TahoeGlass(radius: isPlanApprovalMode ? 18 : 22, tone: .raised) {
+                    VStack(alignment: .leading, spacing: isPlanApprovalMode ? 6 : 8) {
+                        if !attachments.isEmpty {
+                            attachmentStrip
+                        }
+                        if !isPlanApprovalMode && !composerChips.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 6) {
+                                    ForEach(composerChips, id: \.id) { chip in
+                                        composerChip(chip)
+                                    }
+                                }
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            TextField(composerPlaceholder, text: $composerText, axis: .vertical)
+                                .font(TahoeFont.body(14))
+                                .foregroundStyle(t.fg)
+                                .lineLimit(isPlanApprovalMode ? 1...2 : 1...4)
+                                .textInputAutocapitalization(.sentences)
+                                .submitLabel(.send)
+                            .disabled(session == nil && !data.isDemo)
+                            Spacer(minLength: 4)
+                            attachButton
+                            Button(action: { Task { await sendComposer() } }) {
+                                ZStack {
+                                    Circle().fill(sendButtonFill)
+                                    if isDispatchingQueuedDraft {
+                                        ProgressView().controlSize(.mini)
+                                    } else {
+                                        TahoeIcon(isSessionRunning ? "tray" : "arrowU", size: 16, weight: .bold)
+                                            .foregroundStyle(.white)
+                                    }
+                                }
+                                .frame(width: 38, height: 38)
+                                .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
+                                .opacity(canSend ? 1.0 : 0.45)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!canSend)
+                        }
+                    }
+                    .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, isPlanApprovalMode ? 7 : 10)
+                }
+                .padding(.horizontal, 12).padding(.top, isPlanApprovalMode ? 6 : 10).padding(.bottom, isPlanApprovalMode ? 10 : 14)
             }
         }
         .alert("Refine the plan", isPresented: $refineAlertShown) {
@@ -263,6 +316,18 @@ public struct IOSSessionDetailView: View {
             }
             .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $checkpointsSheetPresented) {
+            NavigationStack {
+                if let realAgentSession {
+                    iOSCheckpointPane(client: agentClient, session: realAgentSession)
+                        .navigationTitle("Checkpoints")
+                        .navigationBarTitleDisplayMode(.inline)
+                } else {
+                    ContentUnavailableView("Session unavailable", systemImage: "exclamationmark.triangle")
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .sheet(isPresented: $outboxSheetPresented) {
             NavigationStack {
                 iOSOutboxPane(outbox: outbox, sessionId: sessionId)
@@ -278,6 +343,19 @@ public struct IOSSessionDetailView: View {
         .onChange(of: selectedTab) { _, newValue in
             UserDefaults.standard.set(newValue.rawValue, forKey: "clawdmeter.ios.session.\(sessionId).tab")
         }
+        .onChange(of: photoPickerItems) { _, newItems in
+            Task { await ingestPhotoPickerItems(newItems) }
+        }
+        .onChange(of: realAgentSession?.status) { oldValue, newValue in
+            if newValue == .running {
+                dispatchedQueuedTurnForCurrentIdle = false
+            } else if oldValue == .running {
+                dispatchedQueuedTurnForCurrentIdle = false
+            }
+        }
+        .task(id: queueDrainKey) {
+            await drainQueuedDraftsIfPossible()
+        }
         .onDisappear {
             chatStore.stop()
         }
@@ -285,60 +363,128 @@ public struct IOSSessionDetailView: View {
 
     // MARK: - Tab UI
 
+    private var sessionMenuButton: some View {
+        Menu {
+            if !data.isDemo {
+                Button {
+                    openConfigSheet()
+                } label: {
+                    Label("Session settings", systemImage: "slider.horizontal.3")
+                }
+                Button {
+                    checkpointsSheetPresented = true
+                } label: {
+                    Label("Checkpoints", systemImage: "bookmark")
+                }
+                Divider()
+            }
+            ForEach(visibleTabs) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    Label(tab.label, systemImage: tab.icon)
+                }
+            }
+        } label: {
+            TahoeIcon("sliders", size: 16)
+                .foregroundStyle(t.fg)
+                .frame(width: 40, height: 38)
+                .background {
+                    Capsule(style: .continuous).fill(t.glassTintHi)
+                }
+                .overlay {
+                    Capsule(style: .continuous).stroke(t.hairline, lineWidth: 0.5)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
     /// Visible tabs change with session state. Plan only when there's a
-    /// plan; PR only when the session has a worktree; Terminal only when
-    /// at least one tmux pane exists; Artifacts only when the session
-    /// snapshot lists at least one artifact entry.
+    /// plan; all backed review panes stay visible so empty states do not
+    /// hide working controls or make the tab set jump as data arrives.
     private var visibleTabs: [SessionWorkbenchTab] {
         var tabs: [SessionWorkbenchTab] = [.chat]
         if let s = realAgentSession {
-            if let plan = s.planText, !plan.isEmpty {
+            if s.agent == .codex {
+                tabs.append(.plan)
+            } else if s.agent == .gemini && agentClient.supportsAntigravityPlan {
+                tabs.append(.plan)
+            } else if let plan = s.planText, !plan.isEmpty {
                 tabs.append(.plan)
             } else if s.status == .planning {
                 tabs.append(.plan)
             }
             tabs.append(.diff)
+            tabs.append(.sources)
+            tabs.append(.browser)
             // Show PR + Terminal eagerly so the user can navigate to
             // them when empty (the pane handles its own empty state).
             tabs.append(.pr)
-            if !s.terminalPanes.isEmpty {
+            if hasTerminalSurface(s) {
                 tabs.append(.terminal)
             }
-            if !chatStore.snapshot.artifactEntries.isEmpty {
-                tabs.append(.artifacts)
-            }
+            tabs.append(.artifacts)
         }
         return tabs
     }
 
     @ViewBuilder
     private var tabChipStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(visibleTabs) { tab in
-                    Button {
-                        selectedTab = tab
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: tab.icon)
-                                .font(.system(size: 12, weight: .medium))
-                            Text(tab.label)
-                                .font(.system(size: 12, weight: .semibold))
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(visibleTabs) { tab in
+                        Button {
+                            selectedTab = tab
+                            withAnimation(.snappy(duration: 0.18)) {
+                                proxy.scrollTo(tab.id, anchor: .center)
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: tab.icon)
+                                    .font(.system(size: 12, weight: .medium))
+                                Text(tab.label)
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background {
+                                Capsule().fill(selectedTab == tab ? t.accent : t.glassTintHi)
+                            }
+                            .overlay {
+                                Capsule().stroke(selectedTab == tab ? .clear : t.hairline, lineWidth: 0.5)
+                            }
+                            .foregroundStyle(selectedTab == tab ? .white : t.fg)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background {
-                            Capsule().fill(selectedTab == tab ? t.accent : t.glassTintHi)
-                        }
-                        .overlay {
-                            Capsule().stroke(selectedTab == tab ? .clear : t.hairline, lineWidth: 0.5)
-                        }
-                        .foregroundStyle(selectedTab == tab ? .white : t.fg)
+                        .buttonStyle(.plain)
+                        .id(tab.id)
                     }
-                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 2)
+            }
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .black, location: 0.06),
+                        .init(color: .black, location: 0.94),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+            .onAppear {
+                DispatchQueue.main.async {
+                    proxy.scrollTo(selectedTab.id, anchor: .center)
                 }
             }
-            .padding(.vertical, 2)
+            .onChange(of: selectedTab) { _, newValue in
+                withAnimation(.snappy(duration: 0.18)) {
+                    proxy.scrollTo(newValue.id, anchor: .center)
+                }
+            }
         }
     }
 
@@ -349,7 +495,7 @@ public struct IOSSessionDetailView: View {
             chatPane
         case .plan:
             if let s = realAgentSession {
-                iOSPlanTrackerView(session: s, onApprove: { await approvePlan() })
+                planPane(for: s)
             } else {
                 emptyState(title: "No session", body: "Session unavailable.")
             }
@@ -359,15 +505,23 @@ public struct IOSSessionDetailView: View {
             } else {
                 emptyState(title: "No session", body: "Session unavailable.")
             }
+        case .sources:
+            iOSSourcesPane(chatStore: chatStore, outbox: outbox, sessionId: sessionId)
+        case .browser:
+            if let s = realAgentSession {
+                iOSRunPreviewPane(client: agentClient, outbox: outbox, session: s)
+            } else {
+                emptyState(title: "No session", body: "Session unavailable.")
+            }
         case .pr:
             if let s = realAgentSession {
-                iOSPRPane(session: s, client: agentClient)
+                iOSPRPane(session: s, client: agentClient, outbox: outbox)
             } else {
                 emptyState(title: "No session", body: "Session unavailable.")
             }
         case .terminal:
             if let s = realAgentSession {
-                iOSTerminalTabsView(client: agentClient, session: s)
+                iOSTerminalTabsView(client: agentClient, session: s, chatStore: chatStore)
             } else {
                 emptyState(title: "No session", body: "Session unavailable.")
             }
@@ -378,6 +532,50 @@ public struct IOSSessionDetailView: View {
                 emptyState(title: "No session", body: "Session unavailable.")
             }
         }
+    }
+
+    private static func screenshotTab(from args: [String]) -> SessionWorkbenchTab? {
+        for arg in args {
+            if arg.hasPrefix("--ios-code-demo-tab=") {
+                let raw = String(arg.dropFirst("--ios-code-demo-tab=".count))
+                return SessionWorkbenchTab(rawValue: raw)
+            }
+        }
+        return nil
+    }
+
+    @ViewBuilder
+    private func planPane(for session: AgentSession) -> some View {
+        if session.agent == .codex {
+            iOSCodexPlanView(
+                chatStore: chatStore,
+                canApprove: session.status == .planning && !approving,
+                onApprove: { await approvePlan() }
+            )
+        } else if session.agent == .gemini && agentClient.supportsAntigravityPlan {
+            iOSAntigravityPlanView(
+                store: iOSAntigravityPlanStore(sessionId: session.id) { id in
+                    try await agentClient.fetchAntigravityPlan(sessionId: id)
+                }
+            )
+        } else {
+            iOSPlanTrackerView(session: session, onApprove: { await approvePlan() })
+        }
+    }
+
+    private func hasTerminalSurface(_ session: AgentSession) -> Bool {
+        if !(session.tmuxPaneId?.isEmpty ?? true) { return true }
+        if !(session.tmuxWindowId?.isEmpty ?? true) { return true }
+        if !session.terminalPanes.isEmpty { return true }
+        return chatStore.snapshot.items.contains { item in
+            guard case let .toolRun(_, pairs) = item else { return false }
+            return pairs.contains { Self.isShellTool($0.call.title) }
+        }
+    }
+
+    private static func isShellTool(_ title: String) -> Bool {
+        let shellTools: Set<String> = ["bash", "shell", "exec", "exec_command", "sh", "zsh", "pwsh", "run", "execute"]
+        return shellTools.contains(title.lowercased())
     }
 
     /// Pre-tabs body content, unchanged. Renders the chat thread + plan
@@ -448,12 +646,246 @@ public struct IOSSessionDetailView: View {
     private var composerPlaceholder: String {
         if data.isDemo { return "Refine the plan…" }
         if session == nil { return "Session unavailable" }
+        if isPlanApprovalMode { return "Approve or refine the plan above" }
+        if isSessionRunning { return "Queue a follow-up while this turn runs…" }
         return "Send a follow-up…"
     }
 
     private var canSend: Bool {
-        guard session != nil else { return false }
-        return !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard session != nil || data.isDemo else { return false }
+        let hasText = !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasReadyAttachment = attachments.contains { $0.remotePath != nil }
+        let anyUploading = attachments.contains(where: \.isUploading)
+        if isPlanApprovalMode {
+            return hasText && !anyUploading && session != nil && !data.isDemo
+        }
+        return (hasText || hasReadyAttachment) && !anyUploading
+    }
+
+    private var isSessionRunning: Bool {
+        realAgentSession?.status == .running
+    }
+
+    private var isPlanApprovalMode: Bool {
+        hasRealPlan && selectedTab == .chat
+    }
+
+    private var queueDrainKey: String {
+        "\(sessionId.uuidString):\(realAgentSession?.status.rawValue ?? "missing"):\(queuedDrafts.count)"
+    }
+
+    private var sendButtonFill: LinearGradient {
+        if isSessionRunning {
+            return LinearGradient(colors: [t.fg3, t.fg4], startPoint: .top, endPoint: .bottom)
+        }
+        return LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom)
+    }
+
+    private struct ComposerChipModel: Identifiable {
+        let id: String
+        let icon: String
+        let text: String
+        let isAccent: Bool
+    }
+
+    private var composerChips: [ComposerChipModel] {
+        guard let realAgentSession else { return [] }
+        var chips: [ComposerChipModel] = [
+            ComposerChipModel(
+                id: "provider",
+                icon: "sparkles",
+                text: realAgentSession.agent.tahoeProvider.displayName,
+                isAccent: true
+            )
+        ]
+        let model = realAgentSession.runtimeBinding?.providerModelId ?? realAgentSession.model
+        if let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            chips.append(ComposerChipModel(id: "model", icon: "code", text: model, isAccent: false))
+        }
+        chips.append(ComposerChipModel(id: "mode", icon: "branch", text: realAgentSession.mode.rawValue.capitalized, isAccent: false))
+        if let effort = realAgentSession.effort {
+            chips.append(ComposerChipModel(id: "effort", icon: "gauge", text: effort.rawValue.uppercased(), isAccent: false))
+        }
+        if !chatStore.snapshot.sourceEntries.isEmpty {
+            chips.append(ComposerChipModel(id: "sources", icon: "link", text: "\(chatStore.snapshot.sourceEntries.count) sources", isAccent: false))
+        }
+        if queuedDrafts.count > 0 {
+            chips.append(ComposerChipModel(id: "queue", icon: "tray", text: "\(queuedDrafts.count) queued", isAccent: true))
+        }
+        if !attachments.isEmpty {
+            chips.append(ComposerChipModel(id: "attachments", icon: "paperclip", text: "\(attachments.count) attached", isAccent: false))
+        }
+        return chips
+    }
+
+    private func composerChip(_ chip: ComposerChipModel) -> some View {
+        HStack(spacing: 5) {
+            TahoeIcon(chip.icon, size: 10.5)
+            Text(chip.text)
+                .lineLimit(1)
+        }
+        .font(TahoeFont.body(10.5, weight: .bold))
+        .foregroundStyle(chip.isAccent ? t.accent : t.fg3)
+        .padding(.horizontal, 8)
+        .frame(height: 23)
+        .background(chip.isAccent ? t.accentAlpha(0.12) : t.hair2, in: Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous)
+                .stroke(chip.isAccent ? t.accentAlpha(0.35) : t.hairline, lineWidth: 0.5)
+        }
+    }
+
+    private var attachButton: some View {
+        PhotosPicker(
+            selection: $photoPickerItems,
+            maxSelectionCount: 4,
+            matching: .images
+        ) {
+            TahoeIcon("paperclip", size: 15, weight: .bold)
+                .foregroundStyle(t.fg3)
+                .frame(width: 34, height: 34)
+                .background(t.hair2, in: Circle())
+        }
+        .photosPickerStyle(.presentation)
+        .disabled(isPlanApprovalMode || session == nil || data.isDemo)
+        .opacity((isPlanApprovalMode || session == nil || data.isDemo) ? 0.45 : 1)
+    }
+
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(attachments) { attachment in
+                    attachmentChip(attachment)
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .frame(maxHeight: 64)
+    }
+
+    private func attachmentChip(_ attachment: ComposerAttachment) -> some View {
+        ZStack(alignment: .topTrailing) {
+            ZStack {
+                #if canImport(UIKit)
+                if let image = UIImage(data: attachment.thumbnailData) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 54, height: 54)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                } else {
+                    fallbackAttachmentThumbnail
+                }
+                #else
+                fallbackAttachmentThumbnail
+                #endif
+                if attachment.isUploading {
+                    Color.black.opacity(0.42)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                        .tint(.white)
+                } else if attachment.uploadError != nil {
+                    Color.red.opacity(0.54)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    TahoeIcon("x", size: 14, weight: .bold)
+                        .foregroundStyle(.white)
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(t.hairline, lineWidth: 0.5)
+            }
+            Button {
+                removeAttachment(attachment.id)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white, Color.black.opacity(0.62))
+            }
+            .buttonStyle(.plain)
+            .offset(x: 6, y: -6)
+        }
+        .help(attachment.uploadError ?? attachment.filename)
+    }
+
+    private var fallbackAttachmentThumbnail: some View {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(t.hair2)
+            .frame(width: 54, height: 54)
+            .overlay {
+                TahoeIcon("doc", size: 18)
+                    .foregroundStyle(t.fg3)
+            }
+    }
+
+    private var queuedDraftsPanel: some View {
+        TahoeGlass(radius: 16, tone: .chip) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    TahoeIcon("tray", size: 12)
+                        .foregroundStyle(t.fg3)
+                    Text("Queued follow-ups")
+                        .font(TahoeFont.body(11.5, weight: .bold))
+                        .foregroundStyle(t.fg2)
+                    Text("\(queuedDrafts.count)")
+                        .font(TahoeFont.mono(10.5, weight: .bold))
+                        .foregroundStyle(t.fg4)
+                    Spacer()
+                    Button("Clear") {
+                        queuedDrafts = []
+                        persistQueuedDrafts()
+                    }
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(t.fg3)
+                }
+                ForEach(queuedDrafts) { draft in
+                    queuedDraftRow(draft)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func queuedDraftRow(_ draft: IOSQueuedCodeDraft) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            TextField(
+                "Queued prompt",
+                text: Binding(
+                    get: { draft.text },
+                    set: { updateQueuedDraft(id: draft.id, text: $0) }
+                ),
+                axis: .vertical
+            )
+            .font(TahoeFont.body(12))
+            .foregroundStyle(t.fg)
+            .lineLimit(1...3)
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(t.hair2, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            Button {
+                Task { await dispatchQueuedDraft(draft, manual: true) }
+            } label: {
+                TahoeIcon("arrowU", size: 12, weight: .bold)
+                    .foregroundStyle(isSessionRunning ? t.fg4 : t.accent)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .disabled(isSessionRunning || isDispatchingQueuedDraft)
+
+            Button(role: .destructive) {
+                removeQueuedDraft(id: draft.id)
+            } label: {
+                TahoeIcon("x", size: 11, weight: .bold)
+                    .foregroundStyle(.red.opacity(0.8))
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     // MARK: - Actions
@@ -461,11 +893,19 @@ public struct IOSSessionDetailView: View {
     @MainActor
     private func sendComposer() async {
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, session != nil else { return }
+        let composed = composedPrompt(text: trimmed)
+        guard !composed.isEmpty, session != nil else { return }
         // Demo bindings short-circuit — clear the text but don't hit the
         // wire (the demo session id wouldn't resolve on the daemon side).
         if data.isDemo {
             composerText = ""
+            attachments.removeAll()
+            return
+        }
+        if isSessionRunning {
+            queueDraft(text: composed)
+            composerText = ""
+            attachments.removeAll()
             return
         }
         // v0.26 follow-up: route through outbox so retries dedup via the
@@ -475,8 +915,151 @@ public struct IOSSessionDetailView: View {
         // composer immediately — the outbox owns delivery from here
         // on, and a stuck delivery is now visible in the queue UI
         // rather than holding the composer hostage.
-        outbox.enqueueSend(sessionId: sessionId, text: trimmed, asFollowUp: true)
+        outbox.enqueueSend(sessionId: sessionId, text: composed, asFollowUp: true)
         composerText = ""
+        attachments.removeAll()
+    }
+
+    private func composedPrompt(text trimmed: String) -> String {
+        let uploadedPaths = attachments.compactMap(\.remotePath)
+        let attachmentPrefix = uploadedPaths.map { "@\($0)" }.joined(separator: "\n")
+        if !attachmentPrefix.isEmpty && !trimmed.isEmpty {
+            return attachmentPrefix + "\n\n" + trimmed
+        } else if !attachmentPrefix.isEmpty {
+            return attachmentPrefix
+        }
+        return trimmed
+    }
+
+    @MainActor
+    private func removeAttachment(_ id: UUID) {
+        attachments.removeAll { $0.id == id }
+    }
+
+    @MainActor
+    private func ingestPhotoPickerItems(_ items: [PhotosPickerItem]) async {
+        guard !items.isEmpty else { return }
+        photoPickerItems = []
+        guard let realAgentSession else { return }
+        for item in items {
+            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            let ext = Self.inferExtension(from: data) ?? "jpg"
+            let attachmentId = UUID()
+            let thumbData = Self.thumbnail(from: data, max: 256) ?? data
+            attachments.append(ComposerAttachment(
+                id: attachmentId,
+                filename: "attachment.\(ext)",
+                thumbnailData: thumbData,
+                remotePath: nil,
+                uploadError: nil,
+                isUploading: true,
+                pendingBytes: nil,
+                pendingExt: nil
+            ))
+            Task {
+                let remote = await agentClient.uploadAttachment(sessionId: realAgentSession.id, ext: ext, data: data)
+                await MainActor.run {
+                    guard let index = attachments.firstIndex(where: { $0.id == attachmentId }) else { return }
+                    if let remote {
+                        attachments[index].remotePath = remote
+                        attachments[index].isUploading = false
+                    } else {
+                        attachments[index].isUploading = false
+                        attachments[index].uploadError = agentClient.lastError ?? "Upload failed"
+                    }
+                }
+            }
+        }
+    }
+
+    private static func inferExtension(from data: Data) -> String? {
+        let bytes = [UInt8](data.prefix(12))
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "png" }
+        if bytes.starts(with: [0xFF, 0xD8]) { return "jpg" }
+        if bytes.starts(with: [0x47, 0x49, 0x46]) { return "gif" }
+        if bytes.count >= 12,
+           bytes[4] == 0x66, bytes[5] == 0x74, bytes[6] == 0x79, bytes[7] == 0x70 {
+            return "heic"
+        }
+        return nil
+    }
+
+    private static func thumbnail(from data: Data, max: CGFloat) -> Data? {
+        #if canImport(UIKit)
+        guard let image = UIImage(data: data) else { return nil }
+        let scale = min(max / image.size.width, max / image.size.height, 1)
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let rendered = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        return rendered.jpegData(compressionQuality: 0.74)
+        #else
+        return nil
+        #endif
+    }
+
+    @MainActor
+    private func queueDraft(text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        queuedDrafts.append(IOSQueuedCodeDraft(sessionId: sessionId, text: trimmed))
+        persistQueuedDrafts()
+    }
+
+    @MainActor
+    private func updateQueuedDraft(id: UUID, text: String) {
+        guard let index = queuedDrafts.firstIndex(where: { $0.id == id }) else { return }
+        queuedDrafts[index].text = text
+        persistQueuedDrafts()
+    }
+
+    @MainActor
+    private func removeQueuedDraft(id: UUID) {
+        queuedDrafts.removeAll { $0.id == id }
+        persistQueuedDrafts()
+    }
+
+    @MainActor
+    private func drainQueuedDraftsIfPossible() async {
+        guard !isSessionRunning,
+              !isDispatchingQueuedDraft,
+              !dispatchedQueuedTurnForCurrentIdle,
+              let draft = queuedDrafts.sorted(by: { $0.createdAt < $1.createdAt }).first
+        else { return }
+        dispatchedQueuedTurnForCurrentIdle = true
+        await dispatchQueuedDraft(draft, manual: false)
+    }
+
+    @MainActor
+    private func dispatchQueuedDraft(_ draft: IOSQueuedCodeDraft, manual: Bool) async {
+        guard !isSessionRunning, !isDispatchingQueuedDraft else { return }
+        let trimmed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            removeQueuedDraft(id: draft.id)
+            return
+        }
+        isDispatchingQueuedDraft = true
+        defer { isDispatchingQueuedDraft = false }
+        outbox.enqueueSend(sessionId: sessionId, text: trimmed, asFollowUp: true)
+        removeQueuedDraft(id: draft.id)
+    }
+
+    private static func queuedDraftsKey(sessionId: UUID) -> String {
+        "clawdmeter.ios.session.\(sessionId.uuidString).queuedDrafts"
+    }
+
+    private static func loadQueuedDrafts(sessionId: UUID) -> [IOSQueuedCodeDraft] {
+        guard let data = UserDefaults.standard.data(forKey: queuedDraftsKey(sessionId: sessionId)),
+              let decoded = try? JSONDecoder().decode([IOSQueuedCodeDraft].self, from: data)
+        else { return [] }
+        return decoded.filter { $0.sessionId == sessionId }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    private func persistQueuedDrafts() {
+        guard let data = try? JSONEncoder().encode(queuedDrafts) else { return }
+        UserDefaults.standard.set(data, forKey: Self.queuedDraftsKey(sessionId: sessionId))
     }
 
     @MainActor
@@ -668,6 +1251,15 @@ private struct IOSPlanHaloMini: View {
     var onRefine: () -> Void
     var onApprove: () -> Void
 
+    private var estimatedCostLabel: String {
+        switch steps.count {
+        case 0...2: return "~$0.08"
+        case 3: return "~$0.12"
+        case 4: return "~$0.15"
+        default: return "~$0.18"
+        }
+    }
+
     var body: some View {
         if steps.isEmpty {
             EmptyView()
@@ -690,18 +1282,17 @@ private struct IOSPlanHaloMini: View {
                                 .shadow(color: t.accentDeep.color(opacity: 0.35), radius: 6, x: 0, y: 4)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("PLAN READY")
-                                    .font(TahoeFont.body(11, weight: .bold))
-                                    .tracking(0.4)
-                                    .foregroundStyle(t.fg3)
-                                Text("\(steps.count) step\(steps.count == 1 ? "" : "s")")
-                                    .font(TahoeFont.body(13, weight: .bold))
+                                    .font(TahoeFont.body(10.5, weight: .bold))
                                     .foregroundStyle(t.fg)
+                                Text("\(steps.count) step\(steps.count == 1 ? "" : "s") · \(estimatedCostLabel)")
+                                    .font(TahoeFont.body(11.5, weight: .semibold))
+                                    .foregroundStyle(t.fg3)
                             }
                             Spacer()
                         }
-                        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
+                        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 8)
 
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 5) {
                             ForEach(Array(steps.prefix(3).enumerated()), id: \.offset) { i, step in
                                 HStack(alignment: .top, spacing: 9) {
                                     ZStack {
@@ -710,27 +1301,28 @@ private struct IOSPlanHaloMini: View {
                                     }
                                     .frame(width: 18, height: 18)
                                     Text(step)
-                                        .font(TahoeFont.body(12.5))
+                                        .font(TahoeFont.body(12))
                                         .foregroundStyle(t.fg)
+                                        .lineLimit(2)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                             if steps.count > 3 {
-                                Text("+ \(steps.count - 3) more step\(steps.count - 3 == 1 ? "" : "s")…")
-                                    .font(TahoeFont.body(11.5))
+                                Text("+ \(steps.count - 3) more step\(steps.count - 3 == 1 ? "" : "s")...")
+                                    .font(TahoeFont.body(11))
                                     .foregroundStyle(t.fg3)
                                     .padding(.leading, 27)
                             }
                         }
-                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
+                        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 11)
 
                         TahoeHair()
 
                         HStack(spacing: 8) {
-                            TahoeGhostButton(size: .l, action: onRefine) { Text("Refine") }
+                            TahoeGhostButton(size: .m, action: onRefine) { Text("Refine") }
                                 .frame(maxWidth: .infinity)
-                            TahoeAccentButton(size: .l, action: onApprove) { Text("Approve & run") }
-                                .frame(maxWidth: .infinity * 2)
+                            TahoeAccentButton(size: .m, action: onApprove) { Text("Approve & run") }
+                                .frame(maxWidth: .infinity)
                                 .opacity(canApprove ? 1.0 : 0.5)
                                 .disabled(!canApprove)
                         }

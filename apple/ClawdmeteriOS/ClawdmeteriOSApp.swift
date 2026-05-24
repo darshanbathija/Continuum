@@ -30,7 +30,12 @@ struct ClawdmeteriOSApp: App {
     }
 
     init() {
+        #if DEBUG
+        let screenshotCodeFixture = ProcessInfo.processInfo.arguments.contains("--ios-code-demo")
+        let client = AgentControlClient(codeTabVerificationFixture: screenshotCodeFixture)
+        #else
         let client = AgentControlClient()
+        #endif
         _agentClient = StateObject(wrappedValue: client)
         _outbox = StateObject(wrappedValue: MobileCommandOutbox(client: client))
         // Register the BGAppRefreshTask handler at launch (D15 fallback for

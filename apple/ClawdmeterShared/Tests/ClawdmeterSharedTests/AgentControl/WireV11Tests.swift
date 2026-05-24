@@ -15,11 +15,10 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsSeventeen() {
-        // v17 (2026-05-24, Cursor provider): adds Cursor as a first-class
-        // AgentKind plus Cursor CLI/SDK runtime metadata and model catalog
-        // bucket. iOS still proxies start/resume requests to the paired Mac.
-        XCTAssertEqual(AgentControlWireVersion.current, 17)
+    func test_currentWireVersionIsEighteen() {
+        // v18 (2026-05-25, iOS Code workbench parity): adds remote
+        // Mac-backed run-profile and checkpoint lifecycle endpoints.
+        XCTAssertEqual(AgentControlWireVersion.current, 18)
     }
 
     func test_workspacesMinimumIsSixteen() {
@@ -34,6 +33,13 @@ final class WireV11Tests: XCTestCase {
         XCTAssertEqual(AgentControlWireVersion.cursorMinimum, 17)
         XCTAssertFalse(AgentControlWireVersion.supportsCursor(serverWireVersion: 16))
         XCTAssertTrue(AgentControlWireVersion.supportsCursor(serverWireVersion: 17))
+    }
+
+    func test_codeWorkbenchRemoteMinimumIsEighteen() {
+        XCTAssertEqual(AgentControlWireVersion.codeWorkbenchRemoteMinimum, 18)
+        XCTAssertFalse(AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: nil))
+        XCTAssertFalse(AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: 17))
+        XCTAssertTrue(AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: 18))
     }
 
     func test_opencodeMinimumIsThirteen() {

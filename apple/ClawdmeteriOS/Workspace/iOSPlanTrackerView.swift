@@ -9,6 +9,7 @@ import ClawdmeterShared
 /// can tap to manually toggle completion (manual override of the heuristic
 /// auto-complete that the Mac PlanTrackerPane uses).
 struct iOSPlanTrackerView: View {
+    @Environment(\.tahoe) private var t
     let session: AgentSession
     /// Called when the user taps "Approve & run". The parent SessionDetail
     /// routes this through `AgentControlClient.approvePlan(sessionId:)` or
@@ -23,39 +24,61 @@ struct iOSPlanTrackerView: View {
             if let planText = session.planText, !planText.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
+                        Text("Plan - \(steps.count) steps")
+                            .font(TahoeFont.body(11, weight: .bold))
+                            .tracking(0.5)
+                            .textCase(.uppercase)
+                            .foregroundStyle(t.fg3)
                         if let goal = session.goal, !goal.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Goal")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                Text(goal)
-                                    .font(.callout.weight(.medium))
+                            TahoeGlass(radius: 14, tone: .chip) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Goal")
+                                        .font(TahoeFont.body(10.5, weight: .bold))
+                                        .foregroundStyle(t.fg4)
+                                    Text(goal)
+                                        .font(TahoeFont.body(12.5, weight: .semibold))
+                                        .foregroundStyle(t.fg)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .padding(.bottom, 4)
                         }
 
-                        ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                            stepRow(index: index, text: step)
+                        TahoeGlass(radius: 16, tone: .raised) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                                    stepRow(index: index, text: step)
+                                    if index < steps.count - 1 {
+                                        TahoeHair()
+                                    }
+                                }
+                            }
                         }
 
                         if session.status == .planning, onApprove != nil {
                             Button {
                                 Task { await approve() }
                             } label: {
-                                if isApproving {
-                                    ProgressView()
-                                        .frame(maxWidth: .infinity)
-                                } else {
-                                    Label("Approve & run", systemImage: "checkmark.seal.fill")
-                                        .font(.headline)
-                                        .frame(maxWidth: .infinity)
+                                HStack(spacing: 8) {
+                                    if isApproving {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        TahoeIcon("check", size: 13, weight: .bold)
+                                    }
+                                    Text(isApproving ? "Approving..." : "Approve & run")
+                                        .font(TahoeFont.body(13, weight: .bold))
                                 }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(
+                                    LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom),
+                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                )
+                                .foregroundStyle(.white)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(SessionsV2Theme.accent)
+                            .buttonStyle(.plain)
                             .disabled(isApproving)
-                            .frame(minHeight: 44)
-                            .padding(.top, 12)
                             .accessibilityLabel("Approve plan and run")
                             .accessibilityHint("Switches the agent out of plan mode into edit mode.")
                         }
@@ -63,13 +86,25 @@ struct iOSPlanTrackerView: View {
                     .padding(16)
                 }
             } else {
-                ContentUnavailableView(
-                    "No plan yet",
-                    systemImage: "list.bullet.rectangle",
-                    description: Text("Plans appear here when Claude exits plan mode with a proposal.")
-                )
+                emptyState
             }
         }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            TahoeIcon("doc", size: 24)
+                .foregroundStyle(t.fg4)
+            Text("No plan yet")
+                .font(TahoeFont.body(14, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text("Plans appear here when the agent proposes one.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 
     private var steps: [String] {
@@ -94,23 +129,31 @@ struct iOSPlanTrackerView: View {
             }
         } label: {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: completed ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(completed ? SessionsV2Theme.accent : .secondary)
-                    .font(.title3)
-                    .accessibilityHidden(true)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(completed ? Color.green.opacity(0.18) : (index == 0 ? t.accentAlpha(0.18) : t.hair2))
+                    .frame(width: 22, height: 22)
+                    .overlay {
+                        if completed {
+                            TahoeIcon("check", size: 11, weight: .bold)
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("\(index + 1)")
+                                .font(TahoeFont.mono(11, weight: .bold))
+                                .foregroundStyle(index == 0 ? t.accent : t.fg2)
+                        }
+                    }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Step \(index + 1)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
                     Text(text)
-                        .font(.callout)
+                        .font(TahoeFont.body(12.5))
                         .strikethrough(completed)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(completed ? t.fg3 : t.fg)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
             }
-            .padding(.vertical, 4)
-            .frame(minHeight: 44)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

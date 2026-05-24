@@ -62,6 +62,14 @@ public final class AgentControlClient: ObservableObject {
     private let wsPortOverride: Int?
     private let tokenOverride: String?
 
+    #if DEBUG
+    public static let codeTabVerificationSessionId = UUID(uuidString: "8D70F169-9D3A-45C8-9F7F-04E02E55A201")!
+    private var codeTabVerificationFixtureInstalled: Bool = false
+    private var codeTabVerificationSnapshots: [UUID: WireChatSnapshot] = [:]
+    private var codeTabVerificationDiffs: [UUID: [GitDiffFile]] = [:]
+    private var codeTabVerificationPRs: [UUID: PRStatus] = [:]
+    #endif
+
     /// UserDefaults-backed init — the existing iOS path. Reads pairing
     /// from `UserDefaults.standard`. `setPairing(...)` writes those keys.
     public init() {
@@ -72,6 +80,19 @@ public final class AgentControlClient: ObservableObject {
         self.isConfigured = (UserDefaults.standard.string(forKey: Self.hostKey) != nil
                              && UserDefaults.standard.string(forKey: Self.tokenKey) != nil)
     }
+
+    #if DEBUG
+    /// Launch-argument-only fixture used by screenshot verification. It seeds
+    /// the same public client/session/chat/diff/PR DTOs that production panes
+    /// consume, so design screenshots exercise shipped view paths instead of
+    /// a parallel demo renderer.
+    public convenience init(codeTabVerificationFixture: Bool) {
+        self.init()
+        if codeTabVerificationFixture {
+            installCodeTabVerificationFixture()
+        }
+    }
+    #endif
 
     /// Explicit-config init for in-process clients (Mac loopback). Does
     /// NOT touch UserDefaults — pairing values are held in-memory for
@@ -84,6 +105,269 @@ public final class AgentControlClient: ObservableObject {
         self.tokenOverride = token
         self.isConfigured = true
     }
+
+    #if DEBUG
+    public func installCodeTabVerificationFixture(now: Date = Date()) {
+        let sessionId = Self.codeTabVerificationSessionId
+        let repoKey = "/Users/darshanbathija/workspaces/defx-frontend"
+        let worktreePath = "\(repoKey)/.claude/worktrees/settlement-dedupe"
+        let planText = """
+        1. Replace settlement dedupe with an atomic insert path.
+        2. Add a unique index on `settlements.fill_id`.
+        3. Lift cache invalidation to daemon scope.
+        4. Add a 200-writer regression test.
+        5. Run the settlement-store smoke gate.
+        """
+        let primary = AgentSession(
+            id: sessionId,
+            repoKey: repoKey,
+            repoDisplayName: "defx-frontend",
+            agent: .claude,
+            model: "Sonnet 4.5",
+            goal: "Refactor settlement store dedupe",
+            worktreePath: worktreePath,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: .planning,
+            planText: planText,
+            createdAt: now.addingTimeInterval(-24 * 60),
+            lastEventAt: now.addingTimeInterval(-90),
+            lastEventSeq: 84,
+            mode: .worktree,
+            runtimeCwd: worktreePath,
+            chatCwd: repoKey,
+            effort: .high,
+            customName: "Settlement store dedupe"
+        )
+        let running = AgentSession(
+            id: UUID(uuidString: "32E0D70B-2C91-445D-9B49-56A6243403E8")!,
+            repoKey: repoKey,
+            repoDisplayName: "defx-frontend",
+            agent: .codex,
+            model: "gpt-5",
+            goal: "Wire WS reconnect backoff",
+            worktreePath: "\(repoKey)/.codex/worktrees/ws-reconnect",
+            tmuxWindowId: "@18",
+            tmuxPaneId: "%27",
+            status: .running,
+            planText: nil,
+            createdAt: now.addingTimeInterval(-42 * 60),
+            lastEventAt: now.addingTimeInterval(-25),
+            lastEventSeq: 53,
+            mode: .worktree,
+            runtimeCwd: "\(repoKey)/.codex/worktrees/ws-reconnect",
+            chatCwd: repoKey,
+            effort: .xhigh,
+            customName: "WS reconnect backoff"
+        )
+        let archived = AgentSession(
+            id: UUID(uuidString: "B283B3D3-7CF7-4DAB-9B66-A51AFD98D688")!,
+            repoKey: repoKey,
+            repoDisplayName: "defx-frontend",
+            agent: .gemini,
+            model: "antigravity-pro",
+            goal: "Review order book reconciliation",
+            worktreePath: nil,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: .done,
+            planText: nil,
+            createdAt: now.addingTimeInterval(-3 * 60 * 60),
+            lastEventAt: now.addingTimeInterval(-58 * 60),
+            lastEventSeq: 41,
+            mode: .local,
+            archivedAt: now.addingTimeInterval(-45 * 60),
+            customName: "Order book reconciliation"
+        )
+
+        self.isConfigured = true
+        self.sessions = [primary, running, archived]
+        self.lastPolledAt = now
+        self.lastError = nil
+        self.codeTabVerificationFixtureInstalled = true
+        self.codeTabVerificationSnapshots = [sessionId: Self.makeCodeTabVerificationSnapshot(sessionId: sessionId, now: now)]
+        self.codeTabVerificationDiffs = [sessionId: Self.makeCodeTabVerificationDiff()]
+        self.codeTabVerificationPRs = [sessionId: Self.makeCodeTabVerificationPR()]
+    }
+
+    public func codeTabVerificationChatSnapshot(sessionId: UUID) -> WireChatSnapshot? {
+        guard codeTabVerificationFixtureInstalled else { return nil }
+        return codeTabVerificationSnapshots[sessionId]
+    }
+
+    public func codeTabVerificationDiff(sessionId: UUID) -> [GitDiffFile]? {
+        guard codeTabVerificationFixtureInstalled else { return nil }
+        return codeTabVerificationDiffs[sessionId]
+    }
+
+    public func codeTabVerificationDiffFile(sessionId: UUID, path: String) -> GitDiffFile? {
+        guard codeTabVerificationFixtureInstalled else { return nil }
+        return codeTabVerificationDiffs[sessionId]?.first { $0.path == path }
+    }
+
+    public func codeTabVerificationPRStatus(sessionId: UUID) -> PRStatus? {
+        guard codeTabVerificationFixtureInstalled else { return nil }
+        return codeTabVerificationPRs[sessionId]
+    }
+
+    private static func makeCodeTabVerificationSnapshot(sessionId: UUID, now: Date) -> WireChatSnapshot {
+        let toolCall = ChatMessage(
+            id: "tool-call-test",
+            kind: .toolCall,
+            title: "bash",
+            body: "Run settlement store regression tests",
+            detail: "pnpm test settlement-store",
+            at: now.addingTimeInterval(-260),
+            bashResult: BashResult(command: "pnpm test settlement-store", cwd: "/Users/darshanbathija/workspaces/defx-frontend")
+        )
+        let toolResult = ChatMessage(
+            id: "tool-result-test",
+            kind: .toolResult,
+            title: "bash",
+            body: "12 passed in 1.8s\nsettlement-store.test.ts completed",
+            at: now.addingTimeInterval(-248)
+        )
+        let diffCall = ChatMessage(
+            id: "tool-call-diff",
+            kind: .toolCall,
+            title: "bash",
+            body: "Inspect changed files",
+            detail: "git diff --stat",
+            at: now.addingTimeInterval(-180),
+            bashResult: BashResult(command: "git diff --stat", cwd: "/Users/darshanbathija/workspaces/defx-frontend")
+        )
+        let diffResult = ChatMessage(
+            id: "tool-result-diff",
+            kind: .toolResult,
+            title: "bash",
+            body: "4 files changed, 182 insertions(+), 47 deletions(-)",
+            at: now.addingTimeInterval(-174)
+        )
+        return WireChatSnapshot(
+            sessionId: sessionId,
+            items: [
+                .message(ChatMessage(
+                    id: "user-goal",
+                    kind: .userText,
+                    title: "You",
+                    body: "Make settlement writes idempotent under concurrent fills.",
+                    at: now.addingTimeInterval(-420)
+                )),
+                .message(ChatMessage(
+                    id: "assistant-plan",
+                    kind: .assistantText,
+                    title: "Claude",
+                    body: "I found the race in `writeSettlement`. The fix is a DB-backed uniqueness guarantee plus a narrower cache invalidation path.",
+                    at: now.addingTimeInterval(-360)
+                )),
+                .toolRun(id: "test-run", pairs: [ToolPair(id: "test-run", call: toolCall, result: toolResult)]),
+                .toolRun(id: "diff-run", pairs: [ToolPair(id: "diff-run", call: diffCall, result: diffResult)]),
+                .message(ChatMessage(
+                    id: "assistant-ready",
+                    kind: .assistantText,
+                    title: "Claude",
+                    body: "Plan is ready for approval. CI and diff review are clean enough to proceed.",
+                    at: now.addingTimeInterval(-100)
+                ))
+            ],
+            planSteps: [
+                PlanStep(id: "1", text: "Replace settlement dedupe with an atomic insert path.", isComplete: true),
+                PlanStep(id: "2", text: "Add a unique index on settlements.fill_id.", isComplete: true),
+                PlanStep(id: "3", text: "Lift cache invalidation to daemon scope.", isComplete: false),
+                PlanStep(id: "4", text: "Add a 200-writer regression test.", isComplete: false),
+                PlanStep(id: "5", text: "Run the settlement-store smoke gate.", isComplete: false)
+            ],
+            sourceEntries: [
+                SourceEntry(
+                    id: "f:settlement-store",
+                    kind: .file,
+                    label: "apps/web/src/lib/settlement-store.ts",
+                    payload: "/Users/darshanbathija/workspaces/defx-frontend/apps/web/src/lib/settlement-store.ts",
+                    count: 4
+                ),
+                SourceEntry(
+                    id: "f:schema",
+                    kind: .file,
+                    label: "packages/db/schema.ts",
+                    payload: "/Users/darshanbathija/workspaces/defx-frontend/packages/db/schema.ts",
+                    count: 2
+                ),
+                SourceEntry(
+                    id: "u:runbook",
+                    kind: .url,
+                    label: "github.com/defx/settlement-runbook",
+                    payload: "https://github.com/defx/settlement-runbook",
+                    count: 1
+                )
+            ],
+            artifactEntries: [
+                ArtifactEntry(path: "/Users/darshanbathija/workspaces/defx-frontend/.context/settlement-store.patch"),
+                ArtifactEntry(path: "/Users/darshanbathija/workspaces/defx-frontend/.context/regression-output.txt"),
+                ArtifactEntry(path: "/Users/darshanbathija/workspaces/defx-frontend/.context/pr-body.md")
+            ],
+            totalInputTokens: 18_420,
+            totalOutputTokens: 6_184,
+            cacheReadTokens: 9_202,
+            cacheCreationTokens: 1_112,
+            lastEventAt: now.addingTimeInterval(-90),
+            updateCounter: 42,
+            currentTurnState: .streaming
+        )
+    }
+
+    private static func makeCodeTabVerificationDiff() -> [GitDiffFile] {
+        [
+            GitDiffFile(
+                path: "apps/web/src/lib/settlement-store.ts",
+                status: "M",
+                additions: 88,
+                deletions: 21,
+                hunks: [
+                    GitDiffHunk(header: "@@ -48,12 +48,18 @@", lines: [
+                        .init(kind: .context, text: "export async function writeSettlement(fill: Fill) {"),
+                        .init(kind: .deletion, text: "  if (cache.has(fill.id)) return"),
+                        .init(kind: .addition, text: "  const inserted = await insertSettlementOnce(fill)"),
+                        .init(kind: .addition, text: "  if (!inserted) return"),
+                        .init(kind: .context, text: "  await invalidateSettlementCache(fill.accountId)")
+                    ])
+                ]
+            ),
+            GitDiffFile(
+                path: "apps/web/src/lib/settlement-store.test.ts",
+                status: "A",
+                additions: 72,
+                deletions: 0
+            ),
+            GitDiffFile(
+                path: "packages/db/migrations/20260518_fill_id_unique.sql",
+                status: "A",
+                additions: 18,
+                deletions: 0
+            ),
+            GitDiffFile(
+                path: "apps/web/src/lib/cache.ts",
+                status: "M",
+                additions: 4,
+                deletions: 26
+            )
+        ]
+    }
+
+    private static func makeCodeTabVerificationPR() -> PRStatus {
+        PRStatus(
+            url: "https://github.com/defx/defx-frontend/pull/184",
+            number: 184,
+            title: "fix: make settlement writes idempotent",
+            body: "Adds DB-backed fill id uniqueness and narrows cache invalidation around concurrent settlement writes.",
+            state: .open,
+            additions: 182,
+            deletions: 47,
+            changedFiles: 4,
+            reviewDecision: "approved",
+            checksRollup: "success"
+        )
+    }
+    #endif
 
     /// True when this instance was constructed with explicit pairing
     /// values (Mac loopback). Used by `setPairing` / `clearPairing` to
@@ -260,6 +544,16 @@ public final class AgentControlClient: ObservableObject {
     @MainActor
     public var supportsCursor: Bool {
         AgentControlWireVersion.supportsCursor(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
+    public var supportsCodeWorkbenchRemote: Bool {
+        AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
+    public var supportsAntigravityPlan: Bool {
+        AgentControlWireVersion.supportsAntigravityPlan(serverWireVersion: serverWireVersion)
     }
 
     // MARK: - Sessions v2 mid-session controls
@@ -546,6 +840,11 @@ public final class AgentControlClient: ObservableObject {
     /// selected path with explicit context.
     @MainActor
     public func fetchDiffFile(sessionId: UUID, path: String, context: Int = 80) async -> GitDiffFile? {
+        #if DEBUG
+        if let fixture = codeTabVerificationDiffFile(sessionId: sessionId, path: path) {
+            return fixture
+        }
+        #endif
         let encodedPath = path
             .split(separator: "/", omittingEmptySubsequences: false)
             .map { segment in
@@ -569,6 +868,17 @@ public final class AgentControlClient: ObservableObject {
             clientLogger.debug("fetchDiffFile failed: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    @MainActor
+    public func fetchAntigravityPlan(sessionId: UUID) async throws -> AntigravityPlanSnapshot {
+        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/antigravity-plan") else {
+            throw ArtifactError.notPaired
+        }
+        let data = try await sendChecked(request)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(AntigravityPlanSnapshot.self, from: data)
     }
 
     public enum ArtifactError: LocalizedError {
@@ -1096,6 +1406,11 @@ public final class AgentControlClient: ObservableObject {
     /// for the session's current branch.
     @MainActor
     public func getPRStatus(sessionId: UUID) async -> PRStatus? {
+        #if DEBUG
+        if let fixture = codeTabVerificationPRStatus(sessionId: sessionId) {
+            return fixture
+        }
+        #endif
         guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/pr") else { return nil }
         do {
             let data = try await sendChecked(request)
@@ -1191,6 +1506,64 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    /// `POST /sessions/:id/pr/review`. Runs `gh pr review` on the paired
+    /// Mac and returns the refreshed PR snapshot when available.
+    @MainActor
+    public func reviewPR(
+        sessionId: UUID,
+        action: PRReviewAction = .approve,
+        body: String? = nil,
+        idempotencyKey: String? = nil
+    ) async -> PRReviewResponse? {
+        let req = PRReviewRequest(action: action, body: body, idempotencyKey: idempotencyKey)
+        let encoded = (try? JSONEncoder().encode(req)) ?? Data()
+        guard var request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/pr/review",
+            method: "POST",
+            body: encoded
+        ) else { return nil }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(PRReviewResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// `POST /sessions/:id/diff-action/:path`. File-level staged/unstaged
+    /// operations backed by git on the paired Mac.
+    @MainActor
+    public func applyDiffAction(
+        sessionId: UUID,
+        path: String,
+        action: GitDiffActionKind,
+        idempotencyKey: String? = nil
+    ) async -> GitDiffActionResponse? {
+        let req = GitDiffActionRequest(action: action, idempotencyKey: idempotencyKey)
+        let encoded = (try? JSONEncoder().encode(req)) ?? Data()
+        guard let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              var request = makeRequest(
+                path: "/sessions/\(sessionId.uuidString)/diff-action/\(encodedPath)",
+                method: "POST",
+                body: encoded
+              )
+        else { return nil }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(GitDiffActionResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     // MARK: - v16 workspaces
 
     /// `GET /workspaces`. Returns the persisted per-repo workspaces. iOS
@@ -1237,6 +1610,157 @@ public final class AgentControlClient: ObservableObject {
             // PATCH returns the updated record at the top level + an
             // optional receipt key — decode just the record.
             return try decoder.decode(CodeWorkspaceRecord.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    // MARK: - v18 Code workbench remote runtime
+
+    @MainActor
+    public func fetchRunProfile(sessionId: UUID) async -> CodeRunProfileSnapshot? {
+        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/run-profile", method: "GET") else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeRunProfileResponse.self, from: data).profile
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func startRunProfile(sessionId: UUID, command: String) async -> CodeRunProfileSnapshot? {
+        let req = CodeRunProfileStartRequest(command: command)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(
+                path: "/sessions/\(sessionId.uuidString)/run-profile/start",
+                method: "POST",
+                body: body
+              ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeRunProfileResponse.self, from: data).profile
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func stopRunProfile(sessionId: UUID) async -> CodeRunProfileSnapshot? {
+        guard let request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/run-profile/stop",
+            method: "POST"
+        ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeRunProfileResponse.self, from: data).profile
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func listCheckpoints(sessionId: UUID) async -> [CodeCheckpointSnapshot] {
+        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/checkpoints", method: "GET") else {
+            return []
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeCheckpointListResponse.self, from: data).checkpoints
+        } catch {
+            self.lastError = error.localizedDescription
+            return []
+        }
+    }
+
+    @MainActor
+    public func createCheckpoint(sessionId: UUID, summary: String? = nil) async -> CodeCheckpointSnapshot? {
+        let req = CodeCheckpointCreateRequest(summary: summary)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(
+                path: "/sessions/\(sessionId.uuidString)/checkpoints",
+                method: "POST",
+                body: body
+              ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeCheckpointCreateResponse.self, from: data).checkpoint
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func prepareCheckpointRestore(
+        sessionId: UUID,
+        checkpointId: UUID
+    ) async -> CodeCheckpointRestorePreview? {
+        guard let request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/checkpoints/\(checkpointId.uuidString)/prepare-restore",
+            method: "POST"
+        ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeCheckpointRestorePreviewResponse.self, from: data).preview
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func restoreCheckpoint(
+        sessionId: UUID,
+        checkpointId: UUID,
+        previewId: UUID
+    ) async -> CodeCheckpointRestoreResponse? {
+        let req = CodeCheckpointRestoreRequest(previewId: previewId)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(
+                path: "/sessions/\(sessionId.uuidString)/checkpoints/\(checkpointId.uuidString)/restore",
+                method: "POST",
+                body: body
+              ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeCheckpointRestoreResponse.self, from: data)
         } catch {
             self.lastError = error.localizedDescription
             return nil

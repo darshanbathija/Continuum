@@ -116,7 +116,11 @@ public enum AgentControlWireVersion {
     /// `ModelCatalog`, and `cursorMinimum`. Cursor sessions are Mac-launched
     /// through `cursor-agent` / `agent`; iOS sends the same `/sessions`
     /// request to the paired Mac and never runs the Cursor CLI locally.
-    public static let current: Int = 17
+    /// v18 (2026-05-25, iOS Code workbench parity): adds remote Mac-backed
+    /// run profile endpoints plus checkpoint create / restore-preview /
+    /// restore endpoints so iOS can expose the same Code workbench lifecycle
+    /// without pretending it can run local shell commands on-device.
+    public static let current: Int = 18
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -227,6 +231,10 @@ public enum AgentControlWireVersion {
     /// iOS retains the receipt locally so a duplicate retry against
     /// a too-old Mac surfaces as "no receipt — assume delivered".
     public static let mobileOutboxMinimum: Int = 16
+    /// Minimum wire version that exposes Mac-backed Code workbench runtime
+    /// endpoints to iOS: run profile start/stop/snapshot and checkpoint
+    /// create / restore-preview / restore.
+    public static let codeWorkbenchRemoteMinimum: Int = 18
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -364,6 +372,13 @@ public enum AgentControlWireVersion {
     public static func supportsCursor(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= cursorMinimum
+    }
+
+    /// Whether the paired Mac can host iOS Code Run/Preview + checkpoint
+    /// restore flows through real daemon endpoints.
+    public static func supportsCodeWorkbenchRemote(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= codeWorkbenchRemoteMinimum
     }
 }
 
@@ -1519,6 +1534,234 @@ public struct UpdateWorkspaceDefaultsRequest: Codable, Sendable {
     }
 }
 
+// MARK: - Code workbench remote runtime (wire v18)
+
+public enum CodeRunProfileStatus: String, Codable, Hashable, Sendable, CaseIterable {
+    case idle
+    case starting
+    case running
+    case exited
+    case failed
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = CodeRunProfileStatus(rawValue: raw) ?? .idle
+    }
+}
+
+public enum CodeRunProfileHealthState: String, Codable, Hashable, Sendable, CaseIterable {
+    case unknown
+    case healthy
+    case unhealthy
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = CodeRunProfileHealthState(rawValue: raw) ?? .unknown
+    }
+}
+
+public struct CodeRunProfileHealth: Codable, Hashable, Sendable {
+    public let state: CodeRunProfileHealthState
+    public let statusCode: Int?
+    public let message: String?
+    public let checkedAt: Date?
+
+    public init(
+        state: CodeRunProfileHealthState = .unknown,
+        statusCode: Int? = nil,
+        message: String? = nil,
+        checkedAt: Date? = nil
+    ) {
+        self.state = state
+        self.statusCode = statusCode
+        self.message = message
+        self.checkedAt = checkedAt
+    }
+}
+
+public struct CodeRunProfileSnapshot: Codable, Hashable, Sendable {
+    public let sessionId: UUID
+    public let cwd: String?
+    public let command: String?
+    public let detectedURL: String?
+    public let source: String?
+    public let status: CodeRunProfileStatus
+    public let health: CodeRunProfileHealth
+    public let stdoutLines: [String]
+    public let stderrLines: [String]
+    public let lastExitCode: Int32?
+    public let lastError: String?
+    public let updatedAt: Date
+
+    public init(
+        sessionId: UUID,
+        cwd: String? = nil,
+        command: String? = nil,
+        detectedURL: String? = nil,
+        source: String? = nil,
+        status: CodeRunProfileStatus = .idle,
+        health: CodeRunProfileHealth = CodeRunProfileHealth(),
+        stdoutLines: [String] = [],
+        stderrLines: [String] = [],
+        lastExitCode: Int32? = nil,
+        lastError: String? = nil,
+        updatedAt: Date = Date()
+    ) {
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.command = command
+        self.detectedURL = detectedURL
+        self.source = source
+        self.status = status
+        self.health = health
+        self.stdoutLines = stdoutLines
+        self.stderrLines = stderrLines
+        self.lastExitCode = lastExitCode
+        self.lastError = lastError
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct CodeRunProfileResponse: Codable, Sendable {
+    public let profile: CodeRunProfileSnapshot
+
+    public init(profile: CodeRunProfileSnapshot) {
+        self.profile = profile
+    }
+}
+
+public struct CodeRunProfileStartRequest: Codable, Sendable {
+    public let command: String?
+    public let idempotencyKey: String?
+
+    public init(command: String? = nil, idempotencyKey: String? = nil) {
+        self.command = command
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public struct CodeCheckpointSnapshot: Codable, Hashable, Sendable, Identifiable {
+    public let id: UUID
+    public let sessionId: UUID
+    public let refName: String
+    public let turnId: String?
+    public let createdAt: Date
+    public let summary: String?
+
+    public init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        refName: String,
+        turnId: String? = nil,
+        createdAt: Date = Date(),
+        summary: String? = nil
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.refName = refName
+        self.turnId = turnId
+        self.createdAt = createdAt
+        self.summary = summary
+    }
+}
+
+public struct CodeCheckpointListResponse: Codable, Sendable {
+    public let checkpoints: [CodeCheckpointSnapshot]
+
+    public init(checkpoints: [CodeCheckpointSnapshot]) {
+        self.checkpoints = checkpoints
+    }
+}
+
+public struct CodeCheckpointCreateRequest: Codable, Sendable {
+    public let summary: String?
+    public let idempotencyKey: String?
+
+    public init(summary: String? = nil, idempotencyKey: String? = nil) {
+        self.summary = summary
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public struct CodeCheckpointCreateResponse: Codable, Sendable {
+    public let checkpoint: CodeCheckpointSnapshot
+
+    public init(checkpoint: CodeCheckpointSnapshot) {
+        self.checkpoint = checkpoint
+    }
+}
+
+public struct CodeCheckpointRestorePreview: Codable, Hashable, Sendable, Identifiable {
+    public let id: UUID
+    public let target: CodeCheckpointSnapshot
+    public let safety: CodeCheckpointSnapshot
+    public let diffStat: String
+    public let diffPatch: String
+    public let patchTruncated: Bool
+    public let dirtyStatusLines: [String]
+    public let untrackedOverwritePaths: [String]
+    public let untrackedSnapshotPaths: [String]
+    public let blockingReasons: [String]
+
+    public var isBlocked: Bool { !blockingReasons.isEmpty }
+
+    public init(
+        id: UUID,
+        target: CodeCheckpointSnapshot,
+        safety: CodeCheckpointSnapshot,
+        diffStat: String,
+        diffPatch: String,
+        patchTruncated: Bool,
+        dirtyStatusLines: [String],
+        untrackedOverwritePaths: [String],
+        untrackedSnapshotPaths: [String],
+        blockingReasons: [String]
+    ) {
+        self.id = id
+        self.target = target
+        self.safety = safety
+        self.diffStat = diffStat
+        self.diffPatch = diffPatch
+        self.patchTruncated = patchTruncated
+        self.dirtyStatusLines = dirtyStatusLines
+        self.untrackedOverwritePaths = untrackedOverwritePaths
+        self.untrackedSnapshotPaths = untrackedSnapshotPaths
+        self.blockingReasons = blockingReasons
+    }
+}
+
+public struct CodeCheckpointRestorePreviewResponse: Codable, Sendable {
+    public let preview: CodeCheckpointRestorePreview
+
+    public init(preview: CodeCheckpointRestorePreview) {
+        self.preview = preview
+    }
+}
+
+public struct CodeCheckpointRestoreRequest: Codable, Sendable {
+    public let previewId: UUID
+    public let idempotencyKey: String?
+
+    public init(previewId: UUID, idempotencyKey: String? = nil) {
+        self.previewId = previewId
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public struct CodeCheckpointRestoreResponse: Codable, Sendable {
+    public let restored: Bool
+    public let checkpoint: CodeCheckpointSnapshot
+    public let safety: CodeCheckpointSnapshot?
+
+    public init(restored: Bool, checkpoint: CodeCheckpointSnapshot, safety: CodeCheckpointSnapshot?) {
+        self.restored = restored
+        self.checkpoint = checkpoint
+        self.safety = safety
+    }
+}
+
 public enum PRReviewState: String, Codable, Hashable, Sendable, CaseIterable {
     case approved
     case changesRequested = "changes_requested"
@@ -2440,6 +2683,12 @@ public struct PRStatus: Codable, Sendable {
     public let reviewDecision: String?
     /// CI checks rolled up: "success" / "pending" / "failure" / null.
     public let checksRollup: String?
+    /// Individual check runs/status contexts mirrored from `gh pr view`.
+    public let checks: [PRCheckMirror]?
+    /// Conservative mergeability derived by the daemon from state + CI.
+    public let mergeability: PRMergeability?
+    /// Daemon timestamp for the last gh poll backing this snapshot.
+    public let lastCheckedAt: Date?
 
     public init(
         url: String,
@@ -2451,7 +2700,10 @@ public struct PRStatus: Codable, Sendable {
         deletions: Int = 0,
         changedFiles: Int = 0,
         reviewDecision: String? = nil,
-        checksRollup: String? = nil
+        checksRollup: String? = nil,
+        checks: [PRCheckMirror]? = nil,
+        mergeability: PRMergeability? = nil,
+        lastCheckedAt: Date? = nil
     ) {
         self.url = url
         self.number = number
@@ -2463,6 +2715,9 @@ public struct PRStatus: Codable, Sendable {
         self.changedFiles = changedFiles
         self.reviewDecision = reviewDecision
         self.checksRollup = checksRollup
+        self.checks = checks
+        self.mergeability = mergeability
+        self.lastCheckedAt = lastCheckedAt
     }
 }
 
@@ -2554,6 +2809,53 @@ public struct MergePRResponse: Codable, Sendable {
     }
 }
 
+public enum PRReviewAction: String, Codable, Hashable, Sendable, CaseIterable {
+    case approve
+    case comment
+    case requestChanges = "request_changes"
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = PRReviewAction(rawValue: raw) ?? .comment
+    }
+}
+
+public struct PRReviewRequest: Codable, Sendable {
+    public let action: PRReviewAction
+    public let body: String?
+    public let idempotencyKey: String?
+
+    public init(
+        action: PRReviewAction = .approve,
+        body: String? = nil,
+        idempotencyKey: String? = nil
+    ) {
+        self.action = action
+        self.body = body
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public struct PRReviewResponse: Codable, Sendable {
+    public let ok: Bool
+    public let pr: PRStatus?
+    public let receipt: MobileCommandReceipt?
+    public let error: String?
+
+    public init(
+        ok: Bool,
+        pr: PRStatus? = nil,
+        receipt: MobileCommandReceipt? = nil,
+        error: String? = nil
+    ) {
+        self.ok = ok
+        self.pr = pr
+        self.receipt = receipt
+        self.error = error
+    }
+}
+
 /// One file's diff. `hunks` may be empty when the file is too large to
 /// inline; the iOS view shows "see full" CTA.
 public struct GitDiffFile: Codable, Sendable, Identifiable {
@@ -2565,6 +2867,9 @@ public struct GitDiffFile: Codable, Sendable, Identifiable {
     public let deletions: Int
     public let hunks: [GitDiffHunk]
     public let truncated: Bool
+    /// Optional daemon action domain: "unstaged", "staged", "mixed",
+    /// or "untracked". Older daemons omit it.
+    public let changeState: String?
 
     public init(
         path: String,
@@ -2573,7 +2878,8 @@ public struct GitDiffFile: Codable, Sendable, Identifiable {
         additions: Int,
         deletions: Int,
         hunks: [GitDiffHunk] = [],
-        truncated: Bool = false
+        truncated: Bool = false,
+        changeState: String? = nil
     ) {
         self.path = path
         self.oldPath = oldPath
@@ -2582,6 +2888,48 @@ public struct GitDiffFile: Codable, Sendable, Identifiable {
         self.deletions = deletions
         self.hunks = hunks
         self.truncated = truncated
+        self.changeState = changeState
+    }
+}
+
+public enum GitDiffActionKind: String, Codable, Hashable, Sendable, CaseIterable {
+    case stageFile = "stage_file"
+    case unstageFile = "unstage_file"
+    case discardFile = "discard_file"
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = GitDiffActionKind(rawValue: raw) ?? .stageFile
+    }
+}
+
+public struct GitDiffActionRequest: Codable, Sendable {
+    public let action: GitDiffActionKind
+    public let idempotencyKey: String?
+
+    public init(action: GitDiffActionKind, idempotencyKey: String? = nil) {
+        self.action = action
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public struct GitDiffActionResponse: Codable, Sendable {
+    public let ok: Bool
+    public let files: [GitDiffFile]
+    public let receipt: MobileCommandReceipt?
+    public let error: String?
+
+    public init(
+        ok: Bool,
+        files: [GitDiffFile] = [],
+        receipt: MobileCommandReceipt? = nil,
+        error: String? = nil
+    ) {
+        self.ok = ok
+        self.files = files
+        self.receipt = receipt
+        self.error = error
     }
 }
 

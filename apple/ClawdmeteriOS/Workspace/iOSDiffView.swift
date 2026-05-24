@@ -7,11 +7,14 @@ import ClawdmeterShared
 /// Wire: `GET /sessions/:id/diff` returns `[GitDiffFile]`. Truncated file
 /// rows lazy-fetch full hunks through `GET /sessions/:id/diff/:path`.
 struct iOSDiffView: View {
+    @Environment(\.tahoe) private var t
     let session: AgentSession
     @ObservedObject var client: AgentControlClient
 
     @State private var files: [GitDiffFile] = []
     @State private var isLoading: Bool = true
+    @State private var applyingPath: String?
+    @State private var discardTarget: GitDiffFile?
     @State private var errorMessage: String?
 
     var body: some View {
@@ -26,7 +29,7 @@ struct iOSDiffView: View {
                     Text(errorMessage)
                 }
             } else if files.isEmpty {
-                ContentUnavailableView("No changes yet", systemImage: "doc.text")
+                emptyState
             } else {
                 fileList
             }
@@ -35,37 +38,143 @@ struct iOSDiffView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await refresh() }
         .task { await refresh() }
+        .confirmationDialog(
+            "Discard this file's local changes?",
+            isPresented: Binding(
+                get: { discardTarget != nil },
+                set: { if !$0 { discardTarget = nil } }
+            ),
+            presenting: discardTarget
+        ) { file in
+            Button("Discard \(file.path)", role: .destructive) {
+                Task { await apply(.discardFile, to: file) }
+            }
+            Button("Cancel", role: .cancel) { discardTarget = nil }
+        } message: { file in
+            Text("This is destructive. Untracked files move to Trash; tracked changes are restored from HEAD.")
+        }
     }
 
     @ViewBuilder
     private var fileList: some View {
-        List(files) { file in
-            NavigationLink {
-                iOSDiffFileView(session: session, client: client, initialFile: file)
-            } label: {
-                HStack {
-                    statusGlyph(file.status)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(file.path)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                            .font(.callout.monospaced())
-                        HStack(spacing: 6) {
-                            Text("+\(file.additions)")
-                                .foregroundStyle(.green)
-                            Text("-\(file.deletions)")
-                                .foregroundStyle(.red)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(files) { file in
+                    NavigationLink {
+                        iOSDiffFileView(session: session, client: client, initialFile: file)
+                    } label: {
+                        TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+                            HStack(alignment: .top, spacing: 11) {
+                                statusGlyph(file.status)
+                                    .frame(width: 24, height: 24)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(file.path)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
+                                        .font(TahoeFont.mono(12))
+                                        .foregroundStyle(t.fg)
+                                    HStack(spacing: 8) {
+                                        Text("+\(file.additions)")
+                                            .foregroundStyle(.green)
+                                        Text("-\(file.deletions)")
+                                            .foregroundStyle(.red)
+                                        if let changeState = file.changeState {
+                                            changeStatePill(changeState)
+                                        }
+                                        if file.truncated {
+                                            Text("truncated")
+                                                .foregroundStyle(t.fg4)
+                                        }
+                                    }
+                                    .font(TahoeFont.mono(10.5, weight: .semibold))
+                                }
+                                Spacer()
+                                TahoeIcon("chevR", size: 13)
+                                    .foregroundStyle(t.fg4)
+                                    .padding(.top, 3)
+                            }
+                            .padding(12)
                         }
-                        .font(.caption.monospacedDigit())
                     }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        diffActionButtons(for: file)
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        Button {
+                            Task { await apply(.stageFile, to: file) }
+                        } label: {
+                            Label("Stage", systemImage: "plus.square")
+                        }
+                        .tint(.green)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            discardTarget = file
+                        } label: {
+                            Label("Discard", systemImage: "trash")
+                        }
+                        if file.changeState == "staged" || file.changeState == "mixed" {
+                            Button {
+                                Task { await apply(.unstageFile, to: file) }
+                            } label: {
+                                Label("Unstage", systemImage: "minus.square")
+                            }
+                            .tint(.orange)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(rowAccessibilityLabel(file))
+                    .accessibilityHint("Double-tap to view the hunks.")
                 }
-                .frame(minHeight: 44)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(rowAccessibilityLabel(file))
-            .accessibilityHint("Double-tap to view the hunks.")
+            .padding(14)
         }
-        .listStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func diffActionButtons(for file: GitDiffFile) -> some View {
+        Button {
+            Task { await apply(.stageFile, to: file) }
+        } label: {
+            Label("Stage file", systemImage: "plus.square")
+        }
+        if file.changeState == "staged" || file.changeState == "mixed" {
+            Button {
+                Task { await apply(.unstageFile, to: file) }
+            } label: {
+                Label("Unstage file", systemImage: "minus.square")
+            }
+        }
+        Button(role: .destructive) {
+            discardTarget = file
+        } label: {
+            Label("Discard file", systemImage: "trash")
+        }
+    }
+
+    private func changeStatePill(_ state: String) -> some View {
+        Text(state.capitalized)
+            .font(TahoeFont.body(9.5, weight: .bold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(t.glassTintHi, in: Capsule())
+            .foregroundStyle(t.fg4)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            TahoeIcon("diff", size: 24)
+                .foregroundStyle(t.fg4)
+            Text("No local diff")
+                .font(TahoeFont.body(14, weight: .semibold))
+                .foregroundStyle(t.fg2)
+            Text("The worktree has no visible changes yet.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 
     private func rowAccessibilityLabel(_ file: GitDiffFile) -> String {
@@ -109,16 +218,35 @@ struct iOSDiffView: View {
             self.isLoading = false
         }
     }
+
+    @MainActor
+    private func apply(_ action: GitDiffActionKind, to file: GitDiffFile) async {
+        applyingPath = file.path
+        defer {
+            applyingPath = nil
+            discardTarget = nil
+        }
+        if let response = await client.applyDiffAction(sessionId: session.id, path: file.path, action: action),
+           response.ok {
+            files = response.files
+            errorMessage = nil
+        } else {
+            errorMessage = client.lastError ?? "The Mac could not apply this diff action."
+        }
+    }
 }
 
 /// File-level diff view with per-hunk paginated rendering for large diffs.
 struct iOSDiffFileView: View {
+    @Environment(\.tahoe) private var t
     let session: AgentSession
     @ObservedObject var client: AgentControlClient
     let initialFile: GitDiffFile
 
     @State private var loadedFile: GitDiffFile?
     @State private var isLoading = false
+    @State private var isApplying = false
+    @State private var discardPresented = false
     @State private var errorMessage: String?
 
     private var file: GitDiffFile { loadedFile ?? initialFile }
@@ -142,7 +270,7 @@ struct iOSDiffFileView: View {
                 }
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(Array(file.hunks.enumerated()), id: \.offset) { _, hunk in
                             hunkView(hunk)
                         }
@@ -153,10 +281,42 @@ struct iOSDiffFileView: View {
         }
         .navigationTitle(file.path)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        Task { await apply(.stageFile) }
+                    } label: {
+                        Label("Stage file", systemImage: "plus.square")
+                    }
+                    Button {
+                        Task { await apply(.unstageFile) }
+                    } label: {
+                        Label("Unstage file", systemImage: "minus.square")
+                    }
+                    Button(role: .destructive) {
+                        discardPresented = true
+                    } label: {
+                        Label("Discard file", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: isApplying ? "clock.arrow.circlepath" : "ellipsis.circle")
+                }
+                .disabled(isApplying)
+            }
+        }
         .task(id: initialFile.path) {
             if initialFile.truncated || initialFile.hunks.isEmpty {
                 await loadFullFile()
             }
+        }
+        .confirmationDialog("Discard file changes?", isPresented: $discardPresented) {
+            Button("Discard", role: .destructive) {
+                Task { await apply(.discardFile) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This is destructive. Untracked files move to Trash; tracked changes are restored from HEAD.")
         }
     }
 
@@ -172,19 +332,53 @@ struct iOSDiffFileView: View {
         isLoading = false
     }
 
+    @MainActor
+    private func apply(_ action: GitDiffActionKind) async {
+        isApplying = true
+        defer { isApplying = false }
+        if let response = await client.applyDiffAction(sessionId: session.id, path: file.path, action: action),
+           response.ok {
+            if let refreshed = response.files.first(where: { $0.path == file.path }) {
+                loadedFile = refreshed
+                if refreshed.truncated || refreshed.hunks.isEmpty {
+                    await loadFullFile()
+                }
+            } else {
+                loadedFile = GitDiffFile(
+                    path: file.path,
+                    status: file.status,
+                    additions: 0,
+                    deletions: 0,
+                    hunks: [],
+                    truncated: false,
+                    changeState: nil
+                )
+            }
+            errorMessage = nil
+        } else {
+            errorMessage = client.lastError ?? "The Mac could not apply this diff action."
+        }
+    }
+
     @ViewBuilder
     private func hunkView(_ hunk: GitDiffHunk) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(hunk.header)
-                .font(.caption.monospaced())
-                .foregroundStyle(SessionsV2Theme.codexBlue)
-            ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
-                Text(line.text)
-                    .font(.system(size: 11).monospaced())
-                    .foregroundStyle(lineColor(line.kind))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(lineBg(line.kind))
+        TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(hunk.header)
+                    .font(TahoeFont.mono(11, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                    .padding(.bottom, 3)
+                ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
+                    Text(line.text)
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(lineColor(line.kind))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(lineBg(line.kind), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                }
             }
+            .padding(10)
         }
     }
 
@@ -209,6 +403,11 @@ extension AgentControlClient {
     /// Fetch the live `git diff HEAD` from the daemon for this session.
     @MainActor
     public func fetchDiff(sessionId: UUID) async -> [GitDiffFile]? {
+        #if DEBUG
+        if let fixture = codeTabVerificationDiff(sessionId: sessionId) {
+            return fixture
+        }
+        #endif
         guard let host, let token else { return nil }
         guard let url = URL(string: "http://\(Self.urlHostLiteral(host)):\(httpPort)/sessions/\(sessionId.uuidString)/diff") else { return nil }
         var req = URLRequest(url: url)
