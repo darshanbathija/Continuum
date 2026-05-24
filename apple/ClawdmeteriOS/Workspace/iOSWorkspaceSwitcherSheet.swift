@@ -9,7 +9,6 @@ struct iOSWorkspaceSwitcherSheet: View {
     let onNewSession: () -> Void
 
     @State private var query = ""
-    @State private var workspaces: [CodeWorkspaceRecord] = []
     @State private var isLoading = true
 
     private var sessions: [AgentSession] {
@@ -18,8 +17,9 @@ struct iOSWorkspaceSwitcherSheet: View {
 
     private var visibleWorkspaces: [CodeWorkspaceRecord] {
         let q = normalized(query)
-        guard !q.isEmpty else { return workspaces.sorted { $0.updatedAt > $1.updatedAt } }
-        return workspaces.filter {
+        let source = client.workspaces
+        guard !q.isEmpty else { return source.sorted { $0.updatedAt > $1.updatedAt } }
+        return source.filter {
             normalized($0.repoDisplayName).contains(q)
                 || normalized($0.runtimeCwd).contains(q)
                 || normalized($0.branchName ?? "").contains(q)
@@ -168,7 +168,7 @@ struct iOSWorkspaceSwitcherSheet: View {
     private func loadWorkspaces() async {
         isLoading = true
         await client.refreshSessions()
-        workspaces = await client.listWorkspaces()
+        await client.refreshWorkspaces()
         isLoading = false
     }
 

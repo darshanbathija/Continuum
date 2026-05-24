@@ -72,6 +72,9 @@ public struct IOSCodeView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     IOSRoundIconBtn("folder", action: { workspaceSwitcherPresented = true })
+                    if let agentClient {
+                        IOSDesktopSyncBadge(client: agentClient)
+                    }
                     Spacer()
                     IOSRoundIconBtn("plus", action: onNewSession)
                 }
@@ -403,6 +406,40 @@ public struct IOSCodeView: View {
             return true
         }
         return false
+    }
+}
+
+private struct IOSDesktopSyncBadge: View {
+    @Environment(\.tahoe) private var t
+    @ObservedObject var client: AgentControlClient
+
+    var body: some View {
+        let connected = client.isDesktopEventSyncConnected
+        HStack(spacing: 6) {
+            Circle()
+                .fill(connected ? Color.green : (client.isConfigured ? Color.orange : t.fg4))
+                .frame(width: 7, height: 7)
+            Text(label)
+                .font(TahoeFont.body(11, weight: .semibold))
+                .foregroundStyle(connected ? t.fg2 : t.fg3)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .background {
+            Capsule(style: .continuous)
+                .fill(t.dark ? Color.white.opacity(0.07) : Color.white.opacity(0.82))
+                .overlay {
+                    Capsule(style: .continuous)
+                        .stroke(t.hairline, lineWidth: 0.6)
+                }
+        }
+        .accessibilityLabel(label)
+    }
+
+    private var label: String {
+        if client.isDesktopEventSyncConnected { return "Desktop live" }
+        if client.isConfigured { return "Reconnecting" }
+        return "Not paired"
     }
 }
 
