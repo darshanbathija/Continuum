@@ -228,11 +228,15 @@ public final class MobileCommandOutbox: ObservableObject {
     }
 
     private func deliver(_ envelope: MobileCommandEnvelope) async {
-        defer {
-            inflight.remove(envelope.idempotencyKey)
-            retryTasks.removeValue(forKey: envelope.idempotencyKey)
-        }
         let success = await dispatch(envelope)
+        // v0.26.2 review: clear inflight BEFORE the retry path, not in
+        // a defer. The previous defer kept the key in inflight while
+        // `reschedule` slept + called `schedule(current)`. That
+        // schedule() saw the key in inflight, early-returned at
+        // line 223, and the retry never fired — offline composer
+        // sends silently stuck in .queued forever.
+        inflight.remove(envelope.idempotencyKey)
+        retryTasks.removeValue(forKey: envelope.idempotencyKey)
         if success {
             markAcknowledged(envelope)
         } else {

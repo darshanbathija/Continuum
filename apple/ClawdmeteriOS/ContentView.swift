@@ -11,17 +11,23 @@ import ClawdmeterShared
 /// the runtime models + notification scheduling now.
 struct ContentView: View {
     @ObservedObject var model: UsageModel
-    @StateObject private var agentClient = AgentControlClient()
+    /// v0.26.2 review: agentClient + outbox are now process-wide,
+    /// owned by `ClawdmeteriOSApp`. iPad multi-window scenes all
+    /// observe the same instances, so cross-window enqueues no
+    /// longer race on outbox.json and we don't open N parallel WS
+    /// connections per device.
+    @ObservedObject var agentClient: AgentControlClient
+    @ObservedObject var outbox: MobileCommandOutbox
     @StateObject private var notifManager: iOSNotificationManager
 
-    init(model: UsageModel) {
+    init(model: UsageModel, agentClient: AgentControlClient, outbox: MobileCommandOutbox) {
         self.model = model
-        let client = AgentControlClient()
-        _agentClient = StateObject(wrappedValue: client)
-        _notifManager = StateObject(wrappedValue: iOSNotificationManager(client: client))
-        WatchPlanBridgeIOS.configure(client: client)
-        model.wire(daemonClient: client)
-        LiveActivityCoordinator.shared.client = client
+        self.agentClient = agentClient
+        self.outbox = outbox
+        _notifManager = StateObject(wrappedValue: iOSNotificationManager(client: agentClient))
+        WatchPlanBridgeIOS.configure(client: agentClient)
+        model.wire(daemonClient: agentClient)
+        LiveActivityCoordinator.shared.client = agentClient
         // Wire the iOS-side bridge so AgentControlClient.refreshSessions
         // notifications (posted from Shared) reach the iOS-only Live
         // Activity + watch bridging singletons. See
@@ -35,7 +41,7 @@ struct ContentView: View {
         // UsageModel is threaded in so the Live tab renders the live
         // per-provider quota via the `tahoeLive` adapter
         // (see IOSTahoeAdapter.swift).
-        IOSRootView(usageModel: model, agentClient: agentClient)
+        IOSRootView(usageModel: model, agentClient: agentClient, outbox: outbox)
             .task {
                 await notifManager.requestAuthorizationIfNeeded()
                 notifManager.scheduleBackgroundRefresh()

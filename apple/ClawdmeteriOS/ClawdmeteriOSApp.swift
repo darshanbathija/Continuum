@@ -5,6 +5,21 @@ import ClawdmeterShared
 @main
 struct ClawdmeteriOSApp: App {
     @StateObject private var model = UsageModel()
+    /// v0.26.2 review: process-wide AgentControlClient so iPad multi-
+    /// window doesn't open N parallel WS connections to the daemon
+    /// AND so the outbox below has a single, stable dispatch client.
+    /// Was previously @StateObject inside ContentView (per-scene).
+    @StateObject private var agentClient: AgentControlClient
+    /// v0.26.2 review: process-wide MobileCommandOutbox. Was previously
+    /// @StateObject inside IOSRootView (per-scene under WindowGroup).
+    /// On iPad multi-window each scene loaded outbox.json into its
+    /// own memory, and persist() rewrote disk from in-memory state,
+    /// so cross-window enqueues raced + the later write dropped the
+    /// earlier window's commands. Hoisting to App scope means one
+    /// outbox owns the queue for the whole process, every window
+    /// sees the same `pending`/`failed`, every persist() is sequenced
+    /// through the same actor.
+    @StateObject private var outbox: MobileCommandOutbox
     /// Reads the same @AppStorage key the Settings picker writes.
     /// Applied on the WindowGroup so the resolved color scheme
     /// propagates into sheets + alerts (which a TabView-level modifier
@@ -15,6 +30,9 @@ struct ClawdmeteriOSApp: App {
     }
 
     init() {
+        let client = AgentControlClient()
+        _agentClient = StateObject(wrappedValue: client)
+        _outbox = StateObject(wrappedValue: MobileCommandOutbox(client: client))
         // Register the BGAppRefreshTask handler at launch (D15 fallback for
         // APNS). The actual scheduling + ack/send happens inside
         // iOSNotificationManager; this just plants the dispatch handler.
@@ -49,7 +67,7 @@ struct ClawdmeteriOSApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model)
+            ContentView(model: model, agentClient: agentClient, outbox: outbox)
                 // Applied here, INSIDE the WindowGroup, so the value
                 // lands on the root view's traitCollection — that's
                 // the path SwiftUI uses to re-theme sheets and alerts

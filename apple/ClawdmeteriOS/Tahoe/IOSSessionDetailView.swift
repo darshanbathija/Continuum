@@ -54,7 +54,15 @@ public struct IOSSessionDetailView: View {
     var onBack: () -> Void
 
     @State private var composerText: String = ""
-    @State private var sending: Bool = false
+    /// v0.26.2 review: rapid-tap guard for Approve. The composer
+    /// uses optimistic-clear as a de-facto guard (cleared text flips
+    /// `canSend` off). Approve has no equivalent — its `canApprove`
+    /// flag depends on async WS-pushed session state, leaving a
+    /// race window where a double-tap enqueues two envelopes with
+    /// distinct idempotency keys. The second hits a respawned
+    /// session and surfaces as a `.failed` envelope. Local flag
+    /// closes the window.
+    @State private var approving: Bool = false
     @State private var refineAlertShown: Bool = false
     @State private var refineText: String = ""
     @State private var lastError: String?
@@ -213,20 +221,14 @@ public struct IOSSessionDetailView: View {
                             ZStack {
                                 Circle().fill(LinearGradient(colors: [t.accent, t.accentDeepC],
                                                              startPoint: .top, endPoint: .bottom))
-                                if sending {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                        .tint(.white)
-                                } else {
-                                    TahoeIcon("arrowU", size: 16, weight: .bold).foregroundStyle(.white)
-                                }
+                                TahoeIcon("arrowU", size: 16, weight: .bold).foregroundStyle(.white)
                             }
                             .frame(width: 38, height: 38)
                             .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
                             .opacity(canSend ? 1.0 : 0.45)
                         }
                         .buttonStyle(.plain)
-                        .disabled(!canSend || sending)
+                        .disabled(!canSend)
                     }
                     .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 10)
                 }
@@ -391,7 +393,7 @@ public struct IOSSessionDetailView: View {
                     }
                     IOSPlanHaloMini(
                         steps: planSteps,
-                        canApprove: true,
+                        canApprove: !approving,
                         onRefine: { refineAlertShown = true },
                         onApprove: { Task { await approvePlan() } }
                     )
@@ -408,7 +410,7 @@ public struct IOSSessionDetailView: View {
                     if !planSteps.isEmpty {
                         IOSPlanHaloMini(
                             steps: planSteps,
-                            canApprove: hasRealPlan,
+                            canApprove: hasRealPlan && !approving,
                             onRefine: { refineAlertShown = true },
                             onApprove: { Task { await approvePlan() } }
                         )
@@ -420,7 +422,7 @@ public struct IOSSessionDetailView: View {
                     if !planSteps.isEmpty {
                         IOSPlanHaloMini(
                             steps: planSteps,
-                            canApprove: hasRealPlan,
+                            canApprove: hasRealPlan && !approving,
                             onRefine: { refineAlertShown = true },
                             onApprove: { Task { await approvePlan() } }
                         )
@@ -489,9 +491,21 @@ public struct IOSSessionDetailView: View {
 
     @MainActor
     private func approvePlan() async {
-        guard session != nil else { return }
+        guard !approving, session != nil else { return }
         guard !data.isDemo else { return }  // demo plan, no real id to approve
+        approving = true
         outbox.enqueueApprovePlan(sessionId: sessionId)
+        // Hold the guard for ~2s — the daemon respawn + WS push that
+        // flips `hasRealPlan` typically lands in <1s on a tailnet, so
+        // the button's own `canApprove` takes over before this timer
+        // expires. Re-arming briefly on slow networks is fine; the
+        // outbox itself owns idempotent delivery from here. NOT using
+        // `defer` because that clears the flag in the same MainActor
+        // turn, leaving the network round-trip window unguarded.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            approving = false
+        }
     }
 
     private func openConfigSheet() {
