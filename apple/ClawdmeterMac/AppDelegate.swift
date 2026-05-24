@@ -55,54 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         configure(runtime: runtime)
-        installFileMenuExtensions()
-    }
-
-    /// v0.14.0 (plan v2.1 T8): add a File menu entry for "Open Folder in
-    /// Design…" so users have a discoverable UI affordance for the
-    /// Code→Design handoff without forcing them to find a per-session
-    /// button buried in MacCodeView. Triggers the standard NSOpenPanel
-    /// + dispatches to `AppRuntime.openFolderInDesign(baseDir:)`.
-    private func installFileMenuExtensions() {
-        guard let main = NSApp.mainMenu else { return }
-        // Find or create the "File" menu.
-        let fileItem: NSMenuItem
-        if let existing = main.items.first(where: { $0.submenu?.title == "File" }) {
-            fileItem = existing
-        } else {
-            let item = NSMenuItem()
-            item.submenu = NSMenu(title: "File")
-            main.insertItem(item, at: 1) // after App menu
-            fileItem = item
-        }
-        guard let fileMenu = fileItem.submenu else { return }
-        // Avoid duplicates on configure re-entry.
-        if fileMenu.items.contains(where: { $0.action == #selector(openFolderInDesignAction) }) {
-            return
-        }
-        let menuItem = NSMenuItem(
-            title: "Open Folder in Design…",
-            action: #selector(openFolderInDesignAction),
-            keyEquivalent: "O"
-        )
-        menuItem.keyEquivalentModifierMask = [.command, .shift]
-        menuItem.target = self
-        fileMenu.addItem(.separator())
-        fileMenu.addItem(menuItem)
-    }
-
-    @objc private func openFolderInDesignAction() {
-        guard let runtime = AppDelegate.runtime else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.title = "Open Folder in Design"
-        panel.prompt = "Open"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { @MainActor in
-            await runtime.openFolderInDesign(baseDir: url.path)
-        }
+        // v0.27.0: installFileMenuExtensions() (the "Open Folder in
+        // Design…" File-menu item) was removed along with the Design
+        // tab + AppRuntime.openFolderInDesign(baseDir:).
     }
 
     func configure(runtime: AppRuntime) {

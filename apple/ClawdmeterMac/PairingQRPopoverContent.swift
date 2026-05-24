@@ -187,26 +187,9 @@ struct PairingQRPopoverContent: View {
             return false
         }()
         let scheme: String = (preferTLS && isMagicDNS) ? "clawdmeters" : "clawdmeter"
-        var url = "\(scheme)://\(hostName):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
-        // v0.14.0 (plan v2.1): include Design routing fields when the
-        // daemon is ready. iOS older builds ignore unknown query keys.
-        // Use the current bearer token as the pairing-id input. When the
-        // user revokes / regenerates the pairing, currentToken() changes
-        // and the derived designToken changes with it — automatic
-        // rotation (v2.1 T19).
-        //
-        // /review codex P1-1: emit the FORWARDER port (Tailscale-exposed),
-        // not the bridge port (loopback-only). The bridge speaks
-        // /sign-import-token + /import-folder + /health only — useless
-        // to iOS. The forwarder is the byte-pump that tunnels everything
-        // through to the daemon.
-        if let designPort = runtime.openDesignDaemon.forwarderPortAtomic.get(),
-           let designToken = runtime.openDesignDaemon.deriveDesignToken(
-               forPairingId: PairingTokenStore.shared.currentToken()
-           ) {
-            url += "&dp=\(designPort)&dt=\(designToken)"
-        }
-        return url
+        // v0.27.0: Design routing fields (`&dp=` and `&dt=`) dropped from
+        // the pairing URL along with the Design tab + DesignPortForwarder.
+        return "\(scheme)://\(hostName):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
     }
 
     private func generateQR(from string: String) -> NSImage? {

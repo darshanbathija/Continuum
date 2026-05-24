@@ -255,27 +255,16 @@ public final class AgentControlServer {
         self.usageHistory = history
     }
 
-    /// v0.14.0 (plan v2.1 T20): wire the Design bridge sidecar so iOS
-    /// can mint Open Design desktop-import-tokens via the existing
-    /// authenticated AgentControlServer port. The closure returns the
-    /// current local bridge port — nil while the daemon is starting or
-    /// has crashed; the /design/import-folder handler returns 503 in
-    /// that case.
-    public func attachDesignBridge(bridgePortProvider: @escaping @Sendable () -> Int?,
-                                   bridgeAuthTokenProvider: @escaping @Sendable () -> String?) {
-        self.designBridgePortProvider = bridgePortProvider
-        self.designBridgeAuthTokenProvider = bridgeAuthTokenProvider
-    }
+    // v0.27.0: attachDesignBridge(...) + the design-bridge port/token
+    // provider properties removed along with the Design tab + Open Design
+    // daemon. The /design/import-folder route + handler were stripped too.
+
     /// Audit P1 fix: 15-minute autopilot inactivity sweep. AutopilotState
     /// already implements the timing logic but nothing was calling
     /// expiredSessions() — so the 15-min safety guardrail advertised in
     /// the eng review was dead code. Started in `start()`, cancelled in
     /// `stop()`, ticks every 30s.
     private var autopilotSweepTask: Task<Void, Never>?
-
-    private var designBridgePortProvider: (@Sendable () -> Int?)?
-    /// /review codex P1-2: bearer token the bridge requires on every request.
-    private var designBridgeAuthTokenProvider: (@Sendable () -> String?)?
 
     // MARK: - Lifecycle
 
@@ -1078,14 +1067,8 @@ public final class AgentControlServer {
             self?.handleGetAnalytics(connection: conn)
         }
 
-        // v0.14.0 (plan v2.1 T20): iOS Code→Design handoff entry.
-        // Bearer-protected like every other AgentControl route. Proxies
-        // to the loopback clawdmeter-bridge-host sidecar which mints
-        // the desktop-import-token + calls Open Design's
-        // /api/import/folder. Returns 503 when the bridge isn't ready.
-        t.register(method: "POST", pattern: "/design/import-folder") { [weak self] req, conn, _ in
-            await self?.handlePostDesignImportFolder(request: req, connection: conn)
-        }
+        // v0.27.0: POST /design/import-folder route removed along with
+        // the Design tab + Open Design daemon + clawdmeter-bridge-host sidecar.
 
         // --- POSTs ---
         t.register(method: "POST", pattern: "/sessions") { [weak self] req, conn, _ in
@@ -3366,64 +3349,10 @@ public final class AgentControlServer {
         }
     }
 
-    // MARK: - Design import-folder proxy (T20)
-
-    /// POST /design/import-folder { baseDir: "/path/to/repo" } → proxies
-    /// to the loopback clawdmeter-bridge-host sidecar, which mints a
-    /// desktop-import-token and calls Open Design's /api/import/folder.
-    /// Returns the bridge's JSON response verbatim. Bearer-protected
-    /// (the existing AgentControlServer auth gate runs before we get here).
-    private func handlePostDesignImportFolder(request: HTTPRequest, connection: NWConnection) async {
-        guard let provider = designBridgePortProvider, let bridgePort = provider() else {
-            sendJSON(["error": "design bridge not ready", "code": "BRIDGE_UNAVAILABLE"], on: connection, status: 503)
-            return
-        }
-        // Validate the body parses as JSON with a baseDir field.
-        guard !request.body.isEmpty,
-              let json = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
-              let baseDir = json["baseDir"] as? String, !baseDir.isEmpty else {
-            sendJSON(["error": "baseDir required"], on: connection, status: 400)
-            return
-        }
-        // Audit P0 fix: constrain baseDir before forwarding to the
-        // bridge. The bridge marks every call `fromTrustedPicker: true`
-        // — without this guard, a paired iPhone could request import
-        // of `~/.ssh` (or any sensitive folder) and Open Design would
-        // ingest the contents. We allow only known-good roots: the
-        // Mac's repo bookmarks + the project paths Antigravity has
-        // resolved for the current user. Symlinks are resolved first
-        // and the canonical path must still match the allow-list.
-        guard Self.isSafeDesignImportBase(baseDir) else {
-            serverLogger.warning("design-import-folder: refusing baseDir \(baseDir, privacy: .public)")
-            sendJSON(
-                ["error": "baseDir must resolve under a known repo / project root",
-                 "code": "BASEDIR_NOT_ALLOWED"],
-                on: connection, status: 400
-            )
-            return
-        }
-        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(bridgePort)/import-folder")!)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // /review codex P1-2: include the bridge bearer token.
-        if let bridgeToken = designBridgeAuthTokenProvider?() {
-            req.setValue("Bearer \(bridgeToken)", forHTTPHeaderField: "Authorization")
-        }
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["baseDir": baseDir])
-        req.timeoutInterval = 30
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 502
-            // Re-serialize as JSON so the iOS client gets a stable shape.
-            if let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                sendJSON(parsed, on: connection, status: statusCode)
-            } else {
-                sendJSON(["error": "bridge returned non-JSON", "raw": String(data: data, encoding: .utf8) ?? ""], on: connection, status: 502)
-            }
-        } catch {
-            sendJSON(["error": "bridge proxy failed: \(error.localizedDescription)", "code": "BRIDGE_PROXY_FAILED"], on: connection, status: 502)
-        }
-    }
+    // v0.27.0: Design import-folder proxy (POST /design/import-folder)
+    // removed along with the Design tab + Open Design daemon +
+    // clawdmeter-bridge-host sidecar. `isSafeDesignImportBase(_:)` and
+    // `allowedDesignBaseDirs()` (the allow-list guard) were stripped too.
 
     // MARK: - Transcript endpoint
 
@@ -5653,28 +5582,8 @@ public final class AgentControlServer {
         PathValidator.isValidJsonlPath(path)
     }
 
-    /// Audit P0 fix: restrict `baseDir` accepted by /design/import-folder
-    /// to paths that pass `isValidRepoKey`. That validator already
-    /// requires an absolute, traversal-free, non-symlink-escaping path
-    /// under the user's home directory, which is the right shape for an
-    /// import-target (a paired iPhone has no legitimate reason to ask
-    /// the daemon to import `~/.ssh` or `~/Library/Keychains`).
-    static func isSafeDesignImportBase(_ baseDir: String) -> Bool {
-        guard isValidRepoKey(baseDir) else { return false }
-        // Belt-and-braces: refuse a handful of obviously sensitive
-        // subtrees inside $HOME that should never legitimately be a
-        // design-import target. Keep the list small + concrete; the
-        // primary defense is the validator above.
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let blocked = ["/.ssh", "/.gnupg", "/.aws", "/Library/Keychains"]
-        let canonical = (try? URL(fileURLWithPath: baseDir).resolvingSymlinksInPath().path) ?? baseDir
-        for sub in blocked {
-            if canonical == home + sub || canonical.hasPrefix(home + sub + "/") {
-                return false
-            }
-        }
-        return true
-    }
+    // v0.27.0: isSafeDesignImportBase(_:) removed along with the Design
+    // tab + Open Design /design/import-folder route.
 
     private func sendResponse(_ response: HTTPResponse, on connection: NWConnection) {
         let bytes = httpResponseBytes(

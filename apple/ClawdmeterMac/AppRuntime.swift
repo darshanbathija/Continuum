@@ -15,13 +15,9 @@ private let runtimeLogger = Logger(subsystem: "com.clawdmeter.mac", category: "A
 /// runtime, every per-model `@Published` change re-invalidates the parent
 /// scene, which reliably re-snapshots the menu bar label.
 extension Notification.Name {
-    /// Posted by `AppRuntime.openFolderInDesign` when a folder is
-    /// successfully imported into Open Design. UserInfo contains
-    /// `projectId: String` and `baseDir: String`. MacRootView listens
-    /// to flip its tab + navigate the WebView.
-    public static let clawdmeterDidOpenInDesign = Notification.Name("clawdmeter.didOpenInDesign")
-    /// Posted when the bridge sidecar isn't ready — UI can show a toast.
-    public static let clawdmeterDesignBridgeUnavailable = Notification.Name("clawdmeter.designBridgeUnavailable")
+    // v0.27.0: Design tab + Open Design integration stripped out. Old
+    // clawdmeterDidOpenInDesign / clawdmeterDesignBridgeUnavailable
+    // notification names removed; no remaining publishers or listeners.
 }
 
 @MainActor
@@ -42,59 +38,13 @@ final class AppRuntime: ObservableObject {
     let sessionsModel: SessionsModel
     let sessionScheduler: SessionScheduler
 
-    // Design tab (v0.14.0 — plan v2.1). Owns the bundled Open Design
-    // daemon + bridge sidecar lifecycle. Lazy-started by MacDesignView
-    // on first appearance so cold start cost is paid only when the
-    // user opens the tab.
-    let openDesignDaemon: OpenDesignDaemonManager
-
     // v0.24.0: in-app update checker. Polls GitHub Releases once a day,
     // surfaces a chip in the titlebar when a newer version ships. The
     // chip opens a popover with release notes + "Download in Browser"
     // CTA. Sparkle one-click install is parked in TODOS.md as phase 2.
     let updateCoordinator: UpdateCoordinator
 
-    /// v0.14.0 (plan v2.1 T8): import a folder into Open Design via the
-    /// bridge sidecar. Posts `.clawdmeterDidOpenInDesign` on success so
-    /// MacRootView can flip its tab + navigate the WebView. Used by the
-    /// "Open in Design" affordance on Code session cards and File menu.
-    public func openFolderInDesign(baseDir: String) async {
-        guard let bridgePort = openDesignDaemon.bridgePortAtomic.get() else {
-            runtimeLogger.warning("openFolderInDesign called but bridge isn't ready yet")
-            NotificationCenter.default.post(
-                name: .clawdmeterDesignBridgeUnavailable,
-                object: nil,
-                userInfo: ["baseDir": baseDir]
-            )
-            return
-        }
-        let url = URL(string: "http://127.0.0.1:\(bridgePort)/import-folder")!
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // /review codex P1-2: bridge bearer token (per-spawn random hex).
-        if let bridgeToken = openDesignDaemon.bridgeAuthTokenAtomic.get() {
-            req.setValue("Bearer \(bridgeToken)", forHTTPHeaderField: "Authorization")
-        }
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["baseDir": baseDir])
-        req.timeoutInterval = 30
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                runtimeLogger.warning("bridge import-folder returned \((response as? HTTPURLResponse)?.statusCode ?? -1)")
-                return
-            }
-            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let projectId = (json?["projectId"] ?? json?["id"]) as? String ?? ""
-            NotificationCenter.default.post(
-                name: .clawdmeterDidOpenInDesign,
-                object: nil,
-                userInfo: ["projectId": projectId, "baseDir": baseDir]
-            )
-        } catch {
-            runtimeLogger.error("openFolderInDesign failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
+    // v0.27.0: openFolderInDesign(baseDir:) removed along with the Design tab.
 
     private var cancellables = Set<AnyCancellable>()
     private var usageQueryService: UsageQueryService?
@@ -195,13 +145,8 @@ final class AppRuntime: ObservableObject {
             registry: self.agentSessionRegistry
         )
         self.notificationDispatcher = NotificationDispatcher()
-        // v0.22.9: Design tab daemon manager. Previously lazy — first
-        // ensureRunning() came from MacDesignView.onAppear, so the user
-        // saw "Waking up Design… Starting Open Design daemon…" the
-        // first time they hit the tab. We now eager-start it during
-        // app launch so the daemon is warm by the time the user picks
-        // the Design tab.
-        self.openDesignDaemon = OpenDesignDaemonManager()
+        // v0.27.0: openDesignDaemon (the bundled Open Design Node sidecar)
+        // removed along with the Design tab.
         self.agentControlServer = AgentControlServer(
             repoIndex: self.repoIndex,
             registry: self.agentSessionRegistry,
@@ -263,17 +208,8 @@ final class AppRuntime: ObservableObject {
         let sessionsEnabled = UserDefaults.standard.object(forKey: "clawdmeter.sessions.enabled") as? Bool ?? true
         if sessionsEnabled {
             self.tmuxSupervisor.start()
-            // v0.14.0 (plan v2.1 T20): wire the design-bridge port provider
-            // BEFORE the server starts handling requests so /design/import-folder
-            // doesn't 503 in the race window. The provider closure is read on
-            // each request; the OpenDesignDaemonManager populates bridgePort
-            // when it spawns the sidecar (lazy).
-            let bridgeAtomic = openDesignDaemon.bridgePortAtomic
-            let bridgeAuthAtomic = openDesignDaemon.bridgeAuthTokenAtomic
-            self.agentControlServer.attachDesignBridge(
-                bridgePortProvider: { bridgeAtomic.get() },
-                bridgeAuthTokenProvider: { bridgeAuthAtomic.get() }
-            )
+            // v0.27.0: agentControlServer.attachDesignBridge(...) call removed
+            // along with the Design tab + Open Design daemon.
             self.agentControlServer.start()
             // PR #24a A1: synchronous loopback bootstrap. `start()` above
             // is sync and assigns `boundPort`/`boundWsPort` before
@@ -287,12 +223,8 @@ final class AppRuntime: ObservableObject {
             }
             self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
             self.sessionScheduler.start()
-            // v0.22.9: eager-start the Open Design daemon at app launch
-            // so the Design tab is warm-ready the first time the user
-            // opens it (no more "Waking up Design…" splash). Lazy
-            // ensureRunning() in MacDesignView.onAppear is now a
-            // safety-net; the supervisor is idempotent.
-            self.openDesignDaemon.ensureRunning()
+            // v0.27.0: openDesignDaemon.ensureRunning() removed along with
+            // the Design tab.
             // v0.22.11: auto-archive chat sessions idle > 5 minutes.
             // User reported the chat view defaulting to whatever was
             // last active even hours later — having stale active

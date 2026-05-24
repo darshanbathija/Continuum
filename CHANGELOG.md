@@ -4,6 +4,52 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.27.0 build 136] - 2026-05-24 — Strip Design tab + Open Design integration (`strip/design-tab`)
+
+The Design tab has been removed across every surface so it can be designed and built fresh from scratch. The current implementation didn't work in practice — the bundled Open Design Node daemon ate ~80 MB of the DMG, the WKWebView never reliably loaded, the Tailscale-forwarded iOS proxy broke whenever the daemon restarted, and the Code↔Design handoff opened blank screens.
+
+This is a deliberately large, surgical removal — **breaking** for anyone who depended on the Design surface or the `/design/import-folder` daemon route. The pairing wire protocol drops `designPort` + `designToken` but stays backward-compatible (older Mac builds emit them; the new iOS parser silently ignores unknown query params).
+
+### Removed (pure-Design, 4696 files / ~1M lines gone)
+
+- **`apple/ClawdmeterMac/Tahoe/MacDesignView.swift`** — WKWebView wrapper, ColdStartCard, ErrorCard. Whole file.
+- **`apple/ClawdmeteriOS/Tahoe/IOSDesignView.swift`** — iOS UIViewRepresentable + DesignPortForwarder consumer. Whole file.
+- **`apple/ClawdmeterMac/AgentControl/OpenDesignDaemonManager.swift`** — daemon lifecycle, file-lock, Keychain OD_API_TOKEN, bridge port atomics, derivedDesignToken HKDF. Whole file.
+- **`apple/ClawdmeterMac/AgentControl/DesignPortForwarder.swift`** — TCP byte-pump for iOS access over Tailscale, token validation, ?token= query stripping, Set-Cookie injection. Whole file.
+- **`apple/ClawdmeterMac/Resources/Vendor/open-design/`** — entire bundled Node 102 daemon + Next.js web export + node_modules + clawdmeter-bridge plugin + sidecar packages. ~80 MB on disk, ~32 MB tracked.
+- **`tools/build-bundled-open-design.sh`** — pnpm build + stage + per-file codesign of `.node` natives.
+- **`tools/clawdmeter-bridge-host/`** — Node sidecar that minted desktop-import-tokens + proxied to `/api/import/folder`.
+- **`tools/clawdmeter-open-design-plugin/`** — the in-Design "Open in Code" bridge plugin source.
+- **`apple/ClawdmeterMacTests/DesignPortForwarderTests.swift`** + **`OpenDesignDaemonManagerTests.swift`** — the tests for the deleted code.
+
+### Removed (surgical edits to surviving files)
+
+- **`apple/ClawdmeterMac/Tahoe/MacRootView.swift`** — Tab enum drops `.design`. Switch-case routing to `MacDesignView`, `clawdmeterDidOpenInDesign` notification handler, `clawdmeterSwitchTab` `.design` branch, titlebar Design chip, `designHealthColor(for:)` and `designChipText(for:)` helpers, and the `TahoeDashTab("Design", …)` row in the tab strip all gone.
+- **`apple/ClawdmeterMac/AppRuntime.swift`** — `openDesignDaemon` property, `openFolderInDesign(baseDir:)` method, `clawdmeterDidOpenInDesign` + `clawdmeterDesignBridgeUnavailable` Notification names, design-bridge atomic plumbing and eager `ensureRunning()` call all stripped.
+- **`apple/ClawdmeterMac/AgentControl/AgentControlServer.swift`** — `attachDesignBridge(bridgePortProvider:bridgeAuthTokenProvider:)`, the `designBridgePortProvider` + `designBridgeAuthTokenProvider` instance properties, the `POST /design/import-folder` route registration, the `handlePostDesignImportFolder(...)` handler, and the `isSafeDesignImportBase(_:)` allow-list helper all removed.
+- **`apple/ClawdmeterMac/AppDelegate.swift`** — the File menu "Open Folder in Design…" item (`installFileMenuExtensions()` + `openFolderInDesignAction()`) gone.
+- **`apple/ClawdmeterMac/PairingSettingsView.swift`** + **`PairingQRPopoverContent.swift`** — the `&dp=` / `&dt=` query-param appenders on the pairing URL builders (both `copyPairingURL()` and the QR refresh path) stripped. The Mac no longer emits Design routing fields in pairing payloads.
+- **`apple/ClawdmeteriOS/Tahoe/IOSRootView.swift`** — Tab enum drops `.design`. Switch-case routing to `IOSDesignView`, the tab-bar row, and the related comments updated.
+- **`apple/ClawdmeteriOS/Tahoe/IOSPairingView.swift`** — `client.setDesignPairing(...)` call after persisting the pairing tokens removed.
+- **`apple/ClawdmeteriOS/PairingScannerView.swift`** — `dp` + `dt` query-param parsing in `parse(urlString:)` stripped. Unknown params keep being ignored, so older Mac QR URLs that still emit them keep pairing fine — they just don't populate Design routing values (there are no Design routing values anymore).
+- **`apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/Protocol.swift`** — `PairingChallenge.designPort` + `designToken` properties and their CodingKeys removed. `decodeIfPresent` keeps backward compat for older Mac emitters; new init signature is `init(host:port:wsPort:token:useHTTPS:)`.
+- **`apple/ClawdmeterShared/Sources/ClawdmeterShared/AgentControl/AgentControlClient.swift`** — `designPortKey` + `designTokenKey` UserDefaults keys, `designPort` + `designToken` accessors, `setDesignPairing(designPort:designToken:)` method, and the Design keys in `clearPairing()`'s wipe loop all stripped.
+- **`apple/project.yml`** — the `Resources/Vendor/open-design/**` source-scan exclusion (no longer needed; the dir is gone) and the `Build bundled Open Design (if missing or stale)` preBuildScript both removed.
+
+### Verification
+
+- `xcodebuild -scheme "Clawdmeter (Mac)" -configuration Release build` → **BUILD SUCCEEDED**.
+- `xcodebuild -scheme "Clawdmeter (iOS)" -configuration Release -destination "generic/platform=iOS" build` → green (next ship verification).
+- `swift test` in `apple/ClawdmeterShared/` → **693 passed, 0 failed, 3 skipped** (skipped = integration probes that need a live language_server, unchanged by this PR).
+
+### Compatibility notes
+
+- **Pairing protocol is forward-compatible.** v0.27.0 iOS pairing scanners ignore the `dp` and `dt` query params if an older Mac (v0.26.x or earlier) emits them in the QR URL. v0.27.0 Macs simply stop emitting those params; v0.26.x iOS scanners decode the URL fine and silently skip the now-missing fields.
+- **Wire protocol unchanged** — no `AgentControlWireVersion` bump. The `/design/import-folder` route returns 404 on a v0.27.0 daemon; older iOS builds that try to hit it will see the same 404. Code is the only path that needs the route, and we removed both ends.
+- **No data migration needed.** UserDefaults `clawdmeter.sessions.designPort` and `clawdmeter.sessions.designToken` entries on existing iOS installs are now orphans — they sit untouched, take a few bytes, and are read by no one.
+
+Bumps `MARKETING_VERSION` 0.26.6 → 0.27.0, `CURRENT_PROJECT_VERSION` 135 → 136.
+
 ## [0.26.6 build 135] - 2026-05-24 — Antigravity Tier-1 LS-local probe (framework + schema; sandbox-blocked discovery) (`fix/antigravity-ls-probe`)
 
 The Antigravity card has read `0% / "resets in —"` for every user whose only Gemini surface is the Antigravity 2 desktop app — `AntigravitySource` Tier 2 (`cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota`) requires `~/.gemini/oauth_creds.json`, which only `gemini auth login` from a terminal creates. Antigravity 2 signs in via the GUI without ever writing that file. The `AntigravitySource.poll()` had a `lsQuotaProbe` hook for a Tier-1 LS-local probe, but the production constructor in `AppRuntime.swift:149` left it defaulted to nil — Tier 1 was code that never ran.

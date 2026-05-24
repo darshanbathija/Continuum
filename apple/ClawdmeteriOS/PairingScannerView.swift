@@ -93,14 +93,19 @@ struct PairingScannerView: UIViewControllerRepresentable {
     /// Parse `clawdmeter://host:httpPort?token=<base64url>&ws=<wsPort>` into
     /// a `PairingChallenge`. Returns nil for unrecognized URLs.
     ///
-    /// Audit P1 fix: validate every field. Previously token / designToken
-    /// were accepted verbatim and host could be any string — a malicious
-    /// printed QR ("Open in Code on this airport Wi-Fi!") could pair the
-    /// iPhone with an attacker-chosen host. The defenses:
+    /// Audit P1 fix: validate every field. Previously token was accepted
+    /// verbatim and host could be any string — a malicious printed QR
+    /// ("Open in Code on this airport Wi-Fi!") could pair the iPhone
+    /// with an attacker-chosen host. The defenses:
     ///   - host must look like loopback, Tailscale CGNAT
     ///     (100.64.0.0/10), or `*.ts.net`.
     ///   - ports must fall in 1…65535.
     ///   - tokens must match `^[A-Za-z0-9_-]{16,256}$` (base64url shape).
+    ///
+    /// v0.27.0: `dp` (designPort) + `dt` (designToken) query params are
+    /// no longer parsed — the Design tab + DesignPortForwarder were
+    /// stripped. Older Mac builds may still emit them in the QR URL;
+    /// the parser ignores unknown params, so pairing keeps working.
     static func parse(urlString: String) -> PairingChallenge? {
         guard let url = URL(string: urlString),
               let scheme = url.scheme,
@@ -118,8 +123,6 @@ struct PairingScannerView: UIViewControllerRepresentable {
         let useHTTPS = (scheme == "clawdmeters")
         var token: String?
         var wsPort: Int?
-        var designPort: Int?
-        var designToken: String?
         if let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
            let items = comps.queryItems {
             for item in items {
@@ -128,17 +131,12 @@ struct PairingScannerView: UIViewControllerRepresentable {
                     if let v = item.value, isValidPairingToken(v) { token = v }
                 case "ws":
                     if let v = item.value, let n = Int(v), isValidPort(n) { wsPort = n }
-                case "dp":
-                    if let v = item.value, let n = Int(v), isValidPort(n) { designPort = n }
-                case "dt":
-                    if let v = item.value, isValidPairingToken(v) { designToken = v }
                 default: break
                 }
             }
         }
         guard let token, let wsPort else { return nil }
         return PairingChallenge(host: host, port: httpPort, wsPort: wsPort, token: token,
-                                designPort: designPort, designToken: designToken,
                                 useHTTPS: useHTTPS)
     }
 
