@@ -108,7 +108,8 @@ public actor ChatProviderProbe {
             agentapiLive: Bool,
             opencodeAvailable: Bool,
             opencodeAuthProviderCount: Int,
-            opencodeEnvironmentAuthAvailable: Bool
+            opencodeEnvironmentAuthAvailable: Bool,
+            cursorState: CursorModelProbeState
         ) = await Task.detached {
             let claudeAvailable = ShellRunner.locateBinary("claude") != nil
             let codexAvailable = ShellRunner.locateBinary("codex") != nil
@@ -142,6 +143,7 @@ public actor ChatProviderProbe {
                     return false
                 }
             }
+            let cursorState = await CursorModelProbe.shared.currentState()
             return (
                 claudeAvailable,
                 codexAvailable,
@@ -149,7 +151,8 @@ public actor ChatProviderProbe {
                 lsLive,
                 opencodeAvailable,
                 opencodeAuthProviderCount,
-                opencodeEnvironmentAuthAvailable
+                opencodeEnvironmentAuthAvailable,
+                cursorState
             )
         }.value
 
@@ -170,6 +173,10 @@ public actor ChatProviderProbe {
             key: "opencode",
             fallback: probes.opencodeAvailable
                 && (probes.opencodeAuthProviderCount > 0 || probes.opencodeEnvironmentAuthAvailable)
+        )
+        let (cursorAuth, cursorReason) = resolveAuth(
+            key: "cursor",
+            fallback: probes.cursorState.authenticated
         )
         let opencodeDefaultReason: String? = {
             if !probes.opencodeAvailable { return "opencode CLI not installed" }
@@ -220,9 +227,17 @@ public actor ChatProviderProbe {
                 lastProbedAt: now,
                 reason: opencodeReason ?? opencodeDefaultReason
             ),
+            ChatProviderEntry(
+                provider: .cursor,
+                available: probes.cursorState.binaryPath != nil,
+                authenticated: cursorAuth,
+                capabilityProbePassed: probes.cursorState.binaryPath != nil && cursorAuth,
+                lastProbedAt: now,
+                reason: cursorReason ?? probes.cursorState.reason
+            ),
         ])
         cache = CacheEntry(response: response, computedAt: now)
-        probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codexSDK=\(probes.codexSDKAvailable, privacy: .public) codexCLI=\(probes.codexAvailable, privacy: .public) gemini=\(probes.agentapiLive, privacy: .public) opencode=\(probes.opencodeAvailable, privacy: .public)")
+        probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codexSDK=\(probes.codexSDKAvailable, privacy: .public) codexCLI=\(probes.codexAvailable, privacy: .public) gemini=\(probes.agentapiLive, privacy: .public) opencode=\(probes.opencodeAvailable, privacy: .public) cursor=\((probes.cursorState.binaryPath != nil), privacy: .public)")
         return response
     }
 
@@ -235,7 +250,123 @@ public actor ChatProviderProbe {
             return codexBackend == .sdk ? "codex:sdk" : "codex:cli"
         case .gemini: return "gemini"
         case .opencode: return "opencode"  // PR #29
+        case .cursor: return "cursor"
         case .unknown: return "unknown"  // X3 forward-compat key
         }
+    }
+}
+
+public struct CursorModelProbeState: Sendable {
+    public let binaryPath: String?
+    public let models: [ModelCatalogEntry]
+    public let authenticated: Bool
+    public let reason: String?
+    public let probedAt: Date
+}
+
+public actor CursorModelProbe {
+    public static let shared = CursorModelProbe()
+
+    private struct CacheEntry {
+        let state: CursorModelProbeState
+        let computedAt: Date
+    }
+
+    private var cache: CacheEntry?
+    private var inflight: Task<CursorModelProbeState, Never>?
+    public static let cacheTTL: TimeInterval = 60
+
+    public init() {}
+
+    public func invalidate() {
+        cache = nil
+        inflight?.cancel()
+        inflight = nil
+    }
+
+    public func currentModels() async -> [ModelCatalogEntry] {
+        await currentState().models
+    }
+
+    public func currentState() async -> CursorModelProbeState {
+        if let cache,
+           Date().timeIntervalSince(cache.computedAt) < Self.cacheTTL {
+            return cache.state
+        }
+        if let task = inflight {
+            return await task.value
+        }
+        let task = Task { await self.runProbe() }
+        inflight = task
+        let state = await task.value
+        cache = CacheEntry(state: state, computedAt: Date())
+        inflight = nil
+        return state
+    }
+
+    private func runProbe() async -> CursorModelProbeState {
+        let now = Date()
+        guard let binary = AgentSpawner.cursorBinaryPath() else {
+            return CursorModelProbeState(
+                binaryPath: nil,
+                models: [CursorModelCatalog.autoEntry],
+                authenticated: false,
+                reason: "cursor-agent CLI not on PATH or failed identity check",
+                probedAt: now
+            )
+        }
+
+        let status = try? await ShellRunner.shared.run(
+            executable: binary,
+            arguments: ["status"],
+            timeout: 5
+        )
+        let statusOutput = ((status?.stdoutString ?? "") + "\n" + (status?.stderrString ?? ""))
+            .lowercased()
+        let authenticated = status?.exitStatus == 0
+            && !statusOutput.contains("not logged in")
+            && !statusOutput.contains("not authenticated")
+            && !statusOutput.contains("not signed in")
+
+        var models = await probeModels(binary: binary, arguments: ["--list-models"])
+        if models.count <= 1 {
+            let fallback = await probeModels(binary: binary, arguments: ["models"])
+            if fallback.count > models.count {
+                models = fallback
+            }
+        }
+        if models.isEmpty {
+            models = [CursorModelCatalog.autoEntry]
+        }
+
+        let reason: String? = {
+            if !authenticated { return "Run cursor-agent login" }
+            return nil
+        }()
+
+        return CursorModelProbeState(
+            binaryPath: binary,
+            models: models,
+            authenticated: authenticated,
+            reason: reason,
+            probedAt: now
+        )
+    }
+
+    private func probeModels(binary: String, arguments: [String]) async -> [ModelCatalogEntry] {
+        guard let result = try? await ShellRunner.shared.run(
+            executable: binary,
+            arguments: arguments,
+            timeout: 10
+        ) else {
+            return [CursorModelCatalog.autoEntry]
+        }
+        guard result.exitStatus == 0 else {
+            return [CursorModelCatalog.autoEntry]
+        }
+        let output = result.stdoutString.isEmpty
+            ? result.stderrString
+            : result.stdoutString
+        return CursorModelCatalog.parseCLIOutput(output)
     }
 }

@@ -40,7 +40,10 @@ public final class ChatV2Store: ObservableObject {
         let restoredModeRaw = defaults.string(forKey: Self.defaultsPrefix + "mode") ?? ChatV2Mode.broadcast.rawValue
         self.mode = ChatV2Mode(rawValue: restoredModeRaw) ?? .broadcast
         let restoredProviderRaw = defaults.string(forKey: Self.defaultsPrefix + "provider") ?? AgentKind.claude.rawValue
-        self.selectedProvider = AgentKind(rawValue: restoredProviderRaw) ?? .claude
+        let restoredProvider = AgentKind(rawValue: restoredProviderRaw) ?? .claude
+        self.selectedProvider = Self.defaultBroadcastProviderOrder.contains(restoredProvider)
+            ? restoredProvider
+            : .claude
         let restoredBroadcast = defaults.stringArray(forKey: Self.defaultsPrefix + "broadcastProviders") ?? [
             AgentKind.claude.rawValue,
             AgentKind.codex.rawValue,
@@ -52,7 +55,10 @@ public final class ChatV2Store: ObservableObject {
             ? decodedBroadcast
             : Set([.claude, .codex])
         let restoredReplyRaw = defaults.string(forKey: Self.defaultsPrefix + "replyProvider") ?? AgentKind.claude.rawValue
-        self.selectedReplyProvider = AgentKind(rawValue: restoredReplyRaw) ?? .claude
+        let restoredReplyProvider = AgentKind(rawValue: restoredReplyRaw) ?? .claude
+        self.selectedReplyProvider = Self.defaultBroadcastProviderOrder.contains(restoredReplyProvider)
+            ? restoredReplyProvider
+            : .claude
         self.selectedModelByProvider = Self.decodeStringMap(
             defaults.dictionary(forKey: Self.defaultsPrefix + "modelByProvider") ?? [:]
         )
@@ -99,6 +105,7 @@ public final class ChatV2Store: ObservableObject {
         case .codex:    return ModelCatalog.bundled.codex.first?.id
         case .gemini:   return ModelCatalog.bundled.gemini.first?.id
         case .opencode: return ModelCatalog.bundled.opencode.first?.id
+        case .cursor:   return nil
         case .unknown:  return nil
         }
     }
@@ -141,6 +148,7 @@ public final class ChatV2Store: ObservableObject {
         case .codex:    return ModelCatalog.bundled.codex.first?.id
         case .gemini:   return ModelCatalog.bundled.gemini.first?.id
         case .opencode: return nil
+        case .cursor:   return nil
         case .unknown:  return nil
         }
     }

@@ -916,7 +916,7 @@ private struct ComposerBar: View {
         if openTarget?.isReadOnlyTranscript == true { return "Archived transcript is read-only" }
         if openTarget?.isFrontier == true { return "Follow up with all agents…" }
         if openTarget != nil { return "Reply to this chat…" }
-        if store.mode == .broadcast { return "Ask Claude, Codex, and Antigravity…" }
+        if store.mode == .broadcast { return "Ask selected providers…" }
         return "Ask \(store.selectedProvider.tahoeProvider.displayName)…"
     }
 
@@ -1006,12 +1006,12 @@ private struct ComposerBar: View {
               !entries.isEmpty else {
             return true
         }
-        return entries.contains { $0.available }
+        return entries.contains { $0.capabilityProbePassed }
     }
 
     private func providerUnavailableReason(_ provider: AgentKind) -> String? {
         guard !isProviderAvailable(provider) else { return nil }
-        return providerMatrix?.providers.first { $0.provider == provider && !$0.available }?.reason
+        return providerMatrix?.providers.first { $0.provider == provider && !$0.capabilityProbePassed }?.reason
     }
 
     /// Solo path: upload each attachment to one session's staging dir

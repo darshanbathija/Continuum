@@ -159,8 +159,8 @@ private struct ChatBody: View {
         case .transcript(_, let path):
             ReadOnlyTranscript(path: path, client: client)
         case nil:
-            EmptyState(title: chatStore.mode == .broadcast ? "Ask all three" : "Start a solo chat",
-                       subtitle: chatStore.mode == .broadcast ? "Claude, Codex, and Antigravity will answer together." : "Pick a provider and send the first prompt.")
+            EmptyState(title: chatStore.mode == .broadcast ? "Ask selected providers" : "Start a solo chat",
+                       subtitle: chatStore.mode == .broadcast ? "Selected providers will answer together." : "Pick a provider and send the first prompt.")
         }
     }
 }
@@ -595,7 +595,7 @@ private struct Composer: View {
         if openTarget?.isReadOnlyTranscript == true { return "Archived transcript is read-only" }
         if openTarget?.isFrontier == true { return "Ask all selected…" }
         if openTarget != nil { return "Reply…" }
-        return store.mode == .broadcast ? "Ask all three…" : "Ask \(store.selectedProvider.tahoeProvider.displayName)…"
+        return store.mode == .broadcast ? "Ask selected providers…" : "Ask \(store.selectedProvider.tahoeProvider.displayName)…"
     }
 
     private func dispatchSend() async {
@@ -682,7 +682,7 @@ private struct Composer: View {
               !entries.isEmpty else {
             return true
         }
-        return entries.contains { $0.available }
+        return entries.contains { $0.capabilityProbePassed }
     }
 
     /// Solo path: upload each attachment to one session's staging dir

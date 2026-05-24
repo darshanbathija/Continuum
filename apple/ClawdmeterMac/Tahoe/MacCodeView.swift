@@ -442,6 +442,7 @@ private struct Sidebar: View {
     @AppStorage("clawdmeter.codeIDE.filter.providerCodex") private var providerCodexEnabled: Bool = true
     @AppStorage("clawdmeter.codeIDE.filter.providerGemini") private var providerGeminiEnabled: Bool = true
     @AppStorage("clawdmeter.codeIDE.filter.providerOpenCode") private var providerOpenCodeEnabled: Bool = true
+    @AppStorage("clawdmeter.codeIDE.filter.providerCursor") private var providerCursorEnabled: Bool = true
 
     /// v0.22.19: free-text query the user types in the Search field at
     /// the top of the sidebar. ⌘K from anywhere flips to the Code tab
@@ -497,6 +498,7 @@ private struct Sidebar: View {
             case .codex: return providerCodexEnabled
             case .gemini: return providerGeminiEnabled
             case .opencode: return providerOpenCodeEnabled  // PR #31
+            case .cursor: return providerCursorEnabled
             }
         }
         let statusAllowed: (TahoeCodeSession.Status) -> Bool = { s in
@@ -689,6 +691,7 @@ private struct Sidebar: View {
                 Toggle("Codex", isOn: $providerCodexEnabled)
                 Toggle("Antigravity", isOn: $providerGeminiEnabled)
                 Toggle("OpenCode", isOn: $providerOpenCodeEnabled)  // PR #31
+                Toggle("Cursor", isOn: $providerCursorEnabled)
             }
             Section("Sort") {
                 ForEach(SortKey.allCases, id: \.rawValue) { opt in
@@ -1728,7 +1731,7 @@ private struct ComposerBar: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .disabled(agentSession == nil || modelEntries.isEmpty)
+        .disabled(agentSession == nil || modelEntries.isEmpty || cursorSwapUnavailable)
     }
 
     @ViewBuilder
@@ -1746,7 +1749,7 @@ private struct ComposerBar: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .disabled(agentSession == nil)
+        .disabled(agentSession == nil || cursorSwapUnavailable)
     }
 
     private var agentSession: AgentSession? {
@@ -1771,6 +1774,7 @@ private struct ComposerBar: View {
         case .codex: return catalog.codex
         case .gemini: return catalog.gemini
         case .opencode: return catalog.opencode
+        case .cursor: return catalog.cursor
         case .unknown: return []
         }
     }
@@ -1783,6 +1787,7 @@ private struct ComposerBar: View {
     @MainActor
     private func changeModel(to entry: ModelCatalogEntry) async {
         guard let agentSession, let client else { return }
+        guard !cursorSwapUnavailable else { return }
         _ = await client.changeModel(
             sessionId: agentSession.id,
             request: ChangeModelRequest(model: entry.cliAlias ?? entry.id, effort: agentSession.effort)
@@ -1797,8 +1802,17 @@ private struct ComposerBar: View {
             }
             return
         }
-        _ = await client.changeMode(sessionId: agentSession.id, mode: agentSession.mode, planMode: enabled)
-        state = enabled ? .plan : .idle
+        guard !cursorSwapUnavailable else { return }
+        if await client.changeMode(sessionId: agentSession.id, mode: agentSession.mode, planMode: enabled) != nil {
+            state = enabled ? .plan : .idle
+        }
+    }
+
+    private var cursorSwapUnavailable: Bool {
+        guard let agentSession, agentSession.agent == .cursor else { return false }
+        let candidate = agentSession.runtimeBinding?.externalSessionId
+            ?? agentSession.runtimeBinding?.externalThreadId
+        return candidate?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
     }
 
     private func placeholder(running: Bool, plan: Bool) -> String {

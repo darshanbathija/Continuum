@@ -259,9 +259,10 @@ struct ComposerInputCore: View {
                     Text("Claude").tag(AgentKind.claude)
                     Text("Codex").tag(AgentKind.codex)
                     Text("Gemini").tag(AgentKind.gemini)
+                    Text("Cursor").tag(AgentKind.cursor)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 200)
+                .frame(width: 260)
                 .labelsHidden()
             }
 

@@ -198,6 +198,10 @@ final class AppRuntime: ObservableObject {
                 // still posts here, silently ignore — no AutoReviver
                 // to drive.
                 break
+            case .cursor:
+                // Cursor usage limits are owned by the user's Cursor account;
+                // no Clawdmeter auto-revive poller exists for this provider.
+                break
             case .unknown:
                 // X3: forward-compat unknown — never user-toggleable.
                 // The handler returns 400 before reaching here.

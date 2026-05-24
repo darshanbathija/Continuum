@@ -53,6 +53,7 @@ public struct IOSLiveView: View {
         case .codex:  return .codex
         case .gemini: return .gemini
         case .opencode: return .opencode  // PR #31
+        case .cursor: return .cursor
         }
     }
 

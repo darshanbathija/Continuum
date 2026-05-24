@@ -65,15 +65,16 @@ final class AgentKindUnknownTests: XCTestCase {
         // X3 contract: pickers + segmented controls never offer .unknown
         // as a selectable choice. AgentKind.allCases overrides the
         // auto-synthesized CaseIterable conformance to strip it.
-        // PR #29 (wire v13): allCases now has 4 selectable kinds
-        // (claude/codex/gemini/opencode); .unknown stays excluded.
+        // PR #29 (wire v13): OpenCode became selectable. v17 adds
+        // Cursor as another selectable runtime; .unknown stays excluded.
         XCTAssertFalse(AgentKind.allCases.contains(.unknown),
             "X3: AgentKind.allCases must exclude .unknown so pickers stay clean")
-        XCTAssertEqual(AgentKind.allCases.count, 4)
+        XCTAssertEqual(AgentKind.allCases.count, 5)
         XCTAssertTrue(AgentKind.allCases.contains(.claude))
         XCTAssertTrue(AgentKind.allCases.contains(.codex))
         XCTAssertTrue(AgentKind.allCases.contains(.gemini))
         XCTAssertTrue(AgentKind.allCases.contains(.opencode))
+        XCTAssertTrue(AgentKind.allCases.contains(.cursor))
     }
 
     // MARK: - AgentKindUI fallback rendering

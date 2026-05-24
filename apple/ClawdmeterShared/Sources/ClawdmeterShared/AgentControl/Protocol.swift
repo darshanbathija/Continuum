@@ -111,13 +111,21 @@ public enum AgentControlWireVersion {
     /// MagicDNS-first pairing host preference + forward-compat
     /// `clawdmeters://` TLS scheme. Older Macs return 404 on the workspace
     /// endpoints; iOS falls back to per-session repo bucketing.
-    public static let current: Int = 16
+    /// v17 (2026-05-24, Cursor provider): adds `AgentKind.cursor`,
+    /// `SessionRuntimeKind.cursorCLI`, a Cursor model bucket in
+    /// `ModelCatalog`, and `cursorMinimum`. Cursor sessions are Mac-launched
+    /// through `cursor-agent` / `agent`; iOS sends the same `/sessions`
+    /// request to the paired Mac and never runs the Cursor CLI locally.
+    public static let current: Int = 17
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
     /// the gate the Mac uses to suppress OpenCode-related controls when
     /// the paired iPhone is too old to render them correctly.
     public static let opencodeMinimum: Int = 13
+    /// Minimum wire version that exposes `AgentKind.cursor` natively.
+    /// Clients below this version decode Cursor sessions as `.unknown`.
+    public static let cursorMinimum: Int = 17
     /// Minimum wire version that supports the `compose-draft` WS op.
     /// iOS guards `postComposeDraft` on this — older Macs would reject
     /// the unknown op via `.unsupportedData` close (review §10 finding).
@@ -350,6 +358,12 @@ public enum AgentControlWireVersion {
     public static func supportsMobileOutbox(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= mobileOutboxMinimum
+    }
+
+    /// Whether the paired Mac exposes Cursor as a first-class provider.
+    public static func supportsCursor(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= cursorMinimum
     }
 }
 
@@ -629,6 +643,11 @@ public struct ModelCatalog: Codable, Sendable {
     /// underlying provider/model identity is persisted on
     /// `SessionRuntimeBinding.providerModelId`.
     public let opencode: [ModelCatalogEntry]
+    /// Cursor models are account-visible and should normally be replaced by
+    /// a live probe from `cursor-agent --list-models` / `agent models`.
+    /// The bundled fallback intentionally contains only Auto so we do not
+    /// claim access to models the user's Cursor account may not expose.
+    public let cursor: [ModelCatalogEntry]
     public let updatedAt: Date
 
     public init(
@@ -636,12 +655,14 @@ public struct ModelCatalog: Codable, Sendable {
         codex: [ModelCatalogEntry],
         gemini: [ModelCatalogEntry] = [],
         opencode: [ModelCatalogEntry] = [],
+        cursor: [ModelCatalogEntry] = [],
         updatedAt: Date
     ) {
         self.claude = claude
         self.codex = codex
         self.gemini = gemini
         self.opencode = opencode
+        self.cursor = cursor
         self.updatedAt = updatedAt
     }
 
@@ -691,6 +712,9 @@ public struct ModelCatalog: Codable, Sendable {
         opencode: [
             ModelCatalogEntry(id: "opencode-default", provider: .opencode, displayName: "OpenCode default", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "BYOK provider", badge: "BYOK"),
         ],
+        cursor: [
+            ModelCatalogEntry(id: CursorModelCatalog.autoModelId, provider: .cursor, displayName: "Cursor default / Auto", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "Cursor account default", badge: "Auto"),
+        ],
         updatedAt: Date(timeIntervalSince1970: 1747353600) // 2026-05-15
     )
 
@@ -700,6 +724,7 @@ public struct ModelCatalog: Codable, Sendable {
             ?? codex.first(where: { $0.id == id || $0.cliAlias == id })
             ?? gemini.first(where: { $0.id == id || $0.cliAlias == id })
             ?? opencode.first(where: { $0.id == id || $0.cliAlias == id })
+            ?? cursor.first(where: { $0.id == id || $0.cliAlias == id })
     }
 
     /// Provider-indexed catalog used by Code V2 pickers. The legacy arrays
@@ -711,6 +736,7 @@ public struct ModelCatalog: Codable, Sendable {
             AgentKind.codex.rawValue: codex,
             AgentKind.gemini.rawValue: gemini,
             AgentKind.opencode.rawValue: opencode,
+            AgentKind.cursor.rawValue: cursor,
         ]
     }
 
@@ -720,8 +746,20 @@ public struct ModelCatalog: Codable, Sendable {
         case .codex: return codex
         case .gemini: return gemini
         case .opencode: return opencode
+        case .cursor: return cursor
         case .unknown: return []
         }
+    }
+
+    public func replacingCursor(_ cursor: [ModelCatalogEntry]) -> ModelCatalog {
+        ModelCatalog(
+            claude: claude,
+            codex: codex,
+            gemini: gemini,
+            opencode: opencode,
+            cursor: cursor,
+            updatedAt: Date()
+        )
     }
 
     // MARK: - Codable
@@ -731,7 +769,7 @@ public struct ModelCatalog: Codable, Sendable {
     /// Codable throws on missing keys; decodeIfPresent + default returns
     /// an empty Gemini array.
     private enum CodingKeys: String, CodingKey {
-        case claude, codex, gemini, opencode, updatedAt
+        case claude, codex, gemini, opencode, cursor, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -740,6 +778,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.codex = try c.decode([ModelCatalogEntry].self, forKey: .codex)
         self.gemini = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .gemini) ?? []
         self.opencode = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .opencode) ?? []
+        self.cursor = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .cursor) ?? []
         self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
     }
 
@@ -749,6 +788,7 @@ public struct ModelCatalog: Codable, Sendable {
         try c.encode(codex, forKey: .codex)
         try c.encode(gemini, forKey: .gemini)
         try c.encode(opencode, forKey: .opencode)
+        try c.encode(cursor, forKey: .cursor)
         try c.encode(updatedAt, forKey: .updatedAt)
     }
 }
@@ -936,6 +976,9 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
     /// is provider-of-the-user's-choice (Anthropic, OpenAI, Google);
     /// analytics tag the spend under `.opencode` regardless.
     case opencode
+    /// Cursor Agent CLI / SDK-backed sessions. The Mac launches Cursor via
+    /// `cursor-agent` or `agent`; iOS requests are proxied to the paired Mac.
+    case cursor
     /// Forward-compat sentinel for unknown agent kinds (X3, v0.17, wire
     /// v12). Older v12 clients connecting to a v13 Mac decode the
     /// `.opencode` raw into `.unknown` instead of `.claude` —
@@ -950,10 +993,9 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
 
     /// Filter `.unknown` out of `allCases` so pickers and provider
     /// segmented controls don't accidentally render it as a choice.
-    /// `.opencode` is included — v13 clients render it as a real
-    /// picker option.
+    /// `.opencode` and `.cursor` are included as real picker options.
     public static var allCases: [AgentKind] {
-        [.claude, .codex, .gemini, .opencode]
+        [.claude, .codex, .gemini, .opencode, .cursor]
     }
 
     /// Lenient decoder (X3 — wire v12). Forward-compat readers keep
@@ -980,6 +1022,8 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
     case codexSDK = "codex_sdk"
     case antigravityAgentAPI = "antigravity_agentapi"
     case opencodeServer = "opencode_server"
+    case cursorCLI = "cursor_cli"
+    case cursorSDK = "cursor_sdk"
     case vscodeBridge = "vscode_bridge"
     case unknown
 
@@ -1003,6 +1047,8 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
             return geminiBackend == .agentapi ? .antigravityAgentAPI : .unknown
         case .opencode:
             return .opencodeServer
+        case .cursor:
+            return .cursorCLI
         case .unknown:
             return .unknown
         }
@@ -1053,7 +1099,7 @@ public struct SessionRuntimeCapabilities: Codable, Hashable, Sendable {
 
     public static func defaults(for runtime: SessionRuntimeKind) -> SessionRuntimeCapabilities {
         switch runtime {
-        case .claudeCLI, .codexCLI:
+        case .claudeCLI, .codexCLI, .cursorCLI:
             return SessionRuntimeCapabilities(
                 supportsCancel: true,
                 supportsPermissionPrompts: true,
@@ -1061,6 +1107,13 @@ public struct SessionRuntimeCapabilities: Codable, Hashable, Sendable {
                 supportsTerminal: true
             )
         case .codexSDK:
+            return SessionRuntimeCapabilities(
+                supportsCancel: true,
+                supportsPermissionPrompts: false,
+                supportsUsage: true,
+                supportsTerminal: false
+            )
+        case .cursorSDK:
             return SessionRuntimeCapabilities(
                 supportsCancel: true,
                 supportsPermissionPrompts: false,

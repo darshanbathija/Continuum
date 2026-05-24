@@ -63,13 +63,7 @@ struct NewSessionSheet: View {
                     Picker("Agent", selection: Binding(
                         get: { agent },
                         set: { newAgent in
-                            guard newAgent != agent else { return }
-                            let defaults = ComposerStore.ChipDefaults.for(
-                                agent: newAgent, catalog: client.modelCatalog
-                            )
-                            agent = newAgent
-                            modelId = defaults.modelId
-                            effort = defaults.effort ?? .medium
+                            setAgent(newAgent)
                         }
                     )) {
                         Text("Claude").tag(AgentKind.claude)
@@ -80,6 +74,12 @@ struct NewSessionSheet: View {
                         // Mac via OpencodeProcessManager/SSEAdapter, so
                         // the iOS side just emits the kind in the RPC.
                         Text("OpenCode").tag(AgentKind.opencode)
+                        // v17: Cursor sessions also start on the paired
+                        // Mac. iOS only sends the request; the Mac chooses
+                        // cursor-agent/agent and binds the workspace.
+                        if client.supportsCursor {
+                            Text("Cursor").tag(AgentKind.cursor)
+                        }
                     }
                     .pickerStyle(.segmented)
 
@@ -94,11 +94,8 @@ struct NewSessionSheet: View {
                     // SessionMode enum stays in the wire for
                     // back-compat with persisted v3 sessions.
 
-                    // Plan mode applies to both agents. Claude maps it
-                    // to `--permission-mode plan`; Codex maps it to
-                    // `--sandbox read-only`. Approve & run flips the
-                    // sandbox afterwards.
                     Toggle("Plan mode", isOn: $planMode)
+                        .disabled(agent == .cursor)
 
                     Toggle("Run as A/B pair (Claude + Codex)", isOn: $runAsABPair)
                         .toggleStyle(.switch)
@@ -148,13 +145,22 @@ struct NewSessionSheet: View {
                 }
             }
             .task {
+                await client.refreshHealth()
                 await client.refreshModelCatalog()
                 if repoKey.isEmpty, let first = client.repos.first {
                     repoKey = first.key
                 }
+                if agent == .cursor && !client.supportsCursor {
+                    setAgent(.claude)
+                }
             }
             .task(id: preflightInputs) {
                 await refreshPreflight()
+            }
+            .onChange(of: client.serverWireVersion) { _, _ in
+                if agent == .cursor && !client.supportsCursor {
+                    setAgent(.claude)
+                }
             }
             .alert("Couldn't open on Mac",
                    isPresented: Binding(
@@ -241,6 +247,20 @@ struct NewSessionSheet: View {
         return entry.supportsEffort
     }
 
+    private func setAgent(_ newAgent: AgentKind) {
+        guard newAgent != agent else { return }
+        let nextAgent = newAgent == .cursor && !client.supportsCursor ? .claude : newAgent
+        let defaults = ComposerStore.ChipDefaults.for(
+            agent: nextAgent, catalog: client.modelCatalog
+        )
+        agent = nextAgent
+        modelId = defaults.modelId
+        effort = defaults.effort ?? .medium
+        if nextAgent == .cursor {
+            planMode = false
+        }
+    }
+
     private func startSession() {
         guard !repoKey.isEmpty else { return }
         isStarting = true
@@ -249,7 +269,7 @@ struct NewSessionSheet: View {
                 repoKey: repoKey,
                 agent: agent,
                 model: modelId,
-                planMode: planMode,
+                planMode: agent == .cursor ? false : planMode,
                 goal: goal.isEmpty ? nil : goal,
                 useWorktree: mode == .worktree,
                 baseBranch: baseBranch.isEmpty ? nil : baseBranch,

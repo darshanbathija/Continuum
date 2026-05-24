@@ -15,14 +15,11 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsSixteen() {
-        // v16 (2026-05-23, Code V2 deferred follow-ups): persisted
-        // workspace store endpoints (`GET /workspaces`, `PATCH /workspaces/:id`),
-        // uniform idempotency-key + receipt across every write endpoint,
-        // MagicDNS-first pairing host preference + forward-compat
-        // `clawdmeters://` TLS scheme. All additive; v15 clients keep
-        // decoding because every new field is optional + decodeIfPresent.
-        XCTAssertEqual(AgentControlWireVersion.current, 16)
+    func test_currentWireVersionIsSeventeen() {
+        // v17 (2026-05-24, Cursor provider): adds Cursor as a first-class
+        // AgentKind plus Cursor CLI/SDK runtime metadata and model catalog
+        // bucket. iOS still proxies start/resume requests to the paired Mac.
+        XCTAssertEqual(AgentControlWireVersion.current, 17)
     }
 
     func test_workspacesMinimumIsSixteen() {
@@ -31,6 +28,12 @@ final class WireV11Tests: XCTestCase {
 
     func test_mobileOutboxMinimumIsSixteen() {
         XCTAssertEqual(AgentControlWireVersion.mobileOutboxMinimum, 16)
+    }
+
+    func test_cursorMinimumIsSeventeen() {
+        XCTAssertEqual(AgentControlWireVersion.cursorMinimum, 17)
+        XCTAssertFalse(AgentControlWireVersion.supportsCursor(serverWireVersion: 16))
+        XCTAssertTrue(AgentControlWireVersion.supportsCursor(serverWireVersion: 17))
     }
 
     func test_opencodeMinimumIsThirteen() {

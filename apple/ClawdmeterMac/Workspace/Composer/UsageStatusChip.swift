@@ -163,6 +163,7 @@ struct ModelEffortPopover: View {
         case .codex:  return catalog.codex
         case .gemini: return catalog.gemini
         case .opencode: return catalog.opencode
+        case .cursor: return catalog.cursor
         case .unknown: return []  // X3: no catalog slice for unknown
         }
     }

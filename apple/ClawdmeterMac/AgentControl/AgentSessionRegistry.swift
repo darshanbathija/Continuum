@@ -313,7 +313,20 @@ public final class AgentSessionRegistry: ObservableObject {
     /// `with()`'s double-optional override semantics don't null it out.
     public func setModel(id: UUID, model: String, effort: ReasoningEffort?) {
         update(id: id) { s in
-            with(s, model: model, effort: .some(effort ?? s.effort))
+            let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
+                agent: s.agent,
+                model: model,
+                codexBackend: s.codexChatBackend,
+                geminiBackend: s.geminiBackend,
+                antigravityConversationId: s.antigravityConversationId,
+                antigravityProjectId: s.antigravityProjectId
+            )).updating(providerModelId: .some(model))
+            return with(
+                s,
+                model: model,
+                effort: .some(effort ?? s.effort),
+                runtimeBinding: binding
+            )
         }
     }
 
@@ -584,12 +597,14 @@ public final class AgentSessionRegistry: ObservableObject {
             case .codex: return "codex"
             case .gemini: return "antigravity"
             case .opencode: return "opencode"
+            case .cursor: return "cursor"
             case .unknown: return nil
             }
         }()
         let billingConfidence: BillingConfidence = {
             switch agent {
             case .opencode: return .providerReported
+            case .cursor: return .unavailable
             case .gemini: return .estimated
             case .claude, .codex: return .locallyPriced
             case .unknown: return .unavailable

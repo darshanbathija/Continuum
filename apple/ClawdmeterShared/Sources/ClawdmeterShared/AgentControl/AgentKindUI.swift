@@ -19,6 +19,7 @@ public enum AgentKindUI {
         case .codex:  return "CodexLogo"
         case .gemini: return "GeminiLogo"
         case .opencode: return "OpencodeLogo" // PR #29: alpha-shaped silhouette
+        case .cursor: return "CodexLogo"
         case .unknown: return "ClaudeLogo" // neutral fallback; UI shows "Other"
         }
     }
@@ -30,7 +31,7 @@ public enum AgentKindUI {
     public static func isTemplate(for agent: AgentKind) -> Bool {
         switch agent {
         case .claude: return false
-        case .codex, .gemini, .opencode, .unknown: return true
+        case .codex, .gemini, .opencode, .cursor, .unknown: return true
         }
     }
 
@@ -45,6 +46,7 @@ public enum AgentKindUI {
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
         case .opencode: return "OpenCode"
+        case .cursor: return "Cursor"
         case .unknown: return "Other agent"
         }
     }
@@ -65,6 +67,7 @@ public enum AgentKindUI {
         case .codex:  return (0x5C, 0x9D, 0xFF)
         case .gemini: return (0x42, 0x85, 0xF4)
         case .opencode: return (0x6B, 0x5D, 0xD3)
+        case .cursor: return (0x22, 0x22, 0x22)
         case .unknown: return (0x88, 0x88, 0x88)
         }
     }
@@ -79,6 +82,7 @@ public enum AgentKindUI {
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
         case .opencode: return "OpenCode"
+        case .cursor: return "Cursor"
         }
     }
 
@@ -88,13 +92,14 @@ public enum AgentKindUI {
         case .codex:  return "CodexLogo"
         case .gemini: return "GeminiLogo"
         case .opencode: return "OpencodeLogo"
+        case .cursor: return "CodexLogo"
         }
     }
 
     public static func isTemplate(for provider: UsageRecord.Provider) -> Bool {
         switch provider {
         case .claude: return false
-        case .codex, .gemini, .opencode: return true
+        case .codex, .gemini, .opencode, .cursor: return true
         }
     }
 }

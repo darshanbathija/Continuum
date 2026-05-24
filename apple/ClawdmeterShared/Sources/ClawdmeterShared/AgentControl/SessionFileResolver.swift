@@ -82,6 +82,11 @@ public final class SessionFileResolver: @unchecked Sendable {
             // serve`'s shared process state. OpencodeSSEAdapter pulls
             // transcript events directly off the SSE stream.
             return nil
+        case .cursor:
+            // Cursor CLI resume/import needs Cursor chat ids rather than a
+            // Claude/Codex JSONL path. The importer will attach a Cursor
+            // transcript source once it can prove those ids.
+            return nil
         case .unknown:
             // X3: forward-compat unknown agent — no transcript file we
             // know how to locate. UI surfaces render as "Other agent".

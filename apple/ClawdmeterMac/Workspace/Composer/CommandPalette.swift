@@ -104,6 +104,10 @@ final class SkillCatalog: ObservableObject {
             // plumbed yet — surface no palette so the chip stays
             // collapsed rather than showing inapplicable Codex hints.
             pool = []
+        case .cursor:
+            // Cursor slash-command discovery is not exposed by the CLI probe
+            // yet, so keep the palette empty instead of showing Codex hints.
+            pool = []
         case .unknown:
             // X3: forward-compat unknown agent — no palette plumbed.
             pool = []

@@ -43,6 +43,7 @@ public struct MacUsageView: View {
                     ProviderColumn(provider: .claude, row: data.claude, model: claudeModel)
                     ProviderColumn(provider: .codex,  row: data.codex,  model: codexModel)
                     ProviderColumn(provider: .gemini, row: data.gemini, model: geminiModel)
+                    ProviderColumn(provider: .cursor, row: data.cursor, model: nil)
                 }
                 .padding(.horizontal, 6).padding(.bottom, 14)
 
@@ -86,6 +87,7 @@ private struct ProviderColumn: View {
             case .codex:  return "codex"
             case .gemini: return "gemini"
             case .opencode: return "opencode"  // PR #31
+            case .cursor: return "cursor"
             }
         }()
         return "clawdmeter.\(id).menuBarShown"

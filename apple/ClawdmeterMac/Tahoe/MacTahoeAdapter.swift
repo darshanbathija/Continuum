@@ -18,7 +18,18 @@ extension AppRuntime {
         TahoeLiveBindings(
             claude: tahoeRow(model: claudeModel, provider: .claude),
             codex:  tahoeRow(model: codexModel,  provider: .codex),
-            gemini: tahoeRow(model: geminiModel, provider: .gemini)
+            gemini: tahoeRow(model: geminiModel, provider: .gemini),
+            cursor: TahoeLiveRow(
+                sessionPercent: 0,
+                weeklyPercent: 0,
+                sessionResetIn: "-",
+                weeklyResetIn: "",
+                modelName: "Cursor Auto",
+                autoReviveOn: false,
+                supportsAutoRevive: false,
+                hasWeekly: false,
+                stale: true
+            )
         )
     }
 
@@ -180,6 +191,7 @@ extension AppRuntime {
         case .codex:  return .codex
         case .gemini: return .gemini
         case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
+        case .cursor: return .cursor
         case .unknown:
             // X3: visual fallback. Semantic correctness lives on
             // AgentKind itself — UI degrades to Claude styling for

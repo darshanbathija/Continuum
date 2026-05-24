@@ -169,9 +169,97 @@ public enum AgentSpawner {
         )
     }
 
+    public static func cursorBinaryPath() -> String? {
+        if let cursorAgent = ShellRunner.locateBinary("cursor-agent"),
+           isCursorAgentBinary(cursorAgent) {
+            return cursorAgent
+        }
+        guard let fallback = ShellRunner.locateBinary("agent"),
+              isCursorAgentBinary(fallback) else {
+            return nil
+        }
+        return fallback
+    }
+
+    private static func isCursorAgentBinary(_ path: String) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["--help"]
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+
+        let deadline = Date().addingTimeInterval(2)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+            return false
+        }
+
+        let output = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            + "\n"
+            + String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let lower = output.lowercased()
+        return lower.contains("cursor agent")
+            && lower.contains("--workspace")
+            && lower.contains("--resume")
+            && lower.contains("--list-models")
+    }
+
+    /// Build argv for Cursor Agent CLI sessions. Cursor differs from the
+    /// other providers in two important ways:
+    /// - The preferred binary is `cursor-agent`, with `agent` as the fallback.
+    /// - The CLI accepts an explicit `--workspace <path>` flag, which we pass
+    ///   even though tmux also starts the pane in that cwd. This keeps Cursor's
+    ///   own workspace binding aligned with the repo/worktree Clawdmeter picked.
+    public static func cursorArgv(
+        model: String? = nil,
+        planMode: Bool = false,
+        effort: ReasoningEffort? = nil,
+        autopilot: Bool = false,
+        acceptEdits: Bool = false,
+        resumeSessionId: String? = nil,
+        workspacePath: String? = nil,
+        extraArgs: [String] = []
+    ) -> [String]? {
+        _ = effort
+        _ = acceptEdits
+        guard let cursor = cursorBinaryPath() else { return nil }
+        var argv = [cursor]
+        if let workspacePath, !workspacePath.isEmpty {
+            argv += ["--workspace", workspacePath]
+        }
+        if let resumeSessionId, !resumeSessionId.isEmpty {
+            argv += ["--resume", resumeSessionId]
+        }
+        if let model, !CursorModelCatalog.isAutoModel(model) {
+            argv += ["--model", model]
+        }
+        if planMode {
+            argv += ["--mode", "plan"]
+        } else if autopilot {
+            argv += ["--force"]
+        }
+        argv.append(contentsOf: extraArgs)
+        return argv
+    }
+
     /// Build argv for a `NewSessionRequest`. Returns an empty array if the
     /// required binary is missing — caller checks and surfaces the error.
-    public static func argv(for request: NewSessionRequest, autopilot: Bool = false) -> [String] {
+    public static func argv(
+        for request: NewSessionRequest,
+        workspacePath: String? = nil,
+        autopilot: Bool = false
+    ) -> [String] {
         switch request.agent {
         case .claude:
             return claudeArgv(
@@ -199,6 +287,17 @@ public enum AgentSpawner {
             // dispatcher routes opencode requests to
             // OpencodeProcessManager + OpencodeSSEAdapter instead.
             return []
+        case .cursor:
+            return cursorArgv(
+                model: request.model,
+                // Cursor plan-mode needs a real Cursor chat id for a safe
+                // approve/resume cycle. New Clawdmeter-owned Cursor sessions
+                // do not have that id yet, so start them directly in code mode.
+                planMode: false,
+                effort: request.effort,
+                autopilot: autopilot,
+                workspacePath: workspacePath ?? request.repoKey
+            ) ?? []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Caller
             // sees missingBinary and surfaces a clean error.
@@ -275,6 +374,14 @@ public enum AgentSpawner {
             // PR #29: opencode sessions don't take a tmux argv.
             // OpencodeProcessManager + SSEAdapter handle spawn.
             return []
+        case (.cursor, _):
+            return cursorArgv(
+                model: session.model,
+                planMode: planMode,
+                effort: session.effort,
+                autopilot: chatAutopilot,
+                workspacePath: session.effectiveCwd
+            ) ?? []
         case (.unknown, _):
             // X3: forward-compat unknown kind — no argv. Caller surfaces
             // a clean error or routes to a future adapter.
@@ -293,7 +400,8 @@ public enum AgentSpawner {
         planMode: Bool,
         effort: ReasoningEffort?,
         autopilot: Bool,
-        acceptEdits: Bool = false
+        acceptEdits: Bool = false,
+        workspacePath: String? = nil
     ) -> [String] {
         switch agent {
         case .claude:
@@ -326,6 +434,16 @@ public enum AgentSpawner {
         case .opencode:
             // PR #29: opencode has no tmux respawn path.
             return []
+        case .cursor:
+            return cursorArgv(
+                model: model,
+                planMode: planMode,
+                effort: effort,
+                autopilot: autopilot,
+                acceptEdits: acceptEdits,
+                resumeSessionId: resumeSessionId,
+                workspacePath: workspacePath
+            ) ?? []
         case .unknown:
             // X3: forward-compat unknown agent — no respawn argv builder.
             return []
@@ -348,6 +466,12 @@ public enum AgentSpawner {
 
     /// Agent-specific preflight for starting a single selected runtime.
     public static func preflight(agent: AgentKind) -> String? {
+        if agent == .cursor {
+            if cursorBinaryPath() == nil {
+                return "Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings → Diagnostics."
+            }
+            return nil
+        }
         let binary = agent.rawValue
         if ShellRunner.locateBinary(binary) == nil {
             return "Agent CLI not found on PATH: \(binary). Configure in Settings → Diagnostics."
