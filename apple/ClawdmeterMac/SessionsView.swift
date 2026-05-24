@@ -28,6 +28,9 @@ struct NewSessionMacSheet: View {
     @State private var goal: String = ""
     @State private var planMode: Bool = true
     @State private var opencodeReady: Bool = false
+    @State private var cursorReady: Bool = false
+    @State private var modelCatalog: ModelCatalog = .bundled
+    @State private var selectedModelId: String?
     // v0.7.9: worktree by default. Local stays in the enum for
     // back-compat but the mode chip is no longer in the New Session UI.
     @State private var mode: SessionMode = .worktree
@@ -71,6 +74,18 @@ struct NewSessionMacSheet: View {
                 }
                 .pickerStyle(.segmented)
 
+                HStack {
+                    Text("Model")
+                    Spacer()
+                    ModelPicker(
+                        selectedModelId: selectedModelId,
+                        catalog: modelCatalog,
+                        agent: agent
+                    ) { entry in
+                        selectedModelId = entry.id
+                    }
+                }
+
                 TextField("Goal", text: $goal,
                           prompt: Text("Optional. Used by done-detector + worktree slug."))
 
@@ -80,12 +95,14 @@ struct NewSessionMacSheet: View {
                 // `codex --help` 2026-05). Approve & run swaps the
                 // sandbox/permission afterwards.
                 Toggle("Plan mode", isOn: $planMode)
+                    .disabled(agent == .cursor)
                     .help({
                         switch agent {
                         case .claude: return "Claude runs in --permission-mode plan: reads + proposes, doesn't write until approved."
                         case .codex:  return "Codex runs in --sandbox read-only: reads + proposes, doesn't write until approved."
                         case .gemini: return "Gemini runs in --approval-mode plan: reads + proposes, doesn't write until approved."
                         case .opencode: return "OpenCode handles tool-call approval inside `opencode serve` — plan mode here is a UI hint only."
+                        case .cursor: return "Cursor Agent starts in code mode until Cursor resume ids are available."
                         case .unknown: return "Plan mode: reads + proposes, doesn't write until approved."
                         }
                     }())
@@ -122,8 +139,16 @@ struct NewSessionMacSheet: View {
         .frame(width: 460)
         .onAppear {
             if let selected = model.selectedRepoKey { repoPath = selected }
+            ensureSelectedModelIsAvailable()
         }
-        .task { await refreshOpencodeAvailability() }
+        .task { await refreshProviderAvailability() }
+        .onChange(of: agent) { _, _ in
+            selectedModelId = defaultModelId(for: agent)
+            if agent == .cursor { planMode = false }
+        }
+        .onChange(of: modelCatalog.updatedAt) { _, _ in
+            ensureSelectedModelIsAvailable()
+        }
     }
 
     private var selectableAgents: [AgentKind] {
@@ -131,17 +156,52 @@ struct NewSessionMacSheet: View {
         if opencodeReady {
             agents.append(.opencode)
         }
+        if cursorReady {
+            agents.append(.cursor)
+        }
         return agents
     }
 
-    private func refreshOpencodeAvailability() async {
+    private func refreshProviderAvailability() async {
         await OpencodeProcessManager.shared.refreshAuthStatus()
         let hasBinary = OpencodeProcessManager.shared.binaryPath != nil
         let hasProvider = !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
         opencodeReady = hasBinary && hasProvider
+        let cursorState = await CursorModelProbe.shared.currentState()
+        modelCatalog = ModelCatalog.bundled.replacingCursor(cursorState.models)
+        cursorReady = cursorState.binaryPath != nil && cursorState.authenticated
         if !opencodeReady, agent == .opencode {
             agent = .claude
         }
+        if !cursorReady, agent == .cursor {
+            agent = .claude
+        }
+        ensureSelectedModelIsAvailable()
+    }
+
+    private func defaultModelId(for agent: AgentKind) -> String? {
+        modelCatalog.entries(for: agent).first?.id
+    }
+
+    private func ensureSelectedModelIsAvailable() {
+        let models = modelCatalog.entries(for: agent)
+        guard !models.isEmpty else {
+            selectedModelId = nil
+            return
+        }
+        if let selectedModelId,
+           models.contains(where: { $0.id == selectedModelId || $0.cliAlias == selectedModelId }) {
+            return
+        }
+        selectedModelId = models.first?.id
+    }
+
+    private func supportsEffort(modelId: String?) -> Bool {
+        guard let modelId,
+              let entry = modelCatalog.entry(forId: modelId) else {
+            return true
+        }
+        return entry.supportsEffort
     }
 
     private func startSession() async {
@@ -152,32 +212,29 @@ struct NewSessionMacSheet: View {
             errorMessage = "Daemon not started — relaunch Clawdmeter."
             return
         }
-        // Seed model + effort from ComposerStore.ChipDefaults so the New
-        // Session sheet picks up the same Opus 4.7 1M + Max defaults the
-        // empty-state composer uses. Codex sessions fall back to the
-        // first Codex catalog entry (gpt-5.5) — no effort default.
+        // Seed effort from ComposerStore.ChipDefaults while model comes from
+        // this sheet's picker. Cursor models are the live account-visible
+        // probe result with Cursor default / Auto as the fallback.
         let defaults = ComposerStore.ChipDefaults.default
-        let modelDefault: String?
+        let selectedModel = selectedModelId ?? defaultModelId(for: agent)
         switch agent {
-        case .claude: modelDefault = defaults.modelId
-        case .codex:  modelDefault = ModelCatalog.bundled.codex.first?.id
-        case .gemini: modelDefault = ModelCatalog.bundled.gemini.first?.id
-        case .opencode: modelDefault = ModelCatalog.bundled.opencode.first?.id
         case .unknown:
             // X3: unreachable from the picker (allCases excludes .unknown)
             errorMessage = "Unknown agent kind — relaunch to refresh."
             return
+        default:
+            break
         }
         do {
             _ = try await model.spawnSession(
                 repoPath: repoPath,
                 agent: agent,
-                planMode: planMode,
+                planMode: agent == .cursor ? false : planMode,
                 goal: goal.isEmpty ? nil : goal,
                 mode: mode,
                 tmux: runtime.tmuxClient,
-                model: modelDefault,
-                effort: defaults.effort
+                model: selectedModel,
+                effort: supportsEffort(modelId: selectedModel) ? defaults.effort : nil
             )
             dismiss()
         } catch {
@@ -570,6 +627,7 @@ public final class SessionsModel: ObservableObject {
     /// via WorktreeManager and spawn the agent there.
     public enum SpawnError: LocalizedError {
         case missingBinary(String)
+        case unsupportedMode(String)
         /// v0.8.0 agy-migration — Antigravity 2 isn't installed / running /
         /// signed in / has-no-project-for-this-repo. Carries the
         /// user-facing CTA string the composer surfaces inline.
@@ -577,6 +635,7 @@ public final class SessionsModel: ObservableObject {
         public var errorDescription: String? {
             switch self {
             case .missingBinary(let m): return m
+            case .unsupportedMode(let m): return m
             case .antigravityNotReady(let m): return m
             }
         }
@@ -623,27 +682,52 @@ public final class SessionsModel: ObservableObject {
                 initialMessage: initialMessage
             )
         }
+        if agent == .cursor, planMode, (resumeSessionId?.isEmpty ?? true) {
+            throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
+        }
         // Fail fast on missing CLIs rather than spawning tmux + the
         // worktree only to error in the agent's pane (where the user
         // can't easily see it without opening the terminal view).
         if let reason = AgentSpawner.preflight(agent: agent) {
             throw SpawnError.missingBinary(reason)
         }
+        if agent == .cursor {
+            let cursorState = await CursorModelProbe.shared.currentState()
+            guard cursorState.binaryPath != nil else {
+                throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
+            }
+            guard cursorState.authenticated else {
+                throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
+            }
+            if let model,
+               !CursorModelCatalog.isAutoModel(model),
+               !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
+                throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
+            }
+        }
+        let effectivePlanMode = planMode
         try await tmux.start()
         var cwd = repoPath
         var worktreePath: String? = nil
+        var provisionalSessionId: UUID?
         // Skip worktree creation for resumes — the CLI handles cwd from JSONL.
         if mode == .worktree, resumeSessionId == nil {
             // v0.7.9: city-named worktree + matching branch. Mint up
             // front so the path slug + branch use the same name.
-            let provisionalSessionId = UUID()
-            let city = CityNamer.shared.cityName(for: provisionalSessionId)
+            let sessionId = UUID()
+            provisionalSessionId = sessionId
+            let city = CityNamer.shared.cityName(for: sessionId)
             let slug = WorktreeManager.slug(city: city)
-            worktreePath = try await WorktreeManager.shared.add(
-                repoRoot: repoPath,
-                slug: slug,
-                branchName: slug
-            )
+            do {
+                worktreePath = try await WorktreeManager.shared.add(
+                    repoRoot: repoPath,
+                    slug: slug,
+                    branchName: slug
+                )
+            } catch {
+                CityNamer.shared.release(sessionId)
+                throw error
+            }
             cwd = worktreePath!
         }
         // Build argv per agent. Use direct argv-builders for the resume
@@ -654,7 +738,7 @@ public final class SessionsModel: ObservableObject {
         case .claude:
             argv = AgentSpawner.claudeArgv(
                 model: model,
-                planMode: planMode,
+                planMode: effectivePlanMode,
                 effort: effort,
                 autopilot: autopilot,
                 acceptEdits: acceptEdits,
@@ -663,7 +747,7 @@ public final class SessionsModel: ObservableObject {
         case .codex:
             argv = AgentSpawner.codexArgv(
                 model: model,
-                planMode: planMode,
+                planMode: effectivePlanMode,
                 effort: effort,
                 autopilot: autopilot,
                 acceptEdits: acceptEdits,
@@ -682,15 +766,40 @@ public final class SessionsModel: ObservableObject {
             // out-of-band. The missingBinary throw below surfaces a
             // clean error if execution reaches here unexpectedly.
             argv = []
+        case .cursor:
+            argv = AgentSpawner.cursorArgv(
+                model: model,
+                planMode: effectivePlanMode,
+                effort: effort,
+                autopilot: autopilot,
+                acceptEdits: acceptEdits,
+                resumeSessionId: resumeSessionId,
+                workspacePath: cwd
+            ) ?? []
         case .unknown:
             // X3: forward-compat unknown kind — no spawn argv path. The
             // missingBinary throw below surfaces a clean error.
             argv = []
         }
         guard !argv.isEmpty else {
+            await cleanupUnregisteredWorktree(
+                repoPath: repoPath,
+                worktreePath: worktreePath,
+                provisionalSessionId: provisionalSessionId
+            )
             throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
         }
-        let window = try await tmux.newWindow(cwd: cwd, child: argv)
+        let window: TmuxControlClient.WindowRef
+        do {
+            window = try await tmux.newWindow(cwd: cwd, child: argv)
+        } catch {
+            await cleanupUnregisteredWorktree(
+                repoPath: repoPath,
+                worktreePath: worktreePath,
+                provisionalSessionId: provisionalSessionId
+            )
+            throw error
+        }
         let session = registry.create(
             repoKey: repoPath,
             repoDisplayName: (repoPath as NSString).lastPathComponent,
@@ -700,8 +809,9 @@ public final class SessionsModel: ObservableObject {
             worktreePath: worktreePath,
             tmuxWindowId: window.windowId,
             tmuxPaneId: window.paneId,
-            planMode: planMode,
-            mode: mode
+            planMode: effectivePlanMode,
+            mode: mode,
+            effort: effort
         )
         if let pinned = pinnedJSONLURL {
             forcedChatStoreURLs[session.id] = pinned
@@ -859,6 +969,11 @@ public final class SessionsModel: ObservableObject {
             // PR #29: no JSONL outside-source for OpenCode (state lives
             // inside `opencode serve` shared process memory).
             return nil
+        case .cursor:
+            // Cursor imported-session resume requires a real Cursor chat id.
+            // The JSONL importer cannot prove that yet, so leave imported
+            // Cursor rows read-only until the Cursor importer lands.
+            return nil
         case .unknown:
             // X3: forward-compat unknown kind — no JSONL parser plumbed.
             return nil
@@ -913,6 +1028,10 @@ public final class SessionsModel: ObservableObject {
         repoDisplayName: String
     ) async -> AgentSession? {
         let jsonlURL = URL(fileURLWithPath: recent.path)
+        guard recent.provider == .claude || recent.provider == .codex else {
+            openOutsideSession(recent: recent, repoKey: repoKey, repoDisplayName: repoDisplayName)
+            return nil
+        }
         let provider: JSONLSessionId.Provider = (recent.provider == .codex) ? .codex : .claude
         guard let cliSessionId = JSONLSessionId.extract(from: jsonlURL, provider: provider) else {
             // No id → keep the read-only synthetic session open.
@@ -993,7 +1112,7 @@ public final class SessionsModel: ObservableObject {
             planMode: session.status == .planning,
             goal: session.goal,
             useWorktree: newMode == .worktree
-        ))
+        ), workspacePath: newCwd)
         do {
             guard !argv.isEmpty else { return }
             let newWindow = try await runtime.tmuxClient.newWindow(cwd: newCwd, child: argv)
@@ -1113,7 +1232,7 @@ public final class SessionsModel: ObservableObject {
             planMode: false,
             goal: nil,
             useWorktree: parent.mode == .worktree
-        ))
+        ), workspacePath: cwd)
         do {
             guard !argv.isEmpty else { return nil }
             let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
@@ -1180,19 +1299,34 @@ public final class SessionsModel: ObservableObject {
               let session = registry.session(id: id),
               let windowId = session.tmuxWindowId,
               session.status == .planning,
-              (session.planText?.isEmpty == false || session.agent == .codex)
+              (session.planText?.isEmpty == false || session.agent == .codex || session.agent == .cursor)
         else { return }
         do {
-            try await runtime.tmuxClient.killWindow(windowId)
+            let providerResumeId: String
+            if session.agent == .cursor {
+                guard let cursorResumeId = Self.cursorResumeId(for: session) else {
+                    registry.setPlanText(
+                        id: id,
+                        planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
+                    )
+                    registry.updateStatus(id: id, status: .degraded)
+                    return
+                }
+                providerResumeId = cursorResumeId
+            } else {
+                providerResumeId = session.id.uuidString
+            }
             let argv = AgentSpawner.respawnArgv(
                 agent: session.agent,
-                resumeSessionId: session.id.uuidString,
+                resumeSessionId: providerResumeId,
                 model: session.model,
                 planMode: false,
                 effort: session.effort,
-                autopilot: false
+                autopilot: false,
+                workspacePath: session.effectiveCwd
             )
             guard !argv.isEmpty else { return }
+            try await runtime.tmuxClient.killWindow(windowId)
             let cwd = session.effectiveCwd
             let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
             registry.updateRuntime(
@@ -1205,5 +1339,30 @@ public final class SessionsModel: ObservableObject {
             registry.setPlanText(id: id, planText: "")
             registry.updateStatus(id: id, status: .running)
         } catch {}
+    }
+
+    private func cleanupUnregisteredWorktree(
+        repoPath: String,
+        worktreePath: String?,
+        provisionalSessionId: UUID?
+    ) async {
+        if let worktreePath {
+            _ = try? await WorktreeManager.shared.delete(
+                repoRoot: repoPath,
+                worktreePath: worktreePath,
+                registryOwned: true
+            )
+        }
+        if let provisionalSessionId {
+            CityNamer.shared.release(provisionalSessionId)
+        }
+    }
+
+    private static func cursorResumeId(for session: AgentSession) -> String? {
+        let candidate = session.runtimeBinding?.externalSessionId
+            ?? session.runtimeBinding?.externalThreadId
+        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 }

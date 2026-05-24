@@ -49,7 +49,7 @@ public struct MacMenubarPopover: View {
     /// first-class tab in the popover. The user reported "we built
     /// complete integrations with OpenCode but I don't see that
     /// anywhere in the UI". The tab itself was missing here.
-    private let enabled: [TahoeProvider] = [.claude, .codex, .gemini, .opencode]
+    private let enabled: [TahoeProvider] = [.claude, .codex, .gemini, .opencode, .cursor]
 
     /// Preview / demo init — no live AppModels; uses the static
     /// `data` snapshot.
@@ -98,7 +98,18 @@ public struct MacMenubarPopover: View {
         return TahoeLiveBindings(
             claude: liveRow(model: models.claude, provider: .claude),
             codex:  liveRow(model: models.codex,  provider: .codex),
-            gemini: liveRow(model: models.gemini, provider: .gemini)
+            gemini: liveRow(model: models.gemini, provider: .gemini),
+            cursor: TahoeLiveRow(
+                sessionPercent: 0,
+                weeklyPercent: 0,
+                sessionResetIn: "-",
+                weeklyResetIn: "",
+                modelName: "Cursor Auto",
+                autoReviveOn: false,
+                supportsAutoRevive: false,
+                hasWeekly: false,
+                stale: true
+            )
         )
     }
 
@@ -123,6 +134,7 @@ public struct MacMenubarPopover: View {
             case .codex:  return "gpt-5"
             case .gemini: return "antigravity-pro"
             case .opencode: return "via opencode"
+            case .cursor: return "Cursor Auto"
             }
         }()
         guard let usage = model.usage else {

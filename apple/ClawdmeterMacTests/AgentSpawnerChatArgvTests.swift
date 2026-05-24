@@ -136,6 +136,63 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
         XCTAssertFalse(argv.contains("--permission-mode"),
                        "code session in .running status should not force plan-mode flag")
     }
+
+    // MARK: - Cursor
+
+    func test_cursorCodeSession_passesWorkspaceAndModel() throws {
+        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
+                      "cursor-agent/agent binary unavailable on PATH; CI skip")
+        let session = makeCodeSession(agent: .cursor, model: "claude-4-sonnet")
+        let argv = AgentSpawner.argv(for: session)
+        XCTAssertFalse(argv.isEmpty)
+        XCTAssertTrue(argv.containsInOrder(["--workspace", "/Users/foo/repo"]))
+        XCTAssertTrue(argv.containsInOrder(["--model", "claude-4-sonnet"]))
+    }
+
+    func test_cursorAutoModel_doesNotPassModelFlag() throws {
+        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
+                      "cursor-agent/agent binary unavailable on PATH; CI skip")
+        let session = makeCodeSession(agent: .cursor, model: CursorModelCatalog.autoModelId)
+        let argv = AgentSpawner.argv(for: session)
+        XCTAssertFalse(argv.isEmpty)
+        XCTAssertFalse(argv.contains("--model"))
+        XCTAssertTrue(argv.containsInOrder(["--workspace", "/Users/foo/repo"]))
+    }
+
+    func test_cursorNewSessionRequest_ignoresPlanModeUntilResumeIdsExist() throws {
+        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
+                      "cursor-agent/agent binary unavailable on PATH; CI skip")
+        let request = NewSessionRequest(
+            repoKey: "/Users/foo/repo",
+            agent: .cursor,
+            model: "gpt-5",
+            planMode: true,
+            useWorktree: true
+        )
+        let argv = AgentSpawner.argv(for: request, workspacePath: "/Users/foo/repo/.claude/worktrees/oslo")
+        XCTAssertFalse(argv.isEmpty)
+        XCTAssertTrue(argv.containsInOrder(["--workspace", "/Users/foo/repo/.claude/worktrees/oslo"]))
+        XCTAssertFalse(argv.containsInOrder(["--mode", "plan"]))
+    }
+
+    func test_cursorRespawnUsesResumeAndWorkspace() throws {
+        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
+                      "cursor-agent/agent binary unavailable on PATH; CI skip")
+        let argv = AgentSpawner.respawnArgv(
+            agent: .cursor,
+            resumeSessionId: "cursor-chat-123",
+            model: "gpt-5",
+            planMode: true,
+            effort: nil,
+            autopilot: false,
+            workspacePath: "/Users/foo/repo"
+        )
+        XCTAssertFalse(argv.isEmpty)
+        XCTAssertTrue(argv.containsInOrder(["--workspace", "/Users/foo/repo"]))
+        XCTAssertTrue(argv.containsInOrder(["--resume", "cursor-chat-123"]))
+        XCTAssertTrue(argv.containsInOrder(["--model", "gpt-5"]))
+        XCTAssertTrue(argv.containsInOrder(["--mode", "plan"]))
+    }
 }
 
 // MARK: - Helper
@@ -145,5 +202,17 @@ private extension Array {
     func last(_ n: Int) -> [Element] {
         guard count >= n else { return self }
         return Array(suffix(n))
+    }
+}
+
+private extension Array where Element: Equatable {
+    func containsInOrder(_ needle: [Element]) -> Bool {
+        guard !needle.isEmpty, count >= needle.count else { return false }
+        for start in indices {
+            let end = index(start, offsetBy: needle.count, limitedBy: endIndex)
+            guard let end, end <= endIndex else { continue }
+            if Array(self[start..<end]) == needle { return true }
+        }
+        return false
     }
 }

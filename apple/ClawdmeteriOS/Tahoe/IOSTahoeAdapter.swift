@@ -85,6 +85,7 @@ extension AgentControlClient {
         case .codex:  return .codex
         case .gemini: return .gemini
         case .opencode: return .opencode
+        case .cursor: return .cursor
         case .unknown: return .claude
         }
     }
@@ -108,6 +109,7 @@ extension AgentControlClient {
             case .codex:  return .codex
             case .gemini: return .gemini
             case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
+            case .cursor: return .cursor
             case .unknown:
                 // X3: visual fallback for raws this client doesn't
                 // recognize. Degrades to Claude styling.
@@ -154,7 +156,18 @@ extension UsageModel {
         TahoeLiveBindings(
             claude: row(usage: usage,                 provider: .claude, hasWeekly: true,  modelFallback: "Sonnet 4.5"),
             codex:  row(usage: codexSnapshot?.usage,  provider: .codex,  hasWeekly: true,  modelFallback: "gpt-5"),
-            gemini: row(usage: geminiSnapshot?.usage, provider: .gemini, hasWeekly: false, modelFallback: "antigravity-pro")
+            gemini: row(usage: geminiSnapshot?.usage, provider: .gemini, hasWeekly: false, modelFallback: "antigravity-pro"),
+            cursor: TahoeLiveRow(
+                sessionPercent: 0,
+                weeklyPercent: 0,
+                sessionResetIn: "-",
+                weeklyResetIn: "",
+                modelName: "Cursor Auto",
+                autoReviveOn: false,
+                supportsAutoRevive: false,
+                hasWeekly: false,
+                stale: true
+            )
         )
     }
 

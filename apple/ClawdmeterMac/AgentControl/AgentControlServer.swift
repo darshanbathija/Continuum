@@ -1005,7 +1005,7 @@ public final class AgentControlServer {
             await self?.handleGetRepos(connection: conn)
         }
         t.register(method: "GET", pattern: "/models") { [weak self] _, conn, _ in
-            self?.handleGetModels(connection: conn)
+            await self?.handleGetModels(connection: conn)
         }
         t.register(method: "GET", pattern: "/sessions") { [weak self] _, conn, _ in
             self?.handleGetSessions(connection: conn)
@@ -1232,10 +1232,12 @@ public final class AgentControlServer {
         ], on: connection)
     }
 
-    private func handleGetModels(connection: NWConnection) {
+    private func handleGetModels(connection: NWConnection) async {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        if let body = try? encoder.encode(ModelCatalog.bundled) {
+        let cursorModels = await CursorModelProbe.shared.currentModels()
+        let catalog = ModelCatalog.bundled.replacingCursor(cursorModels)
+        if let body = try? encoder.encode(catalog) {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
             sendResponse(.internalError, on: connection)
@@ -1253,7 +1255,8 @@ public final class AgentControlServer {
         }
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        guard !req.model.isEmpty, ModelCatalog.bundled.entry(forId: req.model) != nil else {
+        let liveCatalog = ModelCatalog.bundled.replacingCursor(await CursorModelProbe.shared.currentModels())
+        guard !req.model.isEmpty, liveCatalog.entry(forId: req.model) != nil else {
             sendResponse(.badRequest, on: connection); return
         }
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
@@ -1514,6 +1517,9 @@ public final class AgentControlServer {
             }
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
+            if session.agent == .cursor {
+                appendCursorTranscriptEcho(session: session, prompt: req.text, paneId: paneId)
+            }
             await sendCommandResponse(
                 body: ["ok": true],
                 key: req.idempotencyKey,
@@ -1525,6 +1531,61 @@ public final class AgentControlServer {
         } catch {
             serverLogger.error("send-prompt failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func appendCursorTranscriptEcho(session: AgentSession, prompt: String, paneId: String) {
+        guard let store = chatStoreRegistry.snapshotStore(for: session) else { return }
+        let now = Date()
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        var messages: [ChatMessage] = []
+        if !trimmedPrompt.isEmpty {
+            messages.append(ChatMessage(
+                id: "cursor-user-\(UUID().uuidString)",
+                kind: .userText,
+                title: "You",
+                body: trimmedPrompt,
+                at: now
+            ))
+        }
+        let hasMirror = !SDKChatTranscriptMirror.readAll(sessionId: session.id).isEmpty
+        if !hasMirror && store.snapshot.items.isEmpty {
+            messages.append(ChatMessage(
+                id: "cursor-meta-\(UUID().uuidString)",
+                kind: .meta,
+                title: "Cursor",
+                body: "Cursor Agent is running in the Terminal pane. Clawdmeter mirrors sends and terminal snapshots here until native Cursor transcript import can attach a proven Cursor chat id.",
+                at: now
+            ))
+        }
+        store.appendSDKMessages(messages, at: now)
+        store.setCurrentTurnState(.streaming)
+
+        Task { @MainActor [weak self, sessionId = session.id] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self,
+                  let refreshed = self.registry.session(id: sessionId),
+                  let refreshedStore = self.chatStoreRegistry.snapshotStore(for: refreshed),
+                  let captured = try? await self.tmux.command(["capture-pane", "-p", "-t", paneId, "-S", "-80"])
+            else { return }
+            let body = captured.lines
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else {
+                refreshedStore.setCurrentTurnState(.completed)
+                return
+            }
+            let cappedBody = String(body.suffix(6_000))
+            refreshedStore.appendSDKMessages([
+                ChatMessage(
+                    id: "cursor-terminal-\(UUID().uuidString)",
+                    kind: .assistantText,
+                    title: "Cursor terminal",
+                    body: cappedBody,
+                    at: Date()
+                )
+            ])
+            refreshedStore.setCurrentTurnState(.completed)
         }
     }
 
@@ -1837,6 +1898,11 @@ public final class AgentControlServer {
             // OpencodeProcessManager + OpencodeSSEAdapter instead;
             // dropping into the 503 branch here is unreachable in
             // production but kept for exhaustiveness + safety.
+            argv = []
+        case .cursor:
+            // Cursor imported-session resume needs a real Cursor chat id.
+            // The current JSONL extractor only proves Claude/Codex ids, so
+            // keep this conservative until the Cursor importer can prove one.
             argv = []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Fall
@@ -3566,6 +3632,52 @@ public final class AgentControlServer {
             return
         }
 
+        if req.agent == .cursor {
+            guard !req.planMode else {
+                sendResponse(HTTPResponse(
+                    status: 400,
+                    reason: "Bad Request",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"cursor_plan_mode_not_supported","cta":"Start Cursor in code mode until Cursor resume ids are available."}"#.utf8)
+                ), on: connection)
+                return
+            }
+            let cursorState = await CursorModelProbe.shared.currentState()
+            guard cursorState.binaryPath != nil else {
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
+                ), on: connection)
+                return
+            }
+            guard cursorState.authenticated else {
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"cursor_not_authenticated","cta":"Run cursor-agent login, then try again."}"#.utf8)
+                ), on: connection)
+                return
+            }
+            if let model = req.model,
+               !CursorModelCatalog.isAutoModel(model),
+               !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
+                sendResponse(.badRequest(detail: "Cursor model is not available for the authenticated account"), on: connection)
+                return
+            }
+        }
+
+        let effectivePlanMode = req.agent == .cursor ? false : req.planMode
+        let preflightArgv = AgentSpawner.argv(for: req, workspacePath: req.repoKey)
+        guard !preflightArgv.isEmpty else {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"agent_cli_not_found"}"#.utf8)
+            ), on: connection)
+            return
+        }
+
         // Determine the cwd: repo root, or new worktree path if useWorktree.
         // v0.7.9: worktrees are now the default for every new session, and
         // we use the session's CityNamer-assigned city as both the worktree
@@ -3574,13 +3686,15 @@ public final class AgentControlServer {
         // the worktree lives at `<repo>/.claude/worktrees/cape-town/`.
         var cwd = req.repoKey  // assume repoKey is an absolute path
         var worktreePath: String? = nil
+        var provisionalSessionId: UUID?
         if req.useWorktree {
             // Mint a city up front so the worktree path + branch use the
             // same name. The session id we'll register with is captured
             // here so CityNamer's mapping is stable.
-            let provisionalSessionId = UUID()
+            let sessionId = UUID()
+            provisionalSessionId = sessionId
             let city = await MainActor.run {
-                CityNamer.shared.cityName(for: provisionalSessionId)
+                CityNamer.shared.cityName(for: sessionId)
             }
             let slug = WorktreeManager.slug(city: city)
             do {
@@ -3596,7 +3710,7 @@ public final class AgentControlServer {
                 // Release the city back to the pool — we didn't actually
                 // create the session.
                 await MainActor.run {
-                    CityNamer.shared.release(provisionalSessionId)
+                    CityNamer.shared.release(sessionId)
                 }
                 sendResponse(.internalError, on: connection)
                 return
@@ -3604,8 +3718,29 @@ public final class AgentControlServer {
         }
 
         // Build agent argv per E4.
-        let argv = AgentSpawner.argv(for: req)
+        let argv = req.useWorktree
+            ? AgentSpawner.argv(for: req, workspacePath: cwd)
+            : preflightArgv
         guard !argv.isEmpty else {
+            if let worktreePath {
+                do {
+                    let result = try await WorktreeManager.shared.delete(
+                        repoRoot: req.repoKey,
+                        worktreePath: worktreePath,
+                        registryOwned: true
+                    )
+                    if case .skipped(let reason) = result {
+                        serverLogger.error("worktree cleanup after spawn preflight failed: \(reason, privacy: .public)")
+                    }
+                } catch {
+                    serverLogger.error("worktree cleanup after spawn preflight threw: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            if let provisionalSessionId {
+                await MainActor.run {
+                    CityNamer.shared.release(provisionalSessionId)
+                }
+            }
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
                 contentType: "application/json",
@@ -3630,7 +3765,9 @@ public final class AgentControlServer {
                 worktreePath: worktreePath,
                 tmuxWindowId: window.windowId,
                 tmuxPaneId: window.paneId,
-                planMode: req.planMode
+                planMode: effectivePlanMode,
+                mode: req.useWorktree ? .worktree : .local,
+                effort: req.effort
             )
             // Wire up JSONL tail + done-detector + plan-watcher for this
             // session (Phase 4). Best-effort: find the agent's JSONL file
@@ -3645,7 +3782,7 @@ public final class AgentControlServer {
             // run button right away. The user reads the agent's
             // proposal in the regular chat stream, then taps approve
             // to flip the sandbox to workspace-write.
-            if req.agent == .codex && req.planMode {
+            if req.agent == .codex && effectivePlanMode {
                 registry.setPlanText(
                     id: session.id,
                     planText: """
@@ -3685,8 +3822,41 @@ public final class AgentControlServer {
                 sendResponse(.internalError, on: connection)
             }
         } catch {
+            await cleanupUnregisteredWorktree(
+                repoRoot: req.repoKey,
+                worktreePath: worktreePath,
+                provisionalSessionId: provisionalSessionId,
+                context: "spawn tmux failure"
+            )
             serverLogger.error("Failed to spawn session: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func cleanupUnregisteredWorktree(
+        repoRoot: String,
+        worktreePath: String?,
+        provisionalSessionId: UUID?,
+        context: String
+    ) async {
+        if let worktreePath {
+            do {
+                let result = try await WorktreeManager.shared.delete(
+                    repoRoot: repoRoot,
+                    worktreePath: worktreePath,
+                    registryOwned: true
+                )
+                if case .skipped(let reason) = result {
+                    serverLogger.error("worktree cleanup after \(context, privacy: .public) skipped: \(reason, privacy: .public)")
+                }
+            } catch {
+                serverLogger.error("worktree cleanup after \(context, privacy: .public) threw: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        if let provisionalSessionId {
+            await MainActor.run {
+                CityNamer.shared.release(provisionalSessionId)
+            }
         }
     }
 
@@ -3701,6 +3871,14 @@ public final class AgentControlServer {
         decoder.dateDecodingStrategy = .iso8601
         guard let req = try? decoder.decode(CreateChatSessionRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection)
+            return
+        }
+        guard req.provider != .cursor else {
+            sendResponse(HTTPResponse(
+                status: 501, reason: "Not Implemented",
+                contentType: "application/json",
+                body: Data(#"{"error":"cursor_chat_not_supported","cta":"Start Cursor from Code until Cursor transcript import is available."}"#.utf8)
+            ), on: connection)
             return
         }
         // v0.9: Gemini chat dispatches to Antigravity 2's agentapi via
@@ -4495,6 +4673,8 @@ public final class AgentControlServer {
                 payload: ["repo": chatCwd, "agent": "opencode", "opencodeID": opencodeID]
             )
             return updated
+        case .cursor:
+            throw SpawnFailure.message("cursor_chat_not_supported")
         case .unknown:
             // X3: forward-compat unknown agent — no frontier-child spawn
             // path. Surfaces as a slot failure to the broadcast caller.
@@ -4921,6 +5101,9 @@ public final class AgentControlServer {
             // which OpencodeProcessManager + OpencodeSSEAdapter handle
             // out-of-band.
             break
+        case .cursor:
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
         case .unknown:
             // X3: forward-compat unknown agent — no warmup choreography
             // plumbed.
@@ -5140,7 +5323,7 @@ public final class AgentControlServer {
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
         guard session.status == .planning,
-              session.planText?.isEmpty == false || session.agent == .codex else {
+              session.planText?.isEmpty == false || session.agent == .codex || session.agent == .cursor else {
             sendResponse(HTTPResponse(
                 status: 409, reason: "Conflict",
                 contentType: "application/json",
@@ -5195,6 +5378,29 @@ public final class AgentControlServer {
             // `opencode serve`. Surfaces as 500 here so a misrouted
             // approve-plan from a stale UI doesn't pretend to succeed.
             argv = nil
+        case .cursor:
+            guard let cursorResumeId = Self.cursorResumeId(for: session) else {
+                registry.setPlanText(
+                    id: uuid,
+                    planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
+                )
+                registry.updateStatus(id: uuid, status: .degraded)
+                sendResponse(HTTPResponse(
+                    status: 409,
+                    reason: "Conflict",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"cursor_resume_id_missing","cta":"Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."}"#.utf8)
+                ), on: connection)
+                return
+            }
+            argv = AgentSpawner.cursorArgv(
+                model: session.model,
+                planMode: false,
+                effort: session.effort,
+                autopilot: false,
+                resumeSessionId: cursorResumeId,
+                workspacePath: session.effectiveCwd
+            )
         case .unknown:
             // X3: forward-compat unknown agent — no respawn path.
             // Surfaces as 500 below.
@@ -5254,6 +5460,14 @@ public final class AgentControlServer {
             serverLogger.error("approve-plan failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    private static func cursorResumeId(for session: AgentSession) -> String? {
+        let candidate = session.runtimeBinding?.externalSessionId
+            ?? session.runtimeBinding?.externalThreadId
+        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     /// Archive / unarchive a session (G7). Hides it from the default

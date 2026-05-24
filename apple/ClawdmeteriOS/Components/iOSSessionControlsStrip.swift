@@ -25,16 +25,19 @@ struct iOSSessionControlsStrip: View {
                     chip(modelEntry.displayName, accessibilityLabel: "Model: \(modelEntry.displayName). Double-tap to change.") {
                         showingModelPicker = true
                     }
+                    .disabled(cursorSwapUnavailable)
                 }
                 if let effort = session.effort {
                     chip(effortLabel(effort), accessibilityLabel: "Effort: \(longEffortLabel(effort)). Double-tap to change.") {
                         showingEffortSheet = true
                     }
+                    .disabled(cursorSwapUnavailable)
                 }
                 chip(
                     session.mode == .worktree ? "Worktree" : "Local",
                     accessibilityLabel: "Mode: \(session.mode == .worktree ? "worktree" : "local"). Double-tap to change."
                 ) { Task { await toggleExecutionMode() } }
+                    .disabled(cursorSwapUnavailable)
                 Spacer()
             }
 
@@ -54,6 +57,7 @@ struct iOSSessionControlsStrip: View {
                 .frame(minHeight: 44)
                 .accessibilityLabel(session.status == .planning ? "Plan mode on" : "Plan mode off")
                 .accessibilityHint("Double-tap to switch between plan and code mode.")
+                .disabled(cursorSwapUnavailable)
 
                 Button(role: .destructive, action: { Task { await client.interruptSession(sessionId: session.id) } }) {
                     Label("Interrupt", systemImage: "stop.fill")
@@ -167,6 +171,16 @@ struct iOSSessionControlsStrip: View {
         return client.modelCatalog.entry(forId: id)
     }
 
+    private var cursorSwapUnavailable: Bool {
+        session.agent == .cursor && !hasCursorResumeId
+    }
+
+    private var hasCursorResumeId: Bool {
+        let candidate = session.runtimeBinding?.externalSessionId
+            ?? session.runtimeBinding?.externalThreadId
+        return candidate?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
     private func effortLabel(_ effort: ReasoningEffort) -> String {
         switch effort {
         case .minimal: return "Min"
@@ -195,6 +209,7 @@ struct iOSSessionControlsStrip: View {
 
     @MainActor
     private func changeModel(to entry: ModelCatalogEntry) async {
+        guard !cursorSwapUnavailable else { return }
         let modelArg = entry.cliAlias ?? entry.id
         pendingSwapBanner = "Switching to \(entry.displayName)…"
         _ = await client.changeModel(
@@ -206,6 +221,7 @@ struct iOSSessionControlsStrip: View {
 
     @MainActor
     private func changeEffort(to effort: ReasoningEffort) async {
+        guard !cursorSwapUnavailable else { return }
         pendingSwapBanner = "Switching effort to \(effortLabel(effort))…"
         _ = await client.changeEffort(sessionId: session.id, effort: effort)
         pendingSwapBanner = nil
@@ -213,12 +229,14 @@ struct iOSSessionControlsStrip: View {
 
     @MainActor
     private func togglePlanMode() async {
+        guard !cursorSwapUnavailable else { return }
         let newPlan = !(session.status == .planning)
         _ = await client.changeMode(sessionId: session.id, mode: session.mode, planMode: newPlan)
     }
 
     @MainActor
     private func toggleExecutionMode() async {
+        guard !cursorSwapUnavailable else { return }
         let newMode: SessionMode = session.mode == .worktree ? .local : .worktree
         pendingSwapBanner = "Switching to \(newMode == .worktree ? "worktree" : "local")…"
         _ = await client.changeMode(sessionId: session.id, mode: newMode)

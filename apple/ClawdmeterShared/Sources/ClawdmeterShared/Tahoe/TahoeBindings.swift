@@ -86,6 +86,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
                 // for). Demo defaults to anthropic so the chip reads
                 // meaningfully in Previews.
                 case .opencode: return "via opencode"
+                case .cursor: return "Cursor Auto"
                 }
             }(),
             autoReviveOn: d.reviveOn, autoReviveAgo: d.reviveAgo,
@@ -95,22 +96,25 @@ public struct TahoeLiveRow: Equatable, Sendable {
     }
 }
 
-/// All four providers, in one bag. Drives MacUsageView + MacMenubarPopover +
-/// IOSLiveView. PR #31 added `opencode` as the 4th lane.
+/// All providers, in one bag. Drives MacUsageView + MacMenubarPopover +
+/// IOSLiveView.
 public struct TahoeLiveBindings: Equatable, Sendable {
     public var claude: TahoeLiveRow
     public var codex:  TahoeLiveRow
     public var gemini: TahoeLiveRow
     public var opencode: TahoeLiveRow
+    public var cursor: TahoeLiveRow
 
     public init(
         claude: TahoeLiveRow = .demo(.claude),
         codex:  TahoeLiveRow = .demo(.codex),
         gemini: TahoeLiveRow = .demo(.gemini),
-        opencode: TahoeLiveRow = .demo(.opencode)
+        opencode: TahoeLiveRow = .demo(.opencode),
+        cursor: TahoeLiveRow = .demo(.cursor)
     ) {
         self.claude = claude; self.codex = codex; self.gemini = gemini
         self.opencode = opencode
+        self.cursor = cursor
     }
 
     public func row(for provider: TahoeProvider) -> TahoeLiveRow {
@@ -119,6 +123,7 @@ public struct TahoeLiveBindings: Equatable, Sendable {
         case .codex:  return codex
         case .gemini: return gemini
         case .opencode: return opencode
+        case .cursor: return cursor
         }
     }
 

@@ -30,7 +30,7 @@ public struct AnalyticsTotalsGrid: View {
     /// view when the snapshot is empty so first-launch users see a
     /// familiar shape.
     private var visibleProviders: [UsageRecord.Provider] {
-        let order: [UsageRecord.Provider] = [.claude, .codex, .gemini]
+        let order: [UsageRecord.Provider] = [.claude, .codex, .gemini, .opencode, .cursor]
         let active = order.filter { snapshot.byProvider[$0] != nil }
         return active.isEmpty ? [.claude, .codex] : active
     }
@@ -115,6 +115,7 @@ public struct AnalyticsTotalsGrid: View {
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
         case .opencode: return "OpenCode"
+        case .cursor: return "Cursor"
         }
     }
 
@@ -124,6 +125,7 @@ public struct AnalyticsTotalsGrid: View {
         case .codex:  return "CodexLogo"
         case .gemini: return "GeminiLogo"
         case .opencode: return "OpencodeLogo"
+        case .cursor: return "CodexLogo"
         }
     }
 
@@ -136,6 +138,7 @@ public struct AnalyticsTotalsGrid: View {
         case .codex:  return true
         case .gemini: return true
         case .opencode: return true
+        case .cursor: return true
         }
     }
 }

@@ -73,6 +73,7 @@ struct iOSModelPicker: View {
         case .codex:  return catalog.codex
         case .gemini: return catalog.gemini
         case .opencode: return catalog.opencode
+        case .cursor: return catalog.cursor
         case .unknown: return []  // X3: no catalog slice for forward-compat unknown
         }
     }
@@ -83,6 +84,7 @@ struct iOSModelPicker: View {
         case .codex:  return "Codex"
         case .gemini: return "Gemini Code Assist"
         case .opencode: return "OpenCode"
+        case .cursor: return "Cursor"
         case .unknown: return "Other agent"  // X3
         }
     }

@@ -214,7 +214,10 @@ public struct IOSAnalyticsView: View {
     }
 
     private func totalCost(in s: UsageHistorySnapshot, window: UsageHistorySnapshot.Window) -> Double {
-        providerCost(s, .claude, window) + providerCost(s, .codex, window) + providerCost(s, .gemini, window)
+        providerCost(s, .claude, window)
+            + providerCost(s, .codex, window)
+            + providerCost(s, .gemini, window)
+            + providerCost(s, .cursor, window)
     }
 
     private func mapProvider(_ p: TahoeProvider) -> UsageRecord.Provider {
@@ -223,6 +226,7 @@ public struct IOSAnalyticsView: View {
         case .codex:  return .codex
         case .gemini: return .gemini
         case .opencode: return .opencode  // PR #31
+        case .cursor: return .cursor
         }
     }
 
@@ -254,6 +258,8 @@ public struct IOSAnalyticsView: View {
                     // OpenCode analytics polish PR. For now, the outer
                     // iteration only walks 3 providers, so this case
                     // is unreachable; kept for switch exhaustiveness.
+                    break
+                case .cursor:
                     break
                 }
                 bag[key] = current

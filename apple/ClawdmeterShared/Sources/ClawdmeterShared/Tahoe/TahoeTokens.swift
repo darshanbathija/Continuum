@@ -56,6 +56,9 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
     /// switcher. Brand color is OpenCode violet (#6B5DD3) to disambiguate
     /// from Codex blue + Antigravity violet-blue.
     case opencode
+    /// Cursor Agent CLI / SDK lane. The real model catalog is account-scoped,
+    /// so Tahoe labels it by provider rather than by a fixed model.
+    case cursor
     public var id: String { rawValue }
 
     /// User-visible name. Note: internal key for the third provider stays
@@ -67,6 +70,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .codex:  return "Codex"
         case .gemini: return "Antigravity"
         case .opencode: return "OpenCode"
+        case .cursor: return "Cursor"
         }
     }
 
@@ -79,6 +83,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         // saturated than Antigravity's blue-violet to keep them
         // visually distinct in the per-provider segmented control.
         case .opencode: return OKLCH(l: 0.55, c: 0.18, h: 295)
+        case .cursor: return OKLCH(l: 0.34, c: 0.02, h: 260)
         }
     }
 
@@ -88,6 +93,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .codex:  return OKLCH(l: 0.55, c: 0.02, h: 260)
         case .gemini: return OKLCH(l: 0.78, c: 0.18, h: 250)
         case .opencode: return OKLCH(l: 0.75, c: 0.16, h: 295)
+        case .cursor: return OKLCH(l: 0.72, c: 0.02, h: 260)
         }
     }
 
@@ -97,6 +103,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .codex:  return OKLCH(l: 0.12, c: 0.01, h: 260)
         case .gemini: return OKLCH(l: 0.45, c: 0.22, h: 265)
         case .opencode: return OKLCH(l: 0.38, c: 0.20, h: 295)
+        case .cursor: return OKLCH(l: 0.18, c: 0.02, h: 260)
         }
     }
 
@@ -108,6 +115,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .codex:  return OKLCH(l: 0.70, c: 0.16, h: 235)
         case .gemini: return OKLCH(l: 0.72, c: 0.22, h: 285)
         case .opencode: return OKLCH(l: 0.72, c: 0.20, h: 305)
+        case .cursor: return OKLCH(l: 0.76, c: 0.03, h: 260)
         }
     }
 
@@ -122,6 +130,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         // points at "OpencodeLogo". Naming kept consistent for the
         // future Tahoe-art swap.
         case .opencode: return "tahoe-opencode-mark"
+        case .cursor: return "tahoe-codex-mark"
         }
     }
 
@@ -132,6 +141,7 @@ public enum TahoeProvider: String, CaseIterable, Sendable, Codable, Identifiable
         case .claude, .codex: return true
         case .gemini:         return false
         case .opencode:       return true
+        case .cursor:         return true
         }
     }
 }

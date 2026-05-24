@@ -48,7 +48,7 @@ public struct AnalyticsDailyChart: View {
     private var costProviders: [UsageRecord.Provider] {
         // Cost-bearing providers only. Gemini's $0 doesn't go in the
         // stacked dollar chart — it gets a separate request-count panel.
-        let order: [UsageRecord.Provider] = [.claude, .codex]
+        let order: [UsageRecord.Provider] = [.claude, .codex, .opencode, .cursor]
         return order.filter { snapshot.byProvider[$0] != nil && providerFilter.includes($0) }
     }
 
@@ -255,6 +255,7 @@ public struct AnalyticsDailyChart: View {
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
         case .opencode: return "OpenCode"
+        case .cursor: return "Cursor"
         }
     }
 }

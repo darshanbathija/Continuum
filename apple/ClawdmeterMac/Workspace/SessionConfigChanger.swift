@@ -50,23 +50,34 @@ public final class SessionConfigChanger {
               let oldPaneId = session.tmuxPaneId ?? session.tmuxWindowId else {
             return .spawnError(message: "Session not found or has no pane")
         }
+        let providerResumeId: String
+        if session.agent == .cursor {
+            guard let cursorResumeId = Self.cursorResumeId(for: session) else {
+                return .spawnError(message: "cursor_resume_id_missing")
+            }
+            providerResumeId = cursorResumeId
+        } else {
+            providerResumeId = sessionId.uuidString
+        }
         let originalArgv = AgentSpawner.respawnArgv(
             agent: session.agent,
-            resumeSessionId: sessionId.uuidString,
+            resumeSessionId: providerResumeId,
             model: session.model,
             planMode: session.status == .planning,
             effort: session.effort,
             autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId),
-            acceptEdits: PermissionModeStore.shared.acceptEdits(sessionId: sessionId)
+            acceptEdits: PermissionModeStore.shared.acceptEdits(sessionId: sessionId),
+            workspacePath: session.effectiveCwd
         )
         let newArgv = AgentSpawner.respawnArgv(
             agent: session.agent,
-            resumeSessionId: sessionId.uuidString,
+            resumeSessionId: providerResumeId,
             model: newModel ?? session.model,
             planMode: newPlanMode ?? (session.status == .planning),
             effort: (newEffort == nil ? session.effort : newEffort!),
             autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId),
-            acceptEdits: PermissionModeStore.shared.acceptEdits(sessionId: sessionId)
+            acceptEdits: PermissionModeStore.shared.acceptEdits(sessionId: sessionId),
+            workspacePath: session.effectiveCwd
         )
         if newArgv.isEmpty {
             return .spawnError(message: "Could not locate agent binary on PATH")
@@ -126,5 +137,13 @@ public final class SessionConfigChanger {
                 return .resumeFailed(restoredOriginal: false)
             }
         }
+    }
+
+    private static func cursorResumeId(for session: AgentSession) -> String? {
+        let candidate = session.runtimeBinding?.externalSessionId
+            ?? session.runtimeBinding?.externalThreadId
+        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 }

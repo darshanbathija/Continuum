@@ -29,6 +29,8 @@ public struct UsageRecord: Sendable, Equatable {
         /// under `.opencode` so users see how much they spent through
         /// the OpenCode pipeline regardless of the underlying provider.
         case opencode
+        /// Cursor usage attributed to Cursor Agent CLI / SDK runs.
+        case cursor
     }
 
     public let provider: Provider

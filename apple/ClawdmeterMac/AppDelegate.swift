@@ -346,6 +346,7 @@ final class ProviderStatusController: NSObject {
             case "claude": return .claude
             case "codex":  return .codex
             case "gemini": return .gemini
+            case "cursor": return .cursor
             default:       return .claude
             }
         }()

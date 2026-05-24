@@ -262,6 +262,7 @@ enum AnalyticsRangeAdapter {
                 case .codex:    slot.x += entry.totals.costUSD
                 case .gemini:   slot.g += entry.totals.costUSD
                 case .opencode: slot.o += entry.totals.costUSD
+                case .cursor:   break
                 }
                 byRepo[entry.repo] = slot
             }

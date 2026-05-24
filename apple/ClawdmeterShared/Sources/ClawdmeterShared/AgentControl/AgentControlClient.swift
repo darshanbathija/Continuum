@@ -257,6 +257,11 @@ public final class AgentControlClient: ObservableObject {
         AgentControlWireVersion.supportsComposeDraft(serverWireVersion: serverWireVersion)
     }
 
+    @MainActor
+    public var supportsCursor: Bool {
+        AgentControlWireVersion.supportsCursor(serverWireVersion: serverWireVersion)
+    }
+
     // MARK: - Sessions v2 mid-session controls
 
     @MainActor

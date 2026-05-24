@@ -17,6 +17,7 @@ public extension AgentKind {
         case .codex:    return .codex
         case .gemini:   return .gemini
         case .opencode: return .opencode
+        case .cursor:   return .cursor
         case .unknown:  return .claude
         }
     }
