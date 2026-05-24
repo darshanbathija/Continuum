@@ -140,11 +140,23 @@ public final class MobileCommandOutbox: ObservableObject {
         )
     }
 
-    public func enqueueMerge(sessionId: UUID, method: PRMergeMethod = .squash) {
+    public func enqueueMerge(
+        sessionId: UUID,
+        method: PRMergeMethod = .squash,
+        deleteBranch: Bool = false,
+        auto: Bool = false,
+        adminOverride: Bool = false
+    ) {
         enqueue(
             kind: .mergePR,
             sessionId: sessionId,
-            payload: MergePRRequest(method: method, idempotencyKey: "")
+            payload: MergePRRequest(
+                method: method,
+                deleteBranch: deleteBranch,
+                auto: auto,
+                adminOverride: adminOverride,
+                idempotencyKey: ""
+            )
         )
     }
 

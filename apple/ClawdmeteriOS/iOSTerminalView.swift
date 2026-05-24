@@ -8,6 +8,12 @@ private let iosTermLogger = Logger(subsystem: "com.clawdmeter.ios", category: "T
 
 /// iOS wrapper around SwiftTerm.TerminalView with a keyboard accessory bar
 /// (Esc, Ctrl, Tab, ↑↓←→). Per design Pass 7 = 7 buttons × 44pt each.
+enum IOSTerminalCommand: Equatable {
+    case send(UUID, String)
+    case raw(UUID, [UInt8])
+    case reconnect(UUID)
+}
+
 struct iOSTerminalView: UIViewRepresentable {
 
     let sessionId: UUID
@@ -17,6 +23,7 @@ struct iOSTerminalView: UIViewRepresentable {
     /// Optional tmux pane filter. When nil the daemon falls back to the
     /// session's primary pane (preserves single-pane behavior).
     var paneId: String? = nil
+    @Binding var command: IOSTerminalCommand?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(sessionId: sessionId, host: host, wsPort: wsPort, token: token, paneId: paneId)
@@ -31,7 +38,21 @@ struct iOSTerminalView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: TerminalView, context: Context) {}
+    func updateUIView(_ uiView: TerminalView, context: Context) {
+        guard let command else { return }
+        switch command {
+        case .send(_, let text):
+            context.coordinator.sendRaw(Array(text.utf8))
+        case .raw(_, let bytes):
+            context.coordinator.sendRaw(bytes)
+        case .reconnect:
+            context.coordinator.disconnect()
+            context.coordinator.connect()
+        }
+        DispatchQueue.main.async {
+            self.command = nil
+        }
+    }
 
     static func dismantleUIView(_ uiView: TerminalView, coordinator: Coordinator) {
         coordinator.disconnect()

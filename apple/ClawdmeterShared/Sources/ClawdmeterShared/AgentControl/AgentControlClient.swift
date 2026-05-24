@@ -547,6 +547,11 @@ public final class AgentControlClient: ObservableObject {
     }
 
     @MainActor
+    public var supportsCodeWorkbenchRemote: Bool {
+        AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
     public var supportsAntigravityPlan: Bool {
         AgentControlWireVersion.supportsAntigravityPlan(serverWireVersion: serverWireVersion)
     }
@@ -1501,6 +1506,64 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    /// `POST /sessions/:id/pr/review`. Runs `gh pr review` on the paired
+    /// Mac and returns the refreshed PR snapshot when available.
+    @MainActor
+    public func reviewPR(
+        sessionId: UUID,
+        action: PRReviewAction = .approve,
+        body: String? = nil,
+        idempotencyKey: String? = nil
+    ) async -> PRReviewResponse? {
+        let req = PRReviewRequest(action: action, body: body, idempotencyKey: idempotencyKey)
+        let encoded = (try? JSONEncoder().encode(req)) ?? Data()
+        guard var request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/pr/review",
+            method: "POST",
+            body: encoded
+        ) else { return nil }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(PRReviewResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// `POST /sessions/:id/diff-action/:path`. File-level staged/unstaged
+    /// operations backed by git on the paired Mac.
+    @MainActor
+    public func applyDiffAction(
+        sessionId: UUID,
+        path: String,
+        action: GitDiffActionKind,
+        idempotencyKey: String? = nil
+    ) async -> GitDiffActionResponse? {
+        let req = GitDiffActionRequest(action: action, idempotencyKey: idempotencyKey)
+        let encoded = (try? JSONEncoder().encode(req)) ?? Data()
+        guard let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              var request = makeRequest(
+                path: "/sessions/\(sessionId.uuidString)/diff-action/\(encodedPath)",
+                method: "POST",
+                body: encoded
+              )
+        else { return nil }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(GitDiffActionResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     // MARK: - v16 workspaces
 
     /// `GET /workspaces`. Returns the persisted per-repo workspaces. iOS
@@ -1547,6 +1610,157 @@ public final class AgentControlClient: ObservableObject {
             // PATCH returns the updated record at the top level + an
             // optional receipt key — decode just the record.
             return try decoder.decode(CodeWorkspaceRecord.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    // MARK: - v18 Code workbench remote runtime
+
+    @MainActor
+    public func fetchRunProfile(sessionId: UUID) async -> CodeRunProfileSnapshot? {
+        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/run-profile", method: "GET") else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeRunProfileResponse.self, from: data).profile
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func startRunProfile(sessionId: UUID, command: String) async -> CodeRunProfileSnapshot? {
+        let req = CodeRunProfileStartRequest(command: command)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(
+                path: "/sessions/\(sessionId.uuidString)/run-profile/start",
+                method: "POST",
+                body: body
+              ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeRunProfileResponse.self, from: data).profile
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func stopRunProfile(sessionId: UUID) async -> CodeRunProfileSnapshot? {
+        guard let request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/run-profile/stop",
+            method: "POST"
+        ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeRunProfileResponse.self, from: data).profile
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func listCheckpoints(sessionId: UUID) async -> [CodeCheckpointSnapshot] {
+        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/checkpoints", method: "GET") else {
+            return []
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeCheckpointListResponse.self, from: data).checkpoints
+        } catch {
+            self.lastError = error.localizedDescription
+            return []
+        }
+    }
+
+    @MainActor
+    public func createCheckpoint(sessionId: UUID, summary: String? = nil) async -> CodeCheckpointSnapshot? {
+        let req = CodeCheckpointCreateRequest(summary: summary)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(
+                path: "/sessions/\(sessionId.uuidString)/checkpoints",
+                method: "POST",
+                body: body
+              ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeCheckpointCreateResponse.self, from: data).checkpoint
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func prepareCheckpointRestore(
+        sessionId: UUID,
+        checkpointId: UUID
+    ) async -> CodeCheckpointRestorePreview? {
+        guard let request = makeRequest(
+            path: "/sessions/\(sessionId.uuidString)/checkpoints/\(checkpointId.uuidString)/prepare-restore",
+            method: "POST"
+        ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeCheckpointRestorePreviewResponse.self, from: data).preview
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func restoreCheckpoint(
+        sessionId: UUID,
+        checkpointId: UUID,
+        previewId: UUID
+    ) async -> CodeCheckpointRestoreResponse? {
+        let req = CodeCheckpointRestoreRequest(previewId: previewId)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(req),
+              let request = makeRequest(
+                path: "/sessions/\(sessionId.uuidString)/checkpoints/\(checkpointId.uuidString)/restore",
+                method: "POST",
+                body: body
+              ) else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(CodeCheckpointRestoreResponse.self, from: data)
         } catch {
             self.lastError = error.localizedDescription
             return nil

@@ -18,7 +18,7 @@ import UIKit
 /// Persisted per-session in `UserDefaults` so re-opening a session
 /// returns to the last viewed tab.
 enum SessionWorkbenchTab: String, CaseIterable, Identifiable {
-    case chat, plan, diff, sources, pr, terminal, artifacts
+    case chat, plan, diff, sources, browser, pr, terminal, artifacts
     var id: String { rawValue }
 
     var label: String {
@@ -27,6 +27,7 @@ enum SessionWorkbenchTab: String, CaseIterable, Identifiable {
         case .plan: return "Plan"
         case .diff: return "Diff"
         case .sources: return "Sources"
+        case .browser: return "Run"
         case .pr: return "PR"
         case .terminal: return "Term"
         case .artifacts: return "Files"
@@ -39,6 +40,7 @@ enum SessionWorkbenchTab: String, CaseIterable, Identifiable {
         case .plan: return "list.bullet.rectangle"
         case .diff: return "doc.text.magnifyingglass"
         case .sources: return "link"
+        case .browser: return "safari"
         case .pr: return "arrow.triangle.merge"
         case .terminal: return "terminal"
         case .artifacts: return "doc.richtext"
@@ -87,6 +89,7 @@ public struct IOSSessionDetailView: View {
     @State private var refineText: String = ""
     @State private var lastError: String?
     @State private var configSheetPresented: Bool = false
+    @State private var checkpointsSheetPresented: Bool = false
     @State private var outboxSheetPresented: Bool = false
     @State private var selectedTab: SessionWorkbenchTab
     @State private var queuedDrafts: [IOSQueuedCodeDraft]
@@ -313,6 +316,18 @@ public struct IOSSessionDetailView: View {
             }
             .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $checkpointsSheetPresented) {
+            NavigationStack {
+                if let realAgentSession {
+                    iOSCheckpointPane(client: agentClient, session: realAgentSession)
+                        .navigationTitle("Checkpoints")
+                        .navigationBarTitleDisplayMode(.inline)
+                } else {
+                    ContentUnavailableView("Session unavailable", systemImage: "exclamationmark.triangle")
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .sheet(isPresented: $outboxSheetPresented) {
             NavigationStack {
                 iOSOutboxPane(outbox: outbox, sessionId: sessionId)
@@ -356,6 +371,11 @@ public struct IOSSessionDetailView: View {
                 } label: {
                     Label("Session settings", systemImage: "slider.horizontal.3")
                 }
+                Button {
+                    checkpointsSheetPresented = true
+                } label: {
+                    Label("Checkpoints", systemImage: "bookmark")
+                }
                 Divider()
             }
             ForEach(visibleTabs) { tab in
@@ -396,6 +416,7 @@ public struct IOSSessionDetailView: View {
             }
             tabs.append(.diff)
             tabs.append(.sources)
+            tabs.append(.browser)
             // Show PR + Terminal eagerly so the user can navigate to
             // them when empty (the pane handles its own empty state).
             tabs.append(.pr)
@@ -485,7 +506,13 @@ public struct IOSSessionDetailView: View {
                 emptyState(title: "No session", body: "Session unavailable.")
             }
         case .sources:
-            iOSSourcesPane(chatStore: chatStore)
+            iOSSourcesPane(chatStore: chatStore, outbox: outbox, sessionId: sessionId)
+        case .browser:
+            if let s = realAgentSession {
+                iOSRunPreviewPane(client: agentClient, outbox: outbox, session: s)
+            } else {
+                emptyState(title: "No session", body: "Session unavailable.")
+            }
         case .pr:
             if let s = realAgentSession {
                 iOSPRPane(session: s, client: agentClient, outbox: outbox)

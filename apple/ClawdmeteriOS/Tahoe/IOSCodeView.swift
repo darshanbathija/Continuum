@@ -8,28 +8,26 @@ import ClawdmeterShared
 public struct IOSCodeView: View {
     @Environment(\.tahoe) private var t
     private enum StatusScope: String, CaseIterable, Identifiable {
-        case all, live, planning, paused, done, recent
+        case all, active, review, done, archived
         var id: String { rawValue }
 
         var label: String {
             switch self {
             case .all: return "All"
-            case .live: return "Live"
-            case .planning: return "Plan"
-            case .paused: return "Paused"
+            case .active: return "Active"
+            case .review: return "Review"
             case .done: return "Done"
-            case .recent: return "Recent"
+            case .archived: return "Archived"
             }
         }
 
         var icon: String {
             switch self {
             case .all: return "chat"
-            case .live: return "bolt"
-            case .planning: return "sparkles"
-            case .paused: return "pause"
+            case .active: return "bolt"
+            case .review: return "sparkles"
             case .done: return "check"
-            case .recent: return "archive"
+            case .archived: return "archive"
             }
         }
     }
@@ -67,11 +65,13 @@ public struct IOSCodeView: View {
     @State private var providerFilter: TahoeProvider?
     @State private var includeRecents: Bool = true
     @State private var filtersDialogPresented: Bool = false
+    @State private var workspaceSwitcherPresented: Bool = false
 
     public var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                HStack {
+                HStack(spacing: 10) {
+                    IOSRoundIconBtn("folder", action: { workspaceSwitcherPresented = true })
                     Spacer()
                     IOSRoundIconBtn("plus", action: onNewSession)
                 }
@@ -109,7 +109,14 @@ public struct IOSCodeView: View {
                     .padding(.horizontal, 14)
                     .frame(height: 38)
                 }
-                .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 18)
+                .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
+
+                // Desktop parity: a visible four-bucket status model
+                // (Active / Review / Done / Archived) with a summary
+                // "All" scope, rather than hiding status state entirely
+                // behind the filter menu.
+                statusBuckets
+                    .padding(.bottom, 16)
 
                 // Repo sections — apply the search query if non-empty.
                 let visible = filteredRepos
@@ -148,14 +155,14 @@ public struct IOSCodeView: View {
             ForEach(StatusScope.allCases) { scope in
                 Button("\(scope.label) \(statusCounts[scope] ?? 0)") {
                     statusScope = scope
-                    if scope == .recent {
+                    if scope == .archived {
                         includeRecents = true
                     }
                 }
             }
             Button(includeRecents ? "Hide recent sessions" : "Show recent sessions") {
                 includeRecents.toggle()
-                if statusScope == .recent {
+                if statusScope == .archived {
                     statusScope = .all
                 }
             }
@@ -167,6 +174,26 @@ public struct IOSCodeView: View {
                     providerFilter = provider
                 }
             }
+        }
+        .sheet(isPresented: $workspaceSwitcherPresented) {
+            Group {
+                if let agentClient {
+                    iOSWorkspaceSwitcherSheet(
+                        client: agentClient,
+                        onOpenSession: onOpenDetail,
+                        onNewSession: onNewSession
+                    )
+                } else {
+                    NavigationStack {
+                        ContentUnavailableView(
+                            "Workspace switcher unavailable",
+                            systemImage: "macbook.and.iphone",
+                            description: Text("Pair this iPhone with the Mac daemon to switch real workspaces and sessions.")
+                        )
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
         }
     }
 
@@ -180,11 +207,10 @@ public struct IOSCodeView: View {
         let recents = repos.flatMap(\.recents)
         return [
             .all: sessions.count + (includeRecents ? recents.count : 0),
-            .live: sessions.filter { $0.status == .running }.count,
-            .planning: sessions.filter { $0.status == .planning }.count,
-            .paused: sessions.filter { $0.status == .paused || $0.status == .degraded }.count,
+            .active: sessions.filter { Self.isActive($0) }.count,
+            .review: sessions.filter { Self.isInReview($0) }.count,
             .done: sessions.filter { $0.status == .done }.count,
-            .recent: recents.count,
+            .archived: recents.count,
         ]
     }
 
@@ -207,6 +233,18 @@ public struct IOSCodeView: View {
             }
             .padding(.horizontal, 16)
         }
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.05),
+                    .init(color: .black, location: 0.95),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
     }
 
     private func statusBucket(_ scope: StatusScope) -> some View {
@@ -214,7 +252,7 @@ public struct IOSCodeView: View {
         let count = statusCounts[scope] ?? 0
         return Button {
             statusScope = scope
-            if scope == .recent {
+            if scope == .archived {
                 includeRecents = true
             }
         } label: {
@@ -304,19 +342,16 @@ public struct IOSCodeView: View {
             switch statusScope {
             case .all:
                 break
-            case .live:
-                sessions = sessions.filter { $0.status == .running }
+            case .active:
+                sessions = sessions.filter { Self.isActive($0) }
                 recents = []
-            case .planning:
-                sessions = sessions.filter { $0.status == .planning }
-                recents = []
-            case .paused:
-                sessions = sessions.filter { $0.status == .paused || $0.status == .degraded }
+            case .review:
+                sessions = sessions.filter { Self.isInReview($0) }
                 recents = []
             case .done:
                 sessions = sessions.filter { $0.status == .done }
                 recents = []
-            case .recent:
+            case .archived:
                 sessions = []
             }
             guard !sessions.isEmpty || !recents.isEmpty else { return nil }
@@ -351,6 +386,23 @@ public struct IOSCodeView: View {
                 recents: repoMatches ? repo.recents : matchedRecents
             )
         }
+    }
+
+    private static func isActive(_ session: TahoeCodeSession) -> Bool {
+        switch session.status {
+        case .running, .paused, .degraded:
+            return true
+        case .planning, .done:
+            return false
+        }
+    }
+
+    private static func isInReview(_ session: TahoeCodeSession) -> Bool {
+        if session.status == .planning { return true }
+        if let plan = session.runtimePlanText?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty {
+            return true
+        }
+        return false
     }
 }
 

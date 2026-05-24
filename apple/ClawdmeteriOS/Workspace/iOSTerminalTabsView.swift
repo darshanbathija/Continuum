@@ -1,5 +1,8 @@
 import SwiftUI
 import ClawdmeterShared
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Sessions v2 T33. Multi-pane terminal container for iOS — wraps
 /// `iOSTerminalView` in a TabView so the user can spawn additional tmux
@@ -18,10 +21,15 @@ struct iOSTerminalTabsView: View {
     @State private var addDraft: String = ""
     @State private var renameTarget: TerminalPaneRef? = nil
     @State private var renameDraft: String = ""
+    @State private var commandDraft: String = ""
+    @State private var terminalCommand: IOSTerminalCommand?
 
     var body: some View {
         VStack(spacing: 0) {
             tabStrip
+            if hasLiveTerminal {
+                commandBar
+            }
             TahoeHair()
             paneContent
         }
@@ -45,6 +53,70 @@ struct iOSTerminalTabsView: View {
         } message: {
             Text("Saved on the Mac and kept after the session list reloads.")
         }
+    }
+
+    private var commandBar: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 7) {
+                TextField("Send command to selected pane", text: $commandDraft)
+                    .font(TahoeFont.mono(11.5))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.send)
+                    .onSubmit(sendCommandDraft)
+                Button {
+                    sendCommandDraft()
+                } label: {
+                    Label("Send", systemImage: "return")
+                        .labelStyle(.iconOnly)
+                }
+                .disabled(commandDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    controlButton("Ctrl-C", bytes: [0x03])
+                    controlButton("Ctrl-D", bytes: [0x04])
+                    controlButton("Esc", bytes: [0x1B])
+                    controlButton("Tab", bytes: [0x09])
+                    controlButton("Clear", bytes: [0x0C])
+                    Button {
+                        terminalCommand = .reconnect(UUID())
+                    } label: {
+                        Label("Reconnect", systemImage: "arrow.clockwise")
+                    }
+                    #if canImport(UIKit)
+                    Button {
+                        if let pasted = UIPasteboard.general.string, !pasted.isEmpty {
+                            terminalCommand = .send(UUID(), pasted)
+                        }
+                    } label: {
+                        Label("Paste", systemImage: "doc.on.clipboard")
+                    }
+                    #endif
+                }
+                .font(TahoeFont.body(11, weight: .semibold))
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+    }
+
+    private func controlButton(_ title: String, bytes: [UInt8]) -> some View {
+        Button {
+            terminalCommand = .raw(UUID(), bytes)
+        } label: {
+            Text(title)
+        }
+    }
+
+    private func sendCommandDraft() {
+        let trimmed = commandDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        terminalCommand = .send(UUID(), trimmed + "\n")
+        commandDraft = ""
     }
 
     private func applyRename() async {
@@ -189,7 +261,8 @@ struct iOSTerminalTabsView: View {
                 host: host,
                 wsPort: client.wsPort,
                 token: token,
-                paneId: selectedPaneId
+                paneId: selectedPaneId,
+                command: $terminalCommand
             )
             .id(selectedPaneId ?? "primary")
         } else {

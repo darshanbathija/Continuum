@@ -13,6 +13,8 @@ struct iOSDiffView: View {
 
     @State private var files: [GitDiffFile] = []
     @State private var isLoading: Bool = true
+    @State private var applyingPath: String?
+    @State private var discardTarget: GitDiffFile?
     @State private var errorMessage: String?
 
     var body: some View {
@@ -36,6 +38,21 @@ struct iOSDiffView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await refresh() }
         .task { await refresh() }
+        .confirmationDialog(
+            "Discard this file's local changes?",
+            isPresented: Binding(
+                get: { discardTarget != nil },
+                set: { if !$0 { discardTarget = nil } }
+            ),
+            presenting: discardTarget
+        ) { file in
+            Button("Discard \(file.path)", role: .destructive) {
+                Task { await apply(.discardFile, to: file) }
+            }
+            Button("Cancel", role: .cancel) { discardTarget = nil }
+        } message: { file in
+            Text("This is destructive. Untracked files move to Trash; tracked changes are restored from HEAD.")
+        }
     }
 
     @ViewBuilder
@@ -61,6 +78,9 @@ struct iOSDiffView: View {
                                             .foregroundStyle(.green)
                                         Text("-\(file.deletions)")
                                             .foregroundStyle(.red)
+                                        if let changeState = file.changeState {
+                                            changeStatePill(changeState)
+                                        }
                                         if file.truncated {
                                             Text("truncated")
                                                 .foregroundStyle(t.fg4)
@@ -77,6 +97,32 @@ struct iOSDiffView: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        diffActionButtons(for: file)
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        Button {
+                            Task { await apply(.stageFile, to: file) }
+                        } label: {
+                            Label("Stage", systemImage: "plus.square")
+                        }
+                        .tint(.green)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            discardTarget = file
+                        } label: {
+                            Label("Discard", systemImage: "trash")
+                        }
+                        if file.changeState == "staged" || file.changeState == "mixed" {
+                            Button {
+                                Task { await apply(.unstageFile, to: file) }
+                            } label: {
+                                Label("Unstage", systemImage: "minus.square")
+                            }
+                            .tint(.orange)
+                        }
+                    }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(rowAccessibilityLabel(file))
                     .accessibilityHint("Double-tap to view the hunks.")
@@ -84,6 +130,36 @@ struct iOSDiffView: View {
             }
             .padding(14)
         }
+    }
+
+    @ViewBuilder
+    private func diffActionButtons(for file: GitDiffFile) -> some View {
+        Button {
+            Task { await apply(.stageFile, to: file) }
+        } label: {
+            Label("Stage file", systemImage: "plus.square")
+        }
+        if file.changeState == "staged" || file.changeState == "mixed" {
+            Button {
+                Task { await apply(.unstageFile, to: file) }
+            } label: {
+                Label("Unstage file", systemImage: "minus.square")
+            }
+        }
+        Button(role: .destructive) {
+            discardTarget = file
+        } label: {
+            Label("Discard file", systemImage: "trash")
+        }
+    }
+
+    private func changeStatePill(_ state: String) -> some View {
+        Text(state.capitalized)
+            .font(TahoeFont.body(9.5, weight: .bold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(t.glassTintHi, in: Capsule())
+            .foregroundStyle(t.fg4)
     }
 
     private var emptyState: some View {
@@ -142,6 +218,22 @@ struct iOSDiffView: View {
             self.isLoading = false
         }
     }
+
+    @MainActor
+    private func apply(_ action: GitDiffActionKind, to file: GitDiffFile) async {
+        applyingPath = file.path
+        defer {
+            applyingPath = nil
+            discardTarget = nil
+        }
+        if let response = await client.applyDiffAction(sessionId: session.id, path: file.path, action: action),
+           response.ok {
+            files = response.files
+            errorMessage = nil
+        } else {
+            errorMessage = client.lastError ?? "The Mac could not apply this diff action."
+        }
+    }
 }
 
 /// File-level diff view with per-hunk paginated rendering for large diffs.
@@ -153,6 +245,8 @@ struct iOSDiffFileView: View {
 
     @State private var loadedFile: GitDiffFile?
     @State private var isLoading = false
+    @State private var isApplying = false
+    @State private var discardPresented = false
     @State private var errorMessage: String?
 
     private var file: GitDiffFile { loadedFile ?? initialFile }
@@ -187,10 +281,42 @@ struct iOSDiffFileView: View {
         }
         .navigationTitle(file.path)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        Task { await apply(.stageFile) }
+                    } label: {
+                        Label("Stage file", systemImage: "plus.square")
+                    }
+                    Button {
+                        Task { await apply(.unstageFile) }
+                    } label: {
+                        Label("Unstage file", systemImage: "minus.square")
+                    }
+                    Button(role: .destructive) {
+                        discardPresented = true
+                    } label: {
+                        Label("Discard file", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: isApplying ? "clock.arrow.circlepath" : "ellipsis.circle")
+                }
+                .disabled(isApplying)
+            }
+        }
         .task(id: initialFile.path) {
             if initialFile.truncated || initialFile.hunks.isEmpty {
                 await loadFullFile()
             }
+        }
+        .confirmationDialog("Discard file changes?", isPresented: $discardPresented) {
+            Button("Discard", role: .destructive) {
+                Task { await apply(.discardFile) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This is destructive. Untracked files move to Trash; tracked changes are restored from HEAD.")
         }
     }
 
@@ -204,6 +330,34 @@ struct iOSDiffFileView: View {
             errorMessage = client.lastError ?? "The Mac did not return this file's hunks."
         }
         isLoading = false
+    }
+
+    @MainActor
+    private func apply(_ action: GitDiffActionKind) async {
+        isApplying = true
+        defer { isApplying = false }
+        if let response = await client.applyDiffAction(sessionId: session.id, path: file.path, action: action),
+           response.ok {
+            if let refreshed = response.files.first(where: { $0.path == file.path }) {
+                loadedFile = refreshed
+                if refreshed.truncated || refreshed.hunks.isEmpty {
+                    await loadFullFile()
+                }
+            } else {
+                loadedFile = GitDiffFile(
+                    path: file.path,
+                    status: file.status,
+                    additions: 0,
+                    deletions: 0,
+                    hunks: [],
+                    truncated: false,
+                    changeState: nil
+                )
+            }
+            errorMessage = nil
+        } else {
+            errorMessage = client.lastError ?? "The Mac could not apply this diff action."
+        }
     }
 
     @ViewBuilder

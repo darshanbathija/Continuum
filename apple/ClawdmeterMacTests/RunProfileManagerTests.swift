@@ -79,6 +79,50 @@ final class RunProfileManagerTests: XCTestCase {
         XCTAssertEqual(manager.stateSnapshot.status, "exited")
     }
 
+    func test_codeRunProfileServiceCapturesMacHostedRunOutput() async throws {
+        let sessionId = UUID()
+        let service = CodeRunProfileService(processManager: FakeRunProcessManager(
+            outputs: [.stdout("remote ready at http://localhost:4555\n")],
+            exitCode: 0
+        ))
+        let session = agentSession(id: sessionId, cwd: "/tmp/clawdmeter-remote-run")
+
+        let starting = await service.start(
+            session: session,
+            command: "npm run dev",
+            messages: []
+        )
+        XCTAssertEqual(starting.sessionId, sessionId)
+        XCTAssertEqual(starting.cwd, "/tmp/clawdmeter-remote-run")
+        XCTAssertEqual(starting.command, "npm run dev")
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let snapshot = await service.snapshot(session: session, messages: [])
+
+        XCTAssertEqual(snapshot.status, .exited)
+        XCTAssertEqual(snapshot.lastExitCode, 0)
+        XCTAssertEqual(snapshot.stdoutLines, ["remote ready at http://localhost:4555"])
+        XCTAssertEqual(snapshot.detectedURL, "http://localhost:4555")
+        XCTAssertEqual(snapshot.source, "run")
+    }
+
+    func test_codeRunProfileServiceDetectsTranscriptPreviewURL() async {
+        let sessionId = UUID()
+        let service = CodeRunProfileService(processManager: FakeRunProcessManager(outputs: [], exitCode: 0))
+        let session = agentSession(id: sessionId, cwd: "/tmp/clawdmeter-transcript")
+
+        let snapshot = await service.snapshot(
+            session: session,
+            messages: [message("preview served at http://127.0.0.1:5173/app")]
+        )
+
+        XCTAssertEqual(snapshot.sessionId, sessionId)
+        XCTAssertEqual(snapshot.cwd, "/tmp/clawdmeter-transcript")
+        XCTAssertEqual(snapshot.status, .idle)
+        XCTAssertEqual(snapshot.detectedURL, "http://127.0.0.1:5173/app")
+        XCTAssertEqual(snapshot.source, "transcript")
+    }
+
     func test_localRunProcessE2ESmokeDetectsHealthyPreviewAndBuildsBrowserContext() async throws {
         guard ShellRunner.locateBinary("python3") != nil else {
             throw XCTSkip("python3 is required for the run/preview smoke test")
@@ -191,6 +235,27 @@ final class RunProfileManagerTests: XCTestCase {
             title: "Agent",
             body: body,
             at: Date()
+        )
+    }
+
+    private func agentSession(id: UUID, cwd: String) -> AgentSession {
+        AgentSession(
+            id: id,
+            repoKey: cwd,
+            repoDisplayName: "Test",
+            agent: .claude,
+            model: nil,
+            goal: nil,
+            worktreePath: nil,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: .running,
+            planText: nil,
+            createdAt: Date(),
+            lastEventAt: Date(),
+            lastEventSeq: 1,
+            mode: .local,
+            runtimeCwd: cwd
         )
     }
 

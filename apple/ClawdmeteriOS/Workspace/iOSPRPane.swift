@@ -18,7 +18,16 @@ struct iOSPRPane: View {
     @State private var pr: PRStatus?
     @State private var isLoading: Bool = true
     @State private var isCreating: Bool = false
+    @State private var isReviewing: Bool = false
+    @State private var isMerging: Bool = false
     @State private var showingMergeConfirm: Bool = false
+    @State private var showingReviewSheet: Bool = false
+    @State private var mergeMethod: PRMergeMethod = .squash
+    @State private var deleteBranch: Bool = false
+    @State private var autoMerge: Bool = false
+    @State private var adminOverride: Bool = false
+    @State private var reviewAction: PRReviewAction = .approve
+    @State private var reviewBody: String = ""
     @State private var bannerMessage: String?
 
     var body: some View {
@@ -36,6 +45,14 @@ struct iOSPRPane: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await refresh() }
         .task { await refresh() }
+        .sheet(isPresented: $showingReviewSheet) {
+            NavigationStack {
+                reviewForm
+                    .navigationTitle("Review PR")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+            .presentationDetents([.medium, .large])
+        }
         .overlay(alignment: .top) {
             if let bannerMessage {
                 Text(bannerMessage)
@@ -126,6 +143,21 @@ struct iOSPRPane: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                if let checks = pr.checks, !checks.isEmpty {
+                    TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Checks")
+                                .font(TahoeFont.body(11.5, weight: .bold))
+                                .foregroundStyle(t.fg3)
+                            ForEach(checks) { check in
+                                checkRow(check)
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
                 Button {
                     if let url = URL(string: pr.url) {
                         UIApplication.shared.open(url)
@@ -148,15 +180,15 @@ struct iOSPRPane: View {
                 .buttonStyle(.plain)
 
                 let mergeAllowed = canMerge(pr)
+                reviewActions(pr)
+
                 VStack(alignment: .leading, spacing: 6) {
                     Button(role: .destructive) {
-                        if mergeAllowed {
-                            showingMergeConfirm = true
-                        }
+                        showingMergeConfirm = true
                     } label: {
                         HStack(spacing: 7) {
                             TahoeIcon("branch", size: 12)
-                            Text("Merge")
+                            Text(isMerging ? "Merging..." : "Merge")
                                 .font(TahoeFont.body(12.5, weight: .bold))
                         }
                         .frame(maxWidth: .infinity)
@@ -172,7 +204,7 @@ struct iOSPRPane: View {
                         .foregroundStyle(mergeAllowed ? .white : t.fg3)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!mergeAllowed)
+                    .disabled(!mergeAllowed || isMerging)
                     .opacity(mergeAllowed ? 1 : 0.45)
                     .accessibilityLabel("Merge pull request to main")
                     .accessibilityHint(mergeAllowed ? "Asks for confirmation before merging." : mergeBlockedReason(pr))
@@ -184,14 +216,46 @@ struct iOSPRPane: View {
                     }
                 }
                 .alert("Merge to main?", isPresented: $showingMergeConfirm) {
-                    Button("Merge anyway", role: .destructive) { Task { await merge() } }
+                    Button("Merge", role: .destructive) { Task { await merge() } }
                     Button("Open PR instead") { showingMergeConfirm = false }
                     Button("Cancel", role: .cancel) { }
                 } message: {
-                    Text("This will commit to your local main branch.")
+                    Text(mergeSummary)
                 }
             }
             .padding(16)
+        }
+    }
+
+    private var mergeSummary: String {
+        var parts = ["Method: \(mergeMethod.rawValue)."]
+        if deleteBranch { parts.append("Delete branch after merge.") }
+        if autoMerge { parts.append("Enable auto-merge if GitHub allows it.") }
+        if adminOverride { parts.append("Use admin override.") }
+        return parts.joined(separator: " ")
+    }
+
+    private var reviewForm: some View {
+        Form {
+            Section("Action") {
+                Picker("Review", selection: $reviewAction) {
+                    Text("Approve").tag(PRReviewAction.approve)
+                    Text("Comment").tag(PRReviewAction.comment)
+                    Text("Request changes").tag(PRReviewAction.requestChanges)
+                }
+                .pickerStyle(.segmented)
+                TextField("Optional review body", text: $reviewBody, axis: .vertical)
+                    .lineLimit(3...8)
+            }
+            Section {
+                Button {
+                    Task { await submitReview() }
+                    showingReviewSheet = false
+                } label: {
+                    Label("Submit review", systemImage: "checkmark.seal")
+                }
+                .disabled(isReviewing)
+            }
         }
     }
 
@@ -204,6 +268,86 @@ struct iOSPRPane: View {
                 .font(TahoeFont.mono(11.5))
                 .foregroundStyle(color)
             Spacer()
+        }
+    }
+
+    private func checkRow(_ check: PRCheckMirror) -> some View {
+        HStack(spacing: 8) {
+            TahoeIcon(checkGlyph(check.state), size: 11)
+                .foregroundStyle(checkColor(check.state))
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(check.name)
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                    .lineLimit(1)
+                if let completedAt = check.completedAt {
+                    Text(completedAt, style: .relative)
+                        .font(TahoeFont.body(10))
+                        .foregroundStyle(t.fg4)
+                }
+            }
+            Spacer()
+            Text(check.state.rawValue.capitalized)
+                .font(TahoeFont.body(10.5, weight: .bold))
+                .foregroundStyle(checkColor(check.state))
+        }
+    }
+
+    @ViewBuilder
+    private func reviewActions(_ pr: PRStatus) -> some View {
+        if pr.state == .open || pr.state == .draft {
+            TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Review")
+                            .font(TahoeFont.body(11.5, weight: .bold))
+                            .foregroundStyle(t.fg3)
+                        Spacer()
+                        if isReviewing {
+                            ProgressView().controlSize(.mini)
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Button {
+                            reviewAction = .approve
+                            reviewBody = ""
+                            Task { await submitReview() }
+                        } label: {
+                            Label("Approve", systemImage: "checkmark.seal.fill")
+                        }
+                        .tint(.green)
+                        Button {
+                            reviewAction = .comment
+                            reviewBody = ""
+                            showingReviewSheet = true
+                        } label: {
+                            Label("Comment", systemImage: "text.bubble")
+                        }
+                        Button {
+                            reviewAction = .requestChanges
+                            reviewBody = ""
+                            showingReviewSheet = true
+                        } label: {
+                            Label("Changes", systemImage: "exclamationmark.bubble")
+                        }
+                    }
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Picker("Merge method", selection: $mergeMethod) {
+                        Text("Squash").tag(PRMergeMethod.squash)
+                        Text("Merge").tag(PRMergeMethod.merge)
+                        Text("Rebase").tag(PRMergeMethod.rebase)
+                    }
+                    .pickerStyle(.segmented)
+                    Toggle("Delete branch", isOn: $deleteBranch)
+                    Toggle("Auto-merge", isOn: $autoMerge)
+                    Toggle("Admin override", isOn: $adminOverride)
+                }
+                .padding(12)
+            }
         }
     }
 
@@ -245,8 +389,28 @@ struct iOSPRPane: View {
         }
     }
 
+    private func checkGlyph(_ state: PRCheckState) -> String {
+        switch state {
+        case .success: return "check"
+        case .pending: return "clock"
+        case .failure: return "x"
+        case .skipped: return "minus"
+        case .unknown: return "question"
+        }
+    }
+
+    private func checkColor(_ state: PRCheckState) -> Color {
+        switch state {
+        case .success: return .green
+        case .pending: return SessionsV2Theme.warn
+        case .failure: return .red
+        case .skipped, .unknown: return .secondary
+        }
+    }
+
     private func canMerge(_ pr: PRStatus) -> Bool {
         guard pr.state == .open else { return false }
+        if adminOverride { return true }
         guard let checks = pr.checksRollup?.trimmingCharacters(in: .whitespacesAndNewlines),
               !checks.isEmpty
         else { return true }
@@ -297,13 +461,53 @@ struct iOSPRPane: View {
 
     @MainActor
     private func merge() async {
+        isMerging = true
         bannerMessage = "Merging…"
+        defer { isMerging = false }
         if let outbox {
-            outbox.enqueueMerge(sessionId: session.id)
+            outbox.enqueueMerge(
+                sessionId: session.id,
+                method: mergeMethod,
+                deleteBranch: deleteBranch,
+                auto: autoMerge,
+                adminOverride: adminOverride
+            )
             bannerMessage = "Queued merge"
         } else {
-            let ok = await client.merge(sessionId: session.id)?.ok == true
+            let ok = await client.merge(
+                sessionId: session.id,
+                method: mergeMethod,
+                deleteBranch: deleteBranch,
+                auto: autoMerge,
+                adminOverride: adminOverride
+            )?.ok == true
             bannerMessage = ok ? "Merged" : "Merge failed - open PR or resolve on Mac"
+        }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        bannerMessage = nil
+        await refresh()
+    }
+
+    @MainActor
+    private func submitReview() async {
+        isReviewing = true
+        bannerMessage = "Submitting review…"
+        defer { isReviewing = false }
+        let trimmed = reviewBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = await client.reviewPR(
+            sessionId: session.id,
+            action: reviewAction,
+            body: trimmed.isEmpty ? nil : trimmed
+        )
+        if result?.ok == true {
+            bannerMessage = "Review submitted"
+            if let refreshed = result?.pr {
+                pr = refreshed
+            } else {
+                await refresh()
+            }
+        } else {
+            bannerMessage = result?.error ?? client.lastError ?? "Review failed"
         }
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         bannerMessage = nil
