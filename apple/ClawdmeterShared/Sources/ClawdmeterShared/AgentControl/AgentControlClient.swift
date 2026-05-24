@@ -481,11 +481,32 @@ public final class AgentControlClient: ObservableObject {
     }
 
     private func sendChecked(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await runRequest(request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw ClientHTTPError.badStatus(http.statusCode, http.value(forHTTPHeaderField: "Retry-After"))
         }
         return data
+    }
+
+    private func runRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        struct NetResult: Sendable {
+            let data: Data
+            let response: URLResponse
+        }
+
+        let result: NetResult = try await withCheckedThrowingContinuation { continuation in
+            let task = URLSession.shared.dataTask(with: request) { data, response, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let data, let response {
+                    continuation.resume(returning: NetResult(data: data, response: response))
+                } else {
+                    continuation.resume(throwing: URLError(.unknown))
+                }
+            }
+            task.resume()
+        }
+        return (result.data, result.response)
     }
 
     @MainActor
@@ -1105,7 +1126,7 @@ public final class AgentControlClient: ObservableObject {
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 30
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await runRequest(req)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw ArtifactError.badStatus(http.statusCode)
         }
@@ -1143,7 +1164,7 @@ public final class AgentControlClient: ObservableObject {
         guard let path = comps.url?.absoluteString,
               let request = makeRequest(path: path) else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await runRequest(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 return nil
             }
@@ -2081,7 +2102,7 @@ public final class AgentControlClient: ObservableObject {
     public func fetchUsage() async -> UsageEnvelope? {
         guard let request = makeRequest(path: "/usage") else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await runRequest(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 return nil
             }
@@ -2100,7 +2121,7 @@ public final class AgentControlClient: ObservableObject {
     public func fetchAnalytics() async -> UsageHistorySnapshot? {
         guard let request = makeRequest(path: "/analytics") else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await runRequest(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 return nil
             }
@@ -2273,7 +2294,7 @@ public final class AgentControlClient: ObservableObject {
               let request = makeRequest(path: query)
         else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await runRequest(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 clientLogger.warning("transcript fetch HTTP \(http.statusCode) for \(path)")
                 return nil
