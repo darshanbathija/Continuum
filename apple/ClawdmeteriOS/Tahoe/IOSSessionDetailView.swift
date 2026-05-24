@@ -43,6 +43,12 @@ enum SessionWorkbenchTab: String, CaseIterable, Identifiable {
 public struct IOSSessionDetailView: View {
     @Environment(\.tahoe) private var t
     @ObservedObject var agentClient: AgentControlClient
+    /// v0.26 follow-up: app-scoped mobile command outbox owned by
+    /// `IOSRootView`. Receive as `@ObservedObject` (not `@StateObject`)
+    /// so a session detail navigation doesn't create a fresh outbox per
+    /// view — the single app-scoped queue serves every session and the
+    /// persisted `outbox.json` is never raced by sibling instances.
+    @ObservedObject var outbox: MobileCommandOutbox
     var sessionId: UUID
     var data: TahoeCodeBindings
     var onBack: () -> Void
@@ -56,20 +62,20 @@ public struct IOSSessionDetailView: View {
     @State private var outboxSheetPresented: Bool = false
     @State private var selectedTab: SessionWorkbenchTab
     @StateObject private var chatStore: iOSChatStore
-    @StateObject private var outbox: MobileCommandOutbox
 
     public init(
         agentClient: AgentControlClient,
+        outbox: MobileCommandOutbox,
         sessionId: UUID,
         data: TahoeCodeBindings,
         onBack: @escaping () -> Void
     ) {
         self.agentClient = agentClient
+        self.outbox = outbox
         self.sessionId = sessionId
         self.data = data
         self.onBack = onBack
         _chatStore = StateObject(wrappedValue: iOSChatStore(sessionId: sessionId, client: agentClient))
-        _outbox = StateObject(wrappedValue: MobileCommandOutbox(client: agentClient))
         // Restore last-selected tab per session. Chat is the default for
         // a freshly opened session.
         let stored = UserDefaults.standard.string(forKey: "clawdmeter.ios.session.\(sessionId).tab")
@@ -460,34 +466,32 @@ public struct IOSSessionDetailView: View {
             composerText = ""
             return
         }
-        sending = true
-        defer { sending = false }
-        // Audit P2 fix: previously the composer text was cleared
-        // unconditionally on every send. If the Mac was offline / the
-        // token expired / the daemon rejected the request, the user's
-        // typed-out prompt was just gone. Clear only on success; on
-        // failure keep the text so the user can retry.
-        let ok = await agentClient.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
-        if ok { composerText = "" }
+        // v0.26 follow-up: route through outbox so retries dedup via the
+        // wire-v16 idempotency contract, offline sends queue + retry
+        // with exp backoff, and failures surface in the per-session
+        // outbox badge instead of getting silently swallowed. Clear
+        // composer immediately — the outbox owns delivery from here
+        // on, and a stuck delivery is now visible in the queue UI
+        // rather than holding the composer hostage.
+        outbox.enqueueSend(sessionId: sessionId, text: trimmed, asFollowUp: true)
+        composerText = ""
     }
 
     @MainActor
     private func sendRefine() async {
         let trimmed = refineText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, session != nil, !data.isDemo else { return }
-        sending = true
-        defer { sending = false }
-        let ok = await agentClient.sendPrompt(sessionId: sessionId, text: trimmed, asFollowUp: true)
-        if ok { refineText = "" }
+        // Same routing rationale as sendComposer — refine is just a
+        // send tagged as a plan-mode follow-up.
+        outbox.enqueueSend(sessionId: sessionId, text: trimmed, asFollowUp: true)
+        refineText = ""
     }
 
     @MainActor
     private func approvePlan() async {
         guard session != nil else { return }
         guard !data.isDemo else { return }  // demo plan, no real id to approve
-        sending = true
-        defer { sending = false }
-        await agentClient.approvePlan(sessionId: sessionId)
+        outbox.enqueueApprovePlan(sessionId: sessionId)
     }
 
     private func openConfigSheet() {

@@ -23,11 +23,19 @@ public struct IOSRootView: View {
     @ObservedObject private var usageModel: UsageModel
     /// Daemon-backed agent client. Drives the Code tab's session list.
     @ObservedObject private var agentClient: AgentControlClient
+    /// v0.26 follow-up: app-scoped mobile command outbox. Was previously
+    /// held as `@StateObject` per `IOSSessionDetailView` — each navigation
+    /// created a fresh instance reading/writing the shared `outbox.json`,
+    /// so iPad multi-window or rapid session switches could race the
+    /// persisted file. Hoisting to app scope means one outbox owns
+    /// the queue for the whole process; views downstream observe it.
+    @StateObject private var outbox: MobileCommandOutbox
 
     public init(usageModel: UsageModel, agentClient: AgentControlClient) {
         self.usageModel = usageModel
         self.agentClient = agentClient
         _theme = State(initialValue: TahoeThemeStore.loaded())
+        _outbox = StateObject(wrappedValue: MobileCommandOutbox(client: agentClient))
     }
 
     public var body: some View {
@@ -89,6 +97,7 @@ public struct IOSRootView: View {
         case .sessionDetail(let id):
             IOSSessionDetailView(
                 agentClient: agentClient,
+                outbox: outbox,
                 sessionId: id,
                 data: code,
                 onBack: { pushedScreen = nil }
