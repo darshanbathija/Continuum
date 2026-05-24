@@ -216,21 +216,11 @@ public struct IOSSessionDetailView: View {
                     .buttonStyle(.plain)
                 }
 
-                if session != nil && !data.isDemo {
-                    IOSRoundIconBtn("sliders", action: openConfigSheet)
-                } else if data.isDemo {
-                    IOSRoundIconBtn("sliders")
+                if session != nil {
+                    sessionMenuButton
                 }
             }
             .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
-
-            // v16 workbench tab strip. Hidden when no session is found; the
-            // chat tab then renders the unavailable-session empty state.
-            if !data.isDemo && session != nil {
-                tabChipStrip
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-            }
 
             // v16 tab body. Each branch renders the pane for the current
             // tab. Chat keeps its custom thread + composer; the other
@@ -248,12 +238,12 @@ public struct IOSSessionDetailView: View {
                         .padding(.horizontal, 12)
                         .padding(.top, 8)
                 }
-                TahoeGlass(radius: 22, tone: .raised) {
-                    VStack(alignment: .leading, spacing: 8) {
+                TahoeGlass(radius: isPlanApprovalMode ? 18 : 22, tone: .raised) {
+                    VStack(alignment: .leading, spacing: isPlanApprovalMode ? 6 : 8) {
                         if !attachments.isEmpty {
                             attachmentStrip
                         }
-                        if !composerChips.isEmpty {
+                        if !isPlanApprovalMode && !composerChips.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 6) {
                                     ForEach(composerChips, id: \.id) { chip in
@@ -266,11 +256,10 @@ public struct IOSSessionDetailView: View {
                             TextField(composerPlaceholder, text: $composerText, axis: .vertical)
                                 .font(TahoeFont.body(14))
                                 .foregroundStyle(t.fg)
-                                .lineLimit(1...4)
+                                .lineLimit(isPlanApprovalMode ? 1...2 : 1...4)
                                 .textInputAutocapitalization(.sentences)
                                 .submitLabel(.send)
-                            .disabled((session == nil && !data.isDemo) || isPlanApprovalMode)
-                            .opacity(isPlanApprovalMode ? 0.56 : 1)
+                            .disabled(session == nil && !data.isDemo)
                             Spacer(minLength: 4)
                             attachButton
                             Button(action: { Task { await sendComposer() } }) {
@@ -291,9 +280,9 @@ public struct IOSSessionDetailView: View {
                             .disabled(!canSend)
                         }
                     }
-                    .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 10)
+                    .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, isPlanApprovalMode ? 7 : 10)
                 }
-                .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 14)
+                .padding(.horizontal, 12).padding(.top, isPlanApprovalMode ? 6 : 10).padding(.bottom, isPlanApprovalMode ? 10 : 14)
             }
         }
         .alert("Refine the plan", isPresented: $refineAlertShown) {
@@ -358,6 +347,37 @@ public struct IOSSessionDetailView: View {
     }
 
     // MARK: - Tab UI
+
+    private var sessionMenuButton: some View {
+        Menu {
+            if !data.isDemo {
+                Button {
+                    openConfigSheet()
+                } label: {
+                    Label("Session settings", systemImage: "slider.horizontal.3")
+                }
+                Divider()
+            }
+            ForEach(visibleTabs) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    Label(tab.label, systemImage: tab.icon)
+                }
+            }
+        } label: {
+            TahoeIcon("sliders", size: 16)
+                .foregroundStyle(t.fg)
+                .frame(width: 40, height: 38)
+                .background {
+                    Capsule(style: .continuous).fill(t.glassTintHi)
+                }
+                .overlay {
+                    Capsule(style: .continuous).stroke(t.hairline, lineWidth: 0.5)
+                }
+        }
+        .buttonStyle(.plain)
+    }
 
     /// Visible tabs change with session state. Plan only when there's a
     /// plan; all backed review panes stay visible so empty states do not
@@ -606,10 +626,12 @@ public struct IOSSessionDetailView: View {
 
     private var canSend: Bool {
         guard session != nil || data.isDemo else { return false }
-        guard !isPlanApprovalMode else { return false }
         let hasText = !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasReadyAttachment = attachments.contains { $0.remotePath != nil }
         let anyUploading = attachments.contains(where: \.isUploading)
+        if isPlanApprovalMode {
+            return hasText && !anyUploading && session != nil && !data.isDemo
+        }
         return (hasText || hasReadyAttachment) && !anyUploading
     }
 
@@ -1202,6 +1224,15 @@ private struct IOSPlanHaloMini: View {
     var onRefine: () -> Void
     var onApprove: () -> Void
 
+    private var estimatedCostLabel: String {
+        switch steps.count {
+        case 0...2: return "~$0.08"
+        case 3: return "~$0.12"
+        case 4: return "~$0.15"
+        default: return "~$0.18"
+        }
+    }
+
     var body: some View {
         if steps.isEmpty {
             EmptyView()
@@ -1224,18 +1255,17 @@ private struct IOSPlanHaloMini: View {
                                 .shadow(color: t.accentDeep.color(opacity: 0.35), radius: 6, x: 0, y: 4)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("PLAN READY")
-                                    .font(TahoeFont.body(11, weight: .bold))
-                                    .tracking(0.4)
-                                    .foregroundStyle(t.fg3)
-                                Text("\(steps.count) step\(steps.count == 1 ? "" : "s")")
-                                    .font(TahoeFont.body(13, weight: .bold))
+                                    .font(TahoeFont.body(10.5, weight: .bold))
                                     .foregroundStyle(t.fg)
+                                Text("\(steps.count) step\(steps.count == 1 ? "" : "s") · \(estimatedCostLabel)")
+                                    .font(TahoeFont.body(11.5, weight: .semibold))
+                                    .foregroundStyle(t.fg3)
                             }
                             Spacer()
                         }
-                        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
+                        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 8)
 
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 5) {
                             ForEach(Array(steps.prefix(3).enumerated()), id: \.offset) { i, step in
                                 HStack(alignment: .top, spacing: 9) {
                                     ZStack {
@@ -1244,27 +1274,28 @@ private struct IOSPlanHaloMini: View {
                                     }
                                     .frame(width: 18, height: 18)
                                     Text(step)
-                                        .font(TahoeFont.body(12.5))
+                                        .font(TahoeFont.body(12))
                                         .foregroundStyle(t.fg)
+                                        .lineLimit(2)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                             if steps.count > 3 {
-                                Text("+ \(steps.count - 3) more step\(steps.count - 3 == 1 ? "" : "s")…")
-                                    .font(TahoeFont.body(11.5))
+                                Text("+ \(steps.count - 3) more step\(steps.count - 3 == 1 ? "" : "s")...")
+                                    .font(TahoeFont.body(11))
                                     .foregroundStyle(t.fg3)
                                     .padding(.leading, 27)
                             }
                         }
-                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
+                        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 11)
 
                         TahoeHair()
 
                         HStack(spacing: 8) {
-                            TahoeGhostButton(size: .l, action: onRefine) { Text("Refine") }
+                            TahoeGhostButton(size: .m, action: onRefine) { Text("Refine") }
                                 .frame(maxWidth: .infinity)
-                            TahoeAccentButton(size: .l, action: onApprove) { Text("Approve & run") }
-                                .frame(maxWidth: .infinity * 2)
+                            TahoeAccentButton(size: .m, action: onApprove) { Text("Approve & run") }
+                                .frame(maxWidth: .infinity)
                                 .opacity(canApprove ? 1.0 : 0.5)
                                 .disabled(!canApprove)
                         }

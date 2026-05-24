@@ -274,7 +274,8 @@ public final class AgentControlClient: ObservableObject {
                 PlanStep(id: "1", text: "Replace settlement dedupe with an atomic insert path.", isComplete: true),
                 PlanStep(id: "2", text: "Add a unique index on settlements.fill_id.", isComplete: true),
                 PlanStep(id: "3", text: "Lift cache invalidation to daemon scope.", isComplete: false),
-                PlanStep(id: "4", text: "Add a 200-writer regression test.", isComplete: false)
+                PlanStep(id: "4", text: "Add a 200-writer regression test.", isComplete: false),
+                PlanStep(id: "5", text: "Run the settlement-store smoke gate.", isComplete: false)
             ],
             sourceEntries: [
                 SourceEntry(

@@ -56,6 +56,9 @@ public struct IOSRootView: View {
     public var body: some View {
         let live = usageModel.tahoeLive
         let code = agentClient.tahoeCode
+        let useCodeReferenceTheme = usesCodeReferenceTheme
+        let activeTheme = useCodeReferenceTheme ? Self.iosCodeReferenceTheme : theme
+        let activeTokens = TahoeTokens.make(from: activeTheme)
         // v0.22.5: unpaired banner stays visible across every tab so
         // first-launch users always have an actionable path to
         // pairing. Was: only LiveGaugesHeader (inside Analytics tab)
@@ -85,8 +88,8 @@ public struct IOSRootView: View {
             }
         }
         .ignoresSafeArea(.container, edges: .bottom)
-        .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 244.0/255, green: 246.0/255, blue: 250.0/255))
-        .tahoeTheme(theme)
+        .background(activeTokens.dark ? Color.black : Color(.sRGB, red: 244.0/255, green: 246.0/255, blue: 250.0/255))
+        .tahoeTheme(activeTheme)
         // P1 fix: pull live session data on first appearance and whenever
         // we return to the foreground. Without this, the daemon-mirrored
         // session list stays empty until the user interacts with the Mac.
@@ -99,6 +102,29 @@ public struct IOSRootView: View {
             // Pair-with-Mac (Scan QR + Paste URL + Forget pairing).
             SettingsView(model: usageModel, agentClient: agentClient)
         }
+    }
+
+    private var usesCodeReferenceTheme: Bool {
+        switch pushedScreen {
+        case .sessionDetail:
+            return true
+        case .pairing:
+            return false
+        case nil:
+            return tab == .code
+        }
+    }
+
+    @MainActor
+    private static var iosCodeReferenceTheme: TahoeThemeStore {
+        TahoeThemeStore(
+            appearance: .light,
+            surface: .translucent,
+            accent: .halo,
+            wallpaper: .graphite,
+            glassIntensity: 95,
+            providerFocus: .claude
+        )
     }
 
     @ViewBuilder
@@ -175,6 +201,7 @@ public struct IOSTabBar: View {
     // Analytics integration is tracked as a follow-up (see plan T6).
     private let items: [(IOSRootView.Tab, String, String)] = [
         (.chat,      "Chat",      "sparkles"),
+        (.live,      "Live",      "moon"),
         (.analytics, "Analytics", "diff"),
         (.code,      "Code",      "chat"),
     ]
