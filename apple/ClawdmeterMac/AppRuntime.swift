@@ -144,9 +144,17 @@ final class AppRuntime: ObservableObject {
         // Same TOS posture as CodexSource against chatgpt.com/backend-api;
         // documented in CLAUDE.md.
         let geminiTokenProvider = GeminiTokenProvider()
+        // v0.26.6: wire the Tier-1 LS-local quota probe so the Antigravity
+        // tile lights up when Antigravity 2 desktop app is running, without
+        // requiring the user to have first run `gemini auth login` to seed
+        // ~/.gemini/oauth_creds.json (which Tier 2 needs). The probe returns
+        // nil silently when LSP isn't reachable, letting Tier 2 take over.
         self.geminiModel = AppModel(
             config: .gemini,
-            source: AntigravitySource(tokenProvider: geminiTokenProvider),
+            source: AntigravitySource(
+                tokenProvider: geminiTokenProvider,
+                lsQuotaProbe: { @Sendable in await AntigravityLSQuotaProbe.probe() }
+            ),
             tokenProvider: geminiTokenProvider
         )
 
