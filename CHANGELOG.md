@@ -4,6 +4,26 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.26.4 build 133] - 2026-05-24 — Repo count + spend chart wired through ClawdmeterRealHome (`fix/usage-tab-completeness`)
+
+After v0.26.2 unblocked the Codex provider tile, the Usage tab still showed three regressions: `0 repos tracked` in the top status bar, an empty `SPEND OVER TIME` chart, and an empty `SPEND BY REPO` panel — even though `~/.claude/projects/` had 112 entries and `~/.codex/sessions/` had hundreds of rollouts on disk. Root cause: two more sandbox-blind call sites that v0.26.2 missed.
+
+`RepoIndex.refresh` and `UsageHistoryLoader.performLoad` are the only feeders for those three surfaces, and both built their roots from `FileManager.default.homeDirectoryForCurrentUser` / `NSHomeDirectory()` — APIs that resolve to the sandbox container in Release. So they enumerated `~/Library/Containers/com.clawdmeter.mac/Data/.claude/projects/` and `…/.codex/sessions/`, found nothing, and silently returned empty arrays. The v0.26.2 entitlements granted access to `/.codex/` and `/.gemini/` but path resolution still pointed at the container, and `/.claude/` wasn't on the entitlement list at all.
+
+### Changed
+
+- **`RepoIndex.refresh`** ([apple/ClawdmeterMac/AgentControl/RepoIndex.swift](apple/ClawdmeterMac/AgentControl/RepoIndex.swift):110) now derives its `home` from `ClawdmeterRealHome.url()` instead of `homeDirectoryForCurrentUser`. The "X repos tracked" status pill reflects every `~/.claude/projects/<cwd>/` directory + every `~/.codex/sessions/**/*.jsonl` cwd again.
+- **`UsageHistoryLoader.init`** ([apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/UsageHistoryLoader.swift](apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/UsageHistoryLoader.swift):54) same swap — `home` is now `ClawdmeterRealHome.url()` instead of `NSHomeDirectory()`. Re-enables SPEND OVER TIME + SPEND BY REPO across Claude, Codex, and Antigravity data.
+- **`ClawdmeterMac-Release.entitlements`** adds two more read-only sandbox exceptions:
+  - `/.claude/` — Anthropic CLI's `projects/` jsonls (the v0.26.2 entitlement list covered `/.codex/`, `/.gemini/`, `/.local/share/opencode/`, and `/Library/Application Support/Antigravity/` but missed Anthropic entirely because Claude itself had been working — turns out *only* via the `PastedAnthropicTokenProvider` keychain path, while `RepoIndex` and `UsageHistoryLoader` silently lost Claude data).
+  - `/Library/Application Support/Clawdmeter/` — Clawdmeter's own pre-sandbox sessions.json + workspaces.json. Users who ran an earlier non-sandboxed build have 90+ tracked sessions in the real path; the new sandboxed app now reads them instead of starting fresh in the container.
+
+### Known limitation
+
+The Antigravity tile still reads 0% when (a) the Antigravity 2 desktop app isn't running AND (b) `~/.gemini/oauth_creds.json` doesn't exist. `AntigravitySource.poll()` ships with an `lsQuotaProbe` hook for the Tier-1 LS-local probe (queries the running language_server on a loopback port), but `AppRuntime.swift:149` constructs `AntigravitySource(tokenProvider:)` with the probe defaulted to nil. Wiring the probe needs a pgrep/lsof discovery pass + an HTTPS-over-loopback client — substantial enough to deserve its own ship. Until then, open Antigravity 2 once after auth to seed `~/.gemini/oauth_creds.json`, or run `gemini auth login` from a terminal.
+
+Bumps `MARKETING_VERSION` 0.26.3 → 0.26.4, `CURRENT_PROJECT_VERSION` 132 → 133.
+
 ## [0.26.3 build 132] - 2026-05-24 — Code V2 follow-ups: cross-platform Watch build, app-scoped outbox, composer routing, test isolation (`darshanbathija/code-v3`)
 
 Seven tidy-ups against the v0.26.0 Code V2 ship that surfaced in post-merge review. The first five close the "next session would hit this" risks the user flagged after the initial Code V2 merge; the last two were caught by an adversarial review pass and are the more dangerous of the bunch — both pre-existed v0.26.0 but became user-visible in this build because the new composer routing made the outbox the main delivery path.
