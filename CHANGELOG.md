@@ -4,6 +4,32 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.7 build 146] - 2026-05-26 - Continuum display-only rebrand + v0.29.6 DMG launch fix (`rebrand/continuum-display-name`)
+
+Two things in one ship:
+
+**Rebrand (Phase 1: display-only).** The app is now called **Continuum** in every user-visible surface — menu bar, Dock, Finder, App Switcher, Window title, the in-app About panel, copyright, microphone/speech privacy strings, the DMG filename and the volume name it mounts as. The bundle identifier (`com.clawdmeter.mac`), PRODUCT_NAME (`Clawdmeter`), on-disk data path (`~/Library/Application Support/Clawdmeter/`), App Group, and keychain-access-group prefix all stay where they are. No data migration; existing installs upgrade in place; paired iPhones remain paired. Phase 2 (full bundle-id transition to `com.montaukanalytics.continuum.*`, signing identity transfer to the new Apple Developer Program team under `accounts@montaukanalytics.xyz`, and notarization of the DMG) lands when the new team enrollment is active.
+
+**DMG launch fix (critical).** v0.29.6 shipped a DMG that wouldn't launch on a clean install with "Launchd job spawn failed" (error 163). Root cause was in the helper re-sign step I added in v0.29.4: the outer-app re-sign passed entitlements verbatim, so the `$(AppIdentifierPrefix)` macro stayed literal in the signed entitlements blob — Gatekeeper rejected the unexpanded keychain-access-group token and launchd refused to spawn. The same step also added `--options runtime` to the outer app, forcing hardened runtime onto the main binary which xcodebuild had signed without it (library validation can then refuse to load bundled Swift dylibs). Fixed in `tools/build-mac-dmg.sh` by extracting the team id from the outer codesign descriptor, expanding the macro into a temp entitlements file via `sed`, and dropping `--options runtime` from the outer call so only the external helpers (`Vendor/opencode/opencode`, `Vendor/uv/uv`) carry the runtime flag.
+
+### Changed
+
+- **CFBundleDisplayName = "Continuum"** on the Mac + iOS Info.plists. CFBundleName / PRODUCT_NAME stay as `Clawdmeter` so bundle paths don't drift.
+- **DMG filename + mounted volume name** are now `Continuum-x.y.z-arm64.dmg` and `Continuum`. `INSTALL.txt` calls out that the .app on disk is still named `Clawdmeter.app` (internal name) so users don't think they grabbed the wrong package.
+- **Visible Swift strings** rewritten: dashboard window title, agent-server start-failure alert, in-app update CTA copy, "Continuum Support" diagnostics bundle folder, iOS privacy footer copy, iOS / Watch widget titles, Watch navigation title.
+- **Copyright** updated to `© 2026 Continuum (Montauk Analytics).`
+
+### Fixed
+
+- **v0.29.6 DMG won't launch** — see DMG launch fix above. Fully re-signed bundle now passes `codesign --verify --deep --strict` and launches cleanly on a fresh `/Applications` install.
+
+### Known limitations
+
+- The XProtect "Apple could not verify '.bbb…dylib' is free of malware" popup is unchanged; killing that requires notarization, which requires the paid Apple Developer Program enrollment under `accounts@montaukanalytics.xyz`. Tracked separately.
+- GitHub repository name stays at `darshanbathija/Clawdmeter` for now. UpdateNotifier still hits `releases/latest` on that repo, so existing in-app update chip keeps working through the transition.
+
+Bumps `MARKETING_VERSION` 0.29.6 -> 0.29.7, `CURRENT_PROJECT_VERSION` 145 -> 146.
+
 ## [0.29.6 build 145] - 2026-05-25 - Consolidated UI ship fixes (`darshanbathija/conductor-ui-research-v1`)
 
 Consolidates the client-local UI rollout and closes the ship-blocking notification, export, provider-default, and diagnostics issues found during review.

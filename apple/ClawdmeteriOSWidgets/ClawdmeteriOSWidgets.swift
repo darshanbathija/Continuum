@@ -266,7 +266,7 @@ struct ClaudeUsageView: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Clawdmeter")
+                Text("Continuum")
                     .font(.headline)
                 Text("Open the app")
                     .font(.caption)
@@ -370,7 +370,7 @@ struct ClaudeUsageView: View {
     @ViewBuilder
     private var emptyState: some View {
         VStack(spacing: 4) {
-            Text("Clawdmeter")
+            Text("Continuum")
                 .font(.headline)
             Text("Open the app to connect")
                 .font(.caption)

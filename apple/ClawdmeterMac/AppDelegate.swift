@@ -43,11 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// surface the SwiftUI window.
     static let showDashboardNotification = Notification.Name("clawdmeter.showDashboard")
 
-    /// Title set on the SwiftUI `Window("Clawdmeter", id: "dashboard")` —
+    /// Title set on the SwiftUI `Window("Continuum", id: "dashboard")` —
     /// matched when the user closes that window so we can drop the Dock icon.
     /// `nonisolated` so the notification observer's @Sendable closure can read
     /// it; the value is an immutable string literal and trivially thread-safe.
-    nonisolated private static let dashboardWindowTitle = "Clawdmeter"
+    nonisolated private static let dashboardWindowTitle = "Continuum"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let runtime = AppDelegate.runtime else {
@@ -88,7 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if runtime.agentControlServer.boundPort == nil {
             DispatchQueue.main.async {
                 let alert = NSAlert()
-                alert.messageText = "Clawdmeter couldn't start its agent server"
+                alert.messageText = "Continuum couldn't start its agent server"
                 alert.informativeText = """
                 Ports 21731–21741 are all in use. Sessions, chat, and \
                 pairing will not work until you free a port or restart \
