@@ -49,6 +49,46 @@ final class SessionSidebarGrouperTests: XCTestCase {
         XCTAssertEqual(groups[1].sessions.first?.id, review.id)
     }
 
+    func test_repoGroupingCollapsesDuplicateVisibleNames() {
+        let now = Date(timeIntervalSince1970: 1_700_001_000)
+        let primaryKey = "/Users/dev/Downloads/CC Watch/Clawdmeter"
+        let duplicateKey = "/Users/dev/conductor/workspaces/Clawdmeter/palembang-v1"
+        let first = session(status: .running, lastEventAt: now, goal: "main", repoKey: primaryKey)
+        let second = session(status: .running, lastEventAt: now.addingTimeInterval(-5), goal: "branch", repoKey: duplicateKey)
+        let sharedRecent = RecentSession(path: "/tmp/a.jsonl", lastModified: now, provider: .claude)
+        let secondRecent = RecentSession(path: "/tmp/b.jsonl", lastModified: now.addingTimeInterval(-10), provider: .codex)
+
+        let groups = SessionSidebarGrouper.group(
+            sessions: [first, second],
+            repos: [
+                AgentRepo(
+                    key: primaryKey,
+                    displayName: "Clawdmeter",
+                    hasActiveSessions: true,
+                    liveSessionCount: 1,
+                    recentSessions: [sharedRecent]
+                ),
+                AgentRepo(
+                    key: duplicateKey,
+                    displayName: " clawdmeter ",
+                    hasActiveSessions: true,
+                    liveSessionCount: 2,
+                    recentSessions: [sharedRecent, secondRecent]
+                )
+            ],
+            grouping: .repo,
+            sorting: .recency,
+            statusFilter: .all,
+            now: now
+        )
+
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].title, "Clawdmeter")
+        XCTAssertEqual(groups[0].repoKey, primaryKey)
+        XCTAssertEqual(groups[0].sessions.map(\.goal), ["main", "branch"])
+        XCTAssertEqual(groups[0].recents.map(\.path), [sharedRecent.path, secondRecent.path])
+    }
+
     func test_jsonlTailFromEndIgnoresExistingRows() async throws {
         let url = try makeTempJSONL(lines: [
             Self.jsonLine(index: 0),
@@ -148,12 +188,13 @@ final class SessionSidebarGrouperTests: XCTestCase {
         lastEventAt: Date,
         goal: String? = nil,
         planText: String? = nil,
-        archivedAt: Date? = nil
+        archivedAt: Date? = nil,
+        repoKey: String = "/tmp/repo"
     ) -> AgentSession {
         AgentSession(
             id: id,
-            repoKey: "/tmp/repo",
-            repoDisplayName: "repo",
+            repoKey: repoKey,
+            repoDisplayName: URL(fileURLWithPath: repoKey).lastPathComponent,
             agent: .claude,
             model: nil,
             goal: goal,

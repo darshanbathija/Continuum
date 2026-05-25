@@ -1,4 +1,5 @@
 #if canImport(SwiftUI)
+import Foundation
 import SwiftUI
 
 /// "Session is still working" footer for the live chat list. Shows when
@@ -11,9 +12,9 @@ import SwiftUI
 ///     style asterisk rotating like the brand mark.
 ///   - **Codex**: codex-blue accent (`#5C9DFF`) with a pulsing sparkle.
 ///
-/// The label is `<elapsed> · thinking…` where `<elapsed>` ticks every
-/// second. Caller hands in the start moment; we don't fix it to the
-/// most recent event so the timer keeps climbing across rapid bursts.
+/// The label is `<elapsed> · thinking…` where `<elapsed>` includes
+/// hundredths of a second. Caller hands in the start moment; we don't fix
+/// it to the most recent event so the timer keeps climbing across rapid bursts.
 /// The user feedback that triggered this: "there's no way to know that
 /// the session is still moving forward and claude/codex is working."
 public struct LiveSessionActivityIndicator: View {
@@ -75,17 +76,17 @@ public struct LiveSessionActivityIndicator: View {
         return now.timeIntervalSince(lastEventAt) < activityWindow
     }
 
-    private var elapsedSeconds: Int {
+    private var elapsedSeconds: TimeInterval {
         let start = activityStartedAt ?? lastEventAt ?? now
-        return max(0, Int(now.timeIntervalSince(start)))
+        return max(0, now.timeIntervalSince(start))
     }
 
     private var elapsedString: String {
         let s = elapsedSeconds
-        if s < 60 { return "\(s)s" }
-        let m = s / 60
-        let r = s % 60
-        return "\(m)m \(r)s"
+        if s < 60 { return String(format: "%.2fs", s) }
+        let m = Int(s) / 60
+        let r = s - Double(m * 60)
+        return String(format: "%dm %.2fs", m, r)
     }
 
     private var accent: Color {
@@ -147,9 +148,9 @@ public struct LiveSessionActivityIndicator: View {
 
     private func startTicker() {
         stopTicker()
-        // 1Hz tick. Cheap; we're only invalidating one View on the chat
-        // thread footer, not the whole list.
-        ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+        // Hundredths display without turning the whole transcript into a
+        // timer; only this footer view owns the tick.
+        ticker = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
             Task { @MainActor in
                 self.now = Date()
             }

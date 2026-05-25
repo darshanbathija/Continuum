@@ -63,15 +63,21 @@ public enum SessionSidebarGrouper {
         now: Date = Date()
     ) -> [SessionSidebarGroup] {
         let filtered = sessions.filter { passes(statusFilter, $0, reviewSessionIds: reviewSessionIds, now: now) }
+        let canonicalRepos = collapseDuplicateVisibleRepos(repos)
         switch grouping {
         case .repo:
-            return groupByRepo(sessions: filtered, repos: repos, sorting: sorting)
+            return groupByRepo(
+                sessions: filtered,
+                repos: canonicalRepos.repos,
+                keyAliases: canonicalRepos.keyAliases,
+                sorting: sorting
+            )
         case .date:
-            return groupByDate(sessions: filtered, repos: repos, sorting: sorting)
+            return groupByDate(sessions: filtered, repos: canonicalRepos.repos, sorting: sorting)
         case .status:
             return groupByStatus(sessions: filtered, sorting: sorting, reviewSessionIds: reviewSessionIds, now: now)
         case .agent:
-            return groupByAgent(sessions: filtered, repos: repos, sorting: sorting)
+            return groupByAgent(sessions: filtered, repos: canonicalRepos.repos, sorting: sorting)
         case .none:
             return [SessionSidebarGroup(
                 id: "all",
@@ -128,6 +134,7 @@ public enum SessionSidebarGrouper {
     private static func groupByRepo(
         sessions: [AgentSession],
         repos: [AgentRepo],
+        keyAliases: [String: String],
         sorting: SessionSorting
     ) -> [SessionSidebarGroup] {
         // Preserve the order returned by SessionsModel.filteredRepos —
@@ -139,7 +146,7 @@ public enum SessionSidebarGrouper {
             // the Chat sidebar, not the Sessions sidebar. Skip them here
             // so they don't grouped under a synthetic empty-string key.
             guard let key = s.repoKey else { continue }
-            byRepo[key, default: []].append(s)
+            byRepo[keyAliases[key] ?? key, default: []].append(s)
         }
         return repos.enumerated().map { (idx, repo) in
             let live = sorted(byRepo[repo.key] ?? [], by: sorting)
@@ -152,6 +159,63 @@ public enum SessionSidebarGrouper {
                 recents: repo.recentSessions
             )
         }
+    }
+
+    private struct CanonicalRepos {
+        let repos: [AgentRepo]
+        let keyAliases: [String: String]
+    }
+
+    private static func collapseDuplicateVisibleRepos(_ repos: [AgentRepo]) -> CanonicalRepos {
+        struct Accumulator {
+            var repo: AgentRepo
+            var recentPaths: Set<String>
+        }
+
+        var orderedKeys: [String] = []
+        var displayKeyToRepoKey: [String: String] = [:]
+        var accumulators: [String: Accumulator] = [:]
+        var keyAliases: [String: String] = [:]
+
+        for repo in repos {
+            let displayKey = normalizedVisibleRepoName(repo.displayName)
+            if let primaryKey = displayKeyToRepoKey[displayKey],
+               var accumulator = accumulators[primaryKey] {
+                keyAliases[repo.key] = primaryKey
+                let mergedRecents = accumulator.repo.recentSessions + repo.recentSessions.filter { !accumulator.recentPaths.contains($0.path) }
+                accumulator.recentPaths.formUnion(repo.recentSessions.map(\.path))
+                accumulator.repo = AgentRepo(
+                    key: accumulator.repo.key,
+                    displayName: accumulator.repo.displayName,
+                    hasActiveSessions: accumulator.repo.hasActiveSessions || repo.hasActiveSessions,
+                    liveSessionCount: accumulator.repo.liveSessionCount + repo.liveSessionCount,
+                    recentSessions: mergedRecents.sorted { $0.lastModified > $1.lastModified }
+                )
+                accumulators[primaryKey] = accumulator
+            } else {
+                displayKeyToRepoKey[displayKey] = repo.key
+                orderedKeys.append(repo.key)
+                keyAliases[repo.key] = repo.key
+                accumulators[repo.key] = Accumulator(
+                    repo: repo,
+                    recentPaths: Set(repo.recentSessions.map(\.path))
+                )
+            }
+        }
+
+        return CanonicalRepos(
+            repos: orderedKeys.compactMap { accumulators[$0]?.repo },
+            keyAliases: keyAliases
+        )
+    }
+
+    private static func normalizedVisibleRepoName(_ name: String) -> String {
+        let normalized = name
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return normalized.isEmpty ? name : normalized
     }
 
     // MARK: - Date

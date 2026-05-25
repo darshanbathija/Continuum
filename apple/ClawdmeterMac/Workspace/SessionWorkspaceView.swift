@@ -82,6 +82,7 @@ struct SessionWorkspaceView: View {
                                         Task { await switchMode(session: session, to: newMode) }
                                     }
                                 )
+                                .id(session.id)
                             } else {
                                 centerEmpty
                             }
@@ -1769,8 +1770,9 @@ private struct CenterThread: View {
         self.onDensityChange = onDensityChange
         self.onModeSwitch = onModeSwitch
         let store = ComposerStore(mode: .bound(sessionId: session.id))
-        store.modelId = session.model
-        store.effort = session.effort
+        let resolvedModel = Self.effectiveModelId(for: session, catalog: catalog)
+        store.modelId = resolvedModel
+        store.effort = Self.effectiveEffort(for: session, modelId: resolvedModel, catalog: catalog)
         store.mode = session.mode
         store.agent = session.agent
         store.planMode = session.status == .planning
@@ -1838,7 +1840,7 @@ private struct CenterThread: View {
                     .foregroundStyle(t.fg)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    Text("\(session.agent.tahoeProvider.displayName) · \(session.model ?? "default") · \(session.mode.rawValue) mode")
+                    Text(sessionConfigurationSummary)
                         .font(TahoeFont.body(11.5))
                         .foregroundStyle(t.fg3)
                         .lineLimit(1)
@@ -2091,14 +2093,6 @@ private struct CenterThread: View {
     private var chatPane: some View {
         VStack(spacing: 0) {
             messageList
-            // Activity strip — time / tokens / cost / live indicator.
-            // Sits between the message list and the composer so the user
-            // always knows what the agent is doing without having to
-            // switch to the Analytics tab.
-            if let store = model.chatStore(for: session) {
-                Divider()
-                SessionActivityStrip(session: session, chatStore: store)
-            }
             if !workbenchState.queuedSends(for: session.id).isEmpty {
                 Divider()
                 queuedSendsPanel
@@ -2240,6 +2234,7 @@ private struct CenterThread: View {
                     }
                 }
             )
+                .id(session.id)
                 .onAppear {
                     // T8 wiring: push session.planText into the store so
                     // the staging actor's precompute can mark steps
@@ -2628,10 +2623,11 @@ private struct CenterThread: View {
     /// hint can lag the chip selection and may report `claude-opus-4-7`
     /// (200K) when the user is actually running the 1M variant.
     private var usageStatusInfo: UsageStatusInfo? {
-        let modelId = session.model ?? model.chatStore(for: session)?.snapshot.modelHint
+        let modelId = effectiveModelId ?? model.chatStore(for: session)?.snapshot.modelHint
         guard let modelId, !modelId.isEmpty else { return nil }
         let entry = catalog.entry(forId: modelId)
         let snap = model.chatStore(for: session)?.snapshot
+        let effort = effectiveEffort(forModelId: modelId)
         let used = snap?.contextWindowUsedTokens ?? 0
         let totals = TokenTotals(
             inputTokens: snap?.totalInputTokens ?? 0,
@@ -2643,7 +2639,7 @@ private struct CenterThread: View {
         let claudePlan = (session.agent == .claude) ? AppDelegate.runtime?.claudeModel.usage : nil
         return UsageStatusInfo(
             modelDisplay: entry?.displayName ?? modelId,
-            effortDisplay: session.effort.map(effortLabel),
+            effortDisplay: effort.map(effortLabel) ?? "Default",
             contextUsedTokens: used,
             contextLimitTokens: entry?.contextWindow,
             costDollar: dollar,
@@ -2665,6 +2661,50 @@ private struct CenterThread: View {
         case .xhigh:   return "Extra high"
         case .max:     return "Max"
         }
+    }
+
+    private var effectiveModelId: String? {
+        Self.effectiveModelId(for: session, catalog: catalog)
+    }
+
+    private func effectiveEffort(forModelId modelId: String?) -> ReasoningEffort? {
+        Self.effectiveEffort(for: session, modelId: modelId, catalog: catalog)
+    }
+
+    private var sessionConfigurationSummary: String {
+        let modelText: String
+        if let id = effectiveModelId, !id.isEmpty {
+            modelText = catalog.entry(forId: id)?.displayName ?? id
+        } else {
+            modelText = "default model"
+        }
+        let effortText = effectiveEffort(forModelId: effectiveModelId).map(effortLabel) ?? "Default effort"
+        return "\(session.agent.tahoeProvider.displayName) · \(modelText) · \(effortText) · \(session.mode.rawValue) mode"
+    }
+
+    private static func effectiveModelId(for session: AgentSession, catalog: ModelCatalog) -> String? {
+        let candidates = [
+            session.runtimeBinding?.providerModelId,
+            session.model
+        ]
+        if let explicit = candidates.compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) }).first(where: { !$0.isEmpty }) {
+            return explicit
+        }
+        return ComposerStore.ChipDefaults.for(agent: session.agent, catalog: catalog).modelId
+    }
+
+    private static func effectiveEffort(
+        for session: AgentSession,
+        modelId: String?,
+        catalog: ModelCatalog
+    ) -> ReasoningEffort? {
+        if let effort = session.effort { return effort }
+        if let modelId,
+           let entry = catalog.entry(forId: modelId),
+           !entry.supportsEffort {
+            return nil
+        }
+        return ComposerStore.ChipDefaults.for(agent: session.agent, catalog: catalog).effort
     }
 
     private func toggleAutopilot(enable: Bool, grantingTrust: Bool = false) async {
@@ -2758,7 +2798,7 @@ private struct CenterThread: View {
     /// launcher catalog so account-scoped Cursor models get the same
     /// effort semantics in bound sessions as they do at launch.
     private var modelSupportsEffort: Bool {
-        guard let id = session.model,
+        guard let id = composerStore.modelId ?? effectiveModelId,
               let entry = catalog.entry(forId: id)
         else { return true }
         return entry.supportsEffort
@@ -3015,9 +3055,9 @@ private struct ChatThreadScroll: View {
                 // they're reading history). Click → scroll-to-last-item.
                 if !userPinnedToBottom, !store.snapshot.items.isEmpty {
                     Button(action: {
-                        userPinnedToBottom = true
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+                        autoScrollTask?.cancel()
+                        autoScrollTask = Task { @MainActor in
+                            await jumpToBottom(proxy, animated: true)
                         }
                     }) {
                         Label("Jump to latest", systemImage: "arrow.down.circle.fill")
@@ -3121,15 +3161,13 @@ private struct ChatThreadScroll: View {
 
     private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, updateCounter: UInt64) {
         let items = store.snapshot.items.count
-        let previousItems = lastScrollItemCount
         lastScrollItemCount = items
         guard !isLoadingEarlierHistory else { return }
-        guard userPinnedToBottom || items >= previousItems else { return }
+        guard userPinnedToBottom else { return }
         autoScrollTask?.cancel()
         autoScrollTask = Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled else { return }
-            userPinnedToBottom = true
             await jumpToBottom(proxy, animated: false)
         }
     }
@@ -3139,7 +3177,7 @@ private struct ChatThreadScroll: View {
         suppressBottomGeometryUntil = Date().addingTimeInterval(0.35)
         userPinnedToBottom = true
         if animated {
-            withAnimation(.easeOut(duration: 0.18)) {
+            withAnimation(.easeInOut(duration: 0.32)) {
                 proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
             }
         } else {
