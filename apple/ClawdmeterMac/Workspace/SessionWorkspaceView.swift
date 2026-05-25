@@ -2972,8 +2972,30 @@ private struct ChatThreadScroll: View {
                         Color.clear
                             .frame(height: 1)
                             .id(Self.bottomSentinelId)
-                            .onAppear { userPinnedToBottom = true }
-                            .onDisappear { userPinnedToBottom = false }
+                            .onAppear {
+                                let currentCounter = store.snapshot.updateCounter
+                                // If a later streaming update yanked the sentinel
+                                // back into view, let the pending user-unpin win.
+                                if let pendingCounter = pendingBottomExitCounter,
+                                   pendingCounter != currentCounter {
+                                    return
+                                }
+                                cancelBottomExit()
+                            }
+                            .onDisappear {
+                                autoScrollTask?.cancel()
+                                autoScrollTask = nil
+                                bottomExitTask?.cancel()
+                                let counter = store.snapshot.updateCounter
+                                pendingBottomExitCounter = counter
+                                bottomExitTask = Task { @MainActor in
+                                    try? await Task.sleep(nanoseconds: 80_000_000)
+                                    guard !Task.isCancelled else { return }
+                                    guard pendingBottomExitCounter == counter else { return }
+                                    pendingBottomExitCounter = nil
+                                    userPinnedToBottom = false
+                                }
+                            }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -2991,6 +3013,7 @@ private struct ChatThreadScroll: View {
                 .onDisappear {
                     autoScrollTask?.cancel()
                     autoScrollTask = nil
+                    cancelBottomExit(markPinned: false)
                 }
 
                 // Jump-to-latest CTA. Visible whenever the user has
@@ -3034,6 +3057,8 @@ private struct ChatThreadScroll: View {
 
     @State private var lastScrollItemCount: Int = 0
     @State private var autoScrollTask: Task<Void, Never>?
+    @State private var bottomExitTask: Task<Void, Never>?
+    @State private var pendingBottomExitCounter: UInt64?
 
     private var rowInsets: EdgeInsets {
         switch density {
@@ -3062,10 +3087,16 @@ private struct ChatThreadScroll: View {
         }
     }
 
-    private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, updateCounter _: UInt64) {
+    private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, updateCounter: UInt64) {
         let items = store.snapshot.items.count
         let delta = items - lastScrollItemCount
         lastScrollItemCount = items
+        if let pendingCounter = pendingBottomExitCounter,
+           pendingCounter != updateCounter {
+            autoScrollTask?.cancel()
+            autoScrollTask = nil
+            return
+        }
         guard userPinnedToBottom else { return }
         autoScrollTask?.cancel()
         autoScrollTask = Task { @MainActor in
@@ -3073,12 +3104,22 @@ private struct ChatThreadScroll: View {
                 try? await Task.sleep(nanoseconds: 25_000_000)
             }
             guard !Task.isCancelled else { return }
+            guard pendingBottomExitCounter == nil || pendingBottomExitCounter == updateCounter else { return }
             userPinnedToBottom = true
             proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
             try? await Task.sleep(nanoseconds: 90_000_000)
-            guard !Task.isCancelled, userPinnedToBottom else { return }
+            guard !Task.isCancelled,
+                  userPinnedToBottom,
+                  pendingBottomExitCounter == nil || pendingBottomExitCounter == updateCounter else { return }
             proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
         }
+    }
+
+    private func cancelBottomExit(markPinned: Bool = true) {
+        bottomExitTask?.cancel()
+        bottomExitTask = nil
+        pendingBottomExitCounter = nil
+        userPinnedToBottom = markPinned
     }
 
     /// One row in the thread. Either a plain user/assistant/meta message, or

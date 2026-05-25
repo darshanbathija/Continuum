@@ -543,20 +543,19 @@ public actor RepoIndex {
 
     /// Some Codex/Conductor JSONLs have no real user prompt because they
     /// were created as continuation/title-generation runs. In that case,
-    /// label the row by the live branch when available, then by the latest
-    /// assistant answer. This keeps the sidebar from collapsing into a
-    /// wall of "Codex session" rows while staying grounded in real local
-    /// state and transcript content.
+    /// prefer transcript content first, then the live branch/feature name.
+    /// That keeps old rows from being silently relabeled when the checkout
+    /// later moves to a different branch.
     nonisolated static func inferredRecentTitle(
         provider _: AgentKind,
         cwd: String,
         jsonlURL: URL
     ) -> String? {
-        if let branch = branchTitle(at: cwd) {
-            return branch
-        }
         if let summary = latestAssistantSummaryTitle(from: jsonlURL) {
             return summary
+        }
+        if let branch = branchTitle(at: cwd) {
+            return branch
         }
         return pathFeatureTitle(from: cwd)
     }
