@@ -4,6 +4,30 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.4 build 143] - 2026-05-25 - Session lifecycle control plane (`darshanbathija/code-sessions`)
+
+Code and Chat sessions now expose a unified lifecycle snapshot that paired clients can fetch or subscribe to without reverse-engineering status strings, transcript markers, or provider-specific runtime details.
+
+### Added
+
+- **Lifecycle wire v19** - adds `SessionLifecycleSnapshot`, phase/capability/evidence DTOs, `GET /sessions/:id/lifecycle`, and the `lifecycle-subscribe` WebSocket op while keeping `AgentSession.status` as the older-client compatibility field.
+- **Lifecycle reducer** - derives plan approval, checkpoint, PR, runtime, and provider-action state into one stable snapshot surface for Mac and paired clients.
+- **Lifecycle notifications** - invalidates lifecycle subscribers when plan text/approval or checkpoint state changes, with semantic WebSocket dedupe that includes evidence and checkpoint state.
+
+### Fixed
+
+- **Non-tmux runtime phases** - classifies Codex SDK, OpenCode, Cursor, and Antigravity runtime sessions without leaving them stuck in spawning-only lifecycle state.
+- **Plan sequence updates** - advances registry event sequence on plan text and approval mutations so paired lifecycle subscribers receive the change.
+- **Wire v19 merge compatibility** - preserves the provider-defaults v19 gates from `main` alongside lifecycle v19 gates.
+
+### Verification
+
+- `swift test --package-path apple/ClawdmeterShared --filter 'SessionLifecycleWireTests|WireV11Tests|WireV19ProviderDefaultsTests'` -> **19 tests passed**.
+- `xcodebuild test -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" -destination "platform=macOS,arch=arm64" -only-testing:ClawdmeterMacTests/SessionLifecycleReducerTests -only-testing:ClawdmeterMacTests/AgentControlServerChatRouteTests/test_lifecycleRouteAndClientReturnSnapshot -only-testing:ClawdmeterMacTests/WorkbenchStateTests/test_recordCheckpointInvalidatesLifecycleSubscribers CODE_SIGNING_ALLOWED=NO CLAWDMETER_SKIP_BUNDLED_NODE=1 CLAWDMETER_SKIP_BUNDLED_UV=1` -> **9 tests passed**.
+- `git diff --check && git diff --cached --check` -> **passed**.
+
+Bumps `MARKETING_VERSION` 0.29.3 -> 0.29.4, `CURRENT_PROJECT_VERSION` 142 -> 143.
+
 ## [0.29.3 build 142] - 2026-05-25 - Provider defaults and model selectors (`darshanbathija/provider-models`)
 
 Provider model and effort choices are now durable per vendor, with OpenRouter and Cursor treated as first-class default rows in Settings and as richer model picker surfaces in Chat.
