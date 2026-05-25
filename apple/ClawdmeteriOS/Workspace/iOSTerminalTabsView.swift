@@ -23,6 +23,7 @@ struct iOSTerminalTabsView: View {
     @State private var renameDraft: String = ""
     @State private var commandDraft: String = ""
     @State private var terminalCommand: IOSTerminalCommand?
+    @State private var connectionState: IOSTerminalConnectionState = .idle
 
     var body: some View {
         VStack(spacing: 0) {
@@ -35,6 +36,9 @@ struct iOSTerminalTabsView: View {
         }
         .task(id: session.id) {
             if hasLiveTerminal { await reload() }
+        }
+        .onChange(of: selectedPaneId) { _, _ in
+            connectionState = client.isConfigured ? .connecting : .idle
         }
         .alert("New terminal", isPresented: $isAdding) {
             TextField("Pane title (optional)", text: $addDraft)
@@ -99,9 +103,59 @@ struct iOSTerminalTabsView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
+            terminalStatusRow
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
+    }
+
+    private var terminalStatusRow: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(connectionStateColor)
+                .frame(width: 7, height: 7)
+            Text(connectionStateLabel)
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .foregroundStyle(t.fg3)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if client.isConfigured {
+                Text("Mac tunnel")
+                    .font(TahoeFont.mono(10))
+                    .foregroundStyle(t.fg4)
+            }
+        }
+    }
+
+    private var connectionStateColor: Color {
+        switch connectionState {
+        case .connected:
+            return .green
+        case .connecting:
+            return .orange
+        case .failed:
+            return .red
+        case .idle, .disconnected:
+            return t.fg4
+        }
+    }
+
+    private var connectionStateLabel: String {
+        if !client.isConfigured {
+            return "Not paired"
+        }
+        switch connectionState {
+        case .idle:
+            return "Terminal idle"
+        case .connecting:
+            return "Connecting"
+        case .connected:
+            return "Live terminal"
+        case .disconnected:
+            return "Disconnected"
+        case .failed(let message):
+            return message.isEmpty ? "Tunnel failed" : message
+        }
     }
 
     private func controlButton(_ title: String, bytes: [UInt8]) -> some View {
@@ -262,7 +316,10 @@ struct iOSTerminalTabsView: View {
                 wsPort: client.wsPort,
                 token: token,
                 paneId: selectedPaneId,
-                command: $terminalCommand
+                command: $terminalCommand,
+                onConnectionStateChange: { state in
+                    connectionState = state
+                }
             )
             .id(selectedPaneId ?? "primary")
         } else {

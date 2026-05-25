@@ -59,9 +59,6 @@ public final class TerminalWebSocketChannel: WSChannel {
     public func stop() {
         outputTask?.cancel()
         receiveTask?.cancel()
-        Task { [tmux, paneId] in
-            await tmux.unsubscribeFromPane(paneId)
-        }
         connection.cancel()
     }
 
@@ -69,9 +66,34 @@ public final class TerminalWebSocketChannel: WSChannel {
 
     private func streamOutputToClient() async {
         let stream = await tmux.subscribeToPane(paneId)
+        await sendInitialPaneSnapshot()
         for await bytes in stream {
             if Task.isCancelled { break }
             await sendFrame(tag: .output, payload: bytes)
+        }
+    }
+
+    /// A remote iOS terminal often attaches after the desktop session has
+    /// already produced output. Seed the SwiftTerm client with the current
+    /// tmux pane contents before live `%output` bytes arrive.
+    private func sendInitialPaneSnapshot() async {
+        do {
+            let result = try await tmux.command([
+                "capture-pane",
+                "-p",
+                "-t", paneId,
+                "-S", "-160",
+                "-E", "-",
+            ])
+            let snapshot = result.lines.joined(separator: "\r\n")
+            var bytes = Data("\u{1B}[2J\u{1B}[H".utf8)
+            if !snapshot.isEmpty {
+                bytes.append(Data(snapshot.utf8))
+                bytes.append(Data("\r\n".utf8))
+            }
+            await sendFrame(tag: .output, payload: bytes)
+        } catch {
+            wsLogger.debug("Initial terminal snapshot failed: \(error.localizedDescription)")
         }
     }
 

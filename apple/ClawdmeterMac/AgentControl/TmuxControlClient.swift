@@ -63,9 +63,11 @@ public actor TmuxControlClient {
     private var currentCommandNumber: Int?
     private var currentCommandBody: [String] = []
 
-    /// Per-pane `%output` byte sinks. The terminal WS bridge subscribes here.
-    /// Key = pane id ("%5"). Value = the continuation feeding the AsyncStream.
-    private var outputSinks: [String: AsyncStream<Data>.Continuation] = [:]
+    /// Per-pane `%output` byte sinks. Terminal consumers include the Mac
+    /// workbench, the iOS Tailscale tunnel, and auth/setup sheets. A pane
+    /// can have several viewers at once; all must receive the same bytes.
+    /// Key = pane id ("%5"). Inner key = subscription id.
+    private var outputSinks: [String: [UUID: AsyncStream<Data>.Continuation]] = [:]
 
     /// Lifecycle event stream. Emits high-level signals (server-exited,
     /// window-added, window-closed) that the supervisor + registry consume.
@@ -232,14 +234,18 @@ public actor TmuxControlClient {
         readTask?.cancel()
         readTask = nil
         childPid = 0
-        // Drop output sinks — paneIds will be reassigned by the new server.
-        for (_, sink) in outputSinks { sink.finish() }
-        outputSinks.removeAll()
         // Fail any in-flight commands.
         for (_, continuation) in pendingCommands {
             continuation.resume(throwing: TmuxError.serverExited)
         }
         pendingCommands.removeAll()
+        // Drop output sinks — paneIds will be reassigned by the new server.
+        for sinks in outputSinks.values {
+            for continuation in sinks.values {
+                continuation.finish()
+            }
+        }
+        outputSinks.removeAll()
         currentCommandNumber = nil
         currentCommandBody = []
         lifecycleContinuation?.yield(.serverExited(reason: reason))
@@ -394,16 +400,42 @@ public actor TmuxControlClient {
     /// AsyncStream; iterate to receive bytes. Phase 3 wires this to the
     /// WebSocket bridge.
     public func subscribeToPane(_ paneId: String) -> AsyncStream<Data> {
+        let normalized = Self.normalizedPaneId(paneId)
+        let subscriptionId = UUID()
         let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
-        // Multiple subscribers per pane: chain by replacing. For Phase 2
-        // we support one subscriber per pane; Phase 3 adds fan-out if needed.
-        outputSinks[paneId] = continuation
+        var sinks = outputSinks[normalized] ?? [:]
+        sinks[subscriptionId] = continuation
+        outputSinks[normalized] = sinks
+        continuation.onTermination = { @Sendable [weak self] _ in
+            Task {
+                await self?.removeOutputSink(paneId: normalized, subscriptionId: subscriptionId)
+            }
+        }
         return stream
     }
 
     public func unsubscribeFromPane(_ paneId: String) {
-        outputSinks[paneId]?.finish()
-        outputSinks.removeValue(forKey: paneId)
+        let normalized = Self.normalizedPaneId(paneId)
+        let sinks = outputSinks.removeValue(forKey: normalized) ?? [:]
+        for continuation in sinks.values {
+            continuation.finish()
+        }
+    }
+
+    private func removeOutputSink(paneId: String, subscriptionId: UUID) {
+        outputSinks[paneId]?.removeValue(forKey: subscriptionId)
+        if outputSinks[paneId]?.isEmpty == true {
+            outputSinks.removeValue(forKey: paneId)
+        }
+    }
+
+    func publishOutputForPane(_ paneId: String, bytes: Data) {
+        let normalized = Self.normalizedPaneId(paneId)
+        if let sinks = outputSinks[normalized] {
+            for continuation in sinks.values {
+                continuation.yield(bytes)
+            }
+        }
     }
 
     /// List current windows in the control session. Used by registry on
@@ -466,8 +498,7 @@ public actor TmuxControlClient {
             // emitted by `%output` already include the `%` prefix (e.g. "5"
             // in the frame body but our parser strips it to "5"). Registry
             // and callers use "%5" form; reconcile here.
-            let normalized = paneId.hasPrefix("%") ? paneId : "%\(paneId)"
-            outputSinks[normalized]?.yield(bytes)
+            publishOutputForPane(paneId, bytes: bytes)
         case .windowAdd(let windowId):
             lifecycleContinuation?.yield(.windowAdded(windowId: windowId))
         case .windowClose(let windowId):
@@ -506,6 +537,10 @@ public actor TmuxControlClient {
     /// quotes; literal single quotes are escaped as `'\''`.
     static func tmuxQuote(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func normalizedPaneId(_ paneId: String) -> String {
+        paneId.hasPrefix("%") ? paneId : "%\(paneId)"
     }
 
     // MARK: - Types
