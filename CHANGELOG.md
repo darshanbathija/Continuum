@@ -4,6 +4,24 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.8 build 147] - 2026-05-26 - PRODUCT_NAME flip: `/Applications/Continuum.app` (`rebrand/continuum-product-name`)
+
+Extends the v0.29.7 display-only rebrand: PRODUCT_NAME on the Mac target flips from `Clawdmeter` to `Continuum`, so the `.app` folder users see in `/Applications`, Finder Get Info, Spotlight, and Activity Monitor process names is now `Continuum.app` / `Continuum`. CFBundleName (which mirrors PRODUCT_NAME) also reads `Continuum` now, so the previous display-vs-name split (display "Continuum" but bundle name still "Clawdmeter") is closed.
+
+Bundle identifier stays `com.clawdmeter.mac`. App Group `group.76S62SDSD3.com.clawdmeter`, keychain-access-group prefix, and on-disk data at `~/Library/Application Support/Clawdmeter/` + `~/Library/Containers/com.clawdmeter.mac/` are all untouched — existing installs upgrade with zero data migration. The full bundle-id transition to `com.montaukanalytics.continuum.*` still waits on the Montauk Analytics Developer Program enrollment.
+
+### Migration note
+
+Users upgrading from v0.29.7 or earlier will see BOTH `/Applications/Clawdmeter.app` (legacy) and `/Applications/Continuum.app` (new) after dragging the new DMG into Applications. They're the same app — the new DMG's `INSTALL.txt` tells users to drag the legacy `Clawdmeter.app` to the Trash. Data and pairing carry over automatically (bundle identifier is unchanged).
+
+### Changed
+
+- **`apple/project.yml`** — ClawdmeterMac target: `PRODUCT_NAME: Continuum`. iOS + Watch targets stay on PRODUCT_NAME = Clawdmeter (iOS / Watch home-screen names already update via CFBundleDisplayName; no on-screen file path to rename there).
+- **`tools/build-mac-dmg.sh`** — `APP_NAME = "Continuum"` so the .app folder lookup, xcarchive path (`Continuum.xcarchive`), and DMG verification all line up. The standalone `DISPLAY_NAME` variable introduced in v0.29.7 is gone — APP_NAME does both jobs now.
+- **`INSTALL.txt` inside the DMG** — adds a migration step telling users to trash the legacy Clawdmeter.app.
+
+Bumps `MARKETING_VERSION` 0.29.7 -> 0.29.8, `CURRENT_PROJECT_VERSION` 146 -> 147.
+
 ## [0.29.7 build 146] - 2026-05-26 - Continuum display-only rebrand + v0.29.6 DMG launch fix (`rebrand/continuum-display-name`)
 
 Two things in one ship:
