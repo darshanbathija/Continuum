@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import ClawdmeterShared
 
 /// Tahoe 26 Mac window root — replaces `DashboardView` as the primary
@@ -27,6 +28,7 @@ struct MacRootView: View {
     @ObservedObject private var claudeModel: AppModel
     @ObservedObject private var codexModel: AppModel
     @ObservedObject private var geminiModel: AppModel
+    @ObservedObject private var skillCatalog = SkillCatalog.shared
 
     // v0.23: legacy chatMode + chatSoloProvider bindings retired with
     // MacChatView (T16). The V2 chat composer owns its own selection
@@ -37,13 +39,30 @@ struct MacRootView: View {
     @State private var handoffToast: String? = nil
     @State private var toastStartedAt: Date = Date()
     @State private var toastDismissTask: Task<Void, Never>? = nil
+    @State private var transientToast: TransientToast? = nil
+    @State private var transientToastStartedAt: Date = Date()
+    @State private var transientToastDismissTask: Task<Void, Never>? = nil
+    @State private var showingGlobalPalette: Bool = false
+    @State private var showingShortcutSheet: Bool = false
+    @State private var showingFilePicker: Bool = false
+    @StateObject private var presentationStore: SessionPresentationStore
+    private let shortcutRegistry = ClawdmeterShortcutRegistry()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openWindow) private var openWindow
 
     private func scheduleToastDismiss() {
         toastDismissTask?.cancel()
         toastDismissTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             if !Task.isCancelled { self.handoffToast = nil }
+        }
+    }
+
+    private func scheduleTransientToastDismiss(duration: TimeInterval) {
+        transientToastDismissTask?.cancel()
+        transientToastDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(max(duration, 0.5) * 1_000_000_000))
+            if !Task.isCancelled { self.transientToast = nil }
         }
     }
 
@@ -56,6 +75,11 @@ struct MacRootView: View {
         self.geminiModel = runtime.geminiModel
         _theme = State(initialValue: TahoeThemeStore.loaded())
         _tab = State(initialValue: initialTab)
+        _presentationStore = StateObject(wrappedValue: SessionPresentationStore(
+            storeURL: SessionPresentationStore.defaultStoreURL(
+                appSupportDirectory: WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
+            )
+        ))
     }
 
     var body: some View {
@@ -123,14 +147,15 @@ struct MacRootView: View {
                             usageHistoryStore: runtime.usageHistoryStore
                         )
                     case .code:
-                        MacCodeShell(model: sessionsModel)
+                        MacCodeShell(model: sessionsModel, presentationStore: presentationStore)
                     case .settings:
                         MacSettingsView(
                             theme: theme,
                             claudeModel: claudeModel,
                             codexModel: codexModel,
                             geminiModel: geminiModel,
-                            runtime: runtime
+                            runtime: runtime,
+                            presentationStore: presentationStore
                         )
                     }
                 }
@@ -140,7 +165,7 @@ struct MacRootView: View {
             }
         }
         .frame(minWidth: 1280, minHeight: 820)
-        // v0.22.9: Cmd+1..Cmd+5 (+ Cmd+,) keyboard shortcuts now live
+        // v0.22.9: Cmd+1..Cmd+4 (+ Cmd+,) keyboard shortcuts now live
         // in the View / app menu via `.commands` on the Window scene
         // in ClawdmeterMacApp. The previous hidden-button hack was
         // unreliable because the buttons had to be in the first
@@ -148,49 +173,640 @@ struct MacRootView: View {
         // had focus, the shortcuts silently dropped. Menu-bar commands
         // are always-active and properly surface in the View menu so
         // users can discover them.
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterSwitchTab)) { note in
-            guard let name = note.userInfo?["tab"] as? String else { return }
-            switch name {
-            case "chat":     tab = .chat
-            case "usage":    tab = .usage
-            case "code":     tab = .code
-            case "settings": tab = .settings
-            default:         break
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterFocusCodeSearch)) { _ in
-            tab = .code
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)
-            }
-        }
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterSwitchTab), perform: handleSwitchTab)
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterFocusCodeSearch), perform: handleFocusCodeSearch)
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenGlobalPalette), perform: handleOpenGlobalPalette)
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenShortcutSheet), perform: handleOpenShortcutSheet)
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenFilePicker), perform: handleOpenFilePicker)
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterExportSession), perform: handleExportSession)
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterShowTransientToast), perform: handleTransientToast)
+        .onReceive(NotificationCenter.default.publisher(for: .sessionNextAttention), perform: handleNextAttention)
         // v0.14.0 (D7): handoff toast overlay — top-anchored Tahoe chip
         // that autodismisses after 2s. Visible across all tabs.
         .overlay(alignment: .top) {
-            if let handoffToast {
-                HStack(spacing: 8) {
-                    Text(handoffToast)
-                        .font(.system(size: 12, weight: .semibold))
-                    ToastCountdownRing(startedAt: toastStartedAt, duration: 2)
-                        .frame(width: 14, height: 14)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
-                .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
-                .padding(.top, 56)
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .accessibilityLabel(handoffToast)
-            }
+            handoffToastOverlay
+        }
+        .overlay(alignment: .top) {
+            transientToastOverlay
+        }
+        .overlay {
+            modalOverlay
         }
         .onChange(of: handoffToast) { _, newValue in
             guard newValue != nil else { return }
             toastStartedAt = Date()
             scheduleToastDismiss()
         }
+        .onChange(of: transientToast) { _, newValue in
+            guard let newValue else { return }
+            transientToastStartedAt = Date()
+            scheduleTransientToastDismiss(duration: newValue.duration)
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: handoffToast)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: transientToast)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: showingGlobalPalette)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: showingShortcutSheet)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: showingFilePicker)
         .tahoeTheme(theme)
         .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 0.94, green: 0.97, blue: 0.98))
+        .background(
+            ShortcutOverrideMonitor(
+                shortcuts: shortcutRegistry,
+                overrides: presentationStore.snapshot.shortcutOverrides,
+                commands: buildCommandRegistry(),
+                onRun: runGlobalCommand
+            )
+        )
+        .onAppear {
+            skillCatalog.refreshIfStale()
+        }
+    }
+
+    private func paletteScrim<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack {
+            Color.black.opacity(0.24)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    showingGlobalPalette = false
+                    showingShortcutSheet = false
+                    showingFilePicker = false
+                }
+            content()
+        }
+        .zIndex(100)
+    }
+
+    @ViewBuilder
+    private var handoffToastOverlay: some View {
+        if let handoffToast {
+            HStack(spacing: 8) {
+                Text(handoffToast)
+                    .font(.system(size: 12, weight: .semibold))
+                ToastCountdownRing(startedAt: toastStartedAt, duration: 2)
+                    .frame(width: 14, height: 14)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
+            .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
+            .padding(.top, 56)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .accessibilityLabel(handoffToast)
+        }
+    }
+
+    @ViewBuilder
+    private var transientToastOverlay: some View {
+        if let toast = transientToast {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(toast.title)
+                        .font(.system(size: 12, weight: .semibold))
+                    if let detail = toast.detail {
+                        Text(detail)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                if let actionTitle = toast.actionTitle {
+                    Button(actionTitle) { performToastAction(toast) }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                ToastCountdownRing(startedAt: transientToastStartedAt, duration: toast.duration)
+                    .frame(width: 14, height: 14)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(.regularMaterial))
+            .overlay(RoundedRectangle(cornerRadius: 999, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
+            .padding(.top, 96)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    @ViewBuilder
+    private var modalOverlay: some View {
+        if showingGlobalPalette {
+            paletteScrim {
+                GlobalCommandPalette(
+                    registry: buildCommandRegistry(),
+                    shortcuts: shortcutRegistry,
+                    shortcutOverrides: presentationStore.snapshot.shortcutOverrides,
+                    recentCommandIDs: presentationStore.snapshot.commandRecents,
+                    onRun: runGlobalCommand,
+                    onDismiss: { showingGlobalPalette = false }
+                )
+            }
+        } else if showingShortcutSheet {
+            paletteScrim {
+                KeyboardCheatSheet(
+                    registry: shortcutRegistry,
+                    overrides: presentationStore.snapshot.shortcutOverrides,
+                    onDismiss: { showingShortcutSheet = false }
+                )
+            }
+        } else if showingFilePicker {
+            paletteScrim {
+                RepoFilePickerView(
+                    repoRoot: openSessionRepoRoot,
+                    presentationStore: presentationStore,
+                    onDismiss: { showingFilePicker = false }
+                )
+            }
+        }
+    }
+
+    private func handleSwitchTab(_ note: Notification) {
+        guard let name = note.userInfo?["tab"] as? String else { return }
+        switch name {
+        case "chat":
+            tab = .chat
+        case "usage":
+            tab = .usage
+        case "code":
+            tab = .code
+        case "settings":
+            tab = .settings
+        default:
+            break
+        }
+    }
+
+    private func handleFocusCodeSearch(_ note: Notification) {
+        tab = .code
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)
+        }
+    }
+
+    private func handleOpenGlobalPalette(_ note: Notification) {
+        skillCatalog.refreshIfStale()
+        showingGlobalPalette = true
+    }
+
+    private func handleOpenShortcutSheet(_ note: Notification) {
+        showingShortcutSheet = true
+    }
+
+    private func handleOpenFilePicker(_ note: Notification) {
+        tab = .code
+        showingFilePicker = true
+    }
+
+    private func handleExportSession(_ note: Notification) {
+        exportOpenSession()
+    }
+
+    private func handleTransientToast(_ note: Notification) {
+        guard let toast = note.userInfo?["toast"] as? TransientToast else { return }
+        showTransientToast(toast)
+    }
+
+    private func handleNextAttention(_ note: Notification) {
+        tab = .code
+        openNextAttentionSession()
+    }
+
+    private func showTransientToast(_ toast: TransientToast) {
+        transientToast = toast
+    }
+
+    private func performToastAction(_ toast: TransientToast) {
+        guard let actionID = toast.actionID else { return }
+        if actionID.hasPrefix("unarchive:"),
+           let id = UUID(uuidString: String(actionID.dropFirst("unarchive:".count))) {
+            sessionsModel.registry.unarchive(id: id)
+            transientToast = nil
+        }
+    }
+
+    private var openSessionRepoRoot: String? {
+        guard let session = sessionsModel.openSession else { return nil }
+        let candidates = [
+            session.effectiveCwd,
+            session.worktreePath,
+            session.runtimeCwd,
+            session.repoKey,
+        ]
+        for raw in candidates {
+            guard let root = normalizedDirectoryPath(raw) else { continue }
+            return root
+        }
+        return nil
+    }
+
+    private func normalizedDirectoryPath(_ raw: String?) -> String? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        let expanded = NSString(string: raw).expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { return nil }
+        return expanded
+    }
+
+    private func buildCommandRegistry() -> ClawdmeterCommandRegistry {
+        var registry = ClawdmeterCommandRegistry(commands: [
+            .init(id: "global.palette", title: "Open Command Palette", subtitle: "Search every action", keywords: ["spotlight", "actions"], scope: .global, kind: .action, shortcutID: "global.palette"),
+            .init(id: "global.shortcuts", title: "Show Keyboard Shortcuts", subtitle: "Search the shortcut cheat sheet", keywords: ["help", "cheat sheet"], scope: .global, kind: .action, shortcutID: "global.shortcuts"),
+            .init(id: "global.filePicker", title: "Open Repo File", subtitle: openSessionRepoRoot ?? "No code session selected", keywords: ["file", "quick open", "cmd p"], scope: .global, kind: .navigation, shortcutID: "global.filePicker", isEnabled: openSessionRepoRoot != nil, disabledReason: openSessionRepoRoot == nil ? "Open a code session first" : nil),
+            .init(id: "global.statusHUD", title: "Open Status HUD", subtitle: "Floating session monitor window", keywords: ["window", "monitor", "hud"], scope: .global, kind: .navigation),
+            .init(id: "nav.chat", title: "Open Chat", subtitle: "Switch to the chat workbench", keywords: ["tab"], scope: .global, kind: .navigation, shortcutID: "nav.chat"),
+            .init(id: "nav.usage", title: "Open Usage", subtitle: "Switch to usage analytics", keywords: ["tab", "analytics"], scope: .global, kind: .navigation, shortcutID: "nav.usage"),
+            .init(id: "nav.code", title: "Open Code", subtitle: "Switch to the code workbench", keywords: ["tab", "sessions"], scope: .global, kind: .navigation, shortcutID: "nav.code"),
+            .init(id: "nav.settings", title: "Open Settings", subtitle: "Switch to settings", keywords: ["preferences"], scope: .global, kind: .navigation, shortcutID: "nav.settings"),
+            .init(id: "session.new", title: "New Code Session", subtitle: "Open the session launcher", keywords: ["spawn", "agent"], scope: .session, kind: .session),
+            .init(id: "session.nextAttention", title: "Open Next Attention Session", subtitle: "Jump to unread, blocked, PR, plan, or failed-check work", keywords: ["unread", "blocked", "pr", "plan"], scope: .session, kind: .navigation, shortcutID: "session.nextAttention"),
+            .init(id: "transcript.find", title: "Find in Transcript", subtitle: "Search the open chat transcript", keywords: ["search", "messages"], scope: .chat, kind: .action, shortcutID: "transcript.find"),
+            .init(id: "transcript.nextMatch", title: "Next Transcript Match", subtitle: "Jump to the next in-chat search match", keywords: ["find", "search"], scope: .chat, kind: .action, shortcutID: "transcript.nextMatch"),
+            .init(id: "transcript.previousMatch", title: "Previous Transcript Match", subtitle: "Jump to the previous in-chat search match", keywords: ["find", "search"], scope: .chat, kind: .action, shortcutID: "transcript.previousMatch"),
+            .init(id: "transcript.latest", title: "Jump to Latest Message", subtitle: "Scroll the transcript to the newest event", keywords: ["bottom"], scope: .chat, kind: .action, shortcutID: "transcript.latest"),
+            .init(id: "transcript.lastUser", title: "Jump to Last User Message", subtitle: "Return to the last prompt in the transcript", keywords: ["prompt"], scope: .chat, kind: .action, shortcutID: "transcript.lastUser"),
+            .init(id: "composer.history", title: "Open Prompt History", subtitle: "Reuse a previous prompt or saved prompt", keywords: ["recall", "saved"], scope: .composer, kind: .action, shortcutID: "composer.history"),
+            .init(id: "composer.send", title: "Send Prompt", subtitle: "Send the current composer draft", keywords: ["submit"], scope: .composer, kind: .action, shortcutID: "composer.send"),
+            .init(id: "composer.queue", title: "Queue Follow-up", subtitle: "Queue the current draft for the running session", keywords: ["follow up", "later"], scope: .composer, kind: .action, shortcutID: "composer.queue"),
+            .init(id: "composer.dictation", title: "Toggle Dictation", subtitle: "Start or stop composer dictation", keywords: ["voice", "microphone"], scope: .composer, kind: .action, shortcutID: "composer.dictation"),
+            .init(id: "code.search", title: "Focus Code Search", subtitle: "Search sessions and projects", keywords: ["filter"], scope: .code, kind: .action, shortcutID: "code.search"),
+            .init(id: "code.workspaceSwitcher", title: "Open Workspace Switcher", subtitle: "Switch workspace or session", keywords: ["repo", "session", "switch"], scope: .code, kind: .navigation, shortcutID: "code.workspaceSwitcher"),
+            .init(id: "code.reviewPane", title: "Toggle Review Pane", subtitle: "Show or hide Plan/Diff/PR/Terminal", keywords: ["plan", "diff", "terminal"], scope: .code, kind: .action, shortcutID: "code.reviewPane"),
+            .init(id: "settings.pairIPhone", title: "Pair Or Manage iPhone", subtitle: "Open Settings for desktop sync", keywords: ["phone", "sync", "qr"], scope: .settings, kind: .setting),
+            .init(id: "settings.whatsNew", title: "What's New", subtitle: "Open the changelog", keywords: ["release", "updates"], scope: .settings, kind: .external),
+        ])
+        if let session = sessionsModel.openSession {
+            let transcriptURL = sessionsModel.chatStore(for: session)?.currentFileURL
+            registry.upsert(.init(id: "session.subchat", title: "Create Sub-chat", subtitle: "Branch from \(session.displayLabel)", keywords: ["branch", "child"], scope: .session, kind: .session, shortcutID: "session.subchat"))
+            registry.upsert(.init(id: "session.archive", title: "Archive Open Session", subtitle: session.displayLabel, keywords: ["hide", "done"], scope: .session, kind: .session, shortcutID: "session.archive", isEnabled: session.archivedAt == nil, disabledReason: session.archivedAt == nil ? nil : "Session is already archived"))
+            registry.upsert(.init(id: "session.export", title: "Export Open Session", subtitle: "Write transcript, metadata, and diff bundle", keywords: ["bundle", "download"], scope: .session, kind: .external, shortcutID: "session.export"))
+            registry.upsert(.init(id: "session.copyID", title: "Copy Open Session ID", subtitle: session.id.uuidString, keywords: ["uuid"], scope: .session, kind: .session))
+            registry.upsert(.init(
+                id: "session.revealJSONL",
+                title: "Reveal Open Session JSONL",
+                subtitle: session.displayLabel,
+                keywords: ["finder", "transcript"],
+                scope: .session,
+                kind: .external,
+                isEnabled: transcriptURL != nil,
+                disabledReason: transcriptURL == nil ? "Transcript file is not available yet" : nil
+            ))
+            if let prURL = session.prMirrorState?.prURL {
+                registry.upsert(.init(id: "session.openPR", title: "Open Pull Request", subtitle: prURL, keywords: ["github", "pr"], scope: .session, kind: .external))
+            }
+        } else {
+            registry.upsert(.init(id: "session.subchat", title: "Create Sub-chat", subtitle: "No session selected", scope: .session, kind: .session, shortcutID: "session.subchat", isEnabled: false, disabledReason: "No session selected"))
+            registry.upsert(.init(id: "session.archive", title: "Archive Open Session", subtitle: "No session selected", scope: .session, kind: .session, shortcutID: "session.archive", isEnabled: false, disabledReason: "No session selected"))
+        }
+        for session in agentSessionRegistry.sessions.filter({ $0.archivedAt == nil }).sorted(by: { $0.lastEventAt > $1.lastEventAt }).prefix(10) {
+            registry.upsert(.init(
+                id: ClawdmeterCommandID(rawValue: "session.open.\(session.id.uuidString)"),
+                title: "Open \(session.displayLabel)",
+                subtitle: "\(session.agent.rawValue) · \(session.repoDisplayName)",
+                keywords: [session.repoDisplayName, session.goal ?? "", session.model ?? ""],
+                scope: .session,
+                kind: .navigation
+            ))
+        }
+        for skill in skillCatalog.commands {
+            registry.upsert(.init(
+                id: ClawdmeterCommandID(rawValue: "skill.\(skill.id)"),
+                title: "/\(skill.id)",
+                subtitle: skill.description,
+                keywords: ["slash", "skill", skill.label],
+                scope: .composer,
+                kind: .skill
+            ))
+        }
+        return registry
+    }
+
+    private func runGlobalCommand(_ command: ClawdmeterCommandDescriptor) {
+        showingGlobalPalette = false
+        try? presentationStore.recordCommand(command.id.rawValue)
+        switch command.id.rawValue {
+        case "global.palette":
+            showingGlobalPalette = true
+        case "global.shortcuts":
+            showingShortcutSheet = true
+        case "global.filePicker":
+            tab = .code
+            showingFilePicker = true
+        case "global.statusHUD":
+            openWindow(id: "status-hud")
+        case "nav.chat":
+            tab = .chat
+        case "nav.usage":
+            tab = .usage
+        case "nav.code":
+            tab = .code
+        case "nav.settings", "settings.pairIPhone":
+            tab = .settings
+        case "settings.whatsNew":
+            openChangelog()
+        case "session.new":
+            tab = .code
+            sessionsModel.showingNewSessionSheet = true
+        case "session.nextAttention":
+            openNextAttentionSession()
+        case "transcript.find":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .transcriptFind, object: nil) }
+        case "transcript.nextMatch":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .transcriptNextMatch, object: nil) }
+        case "transcript.previousMatch":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .transcriptPreviousMatch, object: nil) }
+        case "transcript.latest":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .transcriptLatest, object: nil) }
+        case "transcript.lastUser":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .transcriptLastUser, object: nil) }
+        case "composer.history":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerHistory, object: nil) }
+        case "composer.send":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerSend, object: nil) }
+        case "composer.queue":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerQueue, object: nil) }
+        case "composer.dictation":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .composerToggleDictation, object: nil) }
+        case "code.search":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .focusSidebarSearch, object: nil) }
+        case "code.workspaceSwitcher":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .openWorkspaceSwitcher, object: nil) }
+        case "code.reviewPane":
+            tab = .code
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil) }
+        case "session.subchat":
+            guard let parentId = sessionsModel.openSessionId else { return }
+            Task { _ = await sessionsModel.spawnSubchat(parentId: parentId) }
+        case "session.archive":
+            archiveOpenSession()
+        case "session.export":
+            exportOpenSession()
+        case "session.copyID":
+            copyOpenSessionID()
+        case "session.revealJSONL":
+            revealOpenSessionJSONL()
+        case "session.openPR":
+            openCurrentPR()
+        default:
+            if command.id.rawValue.hasPrefix("session.open."),
+               let id = UUID(uuidString: String(command.id.rawValue.dropFirst("session.open.".count))) {
+                tab = .code
+                sessionsModel.openSessionId = id
+            } else if command.id.rawValue.hasPrefix("skill.") {
+                let skill = String(command.id.rawValue.dropFirst("skill.".count))
+                tab = .code
+                ComposerInsertionInbox.shared.enqueue(text: "/\(skill)\n", autoSend: true)
+            }
+        }
+    }
+
+    private func archiveOpenSession() {
+        guard let session = sessionsModel.openSession, session.archivedAt == nil else { return }
+        sessionsModel.registry.archive(id: session.id)
+        showTransientToast(TransientToast(
+            title: "Archived \(session.displayLabel)",
+            actionTitle: "Undo",
+            actionID: "unarchive:\(session.id.uuidString)",
+            duration: 5,
+            isDestructiveRecovery: true
+        ))
+    }
+
+    private func openNextAttentionSession() {
+        let sessions = agentSessionRegistry.sessions
+            .filter { $0.archivedAt == nil }
+            .sorted { lhs, rhs in
+                let lhsReasons = AttentionReasonResolver.reasons(
+                    for: lhs,
+                    unread: presentationStore.snapshot.unreadSessionIds.contains(lhs.id),
+                    providerBlocked: sessionsModel.chatStore(for: lhs)?.pendingPermissionPrompt != nil,
+                    snoozedUntil: presentationStore.snapshot.snoozedUntil[lhs.id]
+                )
+                let rhsReasons = AttentionReasonResolver.reasons(
+                    for: rhs,
+                    unread: presentationStore.snapshot.unreadSessionIds.contains(rhs.id),
+                    providerBlocked: sessionsModel.chatStore(for: rhs)?.pendingPermissionPrompt != nil,
+                    snoozedUntil: presentationStore.snapshot.snoozedUntil[rhs.id]
+                )
+                let lhsPriority = lhsReasons.first?.priority ?? 99
+                let rhsPriority = rhsReasons.first?.priority ?? 99
+                if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
+                return lhs.lastEventAt > rhs.lastEventAt
+            }
+        let attention = sessions.filter {
+            !AttentionReasonResolver.reasons(
+                for: $0,
+                unread: presentationStore.snapshot.unreadSessionIds.contains($0.id),
+                providerBlocked: sessionsModel.chatStore(for: $0)?.pendingPermissionPrompt != nil,
+                snoozedUntil: presentationStore.snapshot.snoozedUntil[$0.id]
+            ).isEmpty
+        }
+        guard !attention.isEmpty else {
+            showTransientToast(TransientToast(title: "No sessions need attention", duration: 2))
+            return
+        }
+        let current = sessionsModel.openSessionId
+        let target: AgentSession
+        if let current, let idx = attention.firstIndex(where: { $0.id == current }) {
+            target = attention[(idx + 1) % attention.count]
+        } else {
+            target = attention[0]
+        }
+        tab = .code
+        sessionsModel.openOutsideJSONLPath = nil
+        sessionsModel.openSessionId = target.id
+        try? presentationStore.markUnread(target.id, unread: false)
+    }
+
+    private func copyOpenSessionID() {
+        guard let id = sessionsModel.openSession?.id.uuidString else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(id, forType: .string)
+        showTransientToast(TransientToast(title: "Copied session ID", duration: 2))
+    }
+
+    private func exportOpenSession() {
+        guard let session = sessionsModel.openSession else {
+            showTransientToast(TransientToast(title: "No session selected", duration: 2))
+            return
+        }
+        do {
+            let transcriptURL = sessionsModel.chatStore(for: session)?.currentFileURL
+            let url = try SessionExportBundleWriter.export(
+                session: session,
+                transcriptURL: transcriptURL,
+                presentation: presentationStore.snapshot
+            )
+            try? presentationStore.recordExportedSessionURL(url.path)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            showTransientToast(TransientToast(
+                title: "Exported session bundle",
+                detail: url.lastPathComponent,
+                duration: 4
+            ))
+        } catch {
+            showTransientToast(TransientToast(
+                title: "Export failed",
+                detail: error.localizedDescription,
+                duration: 5
+            ))
+        }
+    }
+
+    private func revealOpenSessionJSONL() {
+        guard let session = sessionsModel.openSession,
+              let url = sessionsModel.chatStore(for: session)?.currentFileURL
+        else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func openCurrentPR() {
+        guard let raw = sessionsModel.openSession?.prMirrorState?.prURL,
+              let url = URL(string: raw)
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func openChangelog() {
+        let candidates = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("CHANGELOG.md"),
+            Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("CHANGELOG.md")
+        ]
+        if let existing = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+            NSWorkspace.shared.open(existing)
+        } else {
+            tab = .settings
+            showTransientToast(TransientToast(title: "Changelog not found in this build", duration: 3))
+        }
+    }
+}
+
+private struct ShortcutOverrideMonitor: NSViewRepresentable {
+    let shortcuts: ClawdmeterShortcutRegistry
+    let overrides: [String: String]
+    let commands: ClawdmeterCommandRegistry
+    let onRun: (ClawdmeterCommandDescriptor) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.update(shortcuts: shortcuts, overrides: overrides, commands: commands, onRun: onRun)
+        context.coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            context.coordinator.handle(event)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.update(shortcuts: shortcuts, overrides: overrides, commands: commands, onRun: onRun)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        if let monitor = coordinator.monitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        coordinator.monitor = nil
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var monitor: Any?
+        private var shortcuts = ClawdmeterShortcutRegistry()
+        private var overrides: [String: String] = [:]
+        private var commands = ClawdmeterCommandRegistry()
+        private var onRun: ((ClawdmeterCommandDescriptor) -> Void)?
+
+        func update(
+            shortcuts: ClawdmeterShortcutRegistry,
+            overrides: [String: String],
+            commands: ClawdmeterCommandRegistry,
+            onRun: @escaping (ClawdmeterCommandDescriptor) -> Void
+        ) {
+            self.shortcuts = shortcuts
+            self.overrides = overrides
+            self.commands = commands
+            self.onRun = onRun
+        }
+
+        func handle(_ event: NSEvent) -> NSEvent? {
+            let eventChord = Self.normalizedChord(for: event)
+            guard !eventChord.isEmpty else { return event }
+
+            for shortcut in shortcuts.shortcuts {
+                let chord = shortcuts.displayChord(for: shortcut, overrides: overrides)
+                guard Self.normalize(chord) == eventChord,
+                      let commandID = shortcut.commandID,
+                      let command = commands.command(id: commandID),
+                      command.isEnabled
+                else { continue }
+                onRun?(command)
+                return nil
+            }
+            return event
+        }
+
+        private static func normalizedChord(for event: NSEvent) -> String {
+            var raw = ""
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if flags.contains(.control) { raw += "⌃" }
+            if flags.contains(.option) { raw += "⌥" }
+            if flags.contains(.shift) { raw += "⇧" }
+            if flags.contains(.command) { raw += "⌘" }
+            raw += keyName(for: event)
+            return normalize(raw)
+        }
+
+        private static func keyName(for event: NSEvent) -> String {
+            switch event.keyCode {
+            case 36, 76: return "Return"
+            case 125: return "Down"
+            case 126: return "Up"
+            case 123: return "Left"
+            case 124: return "Right"
+            case 53: return "Esc"
+            default:
+                return (event.charactersIgnoringModifiers ?? event.characters ?? "").uppercased()
+            }
+        }
+
+        private static func normalize(_ chord: String) -> String {
+            let canonical = chord
+                .replacingOccurrences(of: "Command", with: "⌘")
+                .replacingOccurrences(of: "Cmd", with: "⌘")
+                .replacingOccurrences(of: "Shift", with: "⇧")
+                .replacingOccurrences(of: "Option", with: "⌥")
+                .replacingOccurrences(of: "Alt", with: "⌥")
+                .replacingOccurrences(of: "Control", with: "⌃")
+                .replacingOccurrences(of: "Ctrl", with: "⌃")
+                .replacingOccurrences(of: " ", with: "")
+                .uppercased()
+            let hasCommand = canonical.contains("⌘")
+            let hasShift = canonical.contains("⇧")
+            let hasOption = canonical.contains("⌥")
+            let hasControl = canonical.contains("⌃")
+            let key = canonical
+                .replacingOccurrences(of: "⌘", with: "")
+                .replacingOccurrences(of: "⇧", with: "")
+                .replacingOccurrences(of: "⌥", with: "")
+                .replacingOccurrences(of: "⌃", with: "")
+            return [
+                hasCommand ? "⌘" : "",
+                hasShift ? "⇧" : "",
+                hasOption ? "⌥" : "",
+                hasControl ? "⌃" : ""
+            ].joined() + key
+        }
     }
 }
 

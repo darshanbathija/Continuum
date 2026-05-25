@@ -59,6 +59,7 @@ public struct TahoeIcon: View {
         case "user":       return "person.crop.circle"
         case "chat":       return "bubble.left"
         case "bell":       return "bell"
+        case "bellSlash":  return "bell.slash"
         case "tray":       return "tray.and.arrow.down"
         case "play2":      return "play"
         case "eye":        return "eye"
@@ -77,6 +78,9 @@ public struct TahoeIcon: View {
         case "archive":    return "archivebox"
         case "filter":     return "line.3.horizontal.decrease.circle"
         case "folderPlus": return "folder.badge.plus"
+        case "external":   return "arrow.up.right.square"
+        case "command":    return "command"
+        case "ellipsis":   return "ellipsis"
         default:           return "circle"
         }
     }

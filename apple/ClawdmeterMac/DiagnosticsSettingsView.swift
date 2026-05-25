@@ -22,6 +22,8 @@ struct DiagnosticsSettingsView: View {
     @State private var query: String = ""
     @State private var sessionFilter: String = ""
     @State private var refreshTick: Int = 0
+    @State private var supportBundleURL: URL?
+    @State private var supportBundleError: String?
 
     enum AuditKind: String, CaseIterable, Identifiable {
         case sends, swaps, autopilot
@@ -87,6 +89,12 @@ struct DiagnosticsSettingsView: View {
                 .pickerStyle(.segmented)
                 Spacer()
                 Button {
+                    createSupportBundle()
+                } label: {
+                    Label("Support Bundle", systemImage: "shippingbox")
+                }
+                .buttonStyle(.borderless)
+                Button {
                     refreshTick += 1
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
@@ -117,6 +125,24 @@ struct DiagnosticsSettingsView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Open audit folder in Finder")
+            }
+            if let supportBundleURL {
+                HStack(spacing: 6) {
+                    Text("Bundle: \(supportBundleURL.path)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button("Reveal") {
+                        NSWorkspace.shared.activateFileViewerSelecting([supportBundleURL])
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            if let supportBundleError {
+                Text(supportBundleError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
         .padding(.horizontal, 16)
@@ -172,6 +198,155 @@ struct DiagnosticsSettingsView: View {
     private var auditFolderURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".clawdmeter/audit", isDirectory: true)
+    }
+
+    private func createSupportBundle() {
+        do {
+            let url = try SupportBundleWriter.create(
+                auditFolderURL: auditFolderURL,
+                wireEntries: entries.map(\.raw)
+            )
+            supportBundleURL = url
+            supportBundleError = nil
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url.path, forType: .string)
+        } catch {
+            supportBundleError = error.localizedDescription
+        }
+    }
+}
+
+enum SupportBundleWriter {
+    static func create(auditFolderURL: URL, wireEntries: [String], outputRoot: URL? = nil) throws -> URL {
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        let root = (outputRoot ?? downloads).appendingPathComponent("Clawdmeter Support", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let bundle = root.appendingPathComponent("support-\(Self.stamp())", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+
+        let summary = [
+            "createdAt=\(ISO8601DateFormatter().string(from: Date()))",
+            "bundle=\(Bundle.main.bundleIdentifier ?? "unknown")",
+            "version=\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")",
+            "build=\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown")",
+            "shell=\(redact(ProcessInfo.processInfo.environment["SHELL"] ?? "unknown"))",
+            "path=\(redact(ProcessInfo.processInfo.environment["PATH"] ?? "unknown"))",
+            "auditFolder=\(redact(auditFolderURL.path))"
+        ].joined(separator: "\n")
+        try summary.write(to: bundle.appendingPathComponent("summary.txt"), atomically: true, encoding: .utf8)
+
+        try copyRedactedAudit(from: auditFolderURL, to: bundle.appendingPathComponent("audit-redacted", isDirectory: true))
+        try redactAuditText(wireEntries.joined(separator: "\n")).write(to: bundle.appendingPathComponent("visible-diagnostics.jsonl"), atomically: true, encoding: .utf8)
+        try systemSnapshot().write(to: bundle.appendingPathComponent("system.txt"), atomically: true, encoding: .utf8)
+        try providerSnapshot().write(to: bundle.appendingPathComponent("provider-binaries.txt"), atomically: true, encoding: .utf8)
+        try redact(run("/bin/zsh", ["-lc", "tmux list-sessions 2>&1 || true"])).write(to: bundle.appendingPathComponent("tmux.txt"), atomically: true, encoding: .utf8)
+        try redact(run("/bin/zsh", ["-lc", "tailscale status --json 2>&1 || tailscale status 2>&1 || true"])).write(to: bundle.appendingPathComponent("tailscale.txt"), atomically: true, encoding: .utf8)
+        try redact(run("/bin/zsh", ["-lc", "lsof -nP -iTCP -sTCP:LISTEN 2>&1 | head -200 || true"])).write(to: bundle.appendingPathComponent("listening-ports.txt"), atomically: true, encoding: .utf8)
+        try "App logs are omitted from the default support bundle because they can contain prompt and transcript text. Use visible-diagnostics.jsonl and audit-redacted for sanitized event context.\n"
+            .write(to: bundle.appendingPathComponent("app-logs.txt"), atomically: true, encoding: .utf8)
+        return bundle
+    }
+
+    private static func copyRedactedAudit(from auditFolderURL: URL, to target: URL) throws {
+        guard FileManager.default.fileExists(atPath: auditFolderURL.path) else { return }
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let rootPath = auditFolderURL.standardizedFileURL.resolvingSymlinksInPath().path
+        guard let enumerator = FileManager.default.enumerator(
+            at: auditFolderURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        for case let fileURL as URL in enumerator {
+            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey])
+            guard values?.isRegularFile == true else { continue }
+            guard let data = try? Data(contentsOf: fileURL),
+                  let text = String(data: data, encoding: .utf8)
+            else { continue }
+            let filePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+            let relative = filePath.hasPrefix(rootPath + "/")
+                ? String(filePath.dropFirst(rootPath.count + 1))
+                : fileURL.lastPathComponent
+            let name = (relative.isEmpty ? fileURL.lastPathComponent : relative)
+                .replacingOccurrences(of: "/", with: "__")
+            try redactAuditText(text).write(to: target.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+    }
+
+    private static func systemSnapshot() -> String {
+        [
+            "macOS=\(redact(run("/usr/bin/sw_vers", [])))",
+            "uname=\(redact(run("/usr/bin/uname", ["-a"])))",
+            "cwd=\(redact(FileManager.default.currentDirectoryPath))",
+        ].joined(separator: "\n")
+    }
+
+    private static func providerSnapshot() -> String {
+        let providers = ["claude", "codex", "gemini", "opencode", "cursor", "tmux", "tailscale", "gh", "git"]
+        return providers.map { name in
+            let path = redact(run("/bin/zsh", ["-lc", "command -v \(name) 2>/dev/null || true"]))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let version = redact(run("/bin/zsh", ["-lc", "\(name) --version 2>&1 | head -5 || true"]))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return "\(name): \(path.isEmpty ? "missing" : path)\n\(version)"
+        }.joined(separator: "\n\n")
+    }
+
+    private static func run(_ executable: String, _ arguments: [String]) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private static func redact(_ value: String) -> String {
+        var output = value.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
+        if let user = ProcessInfo.processInfo.environment["USER"], !user.isEmpty {
+            output = output.replacingOccurrences(of: user, with: "<user>")
+        }
+        let patterns = [
+            (#"(?i)"(key|token|access|refresh|secret|password|credential|credentials|api[_-]?key|authorization)"\s*:\s*"[^"]*""#, #""$1":"<redacted>""#),
+            (#"(?i)'(key|token|access|refresh|secret|password|credential|credentials|api[_-]?key|authorization)'\s*:\s*'[^']*'"#, #"'$1':'<redacted>'"#),
+            (#"(?i)(token|secret|password|credential|credentials|api[_-]?key|authorization|access|refresh)[=: ]+[^\s,]+"#, "$1=<redacted>"),
+            (#"sk-[A-Za-z0-9_\-]{12,}"#, "<redacted>"),
+            (#"gh[pousr]_[A-Za-z0-9_]{12,}"#, "<redacted>"),
+            (#"(?i)[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}"#, "<email>"),
+            (#"(?i)\bhttps?://[^/\s"'<>]+"#, "https://<host>"),
+            (#"(?i)\b[A-Z0-9][A-Z0-9\-]{1,62}(?:\.[A-Z0-9][A-Z0-9\-]{1,62})+\b"#, "<host>"),
+            (#"\b(?:\d{1,3}\.){3}\d{1,3}\b"#, "<ip>"),
+            (#"\b[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){2,7}\b"#, "<ip>"),
+        ]
+        for (pattern, replacement) in patterns {
+            output = output.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+        }
+        return output
+    }
+
+    static func redactAuditText(_ value: String) -> String {
+        var output = redact(value)
+        let contentPatterns = [
+            (#"(?i)"(text|prompt|body|message|content|goal|planText)"\s*:\s*"(?:\\.|[^"\\])*""#, #""$1":"<redacted-content>""#),
+            (#"(?i)'(text|prompt|body|message|content|goal|planText)'\s*:\s*'(?:\\.|[^'\\])*'"#, #"'$1':'<redacted-content>'"#),
+        ]
+        for (pattern, replacement) in contentPatterns {
+            output = output.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+        }
+        return output
+    }
+
+    private static func stamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
     }
 }
 

@@ -12,6 +12,7 @@ struct SettingsView: View {
     /// IOSRootView covers first-launch, but once paired there was no
     /// way back to the pairing UI.
     @ObservedObject var agentClient: AgentControlClient
+    @ObservedObject var presentationStore: SessionPresentationStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var tokenDraft: String = ""
@@ -89,6 +90,17 @@ struct SettingsView: View {
                     Text("Appearance")
                 } footer: {
                     Text("System follows iOS Settings → Display & Brightness. Light and Dark pin the app regardless of system state.")
+                }
+
+                Section {
+                    Toggle("Do Not Disturb", isOn: notificationPreferenceBinding(\.dndEnabled))
+                    Toggle("Batch banners", isOn: notificationPreferenceBinding(\.batchBanners))
+                    Toggle("Play chimes", isOn: notificationPreferenceBinding(\.playChimes))
+                    Toggle("Show sensitive previews", isOn: notificationPreferenceBinding(\.sensitivePreviews))
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("DND suppresses iPhone banners and sounds without marking Mac attention events as seen.")
                 }
 
                 Section {
@@ -240,5 +252,16 @@ struct SettingsView: View {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         tokenDraft = trimmed
+    }
+
+    private func notificationPreferenceBinding(_ keyPath: WritableKeyPath<NotificationPresentationPreferences, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { presentationStore.snapshot.notificationPreferences[keyPath: keyPath] },
+            set: { newValue in
+                var prefs = presentationStore.snapshot.notificationPreferences
+                prefs[keyPath: keyPath] = newValue
+                try? presentationStore.setNotificationPreferences(prefs)
+            }
+        )
     }
 }

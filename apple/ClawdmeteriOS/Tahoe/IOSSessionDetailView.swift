@@ -64,6 +64,7 @@ private struct IOSQueuedCodeDraft: Codable, Equatable, Identifiable {
 
 public struct IOSSessionDetailView: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var agentClient: AgentControlClient
     /// v0.26 follow-up: app-scoped mobile command outbox owned by
     /// `IOSRootView`. Receive as `@ObservedObject` (not `@StateObject`)
@@ -71,6 +72,7 @@ public struct IOSSessionDetailView: View {
     /// view — the single app-scoped queue serves every session and the
     /// persisted `outbox.json` is never raced by sibling instances.
     @ObservedObject var outbox: MobileCommandOutbox
+    @ObservedObject var presentationStore: SessionPresentationStore
     var sessionId: UUID
     var data: TahoeCodeBindings
     var onBack: () -> Void
@@ -108,10 +110,12 @@ public struct IOSSessionDetailView: View {
         outbox: MobileCommandOutbox,
         sessionId: UUID,
         data: TahoeCodeBindings,
+        presentationStore: SessionPresentationStore,
         onBack: @escaping () -> Void
     ) {
         self.agentClient = agentClient
         self.outbox = outbox
+        self.presentationStore = presentationStore
         self.sessionId = sessionId
         self.data = data
         self.onBack = onBack
@@ -402,7 +406,7 @@ public struct IOSSessionDetailView: View {
             }
             ForEach(visibleTabs) { tab in
                 Button {
-                    selectedTab = tab
+                    selectTab(tab)
                 } label: {
                     Label(tab.label, systemImage: tab.icon)
                 }
@@ -452,62 +456,96 @@ public struct IOSSessionDetailView: View {
         return tabs
     }
 
+    private var primaryTabs: [SessionWorkbenchTab] {
+        let priority: [SessionWorkbenchTab] = [.chat, .plan, .diff, .browser]
+        return priority.filter { visibleTabs.contains($0) }
+    }
+
+    private var overflowTabs: [SessionWorkbenchTab] {
+        visibleTabs.filter { !primaryTabs.contains($0) }
+    }
+
     @ViewBuilder
     private var tabChipStrip: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(visibleTabs) { tab in
+        HStack(spacing: 4) {
+            ForEach(primaryTabs) { tab in
+                tabChip(tab)
+            }
+
+            if !overflowTabs.isEmpty {
+                Menu {
+                    ForEach(overflowTabs) { tab in
                         Button {
-                            selectedTab = tab
-                            withAnimation(.snappy(duration: 0.18)) {
-                                proxy.scrollTo(tab.id, anchor: .center)
-                            }
+                            selectTab(tab)
                         } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: tab.icon)
-                                    .font(.system(size: 12, weight: .medium))
-                                Text(tab.label)
-                                    .font(.system(size: 12, weight: .semibold))
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background {
-                                Capsule().fill(selectedTab == tab ? t.accent : t.glassTintHi)
-                            }
-                            .overlay {
-                                Capsule().stroke(selectedTab == tab ? .clear : t.hairline, lineWidth: 0.5)
-                            }
-                            .foregroundStyle(selectedTab == tab ? .white : t.fg)
+                            Label(tab.label, systemImage: tab.icon)
                         }
-                        .buttonStyle(.plain)
-                        .id(tab.id)
                     }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: overflowTabs.contains(selectedTab) ? selectedTab.icon : "ellipsis")
+                            .font(.system(size: 12, weight: .medium))
+                        Text(overflowTabs.contains(selectedTab) ? selectedTab.label : "More")
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 7)
+                    .background {
+                        Capsule().fill(overflowTabs.contains(selectedTab) ? t.accent : t.glassTintHi)
+                    }
+                    .overlay {
+                        Capsule().stroke(overflowTabs.contains(selectedTab) ? .clear : t.hairline, lineWidth: 0.5)
+                    }
+                    .foregroundStyle(overflowTabs.contains(selectedTab) ? .white : t.fg)
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 2)
+                .buttonStyle(.plain)
             }
-            .mask {
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .black, location: 0.06),
-                        .init(color: .black, location: 0.94),
-                        .init(color: .clear, location: 1)
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func tabChip(_ tab: SessionWorkbenchTab) -> some View {
+        Button {
+            selectTab(tab)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 12, weight: .medium))
+                Text(tab.label)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            .onAppear {
-                DispatchQueue.main.async {
-                    proxy.scrollTo(selectedTab.id, anchor: .center)
-                }
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background {
+                Capsule().fill(selectedTab == tab ? t.accent : t.glassTintHi)
             }
-            .onChange(of: selectedTab) { _, newValue in
-                withAnimation(.snappy(duration: 0.18)) {
-                    proxy.scrollTo(newValue.id, anchor: .center)
-                }
+            .overlay {
+                Capsule().stroke(selectedTab == tab ? .clear : t.hairline, lineWidth: 0.5)
+            }
+            .foregroundStyle(selectedTab == tab ? .white : t.fg)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectTab(_ tab: SessionWorkbenchTab) {
+        if reduceMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                selectedTab = tab
+            }
+        } else {
+            withAnimation(.snappy(duration: 0.18)) {
+                selectedTab = tab
             }
         }
     }
@@ -539,7 +577,7 @@ public struct IOSSessionDetailView: View {
                     session: s,
                     onOpenTerminal: {
                         if visibleTabs.contains(.terminal) {
-                            selectedTab = .terminal
+                            selectTab(.terminal)
                         }
                     }
                 )
@@ -649,8 +687,13 @@ public struct IOSSessionDetailView: View {
                                 )
                             }
                         } else {
-                            ForEach(chatStore.snapshot.items) { item in
-                                IOSWireChatItemRow(item: item, provider: session?.agent ?? .claude)
+                            ForEach(chatStore.snapshot.items.suffix(200)) { item in
+                                IOSWireChatItemRow(
+                                    item: item,
+                                    sessionId: sessionId,
+                                    provider: session?.agent ?? .claude,
+                                    presentationStore: presentationStore
+                                )
                             }
                             if !planSteps.isEmpty {
                                 IOSPlanHaloMini(
@@ -1243,7 +1286,9 @@ public struct IOSSessionDetailView: View {
 private struct IOSWireChatItemRow: View {
     @Environment(\.tahoe) private var t
     var item: ChatItem
+    var sessionId: UUID
     var provider: TahoeProvider
+    @ObservedObject var presentationStore: SessionPresentationStore
 
     var body: some View {
         switch item {
@@ -1271,46 +1316,68 @@ private struct IOSWireChatItemRow: View {
 
     @ViewBuilder
     private func messageRow(_ message: ChatMessage) -> some View {
-        switch message.kind {
-        case .userText:
-            HStack {
-                Spacer()
-                TahoeGlass(radius: 20, tone: .raised) {
-                    Text(message.body)
-                        .font(TahoeFont.body(13))
-                        .foregroundStyle(t.fg)
-                        .padding(.horizontal, 15).padding(.vertical, 11)
-                        .fixedSize(horizontal: false, vertical: true)
+        Group {
+            switch message.kind {
+            case .userText:
+                HStack {
+                    Spacer()
+                    TahoeGlass(radius: 20, tone: .raised) {
+                        Text(message.body)
+                            .font(TahoeFont.body(13))
+                            .foregroundStyle(t.fg)
+                            .padding(.horizontal, 15).padding(.vertical, 11)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: 320, alignment: .trailing)
                 }
-                .frame(maxWidth: 320, alignment: .trailing)
-            }
-        case .assistantText:
-            HStack(alignment: .top, spacing: 9) {
-                TahoeProviderGlyph(provider: provider, size: 24)
+            case .assistantText:
+                HStack(alignment: .top, spacing: 9) {
+                    TahoeProviderGlyph(provider: provider, size: 24)
+                    Text(message.body)
+                        .font(TahoeFont.body(14))
+                        .foregroundStyle(t.fg)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                }
+            case .toolCall, .toolResult:
+                HStack(spacing: 8) {
+                    TahoeIcon(message.kind == .toolCall ? "doc" : "check", size: 11).foregroundStyle(t.fg3)
+                    Text(message.title)
+                        .font(TahoeFont.body(11.5, weight: .semibold))
+                        .foregroundStyle(t.fg2)
+                    Text(message.body)
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(message.isError ? .red : t.fg3)
+                        .lineLimit(2)
+                    Spacer()
+                }
+                .padding(.horizontal, 4).padding(.vertical, 4)
+            case .meta:
                 Text(message.body)
-                    .font(TahoeFont.body(14))
-                    .foregroundStyle(t.fg)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-        case .toolCall, .toolResult:
-            HStack(spacing: 8) {
-                TahoeIcon(message.kind == .toolCall ? "doc" : "check", size: 11).foregroundStyle(t.fg3)
-                Text(message.title)
-                    .font(TahoeFont.body(11.5, weight: .semibold))
-                    .foregroundStyle(t.fg2)
-                Text(message.body)
-                    .font(TahoeFont.mono(11))
-                    .foregroundStyle(message.isError ? .red : t.fg3)
-                    .lineLimit(2)
-                Spacer()
+        }
+        .contextMenu {
+            Button("Copy Message", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = message.body
             }
-            .padding(.horizontal, 4).padding(.vertical, 4)
-        case .meta:
-            Text(message.body)
-                .font(TahoeFont.body(11.5))
-                .foregroundStyle(t.fg3)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Copy Message ID", systemImage: "number") {
+                UIPasteboard.general.string = message.id
+            }
+            Button(
+                presentationStore.snapshot.messageBookmarks[sessionId]?.contains(message.id) == true ? "Remove Bookmark" : "Bookmark",
+                systemImage: "bookmark"
+            ) {
+                try? presentationStore.toggleMessageBookmark(sessionId: sessionId, messageId: message.id)
+            }
+            Button("Copy as Quote", systemImage: "quote.bubble") {
+                UIPasteboard.general.string = message.body
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .map { "> \($0)" }
+                    .joined(separator: "\n")
+            }
         }
     }
 }

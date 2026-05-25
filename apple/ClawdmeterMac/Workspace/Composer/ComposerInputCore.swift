@@ -18,6 +18,7 @@ import ClawdmeterShared
 struct ComposerInputCore: View {
 
     @ObservedObject var store: ComposerStore
+    @ObservedObject var presentationStore: SessionPresentationStore
     let catalog: ModelCatalog
     let agentForModelPicker: AgentKind
     let modelSupportsEffort: Bool
@@ -63,6 +64,10 @@ struct ComposerInputCore: View {
     @State private var paletteQuery: String = ""
     @State private var showingMentions: Bool = false
     @State private var mentionQuery: String = ""
+    @State private var showingPromptHistory: Bool = false
+    @State private var showingExpandedEditor: Bool = false
+    @State private var savePromptTitle: String = ""
+    @ObservedObject private var insertionInbox = ComposerInsertionInbox.shared
     /// Optional: when set, MentionPicker uses these as the source of
     /// suggestions (parent passes session-derived sources + open sessions).
     var mentionSourceProvider: () -> (sessions: [AgentSession], sourceEntries: [SourceEntry], recents: [RecentSession]) = { ([], [], []) }
@@ -146,6 +151,10 @@ struct ComposerInputCore: View {
             let base = composerTextBeforeDictation
             store.text = base.isEmpty ? newPartial : "\(base) \(newPartial)"
         }
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterInsertComposerText)) { note in
+            guard let inserted = note.userInfo?["text"] as? String else { return }
+            applyExternalInsertion(text: inserted, autoSend: note.userInfo?["send"] as? Bool == true)
+        }
         .fileImporter(
             isPresented: $isShowingFileImporter,
             allowedContentTypes: [.image, .pdf, .text, .data, .plainText, .sourceCode],
@@ -155,10 +164,53 @@ struct ComposerInputCore: View {
         }
         .onChange(of: store.text) { _, new in
             updatePaletteTriggers(text: new)
+            persistDraft(new)
         }
         .onAppear {
             skillCatalog.projectSkillsRoot = projectSkillsRoot
             skillCatalog.refreshIfStale()
+            restoreDraftIfNeeded()
+            consumePendingInsertion()
+        }
+        .onChange(of: insertionInbox.pendingRequest?.id) { _, _ in
+            consumePendingInsertion()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .composerHistory)) { _ in
+            showingPromptHistory = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .composerSend)) { _ in
+            requestProgrammaticSend()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .composerQueue)) { _ in
+            queueCurrentDraft()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .composerToggleDictation)) { _ in
+            toggleDictation()
+        }
+        .sheet(isPresented: $showingPromptHistory) {
+            PromptHistorySheet(
+                history: presentationStore.snapshot.promptHistory,
+                savedPrompts: presentationStore.snapshot.savedPrompts,
+                onUse: { prompt in
+                    store.text = prompt
+                    showingPromptHistory = false
+                },
+                onDeleteSaved: { id in
+                    try? presentationStore.deleteSavedPrompt(id)
+                },
+                onDismiss: { showingPromptHistory = false }
+            )
+        }
+        .sheet(isPresented: $showingExpandedEditor) {
+            ExpandedComposerEditor(
+                text: $store.text,
+                title: $savePromptTitle,
+                onSavePrompt: {
+                    try? presentationStore.savePrompt(title: savePromptTitle, body: store.text)
+                    savePromptTitle = ""
+                },
+                onClose: { showingExpandedEditor = false }
+            )
         }
     }
 
@@ -198,7 +250,7 @@ struct ComposerInputCore: View {
         lines.append("/\(cmd.id)")
         store.text = lines.joined(separator: "\n")
         showingPalette = false
-        onSend()
+        requestProgrammaticSend()
     }
 
     private func applyMentionSelection(_ pick: MentionPicker.Suggestion) {
@@ -258,6 +310,10 @@ struct ComposerInputCore: View {
             }
             attachButton
             codeContextChip
+            historyButton
+            savedPromptsMenu
+            stripANSIPasteButton
+            expandEditorButton
             micButton
 
             switch store.modeKind {
@@ -368,6 +424,67 @@ struct ComposerInputCore: View {
         .help("Attach code context")
     }
 
+    private var historyButton: some View {
+        Button(action: { showingPromptHistory = true }) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.upArrow, modifiers: [.option])
+        .help("Prompt history (⌥↑)")
+        .accessibilityLabel("Open prompt history")
+    }
+
+    private var savedPromptsMenu: some View {
+        Menu {
+            if presentationStore.snapshot.savedPrompts.isEmpty {
+                Text("No saved prompts")
+            } else {
+                ForEach(presentationStore.snapshot.savedPrompts) { prompt in
+                    Button(prompt.title) { store.text = prompt.body }
+                }
+            }
+            Divider()
+            Button("Save Current Prompt…") {
+                savePromptTitle = ClawdmeterTextUtilities.collapsedWhitespacePreview(store.text, limit: 48)
+                showingExpandedEditor = true
+            }
+            .disabled(store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } label: {
+            Image(systemName: "bookmark")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Saved prompts")
+        .accessibilityLabel("Saved prompts")
+    }
+
+    private var stripANSIPasteButton: some View {
+        Button(action: pasteStrippingANSI) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Paste terminal text without ANSI color codes")
+        .accessibilityLabel("Paste stripped terminal text")
+    }
+
+    private var expandEditorButton: some View {
+        Button(action: { showingExpandedEditor = true }) {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Open expanded editor")
+        .accessibilityLabel("Open expanded composer editor")
+    }
+
     private var micButton: some View {
         Button(action: toggleDictation) {
             Image(systemName: dictation.state == .recording ? "mic.fill" : "mic")
@@ -425,8 +542,8 @@ struct ComposerInputCore: View {
     private var sendOrStopButton: some View {
         if !isReadOnly, sessionIsRunning, let onInterrupt {
             HStack(spacing: 8) {
-                if let onQueue {
-                    Button(action: onQueue) {
+                if onQueue != nil {
+                    Button(action: queueCurrentDraft) {
                         Image(systemName: store.isSending ? "tray.and.arrow.down" : "tray.and.arrow.down.fill")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(store.canSend && !store.isSending ? t.accent : t.fg3)
@@ -476,7 +593,7 @@ struct ComposerInputCore: View {
                 .help("Stop the running prompt (⌘.)")
             }
         } else {
-            Button(action: onSend) {
+            Button(action: sendCurrentDraft) {
                 TahoeIcon("arrowU", size: 15, weight: .bold)
                     .foregroundStyle(canSendNow ? .white : t.fg4)
                     .frame(width: 34, height: 34)
@@ -504,12 +621,116 @@ struct ComposerInputCore: View {
         store.canSend && !store.isSending && !planApprovalMode
     }
 
+    private func consumePendingInsertion() {
+        guard let id = insertionInbox.pendingRequest?.id,
+              let request = insertionInbox.consumePendingRequest(id: id)
+        else { return }
+        applyExternalInsertion(text: request.text, autoSend: request.autoSend)
+    }
+
+    private func applyExternalInsertion(text inserted: String, autoSend: Bool) {
+        if store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            store.text = inserted
+        } else {
+            if !store.text.hasSuffix("\n") { store.text += "\n" }
+            store.text += inserted
+        }
+        if autoSend {
+            requestProgrammaticSend()
+        }
+    }
+
+    private func requestProgrammaticSend() {
+        guard store.canSend else {
+            store.endSend(error: .empty)
+            return
+        }
+        guard !store.isSending else { return }
+        if planApprovalMode {
+            store.endSend(error: .daemonError(message: "Approve or refine the plan before sending."))
+            return
+        }
+        if sessionIsRunning {
+            if let onQueue {
+                try? presentationStore.recordPrompt(store.text)
+                clearPersistedDraft()
+                onQueue()
+            } else {
+                store.endSend(error: .daemonError(message: "This session is running. Stop it before sending another prompt."))
+            }
+            return
+        }
+        sendCurrentDraft()
+    }
+
+    private func sendCurrentDraft() {
+        try? presentationStore.recordPrompt(store.text)
+        clearPersistedDraft()
+        onSend()
+    }
+
+    private func queueCurrentDraft() {
+        guard store.canSend, !store.isSending else { return }
+        guard let onQueue else {
+            store.endSend(error: .daemonError(message: "No queue target is available for this composer."))
+            return
+        }
+        try? presentationStore.recordPrompt(store.text)
+        clearPersistedDraft()
+        onQueue()
+    }
+
     private var liveCostLabel: String {
         guard let cost = usageStatus?.costDollar else { return "$0.000" }
         return String(format: "$%.3f", NSDecimalNumber(decimal: cost).doubleValue)
     }
 
     // MARK: - Voice + import + drop + paste handlers
+
+    private var draftPersistenceKey: String {
+        switch store.modeKind {
+        case .bound(let sessionId):
+            return "clawdmeter.composer.draft.\(sessionId.uuidString)"
+        case .emptyState:
+            return "clawdmeter.composer.draft.empty"
+        }
+    }
+
+    private func restoreDraftIfNeeded() {
+        guard store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let saved = UserDefaults.standard.string(forKey: draftPersistenceKey),
+              !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        store.text = saved
+    }
+
+    private func persistDraft(_ text: String) {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            UserDefaults.standard.removeObject(forKey: draftPersistenceKey)
+        } else {
+            UserDefaults.standard.set(text, forKey: draftPersistenceKey)
+        }
+    }
+
+    private func clearPersistedDraft() {
+        UserDefaults.standard.removeObject(forKey: draftPersistenceKey)
+    }
+
+    private func pasteStrippingANSI() {
+        guard let raw = NSPasteboard.general.string(forType: .string),
+              !raw.isEmpty
+        else {
+            store.endSend(error: .daemonError(message: "Clipboard has no text to paste."))
+            return
+        }
+        let stripped = ClawdmeterTextUtilities.stripANSI(raw)
+        if store.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            store.text = stripped
+        } else {
+            if !store.text.hasSuffix("\n") { store.text += "\n" }
+            store.text += stripped
+        }
+    }
 
     private func toggleDictation() {
         if dictation.state == .recording {
@@ -655,6 +876,138 @@ private struct AgentMenuChip: View {
         .menuIndicator(.hidden)
         .fixedSize(horizontal: true, vertical: false)
         .help("Choose provider")
+    }
+}
+
+private struct PromptHistorySheet: View {
+    let history: [String]
+    let savedPrompts: [SavedPromptState]
+    let onUse: (String) -> Void
+    let onDeleteSaved: (UUID) -> Void
+    let onDismiss: () -> Void
+
+    @State private var query = ""
+    @Environment(\.tahoe) private var t
+
+    private var filteredHistory: [String] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return history }
+        return history.filter { $0.lowercased().contains(needle) }
+    }
+
+    private var filteredSavedPrompts: [SavedPromptState] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return savedPrompts }
+        return savedPrompts.filter {
+            $0.title.lowercased().contains(needle) || $0.body.lowercased().contains(needle)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(t.fg3)
+                TextField("Search prompts", text: $query)
+                    .textFieldStyle(.plain)
+                Button("Done", action: onDismiss)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+            Divider()
+            List {
+                if !filteredSavedPrompts.isEmpty {
+                    Section("Saved") {
+                        ForEach(filteredSavedPrompts) { prompt in
+                            promptRow(
+                                title: prompt.title,
+                                body: prompt.body,
+                                action: { onUse(prompt.body) },
+                                delete: { onDeleteSaved(prompt.id) }
+                            )
+                        }
+                    }
+                }
+                Section("History") {
+                    if filteredHistory.isEmpty {
+                        Text("No prompt history")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(filteredHistory, id: \.self) { prompt in
+                            promptRow(
+                                title: ClawdmeterTextUtilities.collapsedWhitespacePreview(prompt, limit: 72),
+                                body: prompt,
+                                action: { onUse(prompt) },
+                                delete: nil
+                            )
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+        }
+        .frame(minWidth: 560, minHeight: 440)
+    }
+
+    private func promptRow(title: String, body: String, action: @escaping () -> Void, delete: (() -> Void)?) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .lineLimit(1)
+                Text(ClawdmeterTextUtilities.collapsedWhitespacePreview(body, limit: 120))
+                    .font(TahoeFont.body(10.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .padding(.vertical, 3)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Use Prompt", action: action)
+            Button("Copy Prompt") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(body, forType: .string)
+            }
+            if let delete {
+                Button("Delete Saved Prompt", role: .destructive, action: delete)
+            }
+        }
+    }
+}
+
+private struct ExpandedComposerEditor: View {
+    @Binding var text: String
+    @Binding var title: String
+    let onSavePrompt: () -> Void
+    let onClose: () -> Void
+    @FocusState private var editorFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Expanded composer", systemImage: "square.and.pencil")
+                    .font(TahoeFont.body(14, weight: .semibold))
+                Spacer()
+                Button("Done", action: onClose)
+                    .keyboardShortcut(.defaultAction)
+            }
+            TextEditor(text: $text)
+                .font(TahoeFont.body(13))
+                .focused($editorFocused)
+                .frame(minHeight: 260)
+                .padding(8)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            HStack(spacing: 8) {
+                TextField("Saved prompt title", text: $title)
+                    .textFieldStyle(.roundedBorder)
+                Button("Save Prompt", action: onSavePrompt)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 640, minHeight: 420)
+        .onAppear { editorFocused = true }
     }
 }
 

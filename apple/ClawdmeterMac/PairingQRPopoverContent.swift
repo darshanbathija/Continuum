@@ -24,7 +24,7 @@ struct PairingQRPopoverContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Pair iPhone")
+            Text("Pair with iPhone")
                 .font(.system(size: 15, weight: .semibold))
 
             if let httpPort = runtime.agentControlServer.boundPort,
