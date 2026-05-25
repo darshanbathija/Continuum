@@ -22,15 +22,22 @@ public struct IOSAnalyticsView: View {
     /// scroll, folding the retired standalone Live tab into Analytics.
     /// Nil-passing keeps the view backward-compatible.
     private let liveHeader: AnyView?
+    private let onPairWithDesktop: () -> Void
 
-    public init(agentClient: AgentControlClient) {
+    public init(agentClient: AgentControlClient, onPairWithDesktop: @escaping () -> Void = {}) {
         self.agentClient = agentClient
         self.liveHeader = nil
+        self.onPairWithDesktop = onPairWithDesktop
     }
 
-    public init<Header: View>(agentClient: AgentControlClient, @ViewBuilder liveHeader: () -> Header) {
+    public init<Header: View>(
+        agentClient: AgentControlClient,
+        @ViewBuilder liveHeader: () -> Header,
+        onPairWithDesktop: @escaping () -> Void = {}
+    ) {
         self.agentClient = agentClient
         self.liveHeader = AnyView(liveHeader())
+        self.onPairWithDesktop = onPairWithDesktop
     }
 
     public var body: some View {
@@ -44,6 +51,9 @@ public struct IOSAnalyticsView: View {
                         .padding(.horizontal, 16)
                         .padding(.bottom, 8)
                 }
+                IOSDesktopPairingCTA(client: agentClient, onPair: onPairWithDesktop)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 14)
 
                 // Period segmented
                 TahoeGlass(radius: 12, tone: .chip) {

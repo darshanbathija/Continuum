@@ -529,7 +529,7 @@ private struct WaitingForMacCard: View {
                 .font(.headline)
             Text(isPairedWithMac
                 ? "Codex usage syncs from your paired Mac over Tailscale. Open Clawdmeter on the Mac and make sure `~/.codex/sessions/` has at least one rollout."
-                : "Codex usage syncs from your paired Mac over Tailscale. Tap **Sync with iPhone** on the Mac, then scan the QR or paste the URL below.")
+                : "Codex usage syncs from your paired Mac over Tailscale. Tap **Pair with iPhone** on the Mac, then scan the QR or paste the URL below.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -254,14 +254,6 @@ struct MacTitlebar: View {
         return "\(count) repos"
     }
 
-    /// Real pairing state for the sync chips. True when any iPhone is
-    /// currently paired via the agentControlServer's pairingTokens.
-    /// Nil runtime (Previews) returns false.
-    private var isIPhonePaired: Bool {
-        guard runtime != nil else { return false }
-        return PairingTokenStore.shared.hasAnyPaired
-    }
-
     @ViewBuilder
     private var codeBreadcrumb: some View {
         if let session = runtime?.sessionsModel.openSession {
@@ -293,11 +285,11 @@ struct MacTitlebar: View {
         Button(action: { syncChipPopoverPresented.toggle() }) {
             TahoeSyncChip(
                 icon: "qr",
-                text: isIPhonePaired ? "iPhone paired" : "Sync with iPhone"
+                text: "Pair with iPhone"
             )
         }
         .buttonStyle(.plain)
-        .help(isIPhonePaired ? "Manage paired devices" : "Pair an iPhone")
+        .help("Pair an iPhone")
         // PR #34 (audit retro): the original TODO from PR #26b. The
         // titlebar chip now opens the same `PairingQRPopoverContent`
         // the menu-bar item uses. SwiftUI's `.popover` anchors to the
@@ -335,11 +327,7 @@ struct MacTitlebar: View {
             // dropped the decorative TahoeTrafficLights chip — it was
             // a non-functional Tahoe-themed clone that visually stacked
             // on top of the real lights.
-            if active == .code {
-                trafficChip
-            } else {
-                Color.clear.frame(width: 76, height: 1)
-            }
+            Color.clear.frame(width: 76, height: 1)
 
             if active == .code {
                 TahoeGlass(radius: 11, tone: .chip) {
@@ -393,24 +381,6 @@ struct MacTitlebar: View {
         }
     }
 
-    private var trafficChip: some View {
-        TahoeGlass(radius: 11, tone: .chip) {
-            HStack(spacing: 7) {
-                Circle().fill(Color(red: 1.0, green: 0.35, blue: 0.33))
-                    .frame(width: 10, height: 10)
-                Circle().fill(Color(red: 1.0, green: 0.74, blue: 0.18))
-                    .frame(width: 10, height: 10)
-                Circle().fill(Color(red: 0.20, green: 0.78, blue: 0.25))
-                    .frame(width: 10, height: 10)
-            }
-            .frame(width: 44, height: 10)
-            .padding(.horizontal, 11)
-            .frame(height: 30)
-        }
-        .fixedSize()
-        .allowsHitTesting(false)
-    }
-
     private var codeActions: some View {
         TahoeGlass(radius: 11, tone: .chip) {
             HStack(spacing: 2) {
@@ -420,8 +390,12 @@ struct MacTitlebar: View {
                 codeActionButton(icon: "bell", help: "Pair or manage iPhone sync") {
                     syncChipPopoverPresented = true
                 }
-                codeActionButton(icon: "sidebar", help: "Toggle Code review pane") {
-                    NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil)
+                codeActionButton(icon: "sidebar", help: "Open Plan and review pane") {
+                    NotificationCenter.default.post(
+                        name: .openCodeReviewPane,
+                        object: nil,
+                        userInfo: ["tab": WorkbenchPaneTab.plan.rawValue]
+                    )
                 }
             }
             .padding(.horizontal, 7)

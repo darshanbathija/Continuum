@@ -151,15 +151,18 @@ struct iOSSessionControlsStrip: View {
     private func chip(_ label: String, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.caption2.weight(.medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .frame(minHeight: 44)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .frame(minWidth: 62, minHeight: 38)
                 .background(SessionsV2Theme.surfaceElev1, in: RoundedRectangle(cornerRadius: SessionsV2Theme.Radius.chip))
                 .foregroundStyle(.primary)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(.isButton)
     }

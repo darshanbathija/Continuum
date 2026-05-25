@@ -114,11 +114,10 @@ public final class PairingTokenStore: @unchecked Sendable {
         return mismatch == 0
     }
 
-    /// True when a pairing token has been issued and not revoked. The
-    /// titlebar's "iPhone paired" indicator (PR #26 D6) reads this.
-    /// Not the same as "iPhone is currently connected" — pairing
-    /// outlives connection. Tracking a true online indicator would
-    /// require subscribing to WS lifecycle events on the server.
+    /// True when a pairing token has been issued and not revoked.
+    /// This is credential availability, not proof that an iPhone has
+    /// paired or is currently connected. UI must not label this state as
+    /// a paired-device label without a real device/WS lifecycle signal.
     public var hasAnyPaired: Bool {
         !isRevoked && !currentToken().isEmpty
     }

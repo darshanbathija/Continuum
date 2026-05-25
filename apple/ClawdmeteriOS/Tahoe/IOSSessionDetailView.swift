@@ -225,6 +225,12 @@ public struct IOSSessionDetailView: View {
             }
             .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
 
+            // The workbench tabs are real panes, not a hidden menu item:
+            // Plan, Run, PR, and Terminal are directly reachable from the
+            // detail screen and preserve their existing daemon-backed views.
+            tabChipStrip
+                .padding(.bottom, 8)
+
             // v16 tab body. Each branch renders the pane for the current
             // tab. Chat keeps its custom thread + composer; the other
             // five wrap the standalone pane views that previously

@@ -35,18 +35,23 @@ struct ModelEffortChip: View {
         Button(action: { showingPopover.toggle() }) {
             HStack(spacing: 6) {
                 Text(summaryText)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(minWidth: 128, maxWidth: 220, alignment: .leading)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .frame(minHeight: 32)
             .background(Color.secondary.opacity(0.10), in: Capsule())
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
         .help("Change model or effort")
         .popover(isPresented: $showingPopover, arrowEdge: .top) {
             ModelEffortPopover(
