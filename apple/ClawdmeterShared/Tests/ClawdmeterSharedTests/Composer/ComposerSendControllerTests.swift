@@ -6,7 +6,6 @@ import XCTest
 /// pure-state-machine path: text trimming, canSend gating, sending
 /// state transitions. Network-side behavior (RPC errors, retries) is
 /// integration-tested separately.
-@MainActor
 final class ComposerSendControllerTests: XCTestCase {
 
     private func makeClient() -> AgentControlClient {
@@ -18,6 +17,7 @@ final class ComposerSendControllerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func test_initialState_isEmpty() async {
         let controller = ComposerSendController(client: makeClient())
         XCTAssertEqual(controller.text, "")
@@ -26,24 +26,28 @@ final class ComposerSendControllerTests: XCTestCase {
         XCTAssertFalse(controller.canSend, "Empty text cannot send")
     }
 
+    @MainActor
     func test_canSend_falseForEmptyText() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = ""
         XCTAssertFalse(controller.canSend)
     }
 
+    @MainActor
     func test_canSend_falseForWhitespaceOnly() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = "   \n\t  "
         XCTAssertFalse(controller.canSend, "Whitespace-only text should not be sendable")
     }
 
+    @MainActor
     func test_canSend_trueWithNonEmptyText() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = "Hello"
         XCTAssertTrue(controller.canSend)
     }
 
+    @MainActor
     func test_canSend_falseWhileSending() async {
         // Drive a send (will fail because the test client has no real
         // server at 127.0.0.1:21731 — that's OK; we're testing the
@@ -62,6 +66,7 @@ final class ComposerSendControllerTests: XCTestCase {
         XCTAssertFalse(controller.sending, "sending must be reset after await")
     }
 
+    @MainActor
     func test_emptyTextDoesNotInvokeRPC() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = ""
@@ -72,6 +77,7 @@ final class ComposerSendControllerTests: XCTestCase {
         XCTAssertFalse(controller.sending)
     }
 
+    @MainActor
     func test_whitespaceOnlyTextDoesNotInvokeRPC() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = "   \n  "
@@ -81,6 +87,7 @@ final class ComposerSendControllerTests: XCTestCase {
         XCTAssertFalse(controller.sending)
     }
 
+    @MainActor
     func test_reset_clearsAllState() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = "in-flight draft"
@@ -90,6 +97,7 @@ final class ComposerSendControllerTests: XCTestCase {
         XCTAssertNil(controller.lastError)
     }
 
+    @MainActor
     func test_sendKind_soloAndRefine_bothComplete() async {
         // A3 lock-in: Edit plan = Refine via the same sendPrompt wire.
         // We verify both SendKind variants dispatch and reach the

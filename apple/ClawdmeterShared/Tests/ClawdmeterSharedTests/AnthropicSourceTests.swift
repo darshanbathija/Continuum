@@ -27,11 +27,13 @@ final class AnthropicSourceTests: XCTestCase {
     // MARK: - Primary path: /v1/messages + unified rate-limit headers
 
     func test_poll_happyPath_parsesContractHeaders() async throws {
-        var observedHeaders: [String: String] = [:]
+        var observedAdditionalProtection: String?
+        var observedBillingHeader: String?
         MockURLProtocol.responder = { request in
             // Snapshot the request headers so we can assert the magic
             // additional-protection header is on the wire.
-            for (k, v) in request.allHTTPHeaderFields ?? [:] { observedHeaders[k] = v }
+            observedAdditionalProtection = request.value(forHTTPHeaderField: "x-anthropic-additional-protection")
+            observedBillingHeader = request.value(forHTTPHeaderField: "x-anthropic-billing-header")
             return (
                 statusCode: 200,
                 headers: [
@@ -61,8 +63,8 @@ final class AnthropicSourceTests: XCTestCase {
 
         // Critical: confirm we're sending the magic header. Without it
         // Anthropic returns 403 permission_error.
-        XCTAssertEqual(observedHeaders["x-anthropic-additional-protection"], "true")
-        XCTAssertEqual(observedHeaders["x-anthropic-billing-header"], "cc_version=2.1.143")
+        XCTAssertEqual(observedAdditionalProtection, "true")
+        XCTAssertEqual(observedBillingHeader, "cc_version=2.1.143")
     }
 
     func test_poll_compositeStatus_limitedIfEitherWindowLimited() async throws {

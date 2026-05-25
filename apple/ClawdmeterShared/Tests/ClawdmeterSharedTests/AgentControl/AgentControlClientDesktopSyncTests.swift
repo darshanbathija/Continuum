@@ -1,9 +1,9 @@
 import XCTest
 @testable import ClawdmeterShared
 
-@MainActor
 final class AgentControlClientDesktopSyncTests: XCTestCase {
 
+    @MainActor
     func testSnapshotEventReplacesSessionsAndAdvancesCursor() async throws {
         let client = AgentControlClient()
         let session = makeSession(id: UUID(), status: .running, seq: 12)
@@ -24,6 +24,7 @@ final class AgentControlClientDesktopSyncTests: XCTestCase {
         XCTAssertEqual(client.desktopEventSyncLastEventAt, event.at)
     }
 
+    @MainActor
     func testSessionDeletedEventRemovesLocalSessionWithoutRoundTrip() async throws {
         let client = AgentControlClient()
         let keep = makeSession(id: UUID(), status: .running, seq: 1)
@@ -55,6 +56,7 @@ final class AgentControlClientDesktopSyncTests: XCTestCase {
         XCTAssertEqual(client.desktopEventSyncLastSeq, 11)
     }
 
+    @MainActor
     func testIncrementalEventTracksCursorWithoutMutatingFromPartialPayload() async {
         let client = AgentControlClient()
         let session = makeSession(id: UUID(), status: .running, seq: 1)

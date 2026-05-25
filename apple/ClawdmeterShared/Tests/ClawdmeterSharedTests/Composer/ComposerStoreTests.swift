@@ -1,9 +1,9 @@
 import XCTest
 @testable import ClawdmeterShared
 
-@MainActor
 final class ComposerStoreTests: XCTestCase {
 
+    @MainActor
     func test_init_bound_emptyState() async {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         XCTAssertEqual(s.text, "")
@@ -12,12 +12,14 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertFalse(s.isSending)
     }
 
+    @MainActor
     func test_init_emptyState_seedsRepoAndAgent() async {
         let s = ComposerStore(mode: .emptyState(repoKey: "/Users/x/repo", agent: .codex))
         XCTAssertEqual(s.repoKey, "/Users/x/repo")
         XCTAssertEqual(s.agent, .codex)
     }
 
+    @MainActor
     func test_canSend_textOrAttachment() async throws {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         XCTAssertFalse(s.canSend)
@@ -29,6 +31,7 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertTrue(s.canSend, "attachment alone should enable send")
     }
 
+    @MainActor
     func test_attach_rejectsAboveCap() async {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         let oversized = ComposerStore.attachmentMaxBytes + 1
@@ -41,6 +44,7 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertTrue(s.attachments.isEmpty)
     }
 
+    @MainActor
     func test_attach_acceptsAtCap_andRemoves() async throws {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         let id = try s.attach(url: URL(fileURLWithPath: "/tmp/at-cap.png"), byteSize: ComposerStore.attachmentMaxBytes, isImage: true)
@@ -49,6 +53,7 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertTrue(s.attachments.isEmpty)
     }
 
+    @MainActor
     func test_renderPromptBody_includesAtPathsAndTerminalNewline() async {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         s.text = "look at this"
@@ -56,18 +61,21 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertEqual(body, "@/tmp/a.png\n@/tmp/b.txt\nlook at this\n", "tmux paste-buffer needs the trailing \\n to submit")
     }
 
+    @MainActor
     func test_renderPromptBody_textOnly_stillHasNewline() async {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         s.text = "hello"
         XCTAssertEqual(s.renderPromptBody(attachmentPaths: []), "hello\n")
     }
 
+    @MainActor
     func test_renderPromptBody_attachmentsOnly_noProse() async {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         let body = s.renderPromptBody(attachmentPaths: [URL(fileURLWithPath: "/tmp/x.png")])
         XCTAssertEqual(body, "@/tmp/x.png\n")
     }
 
+    @MainActor
     func test_clearAfterSend_resetsTextAndAttachments_keepsChips() async throws {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         s.modelId = "claude-opus-4-7"
@@ -85,6 +93,7 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertEqual(s.effort, .high)
     }
 
+    @MainActor
     func test_endSend_withError_keepsTextForRetry() async throws {
         let s = ComposerStore(mode: .emptyState(repoKey: "/r", agent: .claude))
         s.text = "important draft"
@@ -94,6 +103,7 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertNotNil(s.lastError)
     }
 
+    @MainActor
     func test_renderPromptBody_whitespaceOnlyText_noAttachments_isJustNewline() async {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         s.text = "   \t  "
@@ -102,12 +112,14 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertEqual(s.renderPromptBody(attachmentPaths: []), "\n")
     }
 
+    @MainActor
     func test_renderPromptBody_preservesInternalNewlines() async {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         s.text = "line one\n\nline three"
         XCTAssertEqual(s.renderPromptBody(attachmentPaths: []), "line one\n\nline three\n")
     }
 
+    @MainActor
     func test_endSend_withError_preservesAttachmentsForRetry() async throws {
         let s = ComposerStore(mode: .bound(sessionId: UUID()))
         s.text = "ship it"
@@ -120,6 +132,7 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertEqual(s.attachments.count, 1, "attachments must survive a send error so the user can retry")
     }
 
+    @MainActor
     func test_emptyStateMode_canSend_mirrorsBound() async throws {
         let s = ComposerStore(mode: .emptyState(repoKey: "/r", agent: .claude))
         XCTAssertFalse(s.canSend)
@@ -130,6 +143,7 @@ final class ComposerStoreTests: XCTestCase {
         XCTAssertTrue(s.canSend)
     }
 
+    @MainActor
     func test_resetChipsForRepo_4A() async {
         // ChipDefaults.default seeds claude-opus-4-7-1m + max effort to
         // match Claude Code's defaults — new sessions ride the 1M window

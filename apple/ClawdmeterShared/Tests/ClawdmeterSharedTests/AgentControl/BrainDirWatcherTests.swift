@@ -22,6 +22,9 @@ final class BrainDirWatcherTests: XCTestCase {
     }
 
     func test_start_returnsTrueOnExistingDir() throws {
+        #if !canImport(Darwin)
+        throw XCTSkip("BrainDirWatcher uses Darwin vnode events")
+        #endif
         let dir = try makeDir()
         let watcher = BrainDirWatcher(dirURL: dir)
         XCTAssertTrue(watcher.start { })
@@ -29,6 +32,9 @@ final class BrainDirWatcherTests: XCTestCase {
     }
 
     func test_callbackFiresOnFileWrite() throws {
+        #if !canImport(Darwin)
+        throw XCTSkip("BrainDirWatcher uses Darwin vnode events")
+        #endif
         let dir = try makeDir()
         let queue = DispatchQueue(label: "watcher-test", qos: .userInitiated)
         let watcher = BrainDirWatcher(dirURL: dir, debounceInterval: 0.05, queue: queue)
@@ -56,6 +62,9 @@ final class BrainDirWatcherTests: XCTestCase {
     }
 
     func test_debounceCoalescesRapidWrites() throws {
+        #if !canImport(Darwin)
+        throw XCTSkip("BrainDirWatcher uses Darwin vnode events")
+        #endif
         let dir = try makeDir()
         let queue = DispatchQueue(label: "watcher-test", qos: .userInitiated)
         let watcher = BrainDirWatcher(dirURL: dir, debounceInterval: 0.15, queue: queue)
@@ -92,6 +101,9 @@ final class BrainDirWatcherTests: XCTestCase {
     }
 
     func test_stopIsIdempotent() throws {
+        #if !canImport(Darwin)
+        throw XCTSkip("BrainDirWatcher uses Darwin vnode events")
+        #endif
         let dir = try makeDir()
         let watcher = BrainDirWatcher(dirURL: dir)
         XCTAssertTrue(watcher.start { })

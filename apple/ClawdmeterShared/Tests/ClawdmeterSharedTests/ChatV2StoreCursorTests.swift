@@ -1,14 +1,15 @@
 import XCTest
 @testable import ClawdmeterShared
 
-@MainActor
 final class ChatV2StoreCursorTests: XCTestCase {
 
+    @MainActor
     func test_cursorIsNotBroadcastCapableUntilTranscriptSupportExists() async {
         XCTAssertFalse(ChatV2Store.broadcastCapableProviders.contains(.cursor))
         XCTAssertFalse(ChatV2Store.defaultBroadcastProviderOrder.contains(.cursor))
     }
 
+    @MainActor
     func test_restoredCursorChatProviderFallsBackToClaude() async {
         let suiteName = "ChatV2StoreCursorTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
