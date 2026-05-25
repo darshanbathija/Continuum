@@ -179,6 +179,11 @@ public struct MacSettingsView: View {
                 CursorSDKProviderRow()
             }
         }
+
+        SettingsCard(title: "Provider defaults",
+                     sub: "Default model and effort for new chat and code sessions.") {
+            ProviderDefaultsSettingsRows(client: runtime?.loopbackClient)
+        }
     }
 
     @ViewBuilder
@@ -625,6 +630,247 @@ private struct AccentPicker: View {
 
 // MARK: - Providers (PR #31 chunk 2)
 
+private struct ProviderDefaultsSettingsRows: View {
+    @Environment(\.tahoe) private var t
+    let client: AgentControlClient?
+    @StateObject private var localStore = ProviderDefaultsStore()
+    @State private var snapshot: ProviderDefaultsSnapshot = .empty
+    @State private var catalog: ModelCatalog = .bundled
+    @State private var refreshingVendor: ChatVendor?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(ChatV2Store.defaultChatVendorOrder, id: \.self) { vendor in
+                ProviderDefaultControlRow(
+                    vendor: vendor,
+                    snapshot: snapshot,
+                    catalog: catalog,
+                    isRefreshing: refreshingVendor == vendor,
+                    onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
+                    onSelectEffort: { effort in update(vendor: vendor, effort: effort) },
+                    onRefresh: { refreshCatalog(for: vendor, force: true) }
+                )
+                if vendor != ChatV2Store.defaultChatVendorOrder.last {
+                    TahoeHair()
+                }
+            }
+        }
+        .task { await refreshAll() }
+    }
+
+    private func refreshAll() async {
+        if let client {
+            await client.refreshHealth()
+            await client.refreshModelCatalog()
+            await client.refreshProviderDefaults()
+            catalog = client.modelCatalog
+            snapshot = client.providerDefaults
+        } else {
+            localStore.refresh()
+            catalog = .bundled
+            snapshot = localStore.snapshot
+        }
+    }
+
+    private func refreshCatalog(for vendor: ChatVendor, force: Bool) {
+        Task {
+            refreshingVendor = vendor
+            if force {
+                switch vendor {
+                case .cursor:
+                    await CursorModelProbe.shared.invalidate()
+                case .openrouter:
+                    await OpenRouterModelProbe.shared.invalidate()
+                default:
+                    break
+                }
+            }
+            if let client {
+                await client.refreshModelCatalog()
+                await client.refreshProviderDefaults()
+                catalog = client.modelCatalog
+                snapshot = client.providerDefaults
+            } else {
+                localStore.refresh()
+                catalog = .bundled
+                snapshot = localStore.snapshot
+            }
+            refreshingVendor = nil
+        }
+    }
+
+    private func update(vendor: ChatVendor, model: String? = nil, effort: ReasoningEffort? = nil) {
+        Task {
+            let nextModel = model ?? snapshot.modelId(for: vendor, catalog: catalog)
+            let normalizedEffort = ProviderModelPickerSupport.normalizedEffort(
+                effort ?? snapshot.effort(for: vendor),
+                vendor: vendor,
+                modelId: nextModel,
+                catalog: catalog
+            )
+            if let client {
+                if let updated = await client.updateProviderDefault(
+                    vendor: vendor,
+                    model: nextModel,
+                    effort: normalizedEffort,
+                    clearEffort: normalizedEffort == nil
+                ) {
+                    snapshot = updated
+                }
+                catalog = client.modelCatalog
+            } else {
+                snapshot = localStore.setDefault(
+                    for: vendor,
+                    model: nextModel,
+                    effort: normalizedEffort,
+                    clearEffort: normalizedEffort == nil,
+                    catalog: catalog
+                )
+            }
+        }
+    }
+}
+
+private struct ProviderDefaultControlRow: View {
+    @Environment(\.tahoe) private var t
+    let vendor: ChatVendor
+    let snapshot: ProviderDefaultsSnapshot
+    let catalog: ModelCatalog
+    let isRefreshing: Bool
+    let onSelectModel: (ModelCatalogEntry) -> Void
+    let onSelectEffort: (ReasoningEffort?) -> Void
+    let onRefresh: () -> Void
+
+    private var selectedModelId: String? {
+        snapshot.modelId(for: vendor, catalog: catalog)
+    }
+
+    private var selectedEntry: ModelCatalogEntry? {
+        guard let selectedModelId else { return nil }
+        return vendor.models(in: catalog).first { $0.id == selectedModelId || $0.cliAlias == selectedModelId }
+    }
+
+    private var supportsEffort: Bool {
+        ProviderModelPickerSupport.supportsEffort(
+            vendor: vendor,
+            modelId: selectedModelId,
+            catalog: catalog
+        )
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(vendor.displayName)
+                    .font(TahoeFont.body(13.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Text(selectedEntry.map(ProviderModelPickerSupport.metadataLine(for:)) ?? "Catalog default")
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 12)
+            VStack(alignment: .trailing, spacing: 8) {
+                HStack(spacing: 8) {
+                    if vendor == .cursor || vendor == .openrouter {
+                        Button(action: onRefresh) {
+                            if isRefreshing {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                TahoeIcon("refresh", size: 11)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help(vendor == .cursor ? "Refresh Cursor account models" : "Refresh OpenRouter model catalog")
+                    }
+                    modelMenu
+                }
+                effortControl
+            }
+        }
+    }
+
+    private var modelMenu: some View {
+        Menu {
+            let sections = ProviderModelPickerSupport.sections(for: vendor, catalog: catalog, query: "")
+            ForEach(sections) { section in
+                Section(section.title) {
+                    ForEach(section.entries) { entry in
+                        Button {
+                            onSelectModel(entry)
+                        } label: {
+                            HStack {
+                                Text(entry.displayName)
+                                if entry.id == selectedModelId {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(selectedEntry?.displayName ?? "Default model")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                TahoeIcon("chevronDown", size: 9)
+            }
+            .foregroundStyle(t.fg)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: 260, alignment: .trailing)
+            .background(Color.white.opacity(0.055), in: Capsule())
+            .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
+        }
+        .menuStyle(.borderlessButton)
+    }
+
+    @ViewBuilder
+    private var effortControl: some View {
+        if supportsEffort {
+            HStack(spacing: 4) {
+                ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                    let selected = snapshot.effort(for: vendor) == effort
+                    Button {
+                        onSelectEffort(effort)
+                    } label: {
+                        Text(effortLabel(effort))
+                            .font(TahoeFont.body(10.5, weight: .semibold))
+                            .foregroundStyle(selected ? t.accent : t.fg3)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(selected ? t.accent.opacity(0.14) : Color.white.opacity(0.035), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        } else {
+            Text("Auto")
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .foregroundStyle(t.fg4)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.white.opacity(0.035), in: Capsule())
+                .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
+                .help(vendor == .cursor ? "Cursor exposes effort as Auto until account models report effort support." : "This model does not expose effort controls.")
+        }
+    }
+
+    private func effortLabel(_ effort: ReasoningEffort) -> String {
+        switch effort {
+        case .minimal: return "Min"
+        case .low: return "Low"
+        case .medium: return "Med"
+        case .high: return "High"
+        case .xhigh: return "xHigh"
+        case .max: return "Max"
+        }
+    }
+}
+
 /// Settings → Providers → OpenCode row.
 ///
 /// Collapsed UX: one toggle, one button.
@@ -668,7 +914,7 @@ private struct OpencodeProviderRow: View {
         HStack(alignment: .top, spacing: 12) {
             TahoeProviderGlyph(provider: .opencode, size: 32)
             VStack(alignment: .leading, spacing: 4) {
-                Text("OpenCode")
+                Text("OpenRouter via OpenCode")
                     .font(TahoeFont.body(14, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Text(detailLine)

@@ -120,7 +120,10 @@ public enum AgentControlWireVersion {
     /// run profile endpoints plus checkpoint create / restore-preview /
     /// restore endpoints so iOS can expose the same Code workbench lifecycle
     /// without pretending it can run local shell commands on-device.
-    public static let current: Int = 18
+    /// v19 (2026-05-25, provider defaults): adds `GET /provider-defaults`
+    /// and `PUT /provider-defaults/:vendor` so paired clients share durable
+    /// per-provider default model and effort picks.
+    public static let current: Int = 19
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -235,6 +238,8 @@ public enum AgentControlWireVersion {
     /// endpoints to iOS: run profile start/stop/snapshot and checkpoint
     /// create / restore-preview / restore.
     public static let codeWorkbenchRemoteMinimum: Int = 18
+    /// Minimum wire version that exposes durable per-provider defaults.
+    public static let providerDefaultsMinimum: Int = 19
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -379,6 +384,14 @@ public enum AgentControlWireVersion {
     public static func supportsCodeWorkbenchRemote(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= codeWorkbenchRemoteMinimum
+    }
+
+    /// Whether the paired Mac exposes `GET /provider-defaults` and
+    /// `PUT /provider-defaults/:vendor`. Older Macs keep local/default
+    /// catalog behavior and never block session creation.
+    public static func supportsProviderDefaults(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= providerDefaultsMinimum
     }
 }
 

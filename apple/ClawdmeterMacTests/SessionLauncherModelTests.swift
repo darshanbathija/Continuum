@@ -51,6 +51,58 @@ final class SessionLauncherModelTests: XCTestCase {
         )
     }
 
+    func test_providerDefaultsDriveOpenRouterAndCursorNewSessionDefaults() {
+        let suiteName = "SessionLauncherProviderDefaults.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let providerDefaults = ProviderDefaultsStore(defaults: defaults)
+        let cursorEntry = ModelCatalogEntry(
+            id: "cursor-account-sonnet",
+            provider: .cursor,
+            displayName: "Cursor Account Sonnet",
+            supportsThinking: true,
+            supportsEffort: false
+        )
+        let catalog = ModelCatalog.bundled
+            .replacingCursor([CursorModelCatalog.autoEntry, cursorEntry])
+            .replacingOpenRouter([
+                ModelCatalogEntry(
+                    id: "anthropic/claude-sonnet-4.6",
+                    provider: .opencode,
+                    displayName: "OpenRouter · Claude Sonnet 4.6",
+                    supportsThinking: true,
+                    supportsEffort: true,
+                    contextWindow: 200_000
+                )
+            ])
+
+        providerDefaults.setDefault(
+            for: .openrouter,
+            model: "anthropic/claude-sonnet-4.6",
+            effort: .high,
+            catalog: catalog
+        )
+        providerDefaults.setDefault(
+            for: .cursor,
+            model: "cursor-account-sonnet",
+            effort: .high,
+            catalog: catalog
+        )
+        let launcher = SessionLauncherModel(
+            modelCatalog: catalog,
+            availability: SessionLauncherAvailability(opencodeReady: true, cursorReady: true),
+            providerDefaults: providerDefaults
+        )
+
+        XCTAssertEqual(launcher.defaultModelId(for: .opencode), "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(launcher.resolvedModelId(for: .opencode, selectedModelId: nil), "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(launcher.resolvedModelId(for: .opencode, selectedModelId: "missing-model"), "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(launcher.chipDefaults(for: .opencode).effort, .high)
+        XCTAssertEqual(launcher.defaultModelId(for: .cursor), "cursor-account-sonnet")
+        XCTAssertEqual(launcher.resolvedModelId(for: .cursor, selectedModelId: nil), "cursor-account-sonnet")
+        XCTAssertNil(launcher.chipDefaults(for: .cursor).effort)
+    }
+
     func test_composerAgentResetUsesInjectedCatalog() {
         let liveCursor = ModelCatalogEntry(
             id: "cursor-account-default",

@@ -11,7 +11,8 @@ import ClawdmeterShared
 /// full daemon:
 ///   - the public BidirectionalMap lookup that gates the first
 ///     `opencode_session_not_registered` 503
-///   - the request body shape we POST to opencode (single text part)
+///   - the request body shape we POST to opencode (single text part plus
+///     optional OpenRouter model override)
 ///   - the error JSON envelopes are valid JSON with the documented keys
 ///   - parser symmetry: a `message.added` round-trip into ChatMessage
 ///     produces the user-bubble shape we pre-echo on send
@@ -59,6 +60,30 @@ final class OpencodeSendTests: XCTestCase {
         XCTAssertEqual(parts?.count, 1)
         XCTAssertEqual(parts?.first?["type"] as? String, "text")
         XCTAssertEqual(parts?.first?["text"] as? String, prompt)
+    }
+
+    func test_requestBody_openRouterOverrideUsesOpenAPImodelObjectAndVariant() throws {
+        // Local `opencode serve` OpenAPI exposes the override as:
+        //   model: { providerID, modelID }
+        //   variant: "minimal|low|medium|high|xhigh"
+        // It does not accept legacy top-level providerID/modelID fields.
+        let body: [String: Any] = [
+            "parts": [["type": "text", "text": "hello"]],
+            "model": [
+                "providerID": "openrouter",
+                "modelID": "anthropic/claude-sonnet-4.6",
+            ],
+            "variant": "high",
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let model = decoded?["model"] as? [String: Any]
+
+        XCTAssertNil(decoded?["providerID"])
+        XCTAssertNil(decoded?["modelID"])
+        XCTAssertEqual(model?["providerID"] as? String, "openrouter")
+        XCTAssertEqual(model?["modelID"] as? String, "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(decoded?["variant"] as? String, "high")
     }
 
     func test_requestBody_preservesPromptWithNewlines() throws {
