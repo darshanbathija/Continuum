@@ -176,6 +176,12 @@ HELPER_BINARIES=(
 # pipe through openssl so no early-exit consumer can SIGPIPE codesign.
 CERT_DIR="$(mktemp -d)"
 codesign -d --extract-certificates="$CERT_DIR/cert" "$APP_PATH" 2>/dev/null || true
+# Always read the full codesign descriptor so the outer-resign step
+# below can pull the TeamIdentifier out of it (needed to expand the
+# `$(AppIdentifierPrefix)` macro in the entitlements file). The SIGPIPE
+# guard via `|| true` keeps `set -euo pipefail` from killing the script
+# if `codesign` writes to stderr before its stdout consumer closes.
+CODESIGN_INFO="$(codesign -dvvv "$APP_PATH" 2>&1 || true)"
 SIGNING_IDENTITY=""
 if [[ -f "$CERT_DIR/cert0" ]]; then
   SIGNING_IDENTITY="$(openssl x509 -inform DER -in "$CERT_DIR/cert0" \
@@ -185,7 +191,6 @@ if [[ -f "$CERT_DIR/cert0" ]]; then
 fi
 # Fallback to the CN if SHA1 extraction failed for any reason.
 if [[ -z "$SIGNING_IDENTITY" ]]; then
-  CODESIGN_INFO="$(codesign -dvvv "$APP_PATH" 2>&1 || true)"
   SIGNING_IDENTITY="$(printf '%s\n' "$CODESIGN_INFO" \
       | grep -E '^Authority=Apple Development' \
       | head -n1 \
@@ -207,12 +212,45 @@ if [[ -n "$SIGNING_IDENTITY" && -f "$HELPER_ENT" ]]; then
   done
   # Re-sign the outer app so its sealed-resources manifest matches the
   # updated helpers (otherwise --deep verify rejects the bundle).
-  codesign --force \
-    --sign "$SIGNING_IDENTITY" \
-    --options runtime \
-    --entitlements "$REPO_ROOT/apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements" \
-    --timestamp=none \
-    "$APP_PATH" 2>&1 | sed 's/^/    /' || echo "    ⚠ outer codesign failed"
+  #
+  # Two subtleties:
+  #
+  # 1. `$(AppIdentifierPrefix)` macros — Xcode expands these at sign
+  #    time using the project's resolved team prefix. Standalone
+  #    `codesign --entitlements` does NOT expand them; it would embed
+  #    the literal `$(AppIdentifierPrefix)com.clawdmeter` as the
+  #    keychain-access-group, which Gatekeeper / launchd reject ("the
+  #    application cannot be opened for an unexpected reason …
+  #    Launchd job spawn failed", error 163). Expand the macro into a
+  #    temp entitlements file using the team id we already extracted
+  #    from the outer binary's CMS chain.
+  #
+  # 2. `--options runtime` on the outer app — the main app was signed
+  #    by xcodebuild with `flags=0x0(none)`, NOT the hardened runtime.
+  #    Adding `runtime` post-hoc enables library validation on the
+  #    main binary's children, which can refuse to load bundled
+  #    Swift / SwiftUI dylibs that were signed without the runtime
+  #    flag. Helpers (opencode, uv) get hardened runtime because
+  #    they're external pre-built binaries; the main Mac app stays
+  #    on its xcodebuild defaults.
+  TEAM_ID="$(printf '%s\n' "$CODESIGN_INFO" \
+      | grep -E '^TeamIdentifier=' \
+      | head -n1 \
+      | sed 's/^TeamIdentifier=//' || true)"
+  if [[ -z "$TEAM_ID" ]]; then
+    echo "    ⚠ Skipping outer re-sign — could not determine team id"
+  else
+    OUTER_ENT="$(mktemp -t outer-ent.XXXXXX.plist)"
+    sed "s|\$(AppIdentifierPrefix)|${TEAM_ID}.|g" \
+        "$REPO_ROOT/apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements" \
+        > "$OUTER_ENT"
+    codesign --force \
+      --sign "$SIGNING_IDENTITY" \
+      --entitlements "$OUTER_ENT" \
+      --timestamp=none \
+      "$APP_PATH" 2>&1 | sed 's/^/    /' || echo "    ⚠ outer codesign failed"
+    rm -f "$OUTER_ENT"
+  fi
 else
   echo "⚠ Skipping helper re-sign — no Apple Development identity on outer app"
 fi
