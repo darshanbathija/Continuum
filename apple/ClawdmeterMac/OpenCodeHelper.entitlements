@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  v0.29.4: re-sign entitlements for the bundled OpenCode helper
+	  binary (Vendor/opencode/opencode) and the bundled `uv` binary
+	  (Vendor/uv/uv). Both ship pre-built upstream and arrive ad-hoc
+	  signed (TeamIdentifier=not set, flags=0x20002).
+
+	  The XProtect dialog "Apple could not verify '.bbb…-00000000.dylib'
+	  is free of malware" fires on macOS Tahoe whenever an unsigned
+	  process dlopens a freshly-extracted Bun runtime module. The
+	  Bun-compiled opencode binary writes those temp dylibs to TMPDIR
+	  every time it boots, and the OS, seeing no trust chain on the
+	  loader, pops the dialog mid-Codex-poll.
+
+	  Fix: re-codesign these helpers under our Apple Development team
+	  identity with the hardened runtime turned on and library
+	  validation explicitly disabled. Once they carry our trust chain,
+	  XProtect lets the dlopens through silently (Bun's extracted
+	  modules are unsigned by design, hence the disable-library-validation
+	  flag).
+
+	  Why not also enable allow-jit / allow-unsigned-executable-memory?
+	  Because Bun ships an AOT-compiled binary — the JS interpreter is
+	  precompiled, no runtime JIT. allow-unsigned-executable-memory
+	  would only matter if we shipped a JIT'd JS engine, which we
+	  don't. Keep the surface minimal.
+	-->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

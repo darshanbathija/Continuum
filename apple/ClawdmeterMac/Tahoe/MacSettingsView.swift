@@ -1482,9 +1482,12 @@ private struct ClaudeCLIProviderRow: View {
     }
 
     /// AppleScript a Terminal window that runs `claude` so the user
-    /// can complete the OAuth handshake inline. No-op if the script
-    /// fails (e.g. Terminal denied, sandbox restriction); the help
-    /// tooltip on the button explains the manual path.
+    /// can complete the OAuth handshake inline. v0.29.4: if the
+    /// AppleScript bridge is denied (sandbox without the apple-events
+    /// entitlement, or the user denied the automation prompt), fall
+    /// back to copying the shell command to the clipboard and showing
+    /// an alert so the user can paste it into Terminal manually —
+    /// previously the click was a silent no-op.
     private func openTerminalForClaudeAuth(installIfMissing: Bool) {
         let command = claudeAuthCommand(installIfMissing: installIfMissing)
         let escaped = command
@@ -1498,7 +1501,36 @@ private struct ClaudeCLIProviderRow: View {
         """
         let appleScript = NSAppleScript(source: script)
         var error: NSDictionary?
-        _ = appleScript?.executeAndReturnError(&error)
+        let result = appleScript?.executeAndReturnError(&error)
+        if result == nil || error != nil {
+            // AppleScript failed — typically because the sandbox blocks
+            // automation events or the user denied the prompt. Surface
+            // a usable fallback instead of pretending nothing happened.
+            let detail = (error?["NSAppleScriptErrorMessage"] as? String)
+                ?? (error?["NSAppleScriptErrorBriefMessage"] as? String)
+                ?? "unknown error"
+            NSLog("[Clawdmeter] Claude auth AppleScript failed: \(detail)")
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            let alert = NSAlert()
+            alert.messageText = "Open Terminal manually"
+            alert.informativeText = """
+            Couldn't drive Terminal from Clawdmeter (\(detail)).
+
+            The install + login command has been copied to your clipboard. Open Terminal yourself and paste it (⌘V) to finish authentication.
+            """
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Open Terminal")
+            let response = alert.runModal()
+            if response == .alertSecondButtonReturn {
+                if let terminal = NSWorkspace.shared.urlForApplication(
+                    withBundleIdentifier: "com.apple.Terminal"
+                ) {
+                    NSWorkspace.shared.open(terminal)
+                }
+            }
+        }
     }
 
     private func claudeAuthCommand(installIfMissing: Bool) -> String {

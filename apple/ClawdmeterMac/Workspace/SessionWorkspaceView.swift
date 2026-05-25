@@ -3015,7 +3015,13 @@ private struct ChatThreadScroll: View {
                         HStack {
                             LiveSessionActivityIndicator(
                                 agent: session.agent,
-                                lastEventAt: store.snapshot.lastEventAt
+                                lastEventAt: store.snapshot.lastEventAt,
+                                // v0.29.4: anchor the elapsed counter to
+                                // the most recent user prompt so the
+                                // pill shows "how long has the model been
+                                // working on this task", not "how long
+                                // since I clicked into the session".
+                                activityStartedAt: store.snapshot.currentTurnStartedAt
                             )
                             Spacer()
                         }
@@ -3220,11 +3226,20 @@ private struct ChatThreadScroll: View {
         switch item {
         case .message(let m):
             messageRow(m)
-        case .toolRun(_, let pairs):
+        case .toolRun(let runId, let pairs):
             // v0.5.5/v0.5.6: partition by tool kind:
             //   • Edit/MultiEdit/Write → inline EditDiffRow chips
             //   • AskUserQuestion       → interactive AskUserQuestionTray
             //   • everything else       → "Ran N commands" disclosure
+            //
+            // v0.29.4: the "everything else" bucket previously rendered
+            // each tool pair as its own row, which meant a long agent
+            // burst (50 sed/rg/cat probes) flooded the transcript with
+            // 50 individual exec_command rows. Wrap that bucket in
+            // `toolRunGroup` so it shows as one collapsed "Ran N
+            // commands" pill that expands on click — matches the
+            // existing MacChatV2View behavior and what users expect
+            // from Claude Code's CLI rendering.
             let editPairs = pairs.filter { $0.call.editStats != nil }
             let askPairs  = pairs.filter { $0.call.askUserQuestion != nil }
             let otherPairs = pairs.filter {
@@ -3262,11 +3277,7 @@ private struct ChatThreadScroll: View {
                     }
                 }
                 if !otherPairs.isEmpty {
-                    VStack(alignment: .leading, spacing: 5) {
-                        ForEach(otherPairs) { pair in
-                            toolPairRow(pair)
-                        }
-                    }
+                    toolRunGroup(id: runId, pairs: otherPairs)
                 }
             }
         }

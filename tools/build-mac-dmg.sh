@@ -137,6 +137,86 @@ APP_PATH="$EXPORT_DIR/${APP_NAME}.app"
 [[ -d "$APP_PATH" ]] || { echo "✗ No .app produced"; exit 1; }
 echo "✓ App exported: $APP_PATH"
 
+# ────────────────────────────────────────────────────────────────────────
+# 4b. v0.29.4: re-sign the Vendor/opencode helper binary.
+#
+# opencode ships ad-hoc signed (TeamIdentifier=not set). When it spawns
+# Bun and Bun extracts native modules to TMPDIR with names like
+# `.bbb6ffeffdf6fffd-00000000.dylib`, macOS Tahoe's XProtect can't find
+# a trust chain on the loader process and pops the "could not verify
+# is free of malware" dialog every time. Re-signing with our developer
+# identity + hardened runtime + library-validation-disabled gives the
+# helper a trust chain (so XProtect lets it through) while still
+# allowing Bun's runtime dlopens of unsigned dylibs.
+#
+# The main app is signed by Xcode's export step above; only the
+# vendored helpers need this pass.
+# ────────────────────────────────────────────────────────────────────────
+
+HELPER_ENT="$REPO_ROOT/apple/ClawdmeterMac/OpenCodeHelper.entitlements"
+HELPER_BINARIES=(
+  "$APP_PATH/Contents/Resources/Vendor/opencode/opencode"
+  "$APP_PATH/Contents/Resources/Vendor/uv/uv"
+)
+
+# Pick the Apple Development identity used to sign the outer app, so the
+# helpers inherit the same trust chain.
+#
+# Use the leaf cert's SHA1 hash rather than the human-readable Common
+# Name: on machines where the cert has been renewed in-place, the
+# keychain can hold two certs with the same CN
+# ("Apple Development: ...") that resolve to different SHA1s, and
+# `codesign --sign <CN>` aborts with "ambiguous identity". The SHA1 is
+# always unique, and we extract it directly from the app xcodebuild
+# just signed so we provably match its trust chain.
+#
+# Subtle: under `set -euo pipefail`, `awk … exit` closes the pipe early,
+# codesign gets SIGPIPE → 141 → the whole substitution fails → script
+# dies silently. Read all of codesign's output into a temp file, then
+# pipe through openssl so no early-exit consumer can SIGPIPE codesign.
+CERT_DIR="$(mktemp -d)"
+codesign -d --extract-certificates="$CERT_DIR/cert" "$APP_PATH" 2>/dev/null || true
+SIGNING_IDENTITY=""
+if [[ -f "$CERT_DIR/cert0" ]]; then
+  SIGNING_IDENTITY="$(openssl x509 -inform DER -in "$CERT_DIR/cert0" \
+      -noout -fingerprint -sha1 2>/dev/null \
+      | sed -e 's/^SHA1 Fingerprint=//' -e 's/://g' \
+      || true)"
+fi
+# Fallback to the CN if SHA1 extraction failed for any reason.
+if [[ -z "$SIGNING_IDENTITY" ]]; then
+  CODESIGN_INFO="$(codesign -dvvv "$APP_PATH" 2>&1 || true)"
+  SIGNING_IDENTITY="$(printf '%s\n' "$CODESIGN_INFO" \
+      | grep -E '^Authority=Apple Development' \
+      | head -n1 \
+      | sed 's/^Authority=//' || true)"
+fi
+rm -rf "$CERT_DIR"
+
+if [[ -n "$SIGNING_IDENTITY" && -f "$HELPER_ENT" ]]; then
+  echo "▸ Re-signing bundled helpers with: $SIGNING_IDENTITY"
+  for HELPER in "${HELPER_BINARIES[@]}"; do
+    if [[ -f "$HELPER" ]]; then
+      codesign --force \
+        --sign "$SIGNING_IDENTITY" \
+        --options runtime \
+        --entitlements "$HELPER_ENT" \
+        --timestamp=none \
+        "$HELPER" 2>&1 | sed 's/^/    /' || echo "    ⚠ codesign failed for $HELPER"
+    fi
+  done
+  # Re-sign the outer app so its sealed-resources manifest matches the
+  # updated helpers (otherwise --deep verify rejects the bundle).
+  codesign --force \
+    --sign "$SIGNING_IDENTITY" \
+    --options runtime \
+    --entitlements "$REPO_ROOT/apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements" \
+    --timestamp=none \
+    "$APP_PATH" 2>&1 | sed 's/^/    /' || echo "    ⚠ outer codesign failed"
+else
+  echo "⚠ Skipping helper re-sign — no Apple Development identity on outer app"
+fi
+
 # Verify the signature didn't break in export
 codesign --verify --deep --strict "$APP_PATH" 2>&1 | head -5 || true
 
