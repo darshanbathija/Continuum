@@ -710,26 +710,29 @@ private struct ComposerBar: View {
 
     var body: some View {
         TahoeGlass(radius: 20, tone: .raised) {
-            VStack(alignment: .leading, spacing: 8) {
-                if !store.attachments.isEmpty {
-                    attachmentStrip
-                }
-                TextField(placeholder, text: $sendCtl.text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(TahoeFont.body(13.5))
-                    .foregroundStyle(t.fg)
-                    .lineLimit(1...5)
-                    .focused($focused)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 12)
-                    .onSubmit { Task { await dispatchSend() } }
-
-                if let err = sendCtl.lastError {
-                    Text(err)
-                        .font(TahoeFont.body(11))
-                        .foregroundStyle(.red)
+            ZStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !store.attachments.isEmpty {
+                        attachmentStrip
+                    }
+                    TextField(placeholder, text: $sendCtl.text)
+                        .textFieldStyle(.plain)
+                        .font(TahoeFont.body(13.5))
+                        .foregroundStyle(t.fg)
+                        .frame(height: 28, alignment: .topLeading)
+                        .focused($focused)
                         .padding(.horizontal, 14)
+                        .padding(.top, 12)
+                        .onSubmit { Task { await dispatchSend() } }
+
+                    if let err = sendCtl.lastError {
+                        Text(err)
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 14)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
                 HStack(spacing: 7) {
                     if openTarget == nil {
@@ -745,11 +748,21 @@ private struct ComposerBar: View {
                         .foregroundStyle(t.fg4)
                     sendButton
                 }
+                .frame(height: 34, alignment: .center)
+                .clipped()
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
             }
+            .frame(height: maxComposerHeight)
+            .clipped()
         }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(height: maxComposerHeight, alignment: .topLeading)
         .onAppear { focused = true }
+    }
+
+    private var maxComposerHeight: CGFloat {
+        (store.attachments.isEmpty && sendCtl.lastError == nil) ? 102 : 168
     }
 
     @ViewBuilder
@@ -802,30 +815,32 @@ private struct ComposerBar: View {
             } label: {
                 let selected = store.isVendorSelected(vendor)
                 let available = isVendorAvailable(vendor)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 5) {
-                        TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 14)
-                        Text(vendor.displayName)
-                            .font(TahoeFont.body(11, weight: .semibold))
-                    }
-                    if selected, let model = compactModelLabel(for: vendor) {
-                        Text(model)
-                            .font(TahoeFont.mono(9))
-                            .foregroundStyle(t.fg4)
-                            .lineLimit(1)
-                    }
-                }
+                Text(providerChipTitle(for: vendor, selected: selected))
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .lineLimit(1)
                 .foregroundStyle(selected && available ? t.fg : t.fg4)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 6)
+                .frame(height: 30)
+                .fixedSize(horizontal: true, vertical: true)
+                .layoutPriority(2)
                 .background(selected && available ? Color.white.opacity(0.10) : Color.white.opacity(0.045), in: Capsule())
                 .overlay(Capsule().stroke(selected ? vendor.backingProvider.tahoeProvider.halo.color.opacity(0.42) : t.hairline, lineWidth: 0.5))
             }
             .menuIndicator(.hidden)
             .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(2)
             .disabled(!store.isVendorSelected(vendor) && !isVendorAvailable(vendor))
             .help(providerUnavailableReason(vendor) ?? "\(vendor.displayName) model picker")
         }
+    }
+
+    private func providerChipTitle(for vendor: ChatVendor, selected: Bool) -> String {
+        guard selected, let model = compactModelLabel(for: vendor) else {
+            return vendor.displayName
+        }
+        return "\(vendor.displayName) \(model)"
     }
 
     private var deepResearchChip: some View {
