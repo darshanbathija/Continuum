@@ -63,7 +63,7 @@ public enum SessionSidebarGrouper {
         now: Date = Date()
     ) -> [SessionSidebarGroup] {
         let filtered = sessions.filter { passes(statusFilter, $0, reviewSessionIds: reviewSessionIds, now: now) }
-        let canonicalRepos = collapseDuplicateVisibleRepos(repos)
+        let canonicalRepos = canonicalizeRepos(repos)
         switch grouping {
         case .repo:
             return groupByRepo(
@@ -161,12 +161,12 @@ public enum SessionSidebarGrouper {
         }
     }
 
-    private struct CanonicalRepos {
+    struct CanonicalRepos {
         let repos: [AgentRepo]
         let keyAliases: [String: String]
     }
 
-    private static func collapseDuplicateVisibleRepos(_ repos: [AgentRepo]) -> CanonicalRepos {
+    static func canonicalizeRepos(_ repos: [AgentRepo]) -> CanonicalRepos {
         struct Accumulator {
             var repo: AgentRepo
             var recentPaths: Set<String>

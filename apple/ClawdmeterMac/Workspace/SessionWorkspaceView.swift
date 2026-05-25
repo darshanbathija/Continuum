@@ -681,8 +681,9 @@ private struct SidebarPane: View {
                         // Legacy repo-grouped path — preserves the existing
                         // expand/collapse + "Recent (last 30 days)" + empty-
                         // state CTA chrome that's threaded through SessionsModel.
-                        ForEach(filteredReposForGrouping, id: \.key) { repo in
-                            repoSection(repo)
+                        let canonical = SessionSidebarGrouper.canonicalizeRepos(filteredReposForGrouping)
+                        ForEach(canonical.repos, id: \.key) { repo in
+                            repoSection(repo, keyAliases: canonical.keyAliases)
                         }
                     } else {
                         // Date / Status / Agent / None — flatten across repos
@@ -885,8 +886,13 @@ private struct SidebarPane: View {
         }
     }
 
-    private func repoSection(_ repo: AgentRepo) -> some View {
-        let allSessions = model.sessions(for: repo.key, includeArchived: model.showArchived)
+    private func repoSection(_ repo: AgentRepo, keyAliases: [String: String] = [:]) -> some View {
+        let allSessions = model.registry.sessions.filter { session in
+            guard let key = session.repoKey else { return false }
+            guard (keyAliases[key] ?? key) == repo.key else { return false }
+            if !model.showArchived, session.archivedAt != nil { return false }
+            return true
+        }
         let visibleSessions = model.filter(sessions: allSessions).filter(sidebarStatusPasses)
         let rootSessions = visibleSessions.filter { $0.parentSessionId == nil }
         let isExpanded = model.expandedRepoKeys.contains(repo.key)

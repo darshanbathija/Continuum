@@ -89,6 +89,38 @@ final class SessionSidebarGrouperTests: XCTestCase {
         XCTAssertEqual(groups[0].recents.map(\.path), [sharedRecent.path, secondRecent.path])
     }
 
+    func test_canonicalizeReposExposesAliasesForRepoSidebarRenderer() {
+        let now = Date(timeIntervalSince1970: 1_700_001_000)
+        let primaryKey = "/Users/dev/Downloads/CC Watch/Clawdmeter"
+        let duplicateKey = "/Users/dev/conductor/workspaces/Clawdmeter/palembang-v1"
+        let firstRecent = RecentSession(path: "/tmp/a.jsonl", lastModified: now, provider: .claude)
+        let secondRecent = RecentSession(path: "/tmp/b.jsonl", lastModified: now.addingTimeInterval(-10), provider: .codex)
+
+        let canonical = SessionSidebarGrouper.canonicalizeRepos([
+            AgentRepo(
+                key: primaryKey,
+                displayName: "Clawdmeter",
+                hasActiveSessions: false,
+                liveSessionCount: 1,
+                recentSessions: [firstRecent]
+            ),
+            AgentRepo(
+                key: duplicateKey,
+                displayName: " clawdmeter ",
+                hasActiveSessions: true,
+                liveSessionCount: 2,
+                recentSessions: [secondRecent]
+            )
+        ])
+
+        XCTAssertEqual(canonical.repos.count, 1)
+        XCTAssertEqual(canonical.repos[0].key, primaryKey)
+        XCTAssertEqual(canonical.repos[0].liveSessionCount, 3)
+        XCTAssertEqual(canonical.repos[0].recentSessions.map(\.path), [firstRecent.path, secondRecent.path])
+        XCTAssertEqual(canonical.keyAliases[primaryKey], primaryKey)
+        XCTAssertEqual(canonical.keyAliases[duplicateKey], primaryKey)
+    }
+
     func test_jsonlTailFromEndIgnoresExistingRows() async throws {
         let url = try makeTempJSONL(lines: [
             Self.jsonLine(index: 0),

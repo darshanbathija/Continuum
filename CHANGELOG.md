@@ -4,6 +4,31 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.2 build 141] - 2026-05-25 - Chat polish and session scrolling fixes (`darshanbathija/chat-polish-bugfixes`)
+
+The Code and iOS session views now stay pinned to the latest message when a session opens, scroll smoothly through long transcripts, and show the model/effort metadata the selected session is actually using.
+
+### Fixed
+
+- **Session activity chrome** - collapses duplicate thinking/activity surfaces, removes the idle iOS activity strip, and shows elapsed thinking time with two decimal places while work is active.
+- **Latest-message stickiness** - remounts center threads per selected session and keeps Mac/iOS transcript panes pinned to the newest message without jumpy auto-scroll while the user is reading history.
+- **Long iOS transcript scrolling** - renders full iOS chat snapshots through `LazyVStack`, adds a smooth Latest button, and keeps the DEBUG scroll performance probe available for long-session validation.
+- **Selected model and effort** - resolves session model metadata from runtime bindings, persisted session fields, or provider defaults, and preselects the same model/effort in the bound composer.
+- **Duplicate project sections** - canonicalizes repo display names across Mac and shared project list renderers so duplicate visible projects collapse into one sidebar section while preserving sessions and recents.
+- **OpenCode security quarantine** - moves runtime temp/cache paths into app-controlled directories and strips quarantine attributes around OpenCode spawn/auth probes to avoid repeated macOS security prompts.
+- **Claude Code auth CTA** - replaces docs-only copy with an Auth via CLI button that opens Terminal to install/expose Claude Code and run `claude /login`.
+
+### Verification
+
+- `swift test --package-path apple/ClawdmeterShared` -> **724 tests passed, 1 skipped**.
+- `swift test --package-path tools/tmux-cc-probe` -> **19 tests passed**.
+- Focused Mac `SessionSidebarGrouperTests` -> **7 tests passed**.
+- `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO` -> **BUILD SUCCEEDED**.
+- XcodeBuildMCP iPhone 17 Pro simulator build + launch for `Clawdmeter (iOS)` -> **SUCCEEDED**.
+- Long iOS transcript scroll probe fixture (4,000 rows) -> **p50 16.67ms, p95 16.67ms, p99 16.67ms, avg 59.6 fps**.
+
+Bumps `MARKETING_VERSION` 0.29.1 -> 0.29.2, `CURRENT_PROJECT_VERSION` 140 -> 141.
+
 ## [0.29.1 build 140] - 2026-05-25 - Chat vendor and model picker unification (`darshanbathija/chat-tab-fixes`)
 
 Chat V2 now has one broadcast-style composer. One selected vendor starts a single-vendor chat; two or three selected vendors create a Frontier broadcast with one child per vendor.

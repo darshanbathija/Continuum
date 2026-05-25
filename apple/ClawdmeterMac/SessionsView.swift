@@ -575,9 +575,10 @@ public final class SessionsModel: ObservableObject {
     /// Used by Cmd+1..9 jump shortcuts and Cmd+; sub-chat detection.
     public var visibleSessions: [AgentSession] {
         var out: [AgentSession] = []
-        for repo in filteredRepos {
+        let canonical = SessionSidebarGrouper.canonicalizeRepos(filteredRepos)
+        for repo in canonical.repos {
             guard expandedRepoKeys.contains(repo.key) else { continue }
-            let all = filter(sessions: sessions(for: repo.key, includeArchived: showArchived))
+            let all = filter(sessions: sessions(for: repo.key, aliases: canonical.keyAliases, includeArchived: showArchived))
             let roots = all.filter { $0.parentSessionId == nil }
             for root in roots {
                 out.append(root)
@@ -585,6 +586,19 @@ public final class SessionsModel: ObservableObject {
             }
         }
         return out
+    }
+
+    private func sessions(
+        for canonicalRepoKey: String,
+        aliases: [String: String],
+        includeArchived: Bool
+    ) -> [AgentSession] {
+        registry.sessions.filter { session in
+            guard let key = session.repoKey else { return false }
+            guard (aliases[key] ?? key) == canonicalRepoKey else { return false }
+            if !includeArchived, session.archivedAt != nil { return false }
+            return true
+        }
     }
 
     /// Recursively append children of `parent` (subject to `allowed`) in
@@ -617,8 +631,9 @@ public final class SessionsModel: ObservableObject {
         defer { isRefreshing = false }
         let snapshot = await repoIndex.refresh()
         self.repos = snapshot
-        for repo in snapshot {
-            if !sessions(for: repo.key).isEmpty
+        let canonical = SessionSidebarGrouper.canonicalizeRepos(snapshot)
+        for repo in canonical.repos {
+            if !sessions(for: repo.key, aliases: canonical.keyAliases, includeArchived: false).isEmpty
                 || repo.liveSessionCount > 0
                 || !repo.recentSessions.isEmpty {
                 expandedRepoKeys.insert(repo.key)
