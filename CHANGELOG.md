@@ -4,6 +4,42 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.6 build 145] - 2026-05-25 - Consolidated UI ship fixes (`darshanbathija/conductor-ui-research-v1`)
+
+Consolidates the client-local UI rollout and closes the ship-blocking notification, export, provider-default, and diagnostics issues found during review.
+
+### Added
+
+- **Command and shortcut primitives** - adds shared command, shortcut, path-link, toast, repo identity, attention, and session presentation primitives used by Mac and iOS UI surfaces.
+- **Mac workbench affordances** - adds command palette, shortcut sheet, file picker entry points, composer history/saved prompts, transcript/file actions, diff review state, PR/check/TODO actions, terminal assist, diagnostics, What’s New, and session export surfaces.
+- **iOS parity affordances** - adds long-press session actions, notification/DND preferences, code/session state badges, path/action surfaces, and matching presentation-state behavior.
+
+### Changed
+
+- **Provider defaults stay live in Chat V2** - Mac Chat V2 refreshes provider defaults and reapplies them when defaults or catalog data change.
+- **OpenRouter via OpenCode uses the current request shape** - OpenCode sends nested OpenRouter provider/model payloads with variant preserved.
+- **Diff and export behavior are safer** - diffs are no longer truncated for review, and exported presentation state is scoped to the selected session instead of dumping global local state.
+- **Notification routing honors local presentation state** - Mac and iOS notification delivery now respects DND, event mute, session mute, batching, chime, and sensitive-preview settings.
+
+### Fixed
+
+- **Support bundle privacy** - support bundles redact prompt/body/message fields in visible diagnostics and audit copies, normalize symlinked audit paths, and omit raw app logs by default.
+- **iOS DND retries** - app-level DND now acks suppressed notification events before system authorization checks so background refresh does not keep refetching the same events.
+- **Settings miswire** - `Notify at 90%` is shown as unavailable again until quota-alert dispatch is actually connected.
+- **PR test fixtures** - PRCoordinator tests include the checks payload required by the current PR summary shape.
+
+### Verification
+
+- `swift test --package-path apple/ClawdmeterShared` -> **745 tests passed, 3 skipped**.
+- `swift test --package-path tools/tmux-cc-probe` -> **19 tests passed**.
+- `xcodebuild test -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" ... -only-testing:ClawdmeterMacTests/DiagnosticsSupportBundleTests -only-testing:ClawdmeterMacTests/SessionExportBundleWriterTests CODE_SIGNING_ALLOWED=NO` -> **3 tests passed**.
+- `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO` -> **passed**.
+- `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (iOS)" -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO` -> **passed**.
+- `git diff --check origin/main...HEAD && git diff --check origin/main && git diff --check` -> **passed**.
+- `codex review` -> **no P1s after fixes; final P2s were fixed before commit**.
+
+Bumps `MARKETING_VERSION` 0.29.5 -> 0.29.6, `CURRENT_PROJECT_VERSION` 144 -> 145.
+
 ## [0.29.5 build 144] - 2026-05-25 - Session lifecycle control plane (`darshanbathija/code-sessions`)
 
 Code and Chat sessions now expose a unified lifecycle snapshot that paired clients can fetch or subscribe to without reverse-engineering status strings, transcript markers, or provider-specific runtime details.
