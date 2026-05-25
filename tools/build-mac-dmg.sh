@@ -27,18 +27,16 @@ cd "$REPO_ROOT"
 
 SCHEME="Clawdmeter (Mac)"
 PROJECT="apple/Clawdmeter.xcodeproj"
-# APP_NAME stays "Clawdmeter" because the xcodebuild PRODUCT_NAME is
-# Clawdmeter — the bundle on disk, the executable, the xcarchive path,
-# and the .app folder all need to keep that name for paths to resolve.
-# v0.29.7 display rebrand: users see "Continuum" via CFBundleDisplayName
-# in the .app's Info.plist; the DMG filename, mounted volume, and on-
-# screen build log all switch to Continuum so it's the only name the
-# user actually encounters during install.
-APP_NAME="Clawdmeter"
-DISPLAY_NAME="Continuum"
+# v0.29.8: PRODUCT_NAME in apple/project.yml is now "Continuum", so
+# the bundle on disk + the xcarchive + the export folder all carry
+# that name. APP_NAME drives both the .app folder lookup and the DMG
+# filename, so it follows. CFBundleIdentifier stays com.clawdmeter.mac
+# (see project.yml comment) so existing installs keep their data —
+# only the visible name and the .app folder rename.
+APP_NAME="Continuum"
 DIST_DIR="$REPO_ROOT/dist"
 BUILD_DIR="$REPO_ROOT/.build/mac-dmg"
-ARCHIVE_PATH="$BUILD_DIR/Clawdmeter.xcarchive"
+ARCHIVE_PATH="$BUILD_DIR/${APP_NAME}.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
 STAGING_DIR="$BUILD_DIR/staging"
 
@@ -54,10 +52,10 @@ if [[ -z "$VERSION" ]]; then
       apple/ClawdmeterMac/Info.plist 2>/dev/null || echo "0.1.0")"
 fi
 
-DMG_NAME="${DISPLAY_NAME}-${VERSION}-arm64.dmg"
+DMG_NAME="${APP_NAME}-${VERSION}-arm64.dmg"
 DMG_PATH="$DIST_DIR/$DMG_NAME"
 
-echo "▸ Building ${DISPLAY_NAME} v${VERSION} (arm64 / macOS Release)"
+echo "▸ Building ${APP_NAME} v${VERSION} (arm64 / macOS Release)"
 echo "  scheme:    $SCHEME"
 echo "  project:   $PROJECT"
 echo "  output:    $DMG_PATH"
@@ -274,22 +272,26 @@ cp -R "$APP_PATH" "$STAGING_DIR/"
 ln -s /Applications "$STAGING_DIR/Applications"
 
 # Drop a short README into the DMG so users see install instructions on mount.
-# The .app on disk is still named "Clawdmeter.app" (bundle PRODUCT_NAME)
-# even though Finder, the Dock, and the menu bar show it as "Continuum"
-# via CFBundleDisplayName. Call out the file name so first-time installers
-# don't think they grabbed the wrong DMG.
+# v0.29.8: PRODUCT_NAME flip means the .app on disk is now called
+# Continuum.app. If the user is upgrading from v0.29.7 or earlier they'll
+# end up with both /Applications/Clawdmeter.app (legacy) and
+# /Applications/Continuum.app — call that out so they know which to
+# trash. Bundle identifier is unchanged, so data + sessions follow the
+# new app automatically.
 cat > "$STAGING_DIR/INSTALL.txt" <<'README'
 Continuum for Mac
 =================
 
-1. Drag Clawdmeter.app into the Applications folder. (Finder shows it
-   as "Continuum" — same app, internal name kept stable for now while
-   the entity transition lands.)
-2. First launch: right-click Continuum in Applications → Open → "Open"
-   in the dialog. macOS asks once because Continuum is signed with a
-   personal Apple Developer team, not notarized. After the first Open,
-   Gatekeeper remembers and never asks again.
-3. The Continuum icon appears in the menu bar. Click it to view your
+1. Drag Continuum.app into the Applications folder.
+2. If you have an existing /Applications/Clawdmeter.app from before
+   v0.29.8, drag it to the Trash now — it's the previous name of the
+   same app. Your data, sessions, and pairing carry over to Continuum.app
+   automatically (the bundle identifier didn't change).
+3. First launch: right-click Continuum.app in Applications → Open →
+   "Open" in the dialog. macOS asks once because Continuum is signed
+   with a personal Apple Developer team, not notarized. After the first
+   Open, Gatekeeper remembers and never asks again.
+4. The Continuum icon appears in the menu bar. Click it to view your
    Claude / Codex usage; click "Open dashboard" for the full window.
 
 Source, watchOS / iOS apps, and release notes:
@@ -304,7 +306,7 @@ README
 echo "▸ Building DMG…"
 rm -f "$DMG_PATH"
 hdiutil create \
-  -volname "$DISPLAY_NAME" \
+  -volname "$APP_NAME" \
   -srcfolder "$STAGING_DIR" \
   -ov \
   -format UDZO \
