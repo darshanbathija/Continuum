@@ -1352,7 +1352,7 @@ public final class SessionsModel: ObservableObject {
                 tmuxPaneId: window.paneId,
                 mode: session.mode
             )
-            registry.setPlanText(id: id, planText: "")
+            registry.markPlanApproved(id: id)
             registry.updateStatus(id: id, status: .running)
         } catch {}
     }

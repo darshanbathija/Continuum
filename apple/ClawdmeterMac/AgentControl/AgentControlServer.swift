@@ -6090,7 +6090,7 @@ public final class AgentControlServer {
             // Clear the plan card and flip status to running so the
             // approve button disappears from the chat UI.
             registry.updateStatus(id: uuid, status: .running)
-            registry.setPlanText(id: uuid, planText: "")
+            registry.markPlanApproved(id: uuid)
             AgentEventStream.recordEvent(
                 sessionId: uuid,
                 kind: .statusChanged,

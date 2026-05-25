@@ -346,7 +346,9 @@ struct MacTitlebar: View {
                     .padding(.horizontal, 12)
                     .frame(height: 30)
                 }
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                .fixedSize(horizontal: true, vertical: false)
+
+                Spacer(minLength: 8)
 
                 codeActions
             } else {

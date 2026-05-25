@@ -1,19 +1,8 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// G5: live plan timeline. Observes `SessionChatStore.messages` to surface
-/// the latest plan + step-by-step progress.
-///
-/// Heuristic: a "step" is any line in either the planText or a later
-/// assistant message that starts with `^\d+\.` ("1.", "2.") or `Step N:`.
-/// We collect them in order of first appearance. A step is considered
-/// "complete" when:
-///   1. A later assistant message contains its text (case-insensitive
-///      substring of the first 40 chars), OR
-///   2. A tool_call ran AFTER the step first appeared and its title
-///      matches a verb in the step text (e.g. "Write" in step body).
-///
-/// This is a soft heuristic; the user can also tap a step to toggle.
+/// G5: plan timeline. This pane only renders explicit pending or approved
+/// plan text; it must not promote review/verifier chat prose into a plan.
 struct PlanTrackerPane: View {
     let session: AgentSession
     @ObservedObject var chatStore: SessionChatStore
@@ -28,6 +17,35 @@ struct PlanTrackerPane: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
+    private var displayPlanText: String? {
+        for candidate in [session.planText, session.approvedPlanText] {
+            guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty
+            else { continue }
+            return trimmed
+        }
+        return nil
+    }
+
+    private var canApprovePendingPlan: Bool {
+        session.status == .planning
+            && session.planText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    private var displaySteps: [PlanStep] {
+        guard let planText = displayPlanText else { return [] }
+        let candidates = ChatMessageOrdering.extractStepCandidates(from: planText)
+        let texts = candidates.isEmpty
+            ? planText
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            : candidates
+        return texts.enumerated().map { index, text in
+            PlanStep(id: "plan-\(index)", text: text, isComplete: false)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -37,12 +55,12 @@ struct PlanTrackerPane: View {
                     if let goal = session.goal, !goal.isEmpty {
                         goalCard(goal)
                     }
-                    if let planText = session.planText, !planText.isEmpty {
+                    if let planText = displayPlanText {
                         planCard(planText)
                     }
-                    if !chatStore.snapshot.planSteps.isEmpty {
-                        stepsSection
-                    } else if session.planText == nil {
+                    if !displaySteps.isEmpty {
+                        stepsSection(displaySteps)
+                    } else if displayPlanText == nil {
                         emptyState
                     }
                 }
@@ -57,7 +75,7 @@ struct PlanTrackerPane: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
             Spacer()
-            if session.planText != nil {
+            if canApprovePendingPlan {
                 Button("Approve & run", action: onApprove)
                     .buttonStyle(.borderedProminent)
                     .tint(terraCotta)
@@ -104,7 +122,7 @@ struct PlanTrackerPane: View {
     }
 
     @ViewBuilder
-    private var stepsSection: some View {
+    private func stepsSection(_ steps: [PlanStep]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Image(systemName: "list.number")
@@ -115,9 +133,7 @@ struct PlanTrackerPane: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.bottom, 8)
-            // T8: steps come precomputed from the staging actor's
-            // snapshot. View does zero per-render work.
-            ForEach(chatStore.snapshot.planSteps) { step in
+            ForEach(steps) { step in
                 stepRow(step)
             }
         }
@@ -167,11 +183,6 @@ struct PlanTrackerPane: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 32)
     }
-
-    // Step extraction + isComplete are precomputed by `StagingParser`
-    // (T8) and read from `chatStore.snapshot.planSteps`. The legacy
-    // `extractSteps` helper that lived here was unreferenced after the
-    // T8 migration; deleted in the post-perf cleanup.
 
     private var terraCotta: Color {
         Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
