@@ -1044,6 +1044,9 @@ public final class AgentControlServer {
         t.register(method: "GET", pattern: "/models") { [weak self] _, conn, _ in
             await self?.handleGetModels(connection: conn)
         }
+        t.register(method: "GET", pattern: "/provider-defaults") { [weak self] _, conn, _ in
+            self?.handleGetProviderDefaults(connection: conn)
+        }
         t.register(method: "GET", pattern: "/sessions") { [weak self] _, conn, _ in
             self?.handleGetSessions(connection: conn)
         }
@@ -1056,6 +1059,13 @@ public final class AgentControlServer {
         t.register(method: "PATCH", pattern: "/workspaces/:id") { [weak self] req, conn, params in
             await self?.handleUpdateWorkspaceDefaults(
                 workspaceId: params["id"] ?? "",
+                request: req,
+                connection: conn
+            )
+        }
+        t.register(method: "PUT", pattern: "/provider-defaults/:vendor") { [weak self] req, conn, params in
+            await self?.handlePutProviderDefault(
+                vendorId: params["vendor"] ?? "",
                 request: req,
                 connection: conn
             )
@@ -1330,6 +1340,51 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    private func handleGetProviderDefaults(connection: NWConnection) {
+        let store = ProviderDefaultsStore()
+        sendCodable(ProviderDefaultsResponse(defaults: store.snapshot), on: connection)
+    }
+
+    private func handlePutProviderDefault(
+        vendorId: String,
+        request: HTTPRequest,
+        connection: NWConnection
+    ) async {
+        guard let vendor = ChatVendor(rawValue: vendorId) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let req = try? decoder.decode(UpdateProviderDefaultRequest.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+
+        let cursorModels = await CursorModelProbe.shared.currentModels()
+        let openRouterModels = await OpenRouterModelProbe.shared.currentModels()
+        let catalog = ModelCatalog.bundled
+            .replacingCursor(cursorModels)
+            .replacingOpenRouter(openRouterModels)
+        if let model = req.model,
+           !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !vendor.models(in: catalog).contains(where: { $0.id == model || $0.cliAlias == model }) {
+            sendResponse(.badRequest, on: connection)
+            return
+        }
+
+        let store = ProviderDefaultsStore()
+        let snapshot = store.setDefault(
+            for: vendor,
+            model: req.model,
+            effort: req.effort,
+            clearModel: req.clearModel,
+            clearEffort: req.clearEffort,
+            catalog: catalog
+        )
+        sendCodable(ProviderDefaultsResponse(defaults: snapshot), on: connection)
     }
 
     // MARK: - Sessions v2 Phase 0 handlers
@@ -5083,6 +5138,8 @@ public final class AgentControlServer {
 
     private func handleRefreshChatProviders(connection: NWConnection) async {
         await ChatProviderProbe.shared.invalidate()
+        await OpenRouterModelProbe.shared.invalidate()
+        await CursorModelProbe.shared.invalidate()
         await handleGetChatProviders(connection: connection)
     }
 
@@ -5821,10 +5878,11 @@ public final class AgentControlServer {
         }
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Minimal body: a single text part. opencode infers provider +
-        // model from the active auth-list defaults. Override hook lives
-        // in `AgentSession.codexModel` / future opencode-specific fields
-        // — wire if/when sessions need per-session model pinning.
+        // OpenCode's local OpenAPI expects a single text part plus an
+        // optional `model` object (`providerID`/`modelID`) and `variant`.
+        // Keep the body inside that schema so current and older serve
+        // builds reject neither unknown top-level provider fields nor
+        // missing default-model state.
         let body = opencodeMessageBody(session: session, prompt: prompt)
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         req.timeoutInterval = 20
@@ -5920,10 +5978,24 @@ public final class AgentControlServer {
            let model = session.model,
            !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            model != "opencode-default" {
-            body["providerID"] = "openrouter"
-            body["modelID"] = model
+            body["model"] = [
+                "providerID": "openrouter",
+                "modelID": model
+            ]
+            if let effort = session.effort {
+                body["variant"] = openRouterVariant(for: effort)
+            }
         }
         return body
+    }
+
+    private func openRouterVariant(for effort: ReasoningEffort) -> String {
+        switch effort {
+        case .max:
+            return ReasoningEffort.xhigh.rawValue
+        default:
+            return effort.rawValue
+        }
     }
 
     private func sendChatSDKPrompt(

@@ -778,6 +778,7 @@ private struct ComposerBar: View {
     let providerMatrix: ChatProvidersResponse?
     @FocusState private var focused: Bool
     @State private var openVendorPicker: ChatVendor?
+    @State private var addVendorPickerPresented = false
 
     var body: some View {
         TahoeGlass(radius: 20, tone: .raised) {
@@ -808,6 +809,7 @@ private struct ComposerBar: View {
                 HStack(spacing: 7) {
                     if openTarget == nil {
                         providerControls
+                            .layoutPriority(1)
                         deepResearchChip
                     } else {
                         lockedModeChip
@@ -819,8 +821,7 @@ private struct ComposerBar: View {
                         .foregroundStyle(t.fg4)
                     sendButton
                 }
-                .frame(height: 34, alignment: .center)
-                .clipped()
+                .frame(minHeight: 34, alignment: .center)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
             }
@@ -838,26 +839,62 @@ private struct ComposerBar: View {
 
     @ViewBuilder
     private var providerControls: some View {
-        ForEach(ChatV2Store.defaultChatVendorOrder, id: \.self) { vendor in
-            let selected = store.isVendorSelected(vendor)
-            let available = isVendorAvailable(vendor)
+        HStack(spacing: 7) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(store.selectedVendors, id: \.self) { vendor in
+                        let selected = store.isVendorSelected(vendor)
+                        let available = isVendorAvailable(vendor)
+                        Button {
+                            openVendorPicker = vendor
+                        } label: {
+                            providerChip(vendor: vendor, selected: selected, available: available)
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: Binding(
+                            get: { openVendorPicker == vendor },
+                            set: { if !$0, openVendorPicker == vendor { openVendorPicker = nil } }
+                        ), arrowEdge: .bottom) {
+                            providerPickerPopover(for: vendor)
+                        }
+                        .help(providerUnavailableReason(vendor) ?? "\(vendor.displayName) model picker")
+                    }
+                }
+                .padding(.vertical, 1)
+            }
+            .frame(maxWidth: 344, alignment: .leading)
+
             Button {
-                openVendorPicker = vendor
+                addVendorPickerPresented = true
             } label: {
-                providerChip(vendor: vendor, selected: selected, available: available)
+                HStack(spacing: 5) {
+                    TahoeIcon(store.selectedVendorCount < 3 ? "plus" : "sliders", size: 11)
+                    Text(store.selectedVendorCount < 3 ? "Add" : "Configure")
+                        .font(TahoeFont.body(11, weight: .semibold))
+                }
+                .foregroundStyle(t.fg3)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .frame(height: 32)
+                .background(Color.white.opacity(0.045), in: Capsule())
+                .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
-            .layoutPriority(2)
-            .disabled(!selected && !available)
             .popover(isPresented: Binding(
-                get: { openVendorPicker == vendor },
-                set: { if !$0, openVendorPicker == vendor { openVendorPicker = nil } }
+                get: { addVendorPickerPresented },
+                set: { addVendorPickerPresented = $0 }
             ), arrowEdge: .bottom) {
-                providerPickerPopover(for: vendor)
+                MacChatModelSelectorPanel(
+                    initialVendor: firstConfigurableVendor,
+                    store: store,
+                    client: client,
+                    providerMatrix: providerMatrix,
+                    onClose: { addVendorPickerPresented = false }
+                )
             }
-            .help(providerUnavailableReason(vendor) ?? "\(vendor.displayName) model picker")
         }
+        .frame(minWidth: 120, maxWidth: 410, alignment: .leading)
     }
 
     private func providerChip(vendor: ChatVendor, selected: Bool, available: Bool) -> some View {
@@ -867,86 +904,34 @@ private struct ComposerBar: View {
                 Text(vendor.displayName)
                     .font(TahoeFont.body(11, weight: .semibold))
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 if selected, let model = compactModelLabel(for: vendor) {
                     Text(model)
                         .font(TahoeFont.mono(8.5))
                         .foregroundStyle(t.fg4)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .foregroundStyle(selected && available ? t.fg : t.fg4)
         .padding(.horizontal, 9)
         .padding(.vertical, 6)
-        .frame(height: 32)
-        .fixedSize(horizontal: true, vertical: true)
+        .frame(width: 124, height: 32, alignment: .leading)
         .background(selected && available ? Color.white.opacity(0.10) : Color.white.opacity(0.045), in: Capsule())
         .overlay(Capsule().stroke(selected ? vendor.backingProvider.tahoeProvider.halo.color.opacity(0.42) : t.hairline, lineWidth: 0.5))
         .contentShape(Capsule())
     }
 
     private func providerPickerPopover(for vendor: ChatVendor) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button {
-                store.toggleVendor(vendor)
-                openVendorPicker = nil
-            } label: {
-                HStack {
-                    Text(store.isVendorSelected(vendor) ? "Remove \(vendor.displayName)" : "Add \(vendor.displayName)")
-                    Spacer()
-                }
-            }
-            .buttonStyle(.plain)
-            .font(TahoeFont.body(12, weight: .semibold))
-            .foregroundStyle(t.fg)
-            .disabled((store.isVendorSelected(vendor) && store.selectedVendorCount == 1)
-                      || (!store.isVendorSelected(vendor) && store.selectedVendorCount == 3)
-                      || (!store.isVendorSelected(vendor) && !isVendorAvailable(vendor)))
-
-            let models = vendor.models(in: client.modelCatalog)
-            if !models.isEmpty {
-                Divider()
-                Text("Model")
-                    .font(TahoeFont.body(10, weight: .semibold))
-                    .foregroundStyle(t.fg4)
-                ForEach(models) { entry in
-                    pickerRow(title: entry.displayName, selected: store.model(for: vendor, catalog: client.modelCatalog) == entry.id) {
-                        store.selectModel(entry.id, for: vendor)
-                    }
-                }
-            }
-
-            if modelSupportsEffort(vendor) {
-                Divider()
-                Text("Effort")
-                    .font(TahoeFont.body(10, weight: .semibold))
-                    .foregroundStyle(t.fg4)
-                ForEach(ReasoningEffort.allCases, id: \.self) { effort in
-                    pickerRow(title: effort.rawValue, selected: store.effort(for: vendor, catalog: client.modelCatalog) == effort) {
-                        store.selectEffort(effort, for: vendor)
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .frame(width: 240)
-    }
-
-    private func pickerRow(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                Text(title)
-                    .font(TahoeFont.body(11.5))
-                    .lineLimit(1)
-                Spacer()
-                if selected {
-                    TahoeIcon("check", size: 10)
-                }
-            }
-            .foregroundStyle(t.fg)
-            .padding(.vertical, 3)
-        }
-        .buttonStyle(.plain)
+        MacChatModelSelectorPanel(
+            initialVendor: vendor,
+            store: store,
+            client: client,
+            providerMatrix: providerMatrix,
+            onClose: { openVendorPicker = nil }
+        )
     }
 
     private var deepResearchChip: some View {
@@ -1182,6 +1167,12 @@ private struct ComposerBar: View {
         return entry.supportsEffort
     }
 
+    private var firstConfigurableVendor: ChatVendor {
+        ChatV2Store.defaultChatVendorOrder.first { vendor in
+            !store.isVendorSelected(vendor) && isVendorAvailable(vendor)
+        } ?? store.primaryVendor
+    }
+
     /// Solo path: upload each attachment to one session's staging dir
     /// and prepend `@<path>` mentions to the prompt body.
     private func uploadAndBuildPrompt(base: String, sessionId: UUID) async -> String {
@@ -1262,6 +1253,300 @@ private struct ComposerBar: View {
                 pathOnDaemon: url.path,
                 localFileURL: url
             ))
+        }
+    }
+}
+
+@available(macOS 14, *)
+private struct MacChatModelSelectorPanel: View {
+    @Environment(\.tahoe) private var t
+    @State private var selectedVendor: ChatVendor
+    @State private var query = ""
+    @State private var refreshing = false
+    @ObservedObject var store: ChatV2Store
+    @ObservedObject var client: AgentControlClient
+    let providerMatrix: ChatProvidersResponse?
+    let onClose: () -> Void
+
+    init(
+        initialVendor: ChatVendor,
+        store: ChatV2Store,
+        client: AgentControlClient,
+        providerMatrix: ChatProvidersResponse?,
+        onClose: @escaping () -> Void
+    ) {
+        self._selectedVendor = State(initialValue: initialVendor)
+        self.store = store
+        self.client = client
+        self.providerMatrix = providerMatrix
+        self.onClose = onClose
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            vendorRail
+            availabilityLine
+            searchField
+            modelList
+            effortControl
+        }
+        .padding(14)
+        .frame(width: 560, height: 520, alignment: .topLeading)
+        .background(Color.black.opacity(0.02))
+    }
+
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Model selector")
+                    .font(TahoeFont.body(14, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Text(store.selectedVendorCount == 1 ? "Solo chat" : "\(store.selectedVendorCount)-vendor broadcast")
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg4)
+            }
+            Spacer()
+            Button(action: onClose) {
+                TahoeIcon("x", size: 11).foregroundStyle(t.fg3)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var vendorRail: some View {
+        HStack(spacing: 6) {
+            ForEach(ChatV2Store.defaultChatVendorOrder, id: \.self) { vendor in
+                Button {
+                    selectedVendor = vendor
+                } label: {
+                    HStack(spacing: 5) {
+                        TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 13)
+                        Text(vendor.displayName)
+                            .font(TahoeFont.body(11, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(vendor == selectedVendor ? t.fg : (isVendorAvailable(vendor) ? t.fg3 : t.fg4))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(vendor == selectedVendor ? Color.white.opacity(0.10) : Color.white.opacity(0.045), in: Capsule())
+                    .overlay(Capsule().stroke(store.isVendorSelected(vendor) ? vendor.backingProvider.tahoeProvider.halo.color.opacity(0.45) : t.hairline, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .disabled(!store.isVendorSelected(vendor) && !isVendorAvailable(vendor))
+            }
+        }
+    }
+
+    private var availabilityLine: some View {
+        HStack(spacing: 8) {
+            let selected = store.isVendorSelected(selectedVendor)
+            let available = isVendorAvailable(selectedVendor)
+            Text(available ? "Available" : (providerUnavailableReason(selectedVendor) ?? "Unavailable"))
+                .font(TahoeFont.body(11))
+                .foregroundStyle(available ? Color.green : Color.orange)
+            Spacer()
+            if selectedVendor == .cursor || selectedVendor == .openrouter {
+                Button {
+                    refreshCatalog()
+                } label: {
+                    if refreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label(selectedVendor == .cursor ? "Refresh Cursor" : "Refresh OpenRouter", systemImage: "arrow.clockwise")
+                            .font(TahoeFont.body(11, weight: .semibold))
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(t.accent)
+            }
+            Button(selected ? (canToggleSelectedVendor ? "Remove" : "Required") : "Add") {
+                store.toggleVendor(selectedVendor)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!canToggleSelectedVendor)
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            TahoeIcon("search", size: 12).foregroundStyle(t.fg4)
+            TextField("Search model name or raw id", text: $query)
+                .textFieldStyle(.plain)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(t.hairline, lineWidth: 0.5))
+    }
+
+    private var modelList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                let sections = ProviderModelPickerSupport.sections(
+                    for: selectedVendor,
+                    catalog: client.modelCatalog,
+                    query: query
+                )
+                if sections.isEmpty {
+                    Text("No models match the search.")
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 24)
+                }
+                ForEach(sections) { section in
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(section.title.uppercased())
+                            .font(TahoeFont.body(9.5, weight: .bold))
+                            .foregroundStyle(t.fg4)
+                        ForEach(section.entries) { entry in
+                            modelRow(entry)
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func modelRow(_ entry: ModelCatalogEntry) -> some View {
+        let selected = store.model(for: selectedVendor, catalog: client.modelCatalog) == entry.id
+        return Button {
+            store.selectModel(entry.id, for: selectedVendor, catalog: client.modelCatalog)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Text(entry.displayName)
+                            .font(TahoeFont.body(12.5, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1)
+                        ForEach(ProviderModelPickerSupport.badges(for: entry), id: \.self) { badge in
+                            Text(badge)
+                                .font(TahoeFont.body(9, weight: .semibold))
+                                .foregroundStyle(t.fg3)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.white.opacity(0.055), in: Capsule())
+                        }
+                    }
+                    Text(ProviderModelPickerSupport.metadataLine(for: entry))
+                        .font(TahoeFont.mono(10.5))
+                        .foregroundStyle(t.fg4)
+                        .lineLimit(2)
+                }
+                Spacer()
+                if selected {
+                    TahoeIcon("check", size: 12).foregroundStyle(t.accent)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .background(selected ? t.accent.opacity(0.12) : Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? t.accent.opacity(0.4) : t.hairline, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var effortControl: some View {
+        let modelId = store.model(for: selectedVendor, catalog: client.modelCatalog)
+        let supports = ProviderModelPickerSupport.supportsEffort(
+            vendor: selectedVendor,
+            modelId: modelId,
+            catalog: client.modelCatalog
+        )
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Effort")
+                .font(TahoeFont.body(10, weight: .bold))
+                .foregroundStyle(t.fg4)
+            if supports {
+                HStack(spacing: 5) {
+                    ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                        let selected = store.effort(for: selectedVendor, catalog: client.modelCatalog) == effort
+                        Button {
+                            store.selectEffort(effort, for: selectedVendor, catalog: client.modelCatalog)
+                        } label: {
+                            Text(effortLabel(effort))
+                                .font(TahoeFont.body(11, weight: .semibold))
+                                .foregroundStyle(selected ? t.accent : t.fg3)
+                                .frame(minWidth: 44)
+                                .padding(.vertical, 6)
+                                .background(selected ? t.accent.opacity(0.14) : Color.white.opacity(0.045), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else {
+                Text("Auto")
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(t.fg4)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.045), in: Capsule())
+                    .help(selectedVendor == .cursor ? "Cursor effort is Auto until account models report effort support." : "This model does not expose effort controls.")
+            }
+        }
+    }
+
+    private var canToggleSelectedVendor: Bool {
+        if store.isVendorSelected(selectedVendor) {
+            return store.selectedVendorCount > 1
+        }
+        return store.selectedVendorCount < 3 && isVendorAvailable(selectedVendor)
+    }
+
+    private func refreshCatalog() {
+        Task {
+            refreshing = true
+            switch selectedVendor {
+            case .cursor:
+                await CursorModelProbe.shared.invalidate()
+            case .openrouter:
+                await OpenRouterModelProbe.shared.invalidate()
+            default:
+                break
+            }
+            await client.refreshModelCatalog()
+            refreshing = false
+        }
+    }
+
+    private func isVendorAvailable(_ vendor: ChatVendor) -> Bool {
+        let provider = vendor.backingProvider
+        guard let entries = providerMatrix?.providers.filter({ $0.provider == provider }),
+              !entries.isEmpty else {
+            return true
+        }
+        if vendor == .chatgpt {
+            return entries.contains { $0.codexBackend == .sdk && $0.capabilityProbePassed }
+        }
+        return entries.contains { $0.capabilityProbePassed }
+    }
+
+    private func providerUnavailableReason(_ vendor: ChatVendor) -> String? {
+        guard !isVendorAvailable(vendor) else { return nil }
+        let provider = vendor.backingProvider
+        if vendor == .chatgpt {
+            return providerMatrix?.providers.first {
+                $0.provider == provider && $0.codexBackend == .sdk && !$0.capabilityProbePassed
+            }?.reason
+        }
+        return providerMatrix?.providers.first { $0.provider == provider && !$0.capabilityProbePassed }?.reason
+    }
+
+    private func effortLabel(_ effort: ReasoningEffort) -> String {
+        switch effort {
+        case .minimal: return "Min"
+        case .low: return "Low"
+        case .medium: return "Med"
+        case .high: return "High"
+        case .xhigh: return "xHigh"
+        case .max: return "Max"
         }
     }
 }

@@ -16,13 +16,16 @@ struct SessionLauncherAvailability: Equatable {
 final class SessionLauncherModel: ObservableObject {
     @Published private(set) var availability: SessionLauncherAvailability
     @Published private(set) var modelCatalog: ModelCatalog
+    private let providerDefaults: ProviderDefaultsStore
 
     init(
         modelCatalog: ModelCatalog = .bundled,
-        availability: SessionLauncherAvailability = SessionLauncherAvailability()
+        availability: SessionLauncherAvailability = SessionLauncherAvailability(),
+        providerDefaults: ProviderDefaultsStore = ProviderDefaultsStore()
     ) {
         self.modelCatalog = modelCatalog
         self.availability = availability
+        self.providerDefaults = providerDefaults
     }
 
     var selectableAgents: [AgentKind] {
@@ -45,8 +48,11 @@ final class SessionLauncherModel: ObservableObject {
         let opencodeReady = OpencodeProcessManager.shared.binaryPath != nil
             && !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
 
+        let openRouterModels = await OpenRouterModelProbe.shared.currentModels()
         let cursorState = await CursorModelProbe.shared.currentState()
-        modelCatalog = ModelCatalog.bundled.replacingCursor(cursorState.models)
+        modelCatalog = ModelCatalog.bundled
+            .replacingCursor(cursorState.models)
+            .replacingOpenRouter(openRouterModels)
         availability = SessionLauncherAvailability(
             opencodeReady: opencodeReady,
             cursorReady: cursorState.binaryPath != nil && cursorState.authenticated
@@ -58,7 +64,11 @@ final class SessionLauncherModel: ObservableObject {
     }
 
     func defaultModelId(for agent: AgentKind) -> String? {
-        modelCatalog.entries(for: agent).first?.id
+        if let vendor = ChatVendor.migrated(from: agent),
+           let model = providerDefaults.modelId(for: vendor, catalog: modelCatalog) {
+            return model
+        }
+        return modelCatalog.entries(for: agent).first?.id
     }
 
     func resolvedModelId(for agent: AgentKind, selectedModelId: String?) -> String? {
@@ -68,7 +78,7 @@ final class SessionLauncherModel: ObservableObject {
            models.contains(where: { $0.id == selectedModelId || $0.cliAlias == selectedModelId }) {
             return selectedModelId
         }
-        return models.first?.id
+        return defaultModelId(for: agent)
     }
 
     func supportsEffort(modelId: String?) -> Bool {
@@ -81,7 +91,17 @@ final class SessionLauncherModel: ObservableObject {
     }
 
     func chipDefaults(for agent: AgentKind) -> ComposerStore.ChipDefaults {
-        ComposerStore.ChipDefaults.for(agent: agent, catalog: modelCatalog)
+        let base = ComposerStore.ChipDefaults.for(agent: agent, catalog: modelCatalog)
+        guard let vendor = ChatVendor.migrated(from: agent) else { return base }
+        let model = providerDefaults.modelId(for: vendor, catalog: modelCatalog) ?? base.modelId
+        let effort = providerDefaults.effort(for: vendor, catalog: modelCatalog) ?? base.effort
+        return ComposerStore.ChipDefaults(
+            agent: agent,
+            modelId: model,
+            effort: supportsEffort(modelId: model) ? effort : nil,
+            mode: base.mode,
+            planMode: base.planMode
+        )
     }
 
     func normalize(_ store: ComposerStore) {

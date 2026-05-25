@@ -120,10 +120,11 @@ public enum AgentControlWireVersion {
     /// run profile endpoints plus checkpoint create / restore-preview /
     /// restore endpoints so iOS can expose the same Code workbench lifecycle
     /// without pretending it can run local shell commands on-device.
-    /// v19 (2026-05-25, lifecycle spine): adds `SessionLifecycleSnapshot`,
-    /// the `GET /sessions/:id/lifecycle` endpoint, and the
-    /// `lifecycle-subscribe` WS op. v18 `AgentSession.status` remains the
-    /// compatibility status for older clients.
+    /// v19 (2026-05-25): adds `SessionLifecycleSnapshot`,
+    /// `GET /sessions/:id/lifecycle`, the `lifecycle-subscribe` WS op,
+    /// and provider default endpoints (`GET /provider-defaults`,
+    /// `PUT /provider-defaults/:vendor`). v18 `AgentSession.status`
+    /// remains the compatibility status for older clients.
     public static let current: Int = 19
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
@@ -242,6 +243,9 @@ public enum AgentControlWireVersion {
     /// Minimum wire version that exposes the unified lifecycle snapshot
     /// spine (`GET /sessions/:id/lifecycle` + `lifecycle-subscribe` WS).
     public static let lifecycleMinimum: Int = 19
+
+    /// Minimum wire version that exposes durable per-provider defaults.
+    public static let providerDefaultsMinimum: Int = 19
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -392,6 +396,14 @@ public enum AgentControlWireVersion {
     public static func supportsLifecycle(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= lifecycleMinimum
+    }
+
+    /// Whether the paired Mac exposes `GET /provider-defaults` and
+    /// `PUT /provider-defaults/:vendor`. Older Macs keep local/default
+    /// catalog behavior and never block session creation.
+    public static func supportsProviderDefaults(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= providerDefaultsMinimum
     }
 }
 

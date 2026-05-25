@@ -37,8 +37,8 @@ final class WireV14ContractTests: XCTestCase {
         // v14 minimums still apply (`turnLifecycleMinimum`,
         // `deepResearchMinimum`, `chatSearchMinimum`); only `current`
         // has advanced. v18 added remote Code workbench run/checkpoint
-        // endpoints for iOS parity; see
-        // `WireV11Tests.test_currentWireVersionIsNineteen`.
+        // endpoints for iOS parity; v19 added lifecycle and provider-default
+        // endpoints.
         XCTAssertEqual(AgentControlWireVersion.current, 19)
     }
 

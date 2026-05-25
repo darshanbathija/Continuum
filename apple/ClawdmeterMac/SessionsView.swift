@@ -29,6 +29,7 @@ struct NewSessionMacSheet: View {
     @State private var planMode: Bool = true
     @StateObject private var launcher = SessionLauncherModel()
     @State private var selectedModelId: String?
+    @State private var selectedModelWasUserChosen = false
     // v0.7.9: worktree by default. Local stays in the enum for
     // back-compat but the mode chip is no longer in the New Session UI.
     @State private var mode: SessionMode = .worktree
@@ -81,6 +82,7 @@ struct NewSessionMacSheet: View {
                         agent: agent
                     ) { entry in
                         selectedModelId = entry.id
+                        selectedModelWasUserChosen = true
                     }
                 }
 
@@ -145,7 +147,8 @@ struct NewSessionMacSheet: View {
             ensureSelectedModelIsAvailable()
         }
         .onChange(of: agent) { _, _ in
-            selectedModelId = launcher.defaultModelId(for: agent)
+            selectedModelWasUserChosen = false
+            selectedModelId = launcher.chipDefaults(for: agent).modelId
             if agent == .cursor { planMode = false }
         }
         .onChange(of: launcher.availability) { _, _ in
@@ -158,13 +161,17 @@ struct NewSessionMacSheet: View {
     }
 
     private func ensureSelectedModelIsAvailable() {
-        selectedModelId = launcher.resolvedModelId(for: agent, selectedModelId: selectedModelId)
+        selectedModelId = launcher.resolvedModelId(
+            for: agent,
+            selectedModelId: selectedModelWasUserChosen ? selectedModelId : nil
+        )
     }
 
     private func normalizeAgentAvailability() {
         let normalized = launcher.availableAgentOrDefault(agent)
         if normalized != agent {
             agent = normalized
+            selectedModelWasUserChosen = false
         }
         if agent == .cursor {
             planMode = false

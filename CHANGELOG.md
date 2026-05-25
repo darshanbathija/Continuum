@@ -4,6 +4,35 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.3 build 142] - 2026-05-25 - Provider defaults and model selectors (`darshanbathija/provider-models`)
+
+Provider model and effort choices are now durable per vendor, with OpenRouter and Cursor treated as first-class default rows in Settings and as richer model picker surfaces in Chat.
+
+### Added
+
+- **Provider defaults store** - adds a shared `ProviderDefaultsStore` keyed by `ChatVendor`, persisted under `clawdmeter.providerDefaults.*`, with migration from the older Chat V2 per-vendor model and effort keys.
+- **Paired defaults API** - adds wire v19 support for `GET /provider-defaults` and `PUT /provider-defaults/:vendor`, including older-Mac fallback behavior and local persistence on paired clients.
+- **Settings defaults controls** - adds `Default model` and `Default effort` controls to Settings -> Providers, renames the OpenCode row to `OpenRouter via OpenCode`, and uses live OpenRouter and Cursor model catalogs where available.
+- **Chat selector panels** - replaces cramped Chat V2 vendor chips with searchable Mac and iOS selector panels that show model names, raw ids, context windows, availability, badges, recommendation copy, and effort controls.
+
+### Fixed
+
+- **New-session default propagation** - applies provider defaults before catalog fallback for new Chat V2 solo/broadcast sessions, Mac new Code sessions, and iOS new sessions while leaving existing running sessions unchanged.
+- **OpenRouter effort support** - clears unsupported OpenRouter efforts based on model metadata and maps supported effort through the OpenCode/OpenRouter request body shape.
+- **Cursor effort handling** - renders Cursor effort as disabled Auto unless future model probe data reports explicit effort support.
+- **Selector layout resilience** - bounds long OpenRouter/Cursor model names on Mac and iOS so provider chips and picker rows remain readable within Tahoe spacing.
+
+### Verification
+
+- `swift test --package-path apple/ClawdmeterShared --scratch-path /tmp/clawdmeter-shared-ship-test --disable-automatic-resolution` -> **732 tests passed, 3 skipped**.
+- Focused Mac tests for `SessionLauncherModelTests`, `OpencodeSendTests`, and `WireV14ContractTests` -> **31 tests passed**.
+- `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" -configuration Debug -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO` -> **BUILD SUCCEEDED**.
+- `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (iOS)" -configuration Debug -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO` -> **BUILD SUCCEEDED**.
+- Independent engineering verifier -> **no blocking issues**.
+- Independent Tahoe design critique -> **98/100 pass**.
+
+Bumps `MARKETING_VERSION` 0.29.2 -> 0.29.3, `CURRENT_PROJECT_VERSION` 141 -> 142.
+
 ## [0.29.2 build 141] - 2026-05-25 - Chat polish and session scrolling fixes (`darshanbathija/chat-polish-bugfixes`)
 
 The Code and iOS session views now stay pinned to the latest message when a session opens, scroll smoothly through long transcripts, and show the model/effort metadata the selected session is actually using.

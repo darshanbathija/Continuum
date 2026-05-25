@@ -123,10 +123,13 @@ public final class ChatV2Store: ObservableObject {
     @Published public var attachments: [ChatV2Attachment] = []
 
     private let defaults: UserDefaults
+    private let providerDefaults: ProviderDefaultsStore
     private static let defaultsPrefix = "clawdmeter.chatv2."
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let providerDefaults = ProviderDefaultsStore(defaults: defaults)
+        self.providerDefaults = providerDefaults
         // Restore prior session picks. Each individual key falls back
         // to a sensible default; collectively this gives a working
         // composer state on cold-launch without prompting the user
@@ -134,12 +137,8 @@ public final class ChatV2Store: ObservableObject {
         let hasVendorSelection = defaults.object(forKey: Self.defaultsPrefix + "vendors") != nil
         let restoredVendors = Self.restoreVendors(defaults: defaults)
         self.selectedVendors = restoredVendors
-        self.selectedModelByVendor = Self.decodeVendorStringMap(
-            defaults.dictionary(forKey: Self.defaultsPrefix + "modelByVendor") ?? [:]
-        )
-        self.selectedEffortByVendor = Self.decodeVendorEffortMap(
-            defaults.dictionary(forKey: Self.defaultsPrefix + "effortByVendor") ?? [:]
-        )
+        self.selectedModelByVendor = providerDefaults.snapshot.decodedModelMap()
+        self.selectedEffortByVendor = providerDefaults.snapshot.decodedEffortMap()
         let restoredModeRaw = defaults.string(forKey: Self.defaultsPrefix + "mode") ?? ChatV2Mode.broadcast.rawValue
         self.mode = ChatV2Mode(rawValue: restoredModeRaw)
             ?? (restoredVendors.count > 1 ? .broadcast : .solo)
@@ -269,21 +268,79 @@ public final class ChatV2Store: ObservableObject {
         persist()
     }
 
-    public func selectModel(_ modelId: String, for vendor: ChatVendor) {
+    public func selectModel(_ modelId: String, for vendor: ChatVendor, catalog: ModelCatalog = .bundled) {
         selectedModelByVendor[vendor] = modelId
         if let provider = ChatVendor.migrated(from: vendor.backingProvider)?.backingProvider {
             selectedModelByProvider[provider] = modelId
         }
+        let effectiveEffort = ProviderModelPickerSupport.normalizedEffort(
+            selectedEffortByVendor[vendor],
+            vendor: vendor,
+            modelId: modelId,
+            catalog: catalog
+        )
+        if effectiveEffort == nil {
+            selectedEffortByVendor.removeValue(forKey: vendor)
+            selectedEffortByProvider.removeValue(forKey: vendor.backingProvider)
+        }
+        providerDefaults.setDefault(
+            for: vendor,
+            model: modelId,
+            effort: effectiveEffort,
+            catalog: catalog
+        )
         persist()
     }
 
-    public func selectEffort(_ effort: ReasoningEffort?, for vendor: ChatVendor) {
-        if let effort {
-            selectedEffortByVendor[vendor] = effort
-            selectedEffortByProvider[vendor.backingProvider] = effort
+    public func selectEffort(_ effort: ReasoningEffort?, for vendor: ChatVendor, catalog: ModelCatalog = .bundled) {
+        let effectiveEffort = ProviderModelPickerSupport.normalizedEffort(
+            effort,
+            vendor: vendor,
+            modelId: model(for: vendor, catalog: catalog),
+            catalog: catalog
+        )
+        if let effectiveEffort {
+            selectedEffortByVendor[vendor] = effectiveEffort
+            selectedEffortByProvider[vendor.backingProvider] = effectiveEffort
         } else {
             selectedEffortByVendor.removeValue(forKey: vendor)
             selectedEffortByProvider.removeValue(forKey: vendor.backingProvider)
+        }
+        providerDefaults.setDefault(
+            for: vendor,
+            model: model(for: vendor, catalog: catalog),
+            effort: effectiveEffort,
+            clearEffort: effectiveEffort == nil,
+            catalog: catalog
+        )
+        persist()
+    }
+
+    public func applyProviderDefaults(_ snapshot: ProviderDefaultsSnapshot, catalog: ModelCatalog = .bundled) {
+        providerDefaults.replace(with: snapshot)
+        for vendor in Self.defaultChatVendorOrder {
+            if let modelId = snapshot.modelId(for: vendor),
+               Self.catalog(catalog, contains: modelId, for: vendor) {
+                selectedModelByVendor[vendor] = modelId
+                selectedModelByProvider[vendor.backingProvider] = modelId
+            } else {
+                selectedModelByVendor.removeValue(forKey: vendor)
+                selectedModelByProvider.removeValue(forKey: vendor.backingProvider)
+            }
+
+            let effectiveEffort = ProviderModelPickerSupport.normalizedEffort(
+                snapshot.effort(for: vendor),
+                vendor: vendor,
+                modelId: selectedModelByVendor[vendor],
+                catalog: catalog
+            )
+            if let effectiveEffort {
+                selectedEffortByVendor[vendor] = effectiveEffort
+                selectedEffortByProvider[vendor.backingProvider] = effectiveEffort
+            } else {
+                selectedEffortByVendor.removeValue(forKey: vendor)
+                selectedEffortByProvider.removeValue(forKey: vendor.backingProvider)
+            }
         }
         persist()
     }
@@ -294,6 +351,10 @@ public final class ChatV2Store: ObservableObject {
         }
         if let userPick = selectedModelByProvider[provider], !userPick.isEmpty {
             return userPick
+        }
+        if let vendor = ChatVendor.migrated(from: provider),
+           let providerDefault = providerDefaults.modelId(for: vendor) {
+            return providerDefault
         }
         switch provider {
         case .claude:   return ModelCatalog.bundled.claude.first?.id
@@ -308,6 +369,9 @@ public final class ChatV2Store: ObservableObject {
     public func model(for vendor: ChatVendor, catalog: ModelCatalog = .bundled) -> String? {
         if let userPick = selectedModelByVendor[vendor], !userPick.isEmpty {
             return userPick
+        }
+        if let providerDefault = providerDefaults.modelId(for: vendor, catalog: catalog) {
+            return providerDefault
         }
         if let legacyPick = selectedModelByProvider[vendor.backingProvider], !legacyPick.isEmpty {
             return legacyPick
@@ -330,6 +394,7 @@ public final class ChatV2Store: ObservableObject {
             return nil
         }
         return selectedEffortByVendor[vendor]
+            ?? providerDefaults.effort(for: vendor, catalog: catalog)
             ?? selectedEffortByProvider[vendor.backingProvider]
             ?? vendor.defaultEffort
     }
@@ -406,6 +471,12 @@ public final class ChatV2Store: ObservableObject {
             if out.count == 3 { break }
         }
         return out.isEmpty ? [.chatgpt] : out
+    }
+
+    private static func catalog(_ catalog: ModelCatalog, contains id: String, for vendor: ChatVendor) -> Bool {
+        let entries = vendor.models(in: catalog)
+        guard !entries.isEmpty else { return true }
+        return entries.contains { $0.id == id || $0.cliAlias == id }
     }
 
     private static func decodeStringMap(_ d: [String: Any]) -> [AgentKind: String] {
