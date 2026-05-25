@@ -12,7 +12,7 @@ At a high level, Clawdmeter does three jobs:
 - Runs and controls local coding-agent sessions from Mac, iPhone, Watch, and Linux.
 - Keeps chat, code, usage, device pairing, diagnostics, and provider setup in one app.
 
-Current source version: `0.27.0` (`apple/project.yml` build `136`).
+Current source version: `0.29.3` (`apple/project.yml` build `142`).
 
 ## What ships
 
@@ -33,7 +33,8 @@ Current source version: `0.27.0` (`apple/project.yml` build `136`).
 | **Claude Code** | Spawns the `claude` CLI in tmux, parses Claude JSONL usage, reads local auth state where allowed, supports plan mode, accept-edits, bypass mode with repo trust, session resume, slash-command skill discovery, and live chat/code transcript ingestion. |
 | **Codex** | Supports CLI-backed sessions and a Codex SDK chat path. Usage parsing reads Codex session JSONL, including cumulative-to-delta conversion. Plan mode maps to read-only sandboxing, and send/interrupt/model/effort flows go through the same daemon surface as other agents. |
 | **Antigravity / Gemini** | Gemini quota and Antigravity 2 native sessions are represented through the shared `.gemini` agent kind in current wire contracts. The newer path talks to Antigravity's `agentapi` / language-server runtime, reads conversation DB and brain-dir state, and exposes plan snapshots. |
-| **OpenCode** | OpenCode is a fourth provider, not a fork target. Clawdmeter manages a shared `opencode serve` process, consumes SSE events, sends prompts through OpenCode's HTTP API, maps OpenCode usage into Clawdmeter analytics, and surfaces setup/auth under Settings -> Providers. |
+| **Cursor** | Discovers account models from Cursor, launches Cursor-backed sessions, and treats effort as Cursor Auto until Cursor exposes a real effort control. |
+| **OpenRouter via OpenCode** | Runs OpenRouter models through Clawdmeter's shared `opencode serve` process, consumes SSE events, sends prompts through OpenCode's HTTP API, maps OpenRouter usage into Clawdmeter analytics, and surfaces live model metadata under Settings -> Providers. |
 
 ## App model
 
@@ -47,10 +48,10 @@ HTTP and WebSocket daemon:
 
 The main Mac tabs are:
 
-- **Chat** - solo or broadcast chat over Claude, Codex, and Antigravity, with Frontier-style multi-provider comparison endpoints in the daemon.
+- **Chat** - solo or broadcast chat over Claude, Codex, Antigravity, Cursor, and OpenRouter, with Frontier-style multi-provider comparison endpoints in the daemon.
 - **Usage** - live quota cards plus historical spend by provider, day, and repo. OpenCode appears as a dollar-cost lane because it does not expose Anthropic-style rolling quota headers.
 - **Code** - repo/session workbench with city-named worktrees, terminal panes, chat transcript, plan/diff/PR/artifact/source panes, archive/reopen flows, and provider filters.
-- **Settings** - visual theme, provider setup, Codex SDK diagnostics, Antigravity SDK diagnostics, pairing, Live Activities, auto-revive, and diagnostics.
+- **Settings** - visual theme, provider setup, per-provider model/effort defaults, Codex SDK diagnostics, Antigravity SDK diagnostics, pairing, Live Activities, auto-revive, and diagnostics.
 
 ## Analytics
 
