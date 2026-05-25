@@ -1,6 +1,23 @@
 import XCTest
 @testable import ClawdmeterShared
 
+private final class CapturedSessionBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: AgentSession?
+
+    func set(_ session: AgentSession) {
+        lock.lock()
+        defer { lock.unlock() }
+        value = session
+    }
+
+    var session: AgentSession? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 /// Tests for the Phase 0b `SessionFileResolver`. Codex respawn-lineage
 /// (`approve-plan` spawns a new rollout file) is the critical regression
 /// case — without lineage tracking the resolver would strand on the dead
@@ -82,17 +99,17 @@ final class SessionFileResolverTests: XCTestCase {
 
     func testClaudeSessionResolvesViaInjectedResolver() {
         let expected = URL(fileURLWithPath: "/tmp/claude/some-session.jsonl")
-        var calledFor: AgentSession?
+        let calledFor = CapturedSessionBox()
         let resolver = SessionFileResolver(
             codexSessionsRoot: tmpdir,
             resolveClaudeURL: { session in
-                calledFor = session
+                calledFor.set(session)
                 return expected
             }
         )
         let session = makeSession(agent: .claude)
         assertSameFile(resolver.resolve(session: session), expected)
-        XCTAssertEqual(calledFor?.id, session.id)
+        XCTAssertEqual(calledFor.session?.id, session.id)
     }
 
     func testClaudeSessionResolverReturnsNilWhenInjectedReturnsNil() {

@@ -4,12 +4,12 @@ import XCTest
 @MainActor
 final class ChatV2StoreCursorTests: XCTestCase {
 
-    func test_cursorIsNotBroadcastCapableUntilTranscriptSupportExists() {
+    func test_cursorIsNotBroadcastCapableUntilTranscriptSupportExists() async {
         XCTAssertFalse(ChatV2Store.broadcastCapableProviders.contains(.cursor))
         XCTAssertFalse(ChatV2Store.defaultBroadcastProviderOrder.contains(.cursor))
     }
 
-    func test_restoredCursorChatProviderFallsBackToClaude() {
+    func test_restoredCursorChatProviderFallsBackToClaude() async {
         let suiteName = "ChatV2StoreCursorTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }

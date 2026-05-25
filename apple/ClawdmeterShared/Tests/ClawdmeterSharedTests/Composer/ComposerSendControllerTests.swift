@@ -18,7 +18,7 @@ final class ComposerSendControllerTests: XCTestCase {
         )
     }
 
-    func test_initialState_isEmpty() {
+    func test_initialState_isEmpty() async {
         let controller = ComposerSendController(client: makeClient())
         XCTAssertEqual(controller.text, "")
         XCTAssertFalse(controller.sending)
@@ -26,19 +26,19 @@ final class ComposerSendControllerTests: XCTestCase {
         XCTAssertFalse(controller.canSend, "Empty text cannot send")
     }
 
-    func test_canSend_falseForEmptyText() {
+    func test_canSend_falseForEmptyText() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = ""
         XCTAssertFalse(controller.canSend)
     }
 
-    func test_canSend_falseForWhitespaceOnly() {
+    func test_canSend_falseForWhitespaceOnly() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = "   \n\t  "
         XCTAssertFalse(controller.canSend, "Whitespace-only text should not be sendable")
     }
 
-    func test_canSend_trueWithNonEmptyText() {
+    func test_canSend_trueWithNonEmptyText() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = "Hello"
         XCTAssertTrue(controller.canSend)
@@ -81,7 +81,7 @@ final class ComposerSendControllerTests: XCTestCase {
         XCTAssertFalse(controller.sending)
     }
 
-    func test_reset_clearsAllState() {
+    func test_reset_clearsAllState() async {
         let controller = ComposerSendController(client: makeClient())
         controller.text = "in-flight draft"
         controller.reset()
