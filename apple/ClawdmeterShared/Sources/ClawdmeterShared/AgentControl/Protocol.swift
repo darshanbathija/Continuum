@@ -725,7 +725,11 @@ public struct ModelCatalog: Codable, Sendable {
             ModelCatalogEntry(id: "gemini-3-flash-thinking",   provider: .gemini, displayName: "Gemini 3 Flash (Thinking)",   cliAlias: "flash-thinking",     supportsThinking: true,  supportsEffort: false, contextWindow: 1_000_000, recommendedFor: "Complex problem solving", badge: "Thinking"),
         ],
         opencode: [
-            ModelCatalogEntry(id: "opencode-default", provider: .opencode, displayName: "OpenCode default", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "BYOK provider", badge: "BYOK"),
+            ModelCatalogEntry(id: "openai/gpt-5.5", provider: .opencode, displayName: "OpenRouter · GPT-5.5", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: nil, recommendedFor: "Most work", badge: "BYOK"),
+            ModelCatalogEntry(id: "anthropic/claude-opus-4.7", provider: .opencode, displayName: "OpenRouter · Claude Opus 4.7", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 200_000, recommendedFor: "Deep reasoning", badge: nil),
+            ModelCatalogEntry(id: "anthropic/claude-sonnet-4.6", provider: .opencode, displayName: "OpenRouter · Claude Sonnet 4.6", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 200_000, recommendedFor: "Plan mode", badge: nil),
+            ModelCatalogEntry(id: "google/gemini-3-pro", provider: .opencode, displayName: "OpenRouter · Gemini 3 Pro", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: 2_000_000, recommendedFor: "Deep reasoning", badge: "Pro"),
+            ModelCatalogEntry(id: "opencode-default", provider: .opencode, displayName: "OpenCode default", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "BYOK provider", badge: "Default"),
         ],
         cursor: [
             ModelCatalogEntry(id: CursorModelCatalog.autoModelId, provider: .cursor, displayName: "Cursor default / Auto", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "Cursor account default", badge: "Auto"),
@@ -767,6 +771,17 @@ public struct ModelCatalog: Codable, Sendable {
     }
 
     public func replacingCursor(_ cursor: [ModelCatalogEntry]) -> ModelCatalog {
+        ModelCatalog(
+            claude: claude,
+            codex: codex,
+            gemini: gemini,
+            opencode: opencode,
+            cursor: cursor,
+            updatedAt: Date()
+        )
+    }
+
+    public func replacingOpenRouter(_ opencode: [ModelCatalogEntry]) -> ModelCatalog {
         ModelCatalog(
             claude: claude,
             codex: codex,
@@ -3776,6 +3791,8 @@ public struct CreateChatSessionRequest: Codable, Sendable {
     public let model: String?
     public let effort: ReasoningEffort?
     public let codexChatBackend: CodexChatBackend?
+    public let chatVendor: ChatVendor?
+    public let billingProvider: String?
     /// v14 (Chat V2): when true, the daemon spawns the chat with deep-
     /// research argv (Claude: `--allowedTools WebSearch,WebFetch,...` +
     /// `--append-system-prompt deep-research-prompt.txt` + `--effort max`).
@@ -3790,17 +3807,21 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         model: String? = nil,
         effort: ReasoningEffort? = nil,
         codexChatBackend: CodexChatBackend? = nil,
+        chatVendor: ChatVendor? = nil,
+        billingProvider: String? = nil,
         deepResearch: Bool = false
     ) {
         self.provider = provider
         self.model = model
         self.effort = effort
         self.codexChatBackend = codexChatBackend
+        self.chatVendor = chatVendor
+        self.billingProvider = billingProvider
         self.deepResearch = deepResearch
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, model, effort, codexChatBackend, deepResearch
+        case provider, model, effort, codexChatBackend, chatVendor, billingProvider, deepResearch
     }
 
     public init(from decoder: Decoder) throws {
@@ -3809,6 +3830,8 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         self.model = try c.decodeIfPresent(String.self, forKey: .model)
         self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
         self.codexChatBackend = try c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)
+        self.chatVendor = try c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)
+        self.billingProvider = try c.decodeIfPresent(String.self, forKey: .billingProvider)
         self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
     }
 }
@@ -3835,6 +3858,8 @@ public struct FrontierModelSlot: Codable, Sendable {
     public let model: String?
     public let effort: ReasoningEffort?
     public let codexChatBackend: CodexChatBackend?
+    public let chatVendor: ChatVendor?
+    public let billingProvider: String?
     /// v14 (Chat V2): per-slot Deep Research toggle. Each broadcast pane
     /// can independently run with deep-research argv. Defaults to false
     /// on older clients (decodeIfPresent).
@@ -3845,17 +3870,21 @@ public struct FrontierModelSlot: Codable, Sendable {
         model: String? = nil,
         effort: ReasoningEffort? = nil,
         codexChatBackend: CodexChatBackend? = nil,
-        deepResearch: Bool = false
+        deepResearch: Bool = false,
+        chatVendor: ChatVendor? = nil,
+        billingProvider: String? = nil
     ) {
         self.provider = provider
         self.model = model
         self.effort = effort
         self.codexChatBackend = codexChatBackend
         self.deepResearch = deepResearch
+        self.chatVendor = chatVendor
+        self.billingProvider = billingProvider
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, model, effort, codexChatBackend, deepResearch
+        case provider, model, effort, codexChatBackend, deepResearch, chatVendor, billingProvider
     }
 
     public init(from decoder: Decoder) throws {
@@ -3865,6 +3894,8 @@ public struct FrontierModelSlot: Codable, Sendable {
         self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
         self.codexChatBackend = try c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)
         self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
+        self.chatVendor = try c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)
+        self.billingProvider = try c.decodeIfPresent(String.self, forKey: .billingProvider)
     }
 }
 

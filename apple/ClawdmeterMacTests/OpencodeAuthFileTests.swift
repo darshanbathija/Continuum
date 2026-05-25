@@ -46,6 +46,17 @@ final class OpencodeAuthFileTests: XCTestCase {
         XCTAssertEqual(entries["openrouter"]?["key"] as? String, "sk-or-test-12345")
     }
 
+    func test_apiKey_readsOnlyApiTypeEntries() async throws {
+        try await OpencodeAuthFile.shared.setAPIKey(
+            providerId: "openrouter",
+            key: "sk-or-test-12345"
+        )
+
+        let key = await OpencodeAuthFile.shared.apiKey(providerId: "openrouter/")
+
+        XCTAssertEqual(key, "sk-or-test-12345")
+    }
+
     func test_setAPIKey_includesMetadataWhenProvided() async throws {
         try await OpencodeAuthFile.shared.setAPIKey(
             providerId: "openrouter",

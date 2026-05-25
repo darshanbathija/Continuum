@@ -486,8 +486,9 @@ enum ProcessProbeSystem {
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
         task.arguments = ["-f", "Antigravity.app/.*language_server"]
         let pipe = Pipe()
+        let errPipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = Pipe()
+        task.standardError = errPipe
         do { try task.run() } catch { return nil }
         task.waitUntilExit()
         let data = pipe.fileHandleForReading.availableData
@@ -508,8 +509,9 @@ enum ProcessProbeSystem {
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
         task.arguments = ["-p", String(pid), "-o", "command="]
         let pipe = Pipe()
+        let errPipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = Pipe()
+        task.standardError = errPipe
         do { try task.run() } catch { return nil }
         task.waitUntilExit()
         let data = pipe.fileHandleForReading.availableData
@@ -527,8 +529,9 @@ enum ProcessProbeSystem {
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
         task.arguments = ["-nP", "-iTCP", "-sTCP:LISTEN", "-p", String(pid)]
         let pipe = Pipe()
+        let errPipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = Pipe()
+        task.standardError = errPipe
         do { try task.run() } catch { return [] }
         task.waitUntilExit()
         let data = pipe.fileHandleForReading.availableData

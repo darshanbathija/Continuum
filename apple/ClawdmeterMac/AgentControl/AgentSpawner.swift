@@ -308,8 +308,8 @@ public enum AgentSpawner {
     /// v0.8 chat-tab kind-aware dispatch. Branches on `session.kind`:
     /// - `.code`: identical to the NewSessionRequest path above (existing
     ///   code-session behavior).
-    /// - `.chat`: forces `planMode = true`, ignores autopilot, and
-    ///   produces the appropriate per-agent argv.
+    /// - `.chat`: forces `planMode = true` for Claude/Codex CLI, ignores
+    ///   autopilot, and produces the appropriate per-agent argv.
     ///
     /// **Codex SDK chat** (`session.codexChatBackend == .sdk`) returns an
     /// empty array — the SDK path is handled by `CodexSubscriptionRelay`
@@ -375,9 +375,14 @@ public enum AgentSpawner {
             // OpencodeProcessManager + SSEAdapter handle spawn.
             return []
         case (.cursor, _):
+            // Cursor plan-mode needs a real Cursor resume id for a safe
+            // approve/resume cycle. New Clawdmeter-owned chat sessions do
+            // not have that id yet, so mirror NewSessionRequest and start
+            // Cursor chat in code mode.
+            let cursorPlanMode = session.kind == .chat ? false : planMode
             return cursorArgv(
                 model: session.model,
-                planMode: planMode,
+                planMode: cursorPlanMode,
                 effort: session.effort,
                 autopilot: chatAutopilot,
                 workspacePath: session.effectiveCwd

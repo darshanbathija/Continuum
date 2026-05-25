@@ -92,6 +92,8 @@ public final class AgentControlServer {
     private var listener: NWListener?
     private var wsListener: NWListener?
     private var listenerQueue: DispatchQueue?
+    private let listenPortRange: ClosedRange<UInt16>
+    private let writesServerMetadata: Bool
 
     /// The port the HTTP listener actually bound to. Written to `server.json`
     /// for the Settings UI to display in the pairing QR.
@@ -207,7 +209,9 @@ public final class AgentControlServer {
         chatStoreRegistry: DaemonChatStoreRegistry? = nil,
         chatFileResolver: SessionFileResolver? = nil,
         workspaceStore: WorkspaceStore? = nil,
-        mobileCommandOutbox: MobileCommandOutbox? = nil
+        mobileCommandOutbox: MobileCommandOutbox? = nil,
+        listenPortRange: ClosedRange<UInt16> = 21731...21741,
+        writesServerMetadata: Bool = true
     ) {
         self.pairingTokens = pairingTokens
         self.repoIndex = repoIndex
@@ -215,6 +219,8 @@ public final class AgentControlServer {
         self.tmux = tmux
         self.notifications = notifications
         self.whois = whois
+        self.listenPortRange = listenPortRange
+        self.writesServerMetadata = writesServerMetadata
         // v16 Code V2: WorkspaceStore is @MainActor like the rest of the
         // registries — default-construct on the same actor so the file
         // load + migrate-from-sessions runs without an actor hop. Tests
@@ -282,7 +288,7 @@ public final class AgentControlServer {
         let queue = DispatchQueue(label: "AgentControlServer.accept", qos: .userInitiated)
         self.listenerQueue = queue
 
-        for port in AgentControlServer.portFallbackRange {
+        for port in listenPortRange {
             if startListening(on: port, queue: queue) {
                 boundPort = port
                 serverLogger.info("HTTP listening on 0.0.0.0:\(port)")
@@ -290,7 +296,7 @@ public final class AgentControlServer {
             }
         }
         guard let httpPort = boundPort else {
-            serverLogger.error("Could not bind HTTP listener to any port in \(AgentControlServer.portFallbackRange.lowerBound)–\(AgentControlServer.portFallbackRange.upperBound)")
+            serverLogger.error("Could not bind HTTP listener to any port in \(self.listenPortRange.lowerBound)–\(self.listenPortRange.upperBound)")
             return
         }
         // Start the WS listener on httpPort + 1 (with fallback).
@@ -302,7 +308,9 @@ public final class AgentControlServer {
                 break
             }
         }
-        writeServerJSON(port: httpPort, wsPort: boundWsPort ?? 0)
+        if writesServerMetadata {
+            writeServerJSON(port: httpPort, wsPort: boundWsPort ?? 0)
+        }
         // v0.5.3: warm the chat-store registry for the most recently-
         // touched JSONLs across ~/.claude/projects/ and ~/.codex/sessions/.
         // The first iPhone /chat-snapshot or /transcript request after
@@ -1287,7 +1295,10 @@ public final class AgentControlServer {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let cursorModels = await CursorModelProbe.shared.currentModels()
-        let catalog = ModelCatalog.bundled.replacingCursor(cursorModels)
+        let openRouterModels = await OpenRouterModelProbe.shared.currentModels()
+        let catalog = ModelCatalog.bundled
+            .replacingCursor(cursorModels)
+            .replacingOpenRouter(openRouterModels)
         if let body = try? encoder.encode(catalog) {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
@@ -1306,7 +1317,9 @@ public final class AgentControlServer {
         }
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        let liveCatalog = ModelCatalog.bundled.replacingCursor(await CursorModelProbe.shared.currentModels())
+        let liveCatalog = ModelCatalog.bundled
+            .replacingCursor(await CursorModelProbe.shared.currentModels())
+            .replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
         guard !req.model.isEmpty, liveCatalog.entry(forId: req.model) != nil else {
             sendResponse(.badRequest, on: connection); return
         }
@@ -1700,6 +1713,8 @@ public final class AgentControlServer {
         model: String?,
         effort: ReasoningEffort?,
         deepResearch: Bool = false,
+        chatVendor: ChatVendor = .antigravity,
+        billingProvider: String? = nil,
         connection: NWConnection
     ) async {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -1762,7 +1777,9 @@ public final class AgentControlServer {
             model: effectiveModel,
             chatCwd: "",
             effort: effort,
-            deepResearch: deepResearch
+            deepResearch: deepResearch,
+            chatVendor: chatVendor,
+            billingProvider: billingProvider
         )
         let chatCwd: String
         do {
@@ -4527,6 +4544,127 @@ public final class AgentControlServer {
 
     // MARK: - v0.8 Chat tab (wire v9)
 
+    private struct ResolvedChatRuntimeMetadata {
+        let vendor: ChatVendor
+        let billingProvider: String?
+        let codexBackend: CodexChatBackend?
+    }
+
+    private enum ChatRuntimeValidationError: Error {
+        case unknownProvider(AgentKind)
+        case vendorProviderMismatch(provider: AgentKind, vendor: ChatVendor)
+        case billingProviderMismatch(vendor: ChatVendor, expected: String?, actual: String)
+    }
+
+    private func resolveChatRuntimeMetadata(
+        provider: AgentKind,
+        requestedVendor: ChatVendor?,
+        requestedBillingProvider: String?,
+        requestedCodexBackend: CodexChatBackend?
+    ) throws -> ResolvedChatRuntimeMetadata {
+        guard let vendor = requestedVendor ?? ChatVendor.migrated(from: provider) else {
+            throw ChatRuntimeValidationError.unknownProvider(provider)
+        }
+        guard vendor.backingProvider == provider else {
+            throw ChatRuntimeValidationError.vendorProviderMismatch(provider: provider, vendor: vendor)
+        }
+
+        let normalizedBilling = requestedBillingProvider?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedBilling = (normalizedBilling?.isEmpty == false) ? normalizedBilling : nil
+        let expectedBilling = canonicalBillingProvider(for: vendor)
+        if let requestedBilling, requestedBilling != expectedBilling {
+            throw ChatRuntimeValidationError.billingProviderMismatch(
+                vendor: vendor,
+                expected: expectedBilling,
+                actual: requestedBilling
+            )
+        }
+
+        let codexBackend = provider == .codex
+            ? (requestedCodexBackend ?? vendor.codexBackend ?? .sdk)
+            : nil
+        return ResolvedChatRuntimeMetadata(
+            vendor: vendor,
+            billingProvider: expectedBilling,
+            codexBackend: codexBackend
+        )
+    }
+
+    private func canonicalBillingProvider(for vendor: ChatVendor) -> String? {
+        if let explicit = vendor.billingProvider {
+            return explicit
+        }
+        switch vendor.backingProvider {
+        case .claude: return "claude"
+        case .codex: return "codex"
+        case .gemini: return "antigravity"
+        case .cursor: return "cursor"
+        case .opencode: return "opencode"
+        case .unknown: return nil
+        }
+    }
+
+    private func sendChatRuntimeValidationError(
+        _ error: ChatRuntimeValidationError,
+        on connection: NWConnection
+    ) {
+        var body: [String: Any] = ["error": "invalid_chat_runtime_metadata"]
+        switch error {
+        case .unknownProvider(let provider):
+            body["provider"] = provider.rawValue
+            body["reason"] = "provider has no chat vendor mapping"
+        case .vendorProviderMismatch(let provider, let vendor):
+            body["provider"] = provider.rawValue
+            body["chatVendor"] = vendor.rawValue
+            body["expectedProvider"] = vendor.backingProvider.rawValue
+            body["reason"] = "chatVendor does not match provider"
+        case .billingProviderMismatch(let vendor, let expected, let actual):
+            body["chatVendor"] = vendor.rawValue
+            body["billingProvider"] = actual
+            if let expected {
+                body["expectedBillingProvider"] = expected
+            } else {
+                body["expectedBillingProvider"] = NSNull()
+            }
+            body["reason"] = "billingProvider must be derived by the server for the selected chatVendor"
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sendResponse(HTTPResponse(
+            status: 400,
+            reason: "Bad Request",
+            contentType: "application/json",
+            body: data
+        ), on: connection)
+    }
+
+    private func chatRuntimeValidationMessage(_ error: ChatRuntimeValidationError) -> String {
+        switch error {
+        case .unknownProvider(let provider):
+            return "invalid_chat_runtime_metadata: provider \(provider.rawValue) has no chat vendor mapping"
+        case .vendorProviderMismatch(let provider, let vendor):
+            return "invalid_chat_runtime_metadata: chatVendor \(vendor.rawValue) does not match provider \(provider.rawValue)"
+        case .billingProviderMismatch(let vendor, let expected, let actual):
+            let expectedText = expected ?? "nil"
+            return "invalid_chat_runtime_metadata: billingProvider \(actual) does not match \(expectedText) for \(vendor.rawValue)"
+        }
+    }
+
+    private func frontierProviderUnavailableReason(
+        provider: AgentKind,
+        codexBackend: CodexChatBackend?
+    ) async -> String? {
+        switch provider {
+        case .cursor, .opencode:
+            return await chatProviderUnavailableReason(provider: provider, codexBackend: codexBackend)
+        default:
+            return nil
+        }
+    }
+
     /// `POST /chat-sessions`: spawn a new chat-kind AgentSession in an
     /// empty per-session chat-cwd. Forces plan-mode. Branches on
     /// (agent, codexChatBackend) per RE1. Gemini chat returns 501 in
@@ -4538,12 +4676,19 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection)
             return
         }
-        guard req.provider != .cursor else {
-            sendResponse(HTTPResponse(
-                status: 501, reason: "Not Implemented",
-                contentType: "application/json",
-                body: Data(#"{"error":"cursor_chat_not_supported","cta":"Start Cursor from Code until Cursor transcript import is available."}"#.utf8)
-            ), on: connection)
+        let metadata: ResolvedChatRuntimeMetadata
+        do {
+            metadata = try resolveChatRuntimeMetadata(
+                provider: req.provider,
+                requestedVendor: req.chatVendor,
+                requestedBillingProvider: req.billingProvider,
+                requestedCodexBackend: req.codexChatBackend
+            )
+        } catch let error as ChatRuntimeValidationError {
+            sendChatRuntimeValidationError(error, on: connection)
+            return
+        } catch {
+            sendResponse(.badRequest, on: connection)
             return
         }
         // v0.9: Gemini chat dispatches to Antigravity 2's agentapi via
@@ -4558,18 +4703,26 @@ public final class AgentControlServer {
                 model: req.model,
                 effort: req.effort,
                 deepResearch: req.deepResearch,
+                chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider,
                 connection: connection
             )
+            return
+        }
+        if req.provider == .opencode {
+            await handlePostOpencodeChatSession(request: req, metadata: metadata, connection: connection)
+            return
+        }
+        if req.provider == .cursor,
+           let reason = await chatProviderUnavailableReason(provider: .cursor) {
+            sendChatProviderUnavailable(provider: .cursor, reason: reason, on: connection)
             return
         }
         // Determine the Codex backend choice for this session. For non-
         // Codex providers, leave it nil. For Codex, honor the per-request
         // override if present; otherwise fall back to the global default
         // (RE1: ship .sdk as the v0.8 default).
-        let codexBackend: CodexChatBackend? = {
-            guard req.provider == .codex else { return nil }
-            return req.codexChatBackend ?? .sdk
-        }()
+        let codexBackend = metadata.codexBackend
         // Create the session record first (assigns a UUID we can use to
         // name the chat-cwd). v0.23 (Chat V2): persist deepResearch on
         // the session so respawn/restore preserves it (Codex outside-
@@ -4580,7 +4733,9 @@ public final class AgentControlServer {
             chatCwd: "",  // placeholder; we'll patch it post-cwd-creation
             codexChatBackend: codexBackend,
             effort: req.effort,
-            deepResearch: req.deepResearch
+            deepResearch: req.deepResearch,
+            chatVendor: metadata.vendor,
+            billingProvider: metadata.billingProvider
         )
         let chatCwd: String
         do {
@@ -4700,6 +4855,163 @@ public final class AgentControlServer {
         } else {
             sendResponse(.internalError, on: connection)
         }
+    }
+
+    private func handlePostOpencodeChatSession(
+        request req: CreateChatSessionRequest,
+        metadata: ResolvedChatRuntimeMetadata,
+        connection: NWConnection
+    ) async {
+        if let reason = await chatProviderUnavailableReason(provider: .opencode) {
+            sendChatProviderUnavailable(provider: .opencode, reason: reason, on: connection)
+            return
+        }
+        guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
+            let body: String
+            switch OpencodeProcessManager.shared.state {
+            case .notInstalled:
+                body = #"{"error":"opencode_not_installed","hint":"Install OpenCode, then add an OpenRouter key in Settings."}"#
+            case .failed(let detail):
+                body = #"{"error":"opencode_serve_failed","detail":"\#(detail)"}"#
+            default:
+                body = #"{"error":"opencode_not_running"}"#
+            }
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+
+        OpencodeSSEAdapter.shared.start()
+        if OpencodeSSEAdapter.shared.chatStoreAccessor == nil {
+            let registry = self.registry
+            let chatStoreRegistry = self.chatStoreRegistry
+            OpencodeSSEAdapter.shared.chatStoreAccessor = { [weak registry, weak chatStoreRegistry] uuid in
+                guard let registry, let chatStoreRegistry else { return nil }
+                guard let session = registry.session(id: uuid) else { return nil }
+                return chatStoreRegistry.acquire(for: session)
+            }
+        }
+
+        guard var sessionReq = await OpencodeProcessManager.shared.makeAuthorizedRequest(path: "/session") else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sessionReq.httpMethod = "POST"
+        sessionReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let vendor = metadata.vendor
+        let title = req.model.map { "\(vendor.displayName) - \($0)" } ?? "Chat - \(vendor.displayName)"
+        sessionReq.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "title": String(title.prefix(60))
+        ])
+
+        let opencodeID: String
+        do {
+            let (data, response) = try await URLSession(configuration: .ephemeral).data(for: sessionReq)
+            guard let http = response as? HTTPURLResponse, http.statusCode < 400 else {
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = obj["id"] as? String else {
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            opencodeID = id
+        } catch {
+            serverLogger.error("opencode chat /session POST failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+            return
+        }
+
+        let session = registry.createChat(
+            provider: .opencode,
+            model: req.model,
+            chatCwd: "",
+            effort: req.effort,
+            deepResearch: req.deepResearch,
+            chatVendor: vendor,
+            billingProvider: metadata.billingProvider
+        )
+        let chatCwd: String
+        do {
+            let url = try ChatCwdManager.ensure(for: session.id)
+            chatCwd = url.path
+        } catch {
+            registry.delete(id: session.id)
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        registry.updateRuntime(
+            id: session.id,
+            worktreePath: chatCwd,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            mode: .local
+        )
+        let updated = registry.session(id: session.id) ?? session
+        OpencodeSSEAdapter.shared.register(
+            clawdmeterID: updated.id,
+            opencodeID: opencodeID,
+            repo: chatCwd
+        )
+        _ = chatStoreRegistry.snapshotStore(for: updated)
+        AgentEventStream.recordEvent(
+            sessionId: updated.id,
+            kind: .sessionCreated,
+            payload: [
+                "chat": "true",
+                "provider": "opencode",
+                "chatVendor": vendor.rawValue,
+                "opencodeID": opencodeID
+            ]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(updated) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    private func chatProviderUnavailableReason(
+        provider: AgentKind,
+        codexBackend: CodexChatBackend? = nil
+    ) async -> String? {
+        let response = await ChatProviderProbe.shared.currentProviders()
+        let row = response.providers.first {
+            guard $0.provider == provider else { return false }
+            guard let codexBackend else { return true }
+            return $0.codexBackend == codexBackend
+        }
+        guard let row else {
+            return "Provider probe did not return \(provider.rawValue)"
+        }
+        guard row.available, row.authenticated, row.capabilityProbePassed else {
+            return row.reason ?? "\(provider.rawValue) is unavailable"
+        }
+        return nil
+    }
+
+    private func sendChatProviderUnavailable(provider: AgentKind, reason: String, on connection: NWConnection) {
+        let body = [
+            "error": "chat_provider_unavailable",
+            "provider": provider.rawValue,
+            "reason": reason,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sendResponse(HTTPResponse(
+            status: 503,
+            reason: "Service Unavailable",
+            contentType: "application/json",
+            body: data
+        ), on: connection)
     }
 
     /// `GET /chat-providers`: returns the per-provider availability +
@@ -4955,6 +5267,9 @@ public final class AgentControlServer {
         do {
             let bytes = text.data(using: .utf8) ?? Data()
             try await tmux.pasteBytes(paneId: paneId, bytes: bytes + Data([0x0D]))
+            if session.agent == .cursor {
+                appendCursorTranscriptEcho(session: session, prompt: text, paneId: paneId)
+            }
             await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
         } catch {
@@ -4998,7 +5313,9 @@ public final class AgentControlServer {
             model: existing.model,
             effort: existing.effort,
             codexChatBackend: existing.codexChatBackend,
-            deepResearch: existing.deepResearch
+            deepResearch: existing.deepResearch,
+            chatVendor: existing.runtimeBinding?.metadata["chatVendor"].flatMap(ChatVendor.init(rawValue:)),
+            billingProvider: existing.runtimeBinding?.billingProvider
         )
         // Delete the old session (cleans up chat-cwd + chat store entry).
         await teardownSDKChat(sessionId: existing.id)
@@ -5145,23 +5462,41 @@ public final class AgentControlServer {
         childIndex: Int,
         slot: FrontierModelSlot
     ) async throws -> AgentSession {
+        let metadata: ResolvedChatRuntimeMetadata
+        do {
+            metadata = try resolveChatRuntimeMetadata(
+                provider: slot.provider,
+                requestedVendor: slot.chatVendor,
+                requestedBillingProvider: slot.billingProvider,
+                requestedCodexBackend: slot.codexChatBackend
+            )
+        } catch let error as ChatRuntimeValidationError {
+            throw SpawnFailure.message(chatRuntimeValidationMessage(error))
+        }
+
+        if let reason = await frontierProviderUnavailableReason(
+            provider: slot.provider,
+            codexBackend: metadata.codexBackend
+        ) {
+            throw SpawnFailure.message(reason)
+        }
+
         switch slot.provider {
-        case .claude, .codex:
+        case .claude, .codex, .cursor:
             // Reuse the same plumbing as Solo chat: createChat → chat-cwd →
             // spawn tmux (or SDK relay) → warm chat store. We don't need
             // the full HTTP wrapper since we already have all the data.
-            let codexBackend: CodexChatBackend? = slot.provider == .codex
-                ? (slot.codexChatBackend ?? .sdk)
-                : nil
             let session = registry.createChat(
                 provider: slot.provider,
                 model: slot.model,
                 chatCwd: "",
-                codexChatBackend: codexBackend,
+                codexChatBackend: metadata.codexBackend,
                 effort: slot.effort,
                 frontierGroupId: groupId,
                 frontierChildIndex: childIndex,
-                deepResearch: slot.deepResearch
+                deepResearch: slot.deepResearch,
+                chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
             )
             let chatCwd: String
             do {
@@ -5222,7 +5557,9 @@ public final class AgentControlServer {
                 chatCwd: "",
                 frontierGroupId: groupId,
                 frontierChildIndex: childIndex,
-                deepResearch: slot.deepResearch
+                deepResearch: slot.deepResearch,
+                chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
             )
             let chatCwd: String
             do {
@@ -5312,8 +5649,12 @@ public final class AgentControlServer {
                 provider: .opencode,
                 model: slot.model,
                 chatCwd: "",
+                effort: slot.effort,
                 frontierGroupId: groupId,
-                frontierChildIndex: childIndex
+                frontierChildIndex: childIndex,
+                deepResearch: slot.deepResearch,
+                chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
             )
             let chatCwd: String
             do {
@@ -5338,8 +5679,6 @@ public final class AgentControlServer {
                 payload: ["repo": chatCwd, "agent": "opencode", "opencodeID": opencodeID]
             )
             return updated
-        case .cursor:
-            throw SpawnFailure.message("cursor_chat_not_supported")
         case .unknown:
             // X3: forward-compat unknown agent — no frontier-child spawn
             // path. Surfaces as a slot failure to the broadcast caller.
@@ -5441,11 +5780,7 @@ public final class AgentControlServer {
         // model from the active auth-list defaults. Override hook lives
         // in `AgentSession.codexModel` / future opencode-specific fields
         // — wire if/when sessions need per-session model pinning.
-        let body: [String: Any] = [
-            "parts": [
-                ["type": "text", "text": prompt]
-            ]
-        ]
+        let body = opencodeMessageBody(session: session, prompt: prompt)
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         req.timeoutInterval = 20
 
@@ -5517,11 +5852,7 @@ public final class AgentControlServer {
         }
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "parts": [
-                ["type": "text", "text": prompt]
-            ]
-        ])
+        req.httpBody = try JSONSerialization.data(withJSONObject: opencodeMessageBody(session: session, prompt: prompt))
         req.timeoutInterval = 20
         let (_, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -5532,6 +5863,22 @@ public final class AgentControlServer {
                 userInfo: [NSLocalizedDescriptionKey: "opencode_send_failed: \(status)"]
             )
         }
+    }
+
+    private func opencodeMessageBody(session: AgentSession, prompt: String) -> [String: Any] {
+        var body: [String: Any] = [
+            "parts": [
+                ["type": "text", "text": prompt]
+            ]
+        ]
+        if session.runtimeBinding?.billingProvider == "openrouter",
+           let model = session.model,
+           !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           model != "opencode-default" {
+            body["providerID"] = "openrouter"
+            body["modelID"] = model
+        }
+        return body
     }
 
     private func sendChatSDKPrompt(

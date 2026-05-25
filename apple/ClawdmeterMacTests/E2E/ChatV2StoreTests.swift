@@ -28,13 +28,15 @@ final class ChatV2StoreTests: XCTestCase {
 
     // MARK: - Defaults
 
-    func test_init_defaults_to_broadcast_and_claude_solo_provider() {
+    func test_init_defaults_to_chatgpt_latest_high_effort() {
         let store = ChatV2Store(defaults: defaults)
-        XCTAssertEqual(store.mode, .broadcast)
-        XCTAssertEqual(store.selectedProvider, .claude)
-        XCTAssertEqual(store.broadcastProviderOrder, [.claude, .codex, .gemini])
-        XCTAssertTrue(store.broadcastReady)
-        XCTAssertEqual(store.selectedReplyProvider, .claude)
+        XCTAssertEqual(store.selectedVendors, [.chatgpt])
+        XCTAssertEqual(store.selectedProvider, .codex)
+        XCTAssertEqual(store.selectedVendorCount, 1)
+        XCTAssertFalse(store.broadcastReady)
+        XCTAssertEqual(store.selectedReplyProvider, .codex)
+        XCTAssertEqual(store.selectedModel, "gpt-5.5")
+        XCTAssertEqual(store.selectedEffort, .high)
         XCTAssertFalse(store.deepResearch)
         XCTAssertEqual(store.codexBackendPreference, .sdk)
         XCTAssertTrue(store.attachments.isEmpty)
@@ -42,68 +44,91 @@ final class ChatV2StoreTests: XCTestCase {
 
     func test_selectedModel_falls_back_to_bundled_catalog_first_entry() {
         let store = ChatV2Store(defaults: defaults)
-        XCTAssertEqual(store.selectedModel, ModelCatalog.bundled.claude.first?.id)
-        store.selectedProvider = .codex
-        XCTAssertEqual(store.selectedModel, ModelCatalog.bundled.codex.first?.id)
-        store.selectedProvider = .gemini
-        XCTAssertEqual(store.selectedModel, ModelCatalog.bundled.gemini.first?.id)
+        XCTAssertEqual(store.model(for: .chatgpt), ModelCatalog.bundled.codex.first?.id)
+        XCTAssertEqual(store.model(for: .claude), ModelCatalog.bundled.claude.first?.id)
+        XCTAssertEqual(store.model(for: .antigravity), ModelCatalog.bundled.gemini.first?.id)
+        XCTAssertEqual(store.model(for: .cursor), ModelCatalog.bundled.cursor.first?.id)
+        XCTAssertEqual(store.model(for: .openrouter), ModelCatalog.bundled.opencode.first?.id)
     }
 
     // MARK: - Persistence
 
     func test_persist_then_reload_restores_picks() {
         let store = ChatV2Store(defaults: defaults)
-        store.mode = .solo
-        store.selectedProvider = .codex
-        store.broadcastProviders = [.claude, .gemini]
-        store.selectedReplyProvider = .gemini
+        store.selectedVendors = [.chatgpt, .claude, .openrouter]
+        store.selectedReplyProvider = .claude
         store.deepResearch = true
-        store.selectedModelByProvider[.codex] = "gpt-5.5-custom"
-        store.selectedEffortByProvider[.codex] = .high
+        store.selectModel("gpt-5.5-custom", for: .chatgpt)
+        store.selectEffort(.high, for: .chatgpt)
+        store.selectModel("anthropic/claude-sonnet-4.6", for: .openrouter)
         store.codexBackendPreference = .cli
         store.persist()
 
         let reloaded = ChatV2Store(defaults: defaults)
-        XCTAssertEqual(reloaded.mode, .solo)
+        XCTAssertEqual(reloaded.selectedVendors, [.chatgpt, .claude, .openrouter])
         XCTAssertEqual(reloaded.selectedProvider, .codex)
-        XCTAssertEqual(reloaded.broadcastProviderOrder, [.claude, .gemini])
-        XCTAssertEqual(reloaded.selectedReplyProvider, .gemini)
+        XCTAssertEqual(reloaded.selectedReplyProvider, .claude)
         XCTAssertTrue(reloaded.deepResearch)
-        XCTAssertEqual(reloaded.selectedModelByProvider[.codex], "gpt-5.5-custom")
-        XCTAssertEqual(reloaded.selectedEffortByProvider[.codex], .high)
+        XCTAssertEqual(reloaded.selectedModelByVendor[.chatgpt], "gpt-5.5-custom")
+        XCTAssertEqual(reloaded.selectedEffortByVendor[.chatgpt], .high)
+        XCTAssertEqual(reloaded.selectedModelByVendor[.openrouter], "anthropic/claude-sonnet-4.6")
         XCTAssertEqual(reloaded.codexBackendPreference, .cli)
     }
 
-    func test_broadcast_provider_toggle_keeps_two_supported_providers() {
+    func test_legacyProviderDefaults_doNotOverrideNewChatGPTDefault() {
+        defaults.set(ChatV2Mode.solo.rawValue, forKey: "clawdmeter.chatv2.mode")
+        defaults.set(AgentKind.claude.rawValue, forKey: "clawdmeter.chatv2.provider")
+        defaults.set([AgentKind.claude.rawValue: "claude-opus-4-7-1m"], forKey: "clawdmeter.chatv2.modelByProvider")
+
         let store = ChatV2Store(defaults: defaults)
 
-        store.toggleBroadcastProvider(.gemini)
-        XCTAssertEqual(store.broadcastProviderOrder, [.claude, .codex])
+        XCTAssertEqual(store.selectedVendors, [.chatgpt])
+        XCTAssertEqual(store.selectedProvider, .codex)
+        XCTAssertEqual(store.selectedModel, "gpt-5.5")
+        XCTAssertEqual(store.selectedEffort, .high)
+    }
+
+    func test_vendor_toggle_allows_one_to_three_only() {
+        let store = ChatV2Store(defaults: defaults)
+
+        store.toggleVendor(.claude)
+        XCTAssertEqual(store.selectedVendors, [.chatgpt, .claude])
         XCTAssertTrue(store.broadcastReady)
 
-        store.toggleBroadcastProvider(.codex)
-        XCTAssertEqual(store.broadcastProviderOrder, [.claude, .codex], "broadcast must keep at least two providers selected")
+        store.toggleVendor(.antigravity)
+        XCTAssertEqual(store.selectedVendors, [.chatgpt, .claude, .antigravity])
 
-        store.toggleBroadcastProvider(.opencode)
-        XCTAssertEqual(store.broadcastProviderOrder, [.claude, .codex], "OpenCode is not broadcast-capable in this pass")
+        store.toggleVendor(.cursor)
+        XCTAssertEqual(store.selectedVendors, [.chatgpt, .claude, .antigravity], "selection must cap at three vendors")
+
+        store.toggleVendor(.antigravity)
+        store.toggleVendor(.claude)
+        XCTAssertEqual(store.selectedVendors, [.chatgpt], "selection may shrink to one vendor")
+
+        store.toggleVendor(.chatgpt)
+        XCTAssertEqual(store.selectedVendors, [.chatgpt], "selection must keep at least one vendor")
     }
 
     func test_frontierSlots_carry_provider_model_effort_backend_and_deepResearch() {
         let store = ChatV2Store(defaults: defaults)
-        store.broadcastProviders = [.claude, .codex]
+        store.selectedVendors = [.claude, .chatgpt, .openrouter]
         store.deepResearch = true
-        store.selectedModelByProvider[.claude] = "claude-opus-test"
-        store.selectedModelByProvider[.codex] = "gpt-5.5-test"
-        store.selectedEffortByProvider[.codex] = .high
+        store.selectModel("claude-opus-test", for: .claude)
+        store.selectModel("gpt-5.5-test", for: .chatgpt)
+        store.selectEffort(.high, for: .chatgpt)
+        store.selectModel("anthropic/claude-sonnet-4.6", for: .openrouter)
         store.codexBackendPreference = .cli
 
         let slots = store.frontierSlots()
-        XCTAssertEqual(slots.map(\.provider), [.claude, .codex])
+        XCTAssertEqual(slots.map(\.provider), [.claude, .codex, .opencode])
+        XCTAssertEqual(slots.map(\.chatVendor), [.claude, .chatgpt, .openrouter])
         XCTAssertEqual(slots[0].model, "claude-opus-test")
         XCTAssertNil(slots[0].codexChatBackend)
         XCTAssertEqual(slots[1].model, "gpt-5.5-test")
         XCTAssertEqual(slots[1].effort, .high)
         XCTAssertEqual(slots[1].codexChatBackend, .cli)
+        XCTAssertEqual(slots[2].model, "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(slots[2].billingProvider, "openrouter")
         XCTAssertTrue(slots.allSatisfy(\.deepResearch))
     }
 
@@ -126,9 +151,9 @@ final class ChatV2StoreTests: XCTestCase {
 
     func test_firstSendKind_carries_provider_model_effort_deepResearch() {
         let store = ChatV2Store(defaults: defaults)
-        store.selectedProvider = .codex
-        store.selectedModelByProvider[.codex] = "gpt-5.5"
-        store.selectedEffortByProvider[.codex] = .max
+        store.selectedVendors = [.chatgpt]
+        store.selectModel("gpt-5.5", for: .chatgpt)
+        store.selectEffort(.max, for: .chatgpt)
         store.deepResearch = true
         store.codexBackendPreference = .sdk
 
@@ -146,7 +171,7 @@ final class ChatV2StoreTests: XCTestCase {
 
     func test_firstSendKind_omits_codexBackend_when_not_codex() {
         let store = ChatV2Store(defaults: defaults)
-        store.selectedProvider = .claude
+        store.selectedVendors = [.claude]
         let kind = store.firstSendKind()
         guard case let .chatCreateV2(_, _, _, _, codexBackend) = kind else {
             XCTFail("expected .chatCreateV2")

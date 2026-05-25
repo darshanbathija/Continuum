@@ -1309,6 +1309,8 @@ public final class AgentControlClient: ObservableObject {
         model: String? = nil,
         codexBackend: CodexChatBackend? = nil,
         effort: ReasoningEffort? = nil,
+        chatVendor: ChatVendor? = nil,
+        billingProvider: String? = nil,
         deepResearch: Bool = false
     ) async -> AgentSession? {
         let req = CreateChatSessionRequest(
@@ -1316,6 +1318,8 @@ public final class AgentControlClient: ObservableObject {
             model: model,
             effort: effort,
             codexChatBackend: codexBackend,
+            chatVendor: chatVendor,
+            billingProvider: billingProvider,
             deepResearch: deepResearch
         )
         let encoder = JSONEncoder()

@@ -108,7 +108,9 @@ public actor ChatProviderProbe {
             agentapiLive: Bool,
             opencodeAvailable: Bool,
             opencodeAuthProviderCount: Int,
+            opencodeOpenRouterAuthAvailable: Bool,
             opencodeEnvironmentAuthAvailable: Bool,
+            openRouterModelState: OpenRouterModelProbeState,
             cursorState: CursorModelProbeState
         ) = await Task.detached {
             let claudeAvailable = ShellRunner.locateBinary("claude") != nil
@@ -123,7 +125,8 @@ public actor ChatProviderProbe {
             let opencodeAvailable = await MainActor.run {
                 OpencodeProcessManager.shared.locateBinary() != nil
             }
-            let opencodeAuthProviderCount = await OpencodeAuthFile.shared.providerIds().count
+            let opencodeProviderIds = await OpencodeAuthFile.shared.providerIds()
+            let opencodeAuthProviderCount = opencodeProviderIds.count
             let opencodeEnvironmentAuthAvailable = ProcessInfo.processInfo.environment.contains { key, value in
                 guard !value.isEmpty else { return false }
                 switch key {
@@ -143,6 +146,9 @@ public actor ChatProviderProbe {
                     return false
                 }
             }
+            let opencodeOpenRouterAuthAvailable = opencodeProviderIds.contains("openrouter")
+                || (ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?.isEmpty == false)
+            let openRouterModelState = await OpenRouterModelProbe.shared.currentState()
             let cursorState = await CursorModelProbe.shared.currentState()
             return (
                 claudeAvailable,
@@ -151,7 +157,9 @@ public actor ChatProviderProbe {
                 lsLive,
                 opencodeAvailable,
                 opencodeAuthProviderCount,
+                opencodeOpenRouterAuthAvailable,
                 opencodeEnvironmentAuthAvailable,
+                openRouterModelState,
                 cursorState
             )
         }.value
@@ -172,7 +180,8 @@ public actor ChatProviderProbe {
         let (opencodeAuth, opencodeReason) = resolveAuth(
             key: "opencode",
             fallback: probes.opencodeAvailable
-                && (probes.opencodeAuthProviderCount > 0 || probes.opencodeEnvironmentAuthAvailable)
+                && probes.opencodeOpenRouterAuthAvailable
+                && probes.openRouterModelState.discoverySucceeded
         )
         let (cursorAuth, cursorReason) = resolveAuth(
             key: "cursor",
@@ -180,8 +189,11 @@ public actor ChatProviderProbe {
         )
         let opencodeDefaultReason: String? = {
             if !probes.opencodeAvailable { return "opencode CLI not installed" }
-            if probes.opencodeAuthProviderCount == 0 && !probes.opencodeEnvironmentAuthAvailable {
-                return "Add an OpenCode provider key in Settings"
+            if !probes.opencodeOpenRouterAuthAvailable {
+                return "Add an OpenRouter key in Settings"
+            }
+            if !probes.openRouterModelState.discoverySucceeded {
+                return probes.openRouterModelState.reason ?? "OpenRouter model discovery failed"
             }
             return nil
         }()
@@ -253,6 +265,174 @@ public actor ChatProviderProbe {
         case .cursor: return "cursor"
         case .unknown: return "unknown"  // X3 forward-compat key
         }
+    }
+}
+
+public struct OpenRouterModelProbeState: Sendable {
+    public let models: [ModelCatalogEntry]
+    public let authenticated: Bool
+    public let discoverySucceeded: Bool
+    public let reason: String?
+    public let probedAt: Date
+}
+
+public actor OpenRouterModelProbe {
+    public static let shared = OpenRouterModelProbe()
+
+    private struct CacheEntry {
+        let state: OpenRouterModelProbeState
+        let computedAt: Date
+    }
+
+    private struct ModelsResponse: Decodable {
+        let data: [Model]
+    }
+
+    private struct Model: Decodable {
+        let id: String
+        let name: String?
+        let contextLength: Int?
+        let supportedParameters: [String]?
+
+        private enum CodingKeys: String, CodingKey {
+            case id
+            case name
+            case contextLength = "context_length"
+            case supportedParameters = "supported_parameters"
+        }
+    }
+
+    private var cache: CacheEntry?
+    private var inflight: Task<OpenRouterModelProbeState, Never>?
+    public static let cacheTTL: TimeInterval = 60
+    private static let endpoint = URL(string: "https://openrouter.ai/api/v1/models?output_modalities=text")!
+
+    public init() {}
+
+    public func invalidate() {
+        cache = nil
+        inflight?.cancel()
+        inflight = nil
+    }
+
+    public func currentModels() async -> [ModelCatalogEntry] {
+        await currentState().models
+    }
+
+    public func currentState() async -> OpenRouterModelProbeState {
+        if let cache,
+           Date().timeIntervalSince(cache.computedAt) < Self.cacheTTL {
+            return cache.state
+        }
+        if let task = inflight {
+            return await task.value
+        }
+        let task = Task { await self.runProbe() }
+        inflight = task
+        let state = await task.value
+        cache = CacheEntry(state: state, computedAt: Date())
+        inflight = nil
+        return state
+    }
+
+    private func runProbe() async -> OpenRouterModelProbeState {
+        let now = Date()
+        let environmentKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileKey = environmentKey?.isEmpty != false
+            ? await OpencodeAuthFile.shared.apiKey(providerId: "openrouter")
+            : nil
+        let key = environmentKey?.isEmpty == false ? environmentKey : fileKey
+        guard let key, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return OpenRouterModelProbeState(
+                models: ModelCatalog.bundled.opencode,
+                authenticated: false,
+                discoverySucceeded: false,
+                reason: "Add an OpenRouter key in Settings",
+                probedAt: now
+            )
+        }
+
+        var request = URLRequest(url: Self.endpoint)
+        request.timeoutInterval = 8
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+                return OpenRouterModelProbeState(
+                    models: ModelCatalog.bundled.opencode,
+                    authenticated: true,
+                    discoverySucceeded: false,
+                    reason: "OpenRouter model discovery failed with HTTP \(status)",
+                    probedAt: now
+                )
+            }
+            let models = try Self.parseModelsResponse(data)
+            guard !models.isEmpty else {
+                return OpenRouterModelProbeState(
+                    models: ModelCatalog.bundled.opencode,
+                    authenticated: true,
+                    discoverySucceeded: false,
+                    reason: "OpenRouter returned no text models",
+                    probedAt: now
+                )
+            }
+            return OpenRouterModelProbeState(
+                models: models,
+                authenticated: true,
+                discoverySucceeded: true,
+                reason: nil,
+                probedAt: now
+            )
+        } catch {
+            return OpenRouterModelProbeState(
+                models: ModelCatalog.bundled.opencode,
+                authenticated: true,
+                discoverySucceeded: false,
+                reason: "OpenRouter model discovery failed: \(error.localizedDescription)",
+                probedAt: now
+            )
+        }
+    }
+
+    internal static func parseModelsResponse(_ data: Data) throws -> [ModelCatalogEntry] {
+        let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
+        let entries = decoded.data.compactMap { model -> ModelCatalogEntry? in
+            let id = model.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty else { return nil }
+            let parameters = Set((model.supportedParameters ?? []).map { $0.lowercased() })
+            let supportsReasoning = parameters.contains("reasoning") || parameters.contains("include_reasoning")
+            let supportsEffort = supportsReasoning
+            let displayName = model.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let bundled = ModelCatalog.bundled.opencode.first(where: { $0.id == id })
+            return ModelCatalogEntry(
+                id: id,
+                provider: .opencode,
+                displayName: "OpenRouter · \((displayName?.isEmpty == false ? displayName : nil) ?? id)",
+                cliAlias: nil,
+                supportsThinking: supportsReasoning,
+                supportsEffort: supportsEffort,
+                contextWindow: model.contextLength,
+                recommendedFor: bundled?.recommendedFor,
+                badge: bundled?.badge
+            )
+        }
+        return featuredFirst(entries)
+    }
+
+    private static func featuredFirst(_ entries: [ModelCatalogEntry]) -> [ModelCatalogEntry] {
+        var byId = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+        var ordered: [ModelCatalogEntry] = []
+        for featured in ModelCatalog.bundled.opencode {
+            if let entry = byId.removeValue(forKey: featured.id) {
+                ordered.append(entry)
+            }
+        }
+        ordered.append(contentsOf: byId.values.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        })
+        return ordered
     }
 }
 

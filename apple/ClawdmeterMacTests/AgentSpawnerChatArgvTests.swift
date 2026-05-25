@@ -175,6 +175,16 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
         XCTAssertFalse(argv.containsInOrder(["--mode", "plan"]))
     }
 
+    func test_cursorChatSession_doesNotUsePlanModeUntilResumeIdsExist() throws {
+        try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
+                      "cursor-agent/agent binary unavailable on PATH; CI skip")
+        let session = makeChatSession(agent: .cursor, model: "gpt-5")
+        let argv = AgentSpawner.argv(for: session)
+        XCTAssertFalse(argv.isEmpty)
+        XCTAssertTrue(argv.containsInOrder(["--workspace", session.effectiveCwd]))
+        XCTAssertFalse(argv.containsInOrder(["--mode", "plan"]))
+    }
+
     func test_cursorRespawnUsesResumeAndWorkspace() throws {
         try XCTSkipIf(AgentSpawner.cursorBinaryPath() == nil,
                       "cursor-agent/agent binary unavailable on PATH; CI skip")
