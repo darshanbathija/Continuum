@@ -147,11 +147,14 @@ struct NewSessionSheet: View {
             .task {
                 await client.refreshHealth()
                 await client.refreshModelCatalog()
+                await client.refreshProviderDefaults()
                 if repoKey.isEmpty, let first = client.repos.first {
                     repoKey = first.key
                 }
                 if agent == .cursor && !client.supportsCursor {
                     setAgent(.claude)
+                } else if modelId == nil {
+                    applyDefaults(for: agent)
                 }
             }
             .task(id: preflightInputs) {
@@ -250,14 +253,32 @@ struct NewSessionSheet: View {
     private func setAgent(_ newAgent: AgentKind) {
         guard newAgent != agent else { return }
         let nextAgent = newAgent == .cursor && !client.supportsCursor ? .claude : newAgent
-        let defaults = ComposerStore.ChipDefaults.for(
-            agent: nextAgent, catalog: client.modelCatalog
-        )
         agent = nextAgent
-        modelId = defaults.modelId
-        effort = defaults.effort ?? .medium
+        applyDefaults(for: nextAgent)
         if nextAgent == .cursor {
             planMode = false
+        }
+    }
+
+    private func applyDefaults(for agent: AgentKind) {
+        let defaults = ComposerStore.ChipDefaults.for(agent: agent, catalog: client.modelCatalog)
+        guard let vendor = ChatVendor.migrated(from: agent) else {
+            modelId = defaults.modelId
+            effort = defaults.effort ?? .medium
+            return
+        }
+        let nextModel = client.providerDefaults.modelId(for: vendor, catalog: client.modelCatalog)
+            ?? defaults.modelId
+        modelId = nextModel
+        effort = client.providerDefaults.effort(for: vendor, catalog: client.modelCatalog)
+            ?? defaults.effort
+            ?? .medium
+        if !ProviderModelPickerSupport.supportsEffort(
+            vendor: vendor,
+            modelId: nextModel,
+            catalog: client.modelCatalog
+        ) {
+            effort = .medium
         }
     }
 

@@ -37,9 +37,8 @@ final class WireV14ContractTests: XCTestCase {
         // v14 minimums still apply (`turnLifecycleMinimum`,
         // `deepResearchMinimum`, `chatSearchMinimum`); only `current`
         // has advanced. v18 added remote Code workbench run/checkpoint
-        // endpoints for iOS parity; see
-        // `WireV11Tests.test_currentWireVersionIsEighteen`.
-        XCTAssertEqual(AgentControlWireVersion.current, 18)
+        // endpoints for iOS parity; v19 added provider defaults endpoints.
+        XCTAssertEqual(AgentControlWireVersion.current, 19)
     }
 
     func test_v14_minimums_match() {

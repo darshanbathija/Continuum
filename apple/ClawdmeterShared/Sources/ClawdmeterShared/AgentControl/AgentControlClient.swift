@@ -54,6 +54,9 @@ public final class AgentControlClient: ObservableObject {
     /// Sessions v2 Phase 0: fetched from `GET /models`. Defaults to the
     /// bundled catalog so the iOS UI works while paired Mac is unreachable.
     @Published public private(set) var modelCatalog: ModelCatalog = .bundled
+    /// v19 provider defaults: fetched from the paired Mac when available,
+    /// otherwise backed by local UserDefaults so older Macs keep working.
+    @Published public private(set) var providerDefaults: ProviderDefaultsSnapshot = .empty
     /// Wire-version handshake (E8). Populated on /health refresh. iOS shows
     /// a mismatch banner when local `AgentControlWireVersion.current` differs.
     @Published public private(set) var serverVersion: String?
@@ -596,6 +599,7 @@ public final class AgentControlClient: ObservableObject {
             await refreshWorkspaces()
         }
         await refreshModelCatalog()
+        await refreshProviderDefaults()
     }
 
     @MainActor
@@ -668,6 +672,11 @@ public final class AgentControlClient: ObservableObject {
     @MainActor
     public var supportsCodeWorkbenchRemote: Bool {
         AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
+    public var supportsProviderDefaults: Bool {
+        AgentControlWireVersion.supportsProviderDefaults(serverWireVersion: serverWireVersion)
     }
 
     @MainActor
@@ -1867,6 +1876,99 @@ public final class AgentControlClient: ObservableObject {
     @MainActor
     public func refreshWorkspaces() async {
         _ = await listWorkspaces()
+    }
+
+    // MARK: - v19 provider defaults
+
+    @MainActor
+    public func refreshProviderDefaults() async {
+        let localStore = ProviderDefaultsStore()
+        if let serverWireVersion,
+           serverWireVersion < AgentControlWireVersion.providerDefaultsMinimum {
+            providerDefaults = localStore.snapshot
+            return
+        }
+        guard let request = makeRequest(path: "/provider-defaults", method: "GET") else {
+            providerDefaults = localStore.snapshot
+            return
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let response = try decoder.decode(ProviderDefaultsResponse.self, from: data)
+            providerDefaults = localStore.replace(with: response.defaults)
+        } catch {
+            providerDefaults = localStore.snapshot
+            clientLogger.debug("refreshProviderDefaults failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    public func updateProviderDefault(
+        vendor: ChatVendor,
+        model: String?,
+        effort: ReasoningEffort?,
+        clearModel: Bool = false,
+        clearEffort: Bool = false
+    ) async -> ProviderDefaultsSnapshot? {
+        let requestBody = UpdateProviderDefaultRequest(
+            model: model,
+            effort: effort,
+            clearModel: clearModel,
+            clearEffort: clearEffort
+        )
+        let localStore = ProviderDefaultsStore()
+        if let serverWireVersion,
+           serverWireVersion < AgentControlWireVersion.providerDefaultsMinimum {
+            providerDefaults = localStore.setDefault(
+                for: vendor,
+                model: model,
+                effort: effort,
+                clearModel: clearModel,
+                clearEffort: clearEffort,
+                catalog: modelCatalog
+            )
+            return providerDefaults
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(requestBody),
+              var request = makeRequest(
+                path: "/provider-defaults/\(vendor.rawValue)",
+                method: "PUT",
+                body: body
+              ) else {
+            providerDefaults = localStore.setDefault(
+                for: vendor,
+                model: model,
+                effort: effort,
+                clearModel: clearModel,
+                clearEffort: clearEffort,
+                catalog: modelCatalog
+            )
+            return providerDefaults
+        }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let response = try decoder.decode(ProviderDefaultsResponse.self, from: data)
+            providerDefaults = localStore.replace(with: response.defaults)
+            return response.defaults
+        } catch {
+            self.lastError = error.localizedDescription
+            providerDefaults = localStore.setDefault(
+                for: vendor,
+                model: model,
+                effort: effort,
+                clearModel: clearModel,
+                clearEffort: clearEffort,
+                catalog: modelCatalog
+            )
+            return providerDefaults
+        }
     }
 
     /// `PATCH /workspaces/:id`. Updates provider defaults; returns the
