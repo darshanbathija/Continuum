@@ -1,3 +1,4 @@
+#if canImport(SwiftUI)
 import XCTest
 @testable import ClawdmeterShared
 
@@ -67,3 +68,4 @@ final class TahoeCodeProjectListTests: XCTestCase {
         XCTAssertEqual(collapsed.map(\.name), [a.name, b.name])
     }
 }
+#endif
