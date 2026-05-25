@@ -2270,7 +2270,7 @@ public final class AgentControlClient: ObservableObject {
     /// write" stub. The Mac daemon parses the JSONL with the same
     /// pipeline `SessionChatStore` uses live, so the rendered messages
     /// match what the Mac shows.
-    public func fetchTranscript(path: String, limit: Int = 500) async -> TranscriptEnvelope? {
+    public func fetchTranscript(path: String, limit: Int = 200) async -> TranscriptEnvelope? {
         await fetchTranscript(path: path, beforeId: nil, limit: limit)
     }
 
@@ -2278,12 +2278,12 @@ public final class AgentControlClient: ObservableObject {
     /// `beforeId` is non-nil, returns the `limit` messages immediately
     /// before that id; used by the V2 transcript's scroll-up-past-the-
     /// top trigger to lazy-load older history beyond the in-memory
-    /// 1000-row window. When `beforeId` is nil, returns the tail
+    /// 200-row window. When `beforeId` is nil, returns the tail
     /// window (existing behavior — back-compat with v0.5.3 clients).
     public func fetchTranscript(
         path: String,
         beforeId: String?,
-        limit: Int = 500
+        limit: Int = 200
     ) async -> TranscriptEnvelope? {
         guard var components = URLComponents(string: "/transcript") else { return nil }
         var items = [

@@ -30,13 +30,14 @@
 //     blobs (see `AntigravityConversationDB.swift` header), so the
 //     bigger near-term analytics win is parsing those — no key needed.
 //
-// First-access prompt: macOS asks the user to allow Clawdmeter to read
-// each Keychain item the first time we hit it. Users click "Always
-// Allow" and we never prompt again. We return nil on denial; never
-// crash, never retry.
+// First-access prompt policy: passive diagnostics must not open a macOS
+// SecurityAgent prompt while the user is switching tabs. We request
+// non-interactive Keychain access and return nil when the item needs
+// approval, is missing, or is otherwise unavailable.
 
 #if os(macOS)
 import Foundation
+import LocalAuthentication
 import Security
 
 /// Static reader for Antigravity-owned Keychain items. Stateless; safe
@@ -52,13 +53,14 @@ public enum AntigravityKeychainKeys {
     /// gracefully (fall back to estimate-mode, hide a UI affordance,
     /// etc.) rather than propagating Keychain errors up.
     public static func readGenericPassword(service: String, account: String) -> Data? {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        PassiveKeychainAccess.apply(to: &query)
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data else {

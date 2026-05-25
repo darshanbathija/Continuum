@@ -5,6 +5,9 @@ import os.signpost
 
 private let chatLogger = Logger(subsystem: "com.clawdmeter.mac", category: "ChatStore")
 
+private let chatRecentMessageLimit = 200
+private let chatInitialTailByteBudget: UInt64 = 2 * 1024 * 1024
+
 /// Perf-overhaul P0/T14 instrumentation. Always-on; OSSignposts are free
 /// at runtime when no Instruments trace is attached. Captures the
 /// session-open → first-paint window so we can prove the perf wins in
@@ -168,6 +171,7 @@ public final class SessionChatStore: ObservableObject {
         Self.flattenMessages(from: snapshot.items)
     }
     @Published public private(set) var isLoading: Bool = true
+    @Published public private(set) var hasOlderHistory: Bool = false
 
     /// v0.8 QA: a CLI permission prompt awaiting user input. The Mac UI
     /// renders this as an AskUserQuestion-style card; on user click the
@@ -257,6 +261,38 @@ public final class SessionChatStore: ObservableObject {
         }
     }
 
+    public func loadOlderHistory(limit: Int = 200) async {
+        guard !sdkOnly, hasOlderHistory else { return }
+        guard let oldestId = snapshot.messages.first?.id else { return }
+        let url = sessionFileURL
+        let currentCount = snapshot.messages.count
+        let page = await Task.detached(priority: .utility) {
+            TranscriptLoader.loadWindowBefore(from: url, beforeId: oldestId, limit: limit)
+        }.value
+        guard page.cursorFound else {
+            hasOlderHistory = false
+            return
+        }
+        guard !page.messages.isEmpty else {
+            hasOlderHistory = false
+            return
+        }
+        let window = page.messages
+        await staging.expandRetainedMessageLimit(to: currentCount + window.count)
+        await staging.ingestBatch(window.map { message in
+            ParsedLine(
+                timestamp: message.at,
+                messages: [message],
+                deltaInputTokens: 0,
+                deltaOutputTokens: 0,
+                deltaCacheCreationTokens: 0,
+                deltaCacheReadTokens: 0,
+                model: nil
+            )
+        })
+        hasOlderHistory = page.truncated
+    }
+
     public let sessionId: UUID
     /// v0.8 QA: was `private let` — now `private var` so chat-mode Codex CLI
     /// sessions can swap the tailed file when the CLI rotates its rollout
@@ -266,9 +302,10 @@ public final class SessionChatStore: ObservableObject {
     private var sessionFileURL: URL
     private var tail: JSONLTail?
     /// Background parser actor — owns ChatItemBuilder, ingests typed
-    /// `ParsedLine` values, never touches main. The 16ms commit task
-    /// polls `await staging.snapshot()` and publishes to main.
-    private let staging = StagingParser()
+    /// `ParsedLine` values, never touches main. Replaced on every fresh
+    /// start so stale in-flight work from an older file/generation cannot
+    /// reset or republish the current transcript.
+    private var staging = StagingParser()
     /// Generation token (codex tension #6). Bumped on every `start()` /
     /// `stop()`. Background commit task captures its generation at launch
     /// and silently drops any commit where the captured generation
@@ -319,8 +356,7 @@ public final class SessionChatStore: ObservableObject {
         guard newURL != sessionFileURL else { return }
         chatLogger.info("Switching tailed file for session \(self.sessionId.uuidString, privacy: .public): \(self.sessionFileURL.lastPathComponent, privacy: .public) → \(newURL.lastPathComponent, privacy: .public)")
         // Stop the current tail + cancel in-flight ingest tasks, then
-        // re-aim and re-start. start() resets the staging actor (bumps
-        // parseGeneration + Task.detached staging.reset), so the new
+        // re-aim and re-start. start() swaps in a fresh staging actor, so the new
         // snapshot starts empty and gets repopulated from the new file.
         // For Codex CLI this is correct because each rotated rollout
         // contains the full conversation history (the CLI passes the
@@ -374,38 +410,37 @@ public final class SessionChatStore: ObservableObject {
                     "session=%{public}@", self.sessionId.uuidString)
         startSignpostID = signpostID
         chatLogger.info("Starting chat store for session \(self.sessionId.uuidString, privacy: .public) at \(self.sessionFileURL.path, privacy: .public)")
+        snapshot = .empty
+        isLoading = true
+        hasOlderHistory = false
 
-        // Reset the staging actor so a start-after-stop cycle doesn't
-        // bleed stale messages / seenIds / derived counters from the
-        // previous generation. Fire-and-forget: the await happens inside
-        // a detached Task so start() stays synchronous from the caller's
-        // perspective. Subsequent reverse-tail and per-line ingests
-        // serialize behind the reset via actor ordering.
+        // A fresh actor is cheaper and safer than an async reset. It makes
+        // session open deterministic: no stale actor task can clear the
+        // recent 200-message seed after it has been ingested.
+        self.staging = StagingParser()
         let staging = self.staging
-        Task.detached(priority: .userInitiated) {
-            await staging.reset()
-        }
 
         // v0.8 Phase 4.5: SDK-only stores skip JSONLTail + reverse-tail
         // because no JSONL file exists. The commit task below still runs
         // and picks up `appendSDKMessages` writes from
         // CodexSDKEventIngestor through the staging actor.
         if !sdkOnly {
-            // T4 reverse-tail progressive parse: kick off a background task
-            // that reads the last ~256 KB of the JSONL and ingests the newest
-            // ~50 messages into the staging actor FIRST. The commit loop's
-            // first frame then shows the latest messages; the head parse
-            // (JSONLTail from line 0) fills in older history behind them.
-            // StagingParser dedups by id + sorts by timestamp, so the final
-            // items array is in correct chronological order regardless of
-            // arrival.
+            // Seed the transcript from the recent tail first. The live
+            // JSONLTail below starts from this byte offset, so opening a
+            // long session never paints the first historical JSONL row before
+            // the current turn and still doesn't miss appends during startup.
+            // The staging actor keeps only the latest chatRecentMessageLimit
+            // messages, which is the scrollback budget for the workbench UI.
             let sessionURL = self.sessionFileURL
+            let liveTailStartOffset = Self.fileSize(at: sessionURL)
             ingestTailTask = Task.detached(priority: .userInitiated) { [weak self] in
                 await Self.ingestTail(
                     url: sessionURL,
                     into: staging,
                     generation: generation,
-                    store: self
+                    store: self,
+                    maxMessages: chatRecentMessageLimit,
+                    maxBytes: chatInitialTailByteBudget
                 )
             }
 
@@ -415,7 +450,7 @@ public final class SessionChatStore: ObservableObject {
             // dictionaries. The per-line task is tracked on `self` so
             // `stop()` can cancel it; the closure-level generation check
             // also drops late ingests from a prior parse generation.
-            let tail = JSONLTail(fileURL: sessionFileURL) { [weak self] json in
+            let tail = JSONLTail(fileURL: sessionFileURL, initialReadMode: .fromOffset(liveTailStartOffset)) { [weak self] json in
                 // v0.23 T4: per-turn lifecycle dispatch BEFORE the
                 // typed parse. Claude's JSONL line shape carries the
                 // turn-state hint in the top-level "type" field:
@@ -564,11 +599,22 @@ public final class SessionChatStore: ObservableObject {
         tail?.stop()
     }
 
-    /// T4: read the last ~256 KB of the JSONL, parse complete lines, and
-    /// ingest into the staging actor. The first line in the chunk is
+    private nonisolated static func fileSize(at url: URL) -> UInt64 {
+        guard
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+            let size = attrs[.size] as? NSNumber
+        else {
+            return 0
+        }
+        return size.uint64Value
+    }
+
+    /// Read the recent tail of the JSONL, parse complete lines, and
+    /// batch-ingest the newest messages into the staging actor. The first
+    /// line in the chunk is
     /// likely partial (we seeked mid-line) so we skip to the first newline
-    /// before parsing. Fail-quiet on any error — the head parse via
-    /// JSONLTail will cover what we missed.
+    /// before parsing. Fail-quiet on any error; live appends are covered by
+    /// JSONLTail starting at EOF.
     ///
     /// The `generation` argument is captured at `start()` time and
     /// checked before each ingest so a `stop()` that races the
@@ -579,7 +625,9 @@ public final class SessionChatStore: ObservableObject {
         url: URL,
         into staging: StagingParser,
         generation: UInt64,
-        store: SessionChatStore?
+        store: SessionChatStore?,
+        maxMessages: Int,
+        maxBytes: UInt64
     ) async {
         let signpostID = OSSignpostID(log: chatPerfLog)
         os_signpost(.begin, log: chatPerfLog, name: "tail-read",
@@ -591,9 +639,8 @@ public final class SessionChatStore: ObservableObject {
         }
         guard let fh = try? FileHandle(forReadingFrom: url) else { return }
         defer { try? fh.close() }
-        // Get file size; if smaller than 256 KB read the whole thing.
         guard let size = (try? fh.seekToEnd()) else { return }
-        let chunkSize: UInt64 = 256 * 1024
+        let chunkSize = max(UInt64(64 * 1024), maxBytes)
         let start: UInt64 = size > chunkSize ? size - chunkSize : 0
         do { try fh.seek(toOffset: start) } catch { return }
         guard let bytes = try? fh.readToEnd(), !bytes.isEmpty else { return }
@@ -604,9 +651,11 @@ public final class SessionChatStore: ObservableObject {
         if start > 0, let nl = slice.firstIndex(of: 0x0A) {
             slice = bytes[bytes.index(after: nl)...]
         }
-        // Parse each complete line; ingest in order. Cancellation +
-        // generation check before each ingest keeps a stale tail from
-        // contaminating a new parse generation after stop() → start().
+        // Parse complete lines first, then batch-ingest only the suffix
+        // needed for the initial viewport. This prevents the first publish
+        // from showing old history during long-file startup.
+        var parsedLines: [ParsedLine] = []
+        var parsedMessageCount = 0
         var lineStart = slice.startIndex
         while lineStart < slice.endIndex {
             if Task.isCancelled { return }
@@ -618,12 +667,28 @@ public final class SessionChatStore: ObservableObject {
             guard !lineBytes.isEmpty else { continue }
             guard let json = (try? JSONSerialization.jsonObject(with: lineBytes)) as? [String: Any] else { continue }
             guard let parsed = ParsedLine.from(json: json) else { continue }
-            if let store {
-                let currentGen = await MainActor.run { store.parseGeneration }
-                guard currentGen == generation else { return }
-            }
-            await staging.ingest(parsed)
+            parsedLines.append(parsed)
+            parsedMessageCount += parsed.messages.count
         }
+        guard !parsedLines.isEmpty else { return }
+        if let store {
+            let currentGen = await MainActor.run { store.parseGeneration }
+            guard currentGen == generation else { return }
+            let hasOlder = start > 0 || parsedMessageCount > maxMessages
+            await MainActor.run {
+                guard store.parseGeneration == generation else { return }
+                store.hasOlderHistory = hasOlder
+            }
+        }
+        var suffix: [ParsedLine] = []
+        suffix.reserveCapacity(min(parsedLines.count, maxMessages))
+        var remaining = maxMessages
+        for parsed in parsedLines.reversed() {
+            guard remaining > 0 else { break }
+            suffix.append(parsed)
+            remaining -= max(parsed.messages.count, 1)
+        }
+        await staging.ingestBatch(suffix.reversed())
     }
 
     /// Flatten `ChatItem.toolRun` pairs back into a flat message array.
@@ -790,7 +855,7 @@ public final class SessionChatStore: ObservableObject {
     /// has already descended us into the git child, but the project dir is
     /// for the parent. Walking up catches it.
     public nonisolated static func resolveSessionFileURL(repoCwd: String) -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = ClawdmeterRealHome.url()
         let projects = home.appendingPathComponent(".claude/projects")
         var current = (repoCwd as NSString).standardizingPath
         while !current.isEmpty, current != "/" {
@@ -1090,10 +1155,10 @@ struct ParsedLine: Sendable {
 ///   manual locking, no @MainActor pinning.
 actor StagingParser {
     /// Messages kept in chronological order (by `at` timestamp, with a
-    /// kind-based tiebreak — see `insertIndex(for:)`). The reverse-tail
-    /// parser ingests newest-first; the head parse ingests oldest-first;
-    /// both converge into one sorted array via insertion. The seenIds
-    /// dedup makes the head parse a no-op for any line the tail covered.
+    /// kind-based tiebreak — see `insertIndex(for:)`). Startup seeds this
+    /// from the recent tail in one batch; JSONLTail then follows only new
+    /// appends. The retained window is capped so the UI never renders the
+    /// entire historical transcript.
     private var sortedMessages: [ChatMessage] = []
     private var seenIds: Set<String> = []
     /// External plan text (AgentSession.planText) injected via
@@ -1192,8 +1257,29 @@ actor StagingParser {
     /// window is always serviced immediately.
     private var lastSnapshotRebuildNS: UInt64 = 0
     private static let minRebuildIntervalNanos: UInt64 = 100_000_000  // 100 ms
+    private static let maxRetainedMessages: Int = chatRecentMessageLimit
+    private var retainedMessageLimit: Int = maxRetainedMessages
 
     func ingest(_ line: ParsedLine) {
+        guard apply(line) else { return }
+        updateCounter &+= 1
+    }
+
+    func expandRetainedMessageLimit(to limit: Int) {
+        retainedMessageLimit = max(retainedMessageLimit, limit)
+    }
+
+    func ingestBatch<S: Sequence>(_ lines: S) where S.Element == ParsedLine {
+        var changed = false
+        for line in lines {
+            changed = apply(line) || changed
+        }
+        guard changed else { return }
+        updateCounter &+= 1
+    }
+
+    @discardableResult
+    private func apply(_ line: ParsedLine) -> Bool {
         var anyAppended = false
         for msg in line.messages {
             guard !seenIds.contains(msg.id) else { continue }
@@ -1209,7 +1295,6 @@ actor StagingParser {
             || line.deltaCacheCreationTokens != 0
             || line.deltaCacheReadTokens != 0
         if anyAppended || hasUsage || (line.model?.isEmpty == false) {
-            updateCounter &+= 1
             // Activity tracking: the metadata strip uses this to decide
             // whether the "thinking" indicator should pulse. We keep
             // the latest line's timestamp (not Date()) so a backfill of
@@ -1245,6 +1330,8 @@ actor StagingParser {
                 modelHint = m
             }
         }
+        trimToRecentLimitIfNeeded()
+        return anyAppended || hasUsage || (line.model?.isEmpty == false)
     }
 
     func setPlanText(_ text: String?) {
@@ -1309,6 +1396,7 @@ actor StagingParser {
         cachedCounter = 0
         updateCounter = 0
         lastSnapshotRebuildNS = 0
+        retainedMessageLimit = Self.maxRetainedMessages
     }
 
     /// Snapshot the current state. Two short-circuit paths:
@@ -1329,9 +1417,7 @@ actor StagingParser {
         }
 
         // 1) items[] — has to be a full rebuild because ChatItemBuilder's
-        //    run-grouping depends on chronological order, and the reverse-
-        //    tail + head parses both insert into the middle of
-        //    sortedMessages until they meet.
+        //    run-grouping depends on chronological order.
         var builder = ChatItemBuilder()
         for msg in sortedMessages {
             builder.ingest(msg)
@@ -1437,6 +1523,27 @@ actor StagingParser {
             }
         case .userText, .toolResult, .meta:
             break
+        }
+    }
+
+    private func trimToRecentLimitIfNeeded() {
+        guard sortedMessages.count > retainedMessageLimit else { return }
+        let dropCount = sortedMessages.count - retainedMessageLimit
+        for message in sortedMessages.prefix(dropCount) {
+            seenIds.remove(message.id)
+        }
+        sortedMessages.removeFirst(dropCount)
+        rebuildDerivedIndexesFromRetainedMessages()
+    }
+
+    private func rebuildDerivedIndexesFromRetainedMessages() {
+        fileCounts.removeAll(keepingCapacity: true)
+        urlCounts.removeAll(keepingCapacity: true)
+        artifactPaths.removeAll(keepingCapacity: true)
+        seenArtifactPaths.removeAll(keepingCapacity: true)
+        lowercasedAssistantBodies.removeAll(keepingCapacity: true)
+        for msg in sortedMessages {
+            ingestIntoDerivedIndexes(msg)
         }
     }
 

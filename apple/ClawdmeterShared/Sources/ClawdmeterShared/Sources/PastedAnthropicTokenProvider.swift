@@ -1,5 +1,6 @@
 #if os(iOS) || os(watchOS) || os(macOS)
 import Foundation
+import LocalAuthentication
 import Security
 #if canImport(OSLog)
 import OSLog
@@ -72,7 +73,11 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
         return nil
     }
 
-    public var hasToken: Bool { currentAccessToken != nil }
+    public var hasToken: Bool {
+        lock.lock(); defer { lock.unlock() }
+        if cached != nil { return true }
+        return keychainItemExists()
+    }
 
     @discardableResult
     public func refreshIfNeeded() async throws -> Bool {
@@ -144,6 +149,7 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
         var query = baseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        PassiveKeychainAccess.apply(to: &query)
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess,
@@ -152,6 +158,15 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
             return nil
         }
         return s
+    }
+
+    private func keychainItemExists() -> Bool {
+        var query = baseQuery()
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        PassiveKeychainAccess.apply(to: &query)
+        var item: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess
     }
 
     @discardableResult

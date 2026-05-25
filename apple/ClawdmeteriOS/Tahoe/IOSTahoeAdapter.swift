@@ -72,8 +72,9 @@ extension AgentControlClient {
             }
             .sorted { $0.name < $1.name }
 
-        let firstOpen = mappedRepos.first(where: { !$0.sessions.isEmpty })?.sessions.first?.id
-        return TahoeCodeBindings(repos: mappedRepos, openSessionId: firstOpen)
+        let uniqueRepos = TahoeCodeProjectList.collapseDuplicateVisibleNames(mappedRepos)
+        let firstOpen = uniqueRepos.first(where: { !$0.sessions.isEmpty })?.sessions.first?.id
+        return TahoeCodeBindings(repos: uniqueRepos, openSessionId: firstOpen)
     }
 
     /// PR #35: same logic as `mapAgent` below but exposed under a

@@ -2941,6 +2941,11 @@ private struct ChatThreadScroll: View {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if store.hasOlderHistory {
+                            loadEarlierButton
+                                .padding(.top, 10)
+                                .padding(.bottom, 4)
+                        }
                         if store.snapshot.items.isEmpty && !store.isLoading {
                             emptyState
                                 .frame(maxWidth: .infinity)
@@ -2972,48 +2977,37 @@ private struct ChatThreadScroll: View {
                         Color.clear
                             .frame(height: 1)
                             .id(Self.bottomSentinelId)
-                            .onAppear {
-                                let currentCounter = store.snapshot.updateCounter
-                                // If a later streaming update yanked the sentinel
-                                // back into view, let the pending user-unpin win.
-                                if let pendingCounter = pendingBottomExitCounter,
-                                   pendingCounter != currentCounter {
-                                    return
-                                }
-                                cancelBottomExit()
-                            }
-                            .onDisappear {
-                                autoScrollTask?.cancel()
-                                autoScrollTask = nil
-                                bottomExitTask?.cancel()
-                                let counter = store.snapshot.updateCounter
-                                pendingBottomExitCounter = counter
-                                bottomExitTask = Task { @MainActor in
-                                    try? await Task.sleep(nanoseconds: 80_000_000)
-                                    guard !Task.isCancelled else { return }
-                                    guard pendingBottomExitCounter == counter else { return }
-                                    pendingBottomExitCounter = nil
-                                    userPinnedToBottom = false
-                                }
-                            }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
+                    return visibleBottom >= geometry.contentSize.height - 120
+                } action: { _, isAtBottom in
+                    if isAtBottom || Date() < suppressBottomGeometryUntil {
+                        userPinnedToBottom = true
+                    } else {
+                        userPinnedToBottom = false
+                    }
                 }
                 .onChange(of: store.snapshot.updateCounter) { _, counter in
                     stickToBottomIfPinned(proxy, updateCounter: counter)
                 }
                 .onAppear {
                     userPinnedToBottom = true
-                    proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
                     lastScrollItemCount = store.snapshot.items.count
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                        proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+                    autoScrollTask?.cancel()
+                    autoScrollTask = Task { @MainActor in
+                        await jumpToBottom(proxy, animated: false)
+                        try? await Task.sleep(nanoseconds: 80_000_000)
+                        guard !Task.isCancelled else { return }
+                        await jumpToBottom(proxy, animated: false)
                     }
                 }
                 .onDisappear {
                     autoScrollTask?.cancel()
                     autoScrollTask = nil
-                    cancelBottomExit(markPinned: false)
+                    userPinnedToBottom = true
                 }
 
                 // Jump-to-latest CTA. Visible whenever the user has
@@ -3057,8 +3051,8 @@ private struct ChatThreadScroll: View {
 
     @State private var lastScrollItemCount: Int = 0
     @State private var autoScrollTask: Task<Void, Never>?
-    @State private var bottomExitTask: Task<Void, Never>?
-    @State private var pendingBottomExitCounter: UInt64?
+    @State private var isLoadingEarlierHistory: Bool = false
+    @State private var suppressBottomGeometryUntil: Date = .distantPast
 
     private var rowInsets: EdgeInsets {
         switch density {
@@ -3087,39 +3081,77 @@ private struct ChatThreadScroll: View {
         }
     }
 
+    private var loadEarlierButton: some View {
+        HStack {
+            Spacer()
+            Button {
+                guard !isLoadingEarlierHistory else { return }
+                isLoadingEarlierHistory = true
+                userPinnedToBottom = false
+                Task {
+                    await store.loadOlderHistory()
+                    await MainActor.run {
+                        isLoadingEarlierHistory = false
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if isLoadingEarlierHistory {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "arrow.up.circle")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    Text(isLoadingEarlierHistory ? "Loading earlier…" : "Load earlier messages")
+                        .font(TahoeFont.body(11, weight: .semibold))
+                }
+                .foregroundStyle(t.fg3)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(t.hair2, in: Capsule(style: .continuous))
+                .overlay(Capsule(style: .continuous).stroke(t.hairline, lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .disabled(isLoadingEarlierHistory)
+            .help("Load the previous 200 messages")
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+    }
+
     private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, updateCounter: UInt64) {
         let items = store.snapshot.items.count
-        let delta = items - lastScrollItemCount
+        let previousItems = lastScrollItemCount
         lastScrollItemCount = items
-        if let pendingCounter = pendingBottomExitCounter,
-           pendingCounter != updateCounter {
-            autoScrollTask?.cancel()
-            autoScrollTask = nil
-            return
-        }
-        guard userPinnedToBottom else { return }
+        guard !isLoadingEarlierHistory else { return }
+        guard userPinnedToBottom || items >= previousItems else { return }
         autoScrollTask?.cancel()
         autoScrollTask = Task { @MainActor in
-            if delta <= 5 && !store.isLoading {
-                try? await Task.sleep(nanoseconds: 25_000_000)
-            }
+            await Task.yield()
             guard !Task.isCancelled else { return }
-            guard pendingBottomExitCounter == nil || pendingBottomExitCounter == updateCounter else { return }
             userPinnedToBottom = true
-            proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
-            try? await Task.sleep(nanoseconds: 90_000_000)
-            guard !Task.isCancelled,
-                  userPinnedToBottom,
-                  pendingBottomExitCounter == nil || pendingBottomExitCounter == updateCounter else { return }
-            proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+            await jumpToBottom(proxy, animated: false)
         }
     }
 
-    private func cancelBottomExit(markPinned: Bool = true) {
-        bottomExitTask?.cancel()
-        bottomExitTask = nil
-        pendingBottomExitCounter = nil
-        userPinnedToBottom = markPinned
+    @MainActor
+    private func jumpToBottom(_ proxy: ScrollViewProxy, animated: Bool) async {
+        suppressBottomGeometryUntil = Date().addingTimeInterval(0.35)
+        userPinnedToBottom = true
+        if animated {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+            }
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+            }
+        }
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        guard !Task.isCancelled else { return }
+        userPinnedToBottom = true
     }
 
     /// One row in the thread. Either a plain user/assistant/meta message, or

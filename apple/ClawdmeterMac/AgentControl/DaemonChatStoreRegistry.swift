@@ -10,7 +10,7 @@ private let registryLogger = Logger(subsystem: "com.clawdmeter.mac", category: "
 /// `SessionsView` already holds `chatStores: [UUID: SessionChatStore]` for
 /// the dashboard, but the daemon has no equivalent. Every iPhone
 /// `GET /chat-snapshot` request reparses the full JSONL via
-/// `TranscriptLoader.load(maxMessages: 500)` at the legacy
+/// `TranscriptLoader.load(maxMessages: 200)` at the legacy
 /// `handleGetChatSnapshot` site. On Tailscale this means RTT + full reparse
 /// every 3 seconds — the shared-pipeline bottleneck that makes iPhone *and*
 /// Mac chat surfaces feel sluggish.
@@ -301,7 +301,7 @@ public final class DaemonChatStoreRegistry {
     /// file on the first WAL write after `agentapi new-conversation`.
     nonisolated public static func antigravityConversationDBURL(
         conversationId: UUID,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = ClawdmeterRealHome.url()
     ) -> URL {
         homeDirectory
             .appendingPathComponent(".gemini/antigravity/conversations", isDirectory: true)
@@ -312,7 +312,7 @@ public final class DaemonChatStoreRegistry {
     /// the registry's default resolver doesn't reach across the server's
     /// private API. Phase 0b replaces this entirely.
     nonisolated public static func newestCodexJSONL() -> URL? {
-        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
+        let sessionsDir = ClawdmeterRealHome.url()
             .appendingPathComponent(".codex/sessions", isDirectory: true)
         guard let enumerator = FileManager.default.enumerator(
             at: sessionsDir,
@@ -340,7 +340,7 @@ public final class DaemonChatStoreRegistry {
     /// rollout for this session exists yet (e.g. before the user's first
     /// prompt processes).
     nonisolated public static func newestCodexJSONLMatching(cwd: String, after: Date) -> URL? {
-        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
+        let sessionsDir = ClawdmeterRealHome.url()
             .appendingPathComponent(".codex/sessions", isDirectory: true)
         guard let enumerator = FileManager.default.enumerator(
             at: sessionsDir,
@@ -524,7 +524,7 @@ public final class DaemonChatStoreRegistry {
     /// session UUID, so we can target it directly without the parent-walk
     /// fuzzy-match that ISSUE-003 fixed for unrelated paths.
     private static func chatCwdClaudeJSONL(chatCwd: String) -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = ClawdmeterRealHome.url()
         let projects = home.appendingPathComponent(".claude/projects")
         let encoded = SessionChatStore.encodeCwd((chatCwd as NSString).standardizingPath)
         let dir = projects.appendingPathComponent(encoded)
@@ -720,7 +720,7 @@ public final class DaemonChatStoreRegistry {
     /// most-recently-modified `.jsonl` files. `nonisolated` so the
     /// background `Task.detached` in `warm()` can call it off-main.
     nonisolated private static func scanForRecentJSONLs(limit: Int) -> [URL] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = ClawdmeterRealHome.url()
         let roots = [
             home.appendingPathComponent(".claude/projects", isDirectory: true),
             home.appendingPathComponent(".codex/sessions", isDirectory: true),

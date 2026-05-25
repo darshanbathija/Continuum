@@ -19,8 +19,19 @@ public final class JSONLTail: @unchecked Sendable {
 
     public typealias EventHandler = @Sendable (_ json: [String: Any]) -> Void
 
+    public enum InitialReadMode: Sendable {
+        /// Drain the existing file from byte zero, then follow appends.
+        case fromBeginning
+        /// Seek to the current EOF, then follow only newly appended lines.
+        case fromEnd
+        /// Seek to a known byte offset, drain anything appended since that
+        /// offset, then follow future appends.
+        case fromOffset(UInt64)
+    }
+
     public let fileURL: URL
     private let handler: EventHandler
+    private let initialReadMode: InitialReadMode
     private let queue = DispatchQueue(label: "JSONLTail.io", qos: .utility)
 
     private var fileHandle: FileHandle?
@@ -29,8 +40,13 @@ public final class JSONLTail: @unchecked Sendable {
     private var lineBuffer = Data()
     private var isRunning = false
 
-    public init(fileURL: URL, handler: @escaping EventHandler) {
+    public init(
+        fileURL: URL,
+        initialReadMode: InitialReadMode = .fromBeginning,
+        handler: @escaping EventHandler
+    ) {
         self.fileURL = fileURL
+        self.initialReadMode = initialReadMode
         self.handler = handler
     }
 
@@ -67,9 +83,31 @@ public final class JSONLTail: @unchecked Sendable {
             return
         }
         self.fileHandle = handle
-        // Read what's already there (we tail from the beginning so a new
-        // subscriber catches up on the session's history).
-        drainHandle()
+        switch initialReadMode {
+        case .fromBeginning:
+            // Read what's already there so subscribers that need full
+            // history, such as done/plan wiring, can catch up.
+            drainHandle()
+        case .fromEnd:
+            // SessionChatStore seeds recent history separately. Starting
+            // this watcher at EOF prevents the first old JSONL line from
+            // racing the tail seed and painting before the latest turn.
+            _ = try? handle.seekToEnd()
+            lineBuffer.removeAll(keepingCapacity: true)
+        case .fromOffset(let offset):
+            // SessionChatStore snapshots the file size before it seeds the
+            // recent history. Starting here closes the gap between that
+            // snapshot and vnode registration: drainHandle() captures bytes
+            // appended in the meantime, and DispatchSource covers the rest.
+            if let end = try? handle.seekToEnd() {
+                do {
+                    try handle.seek(toOffset: min(offset, end))
+                } catch {
+                    _ = try? handle.seekToEnd()
+                }
+            }
+            drainHandle()
+        }
 
         let src = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: handle.fileDescriptor,

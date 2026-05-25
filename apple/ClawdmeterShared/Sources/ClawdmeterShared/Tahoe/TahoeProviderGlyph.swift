@@ -26,13 +26,20 @@ public struct TahoeProviderGlyph: View {
         let monochromize = t.dark && provider.monochromeInDark
         let imageRadius = size * 0.24
 
-        RoundedRectangle(cornerRadius: imageRadius, style: .continuous)
-            .fill(tileColor)
+        ZStack {
+            RoundedRectangle(cornerRadius: imageRadius, style: .continuous)
+                .fill(tileColor)
+            Rectangle()
+                .fill(Color.clear)
+                .overlay {
+                    providerImage(monochromize: monochromize)
+                        .frame(width: size * 0.78, height: size * 0.78)
+                }
+                .frame(width: size * 0.78, height: size * 0.78)
+                .clipped()
+        }
             .frame(width: size, height: size)
-            .overlay {
-                providerImage(monochromize: monochromize)
-                    .frame(width: size * 0.78, height: size * 0.78)
-            }
+            .clipShape(RoundedRectangle(cornerRadius: imageRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: imageRadius, style: .continuous)
                     .stroke(t.dark ? Color(.sRGB, white: 1, opacity: 0.10)

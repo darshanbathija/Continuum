@@ -613,7 +613,7 @@ public final class AgentControlServer {
                     // fall back to the user's home dir so the SDK can run
                     // outside a git repo too.
                     let workingDirectory = payload.repoKey
-                        ?? FileManager.default.homeDirectoryForCurrentUser.path
+                        ?? ClawdmeterRealHome.path()
                     do {
                         let result = try await CodexSDKManager.shared.runResume(
                             threadId: threadId,
@@ -1672,7 +1672,7 @@ public final class AgentControlServer {
         if let persistedProjectId = session.antigravityProjectId {
             projectId = persistedProjectId
         } else {
-            let projectsDir = FileManager.default.homeDirectoryForCurrentUser
+            let projectsDir = ClawdmeterRealHome.url()
                 .appendingPathComponent(".gemini/config/projects", isDirectory: true)
             let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
             guard let repoKey = session.repoKey,
@@ -1717,7 +1717,7 @@ public final class AgentControlServer {
         billingProvider: String? = nil,
         connection: NWConnection
     ) async {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = ClawdmeterRealHome.url()
         let projectsDir = home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
         let lsClient = LanguageServerClient()
         let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
@@ -3346,7 +3346,7 @@ public final class AgentControlServer {
             // shared `SessionFileResolver` so Codex respawn lineage is
             // honored even in the cold path.
             let url = chatFileResolver.resolve(session: session)
-            let messages = url.map { TranscriptLoader.load(from: $0, maxMessages: 500) } ?? []
+            let messages = url.map { TranscriptLoader.load(from: $0, maxMessages: 200) } ?? []
             var builder = ChatItemBuilder()
             for message in messages {
                 builder.ingest(message)
@@ -3820,11 +3820,11 @@ public final class AgentControlServer {
         }
         let query = String(queryPath[queryPath.index(after: queryStart)...])
         var jsonlPath: String?
-        var maxMessages = 500
+        var maxMessages = 200
         // v0.23 (Chat V2 — T13): `beforeId` paginates older messages.
-        // The V2 transcript renders the most-recent 1000 in memory;
+        // The V2 transcript renders the most-recent 200 in memory;
         // when the user scrolls past the top edge it calls
-        // `/transcript?path=&beforeId=<oldestRenderedId>&limit=500`
+        // `/transcript?path=&beforeId=<oldestRenderedId>&limit=200`
         // and prepends the returned window. Older Macs that don't
         // understand the param just return the tail as before — V2
         // clients detect "no older content" by comparing the returned
@@ -3836,7 +3836,7 @@ public final class AgentControlServer {
             let value = kv[1].removingPercentEncoding ?? kv[1]
             switch kv[0] {
             case "path": jsonlPath = value
-            case "limit": maxMessages = max(1, min(2000, Int(value) ?? 500))
+            case "limit": maxMessages = max(1, min(200, Int(value) ?? 200))
             case "beforeId": beforeId = value.isEmpty ? nil : value
             default: break
             }
@@ -3845,7 +3845,7 @@ public final class AgentControlServer {
             sendResponse(.notFound, on: connection)
             return
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = ClawdmeterRealHome.path()
         let allowedPrefixes = [
             home + "/.claude/projects/",
             home + "/.codex/sessions/",
@@ -3858,30 +3858,25 @@ public final class AgentControlServer {
         let url = URL(fileURLWithPath: jsonlPath)
         // v0.5.3: route through the daemon-owned chat-store registry so
         // burst polling reuses the parsed state instead of reparsing
-        // 500 messages on every request. Cold miss falls back to the
+        // 200 messages on every request. Cold miss falls back to the
         // legacy synchronous TranscriptLoader.load path; the store
         // warms up in the background and subsequent requests within
         // the 5-minute idle window hit the cache.
-        let registryStore = chatStoreRegistry.snapshotStore(forJSONLPath: url)
-        let rawMessages: [ChatMessage]
-        if let store = registryStore, !store.snapshot.messages.isEmpty {
-            rawMessages = store.snapshot.messages
-        } else {
-            // Cold-load — fall back to disk parse for the FULL file so
-            // pagination has something to slice. The page slice happens
-            // below.
-            rawMessages = TranscriptLoader.load(from: url, maxMessages: 5000)
-        }
         let messages: [ChatMessage]
         let truncated: Bool
         if let beforeId {
             // Pagination: return the maxMessages messages immediately
-            // before the client's oldest-rendered id. Indexed lookup
-            // because parsed message ids are stable across calls.
-            if let cutIdx = rawMessages.firstIndex(where: { $0.id == beforeId }) {
-                let start = max(0, cutIdx - maxMessages)
-                messages = Array(rawMessages[start..<cutIdx])
-                truncated = start > 0
+            // before the client's oldest-rendered id. This is the only
+            // path that may scan the full file; first open stays bounded
+            // to the recent tail window.
+            let page = TranscriptLoader.loadWindowBefore(
+                from: url,
+                beforeId: beforeId,
+                limit: maxMessages
+            )
+            if page.cursorFound {
+                messages = page.messages
+                truncated = page.truncated
             } else {
                 // beforeId not found — return empty (the cursor is from
                 // a different transcript or already at head). Honest.
@@ -3889,9 +3884,19 @@ public final class AgentControlServer {
                 truncated = false
             }
         } else {
-            // Tail window — default behavior, unchanged.
-            messages = rawMessages.suffix(maxMessages).map { $0 }
-            truncated = rawMessages.count > maxMessages
+            // Tail window — bounded to the same recent window the UI
+            // renders. Warm registry snapshots avoid disk parsing; cold
+            // fallback reverse-reads a tail chunk instead of loading the
+            // full transcript.
+            if let store = chatStoreRegistry.snapshotStore(forJSONLPath: url),
+               !store.snapshot.messages.isEmpty {
+                messages = store.snapshot.messages.suffix(maxMessages).map { $0 }
+                truncated = store.hasOlderHistory || store.snapshot.messages.count > maxMessages
+            } else {
+                let page = TranscriptLoader.loadRecent(from: url, maxMessages: maxMessages)
+                messages = page.messages
+                truncated = page.truncated
+            }
         }
         let envelope = TranscriptEnvelope(
             path: jsonlPath,
@@ -5543,8 +5548,8 @@ public final class AgentControlServer {
             // handlePostGeminiChatSession directly (it owns the
             // connection write), but we lift the same body into a
             // shared helper-style inline call here.
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            let projectsDir = home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
+        let home = ClawdmeterRealHome.url()
+        let projectsDir = home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
             let lsClient = LanguageServerClient()
             let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
             let projects = await resolver.allProjects()
@@ -6261,7 +6266,7 @@ public final class AgentControlServer {
     private func attachClaudeWiring(for session: AgentSession, cwd: String) {
         // Claude encodes the cwd as a directory name with `/` → `-`.
         let encoded = cwd.replacingOccurrences(of: "/", with: "-")
-        let projectDir = FileManager.default.homeDirectoryForCurrentUser
+        let projectDir = ClawdmeterRealHome.url()
             .appendingPathComponent(".claude/projects/\(encoded)")
         // The actual session JSONL is named with a fresh UUID. We watch
         // the parent dir and pick up the newest `.jsonl` once it appears.
@@ -6301,7 +6306,7 @@ public final class AgentControlServer {
     }
 
     private nonisolated func newestCodexJSONL() -> URL? {
-        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
+        let sessionsDir = ClawdmeterRealHome.url()
             .appendingPathComponent(".codex/sessions", isDirectory: true)
         guard let enumerator = FileManager.default.enumerator(
             at: sessionsDir,
@@ -6557,7 +6562,7 @@ public final class AgentControlServer {
         // Belt-and-braces: insist the path is absolute and lives under one
         // of the two well-known JSONL roots. Prevents a paired peer from
         // wedging arbitrary keys into the alias file.
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = ClawdmeterRealHome.path()
         let allowedRoots = [
             home + "/.claude/projects/",
             home + "/.codex/sessions/"
@@ -6805,7 +6810,7 @@ public final class AgentControlServer {
     static func isValidJsonlPath(_ path: String) -> Bool {
         // v0.7.7: delegated to PathValidator. Allowlist of agent project
         // directories lives in the shared helper now.
-        PathValidator.isValidJsonlPath(path)
+        PathValidator.isValidJsonlPath(path, homeDirectory: ClawdmeterRealHome.path())
     }
 
     // v0.27.0: isSafeDesignImportBase(_:) removed along with the Design
@@ -7078,7 +7083,7 @@ extension AgentControlServer {
             sendResponse(.notFound, on: connection); return
         }
 
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = ClawdmeterRealHome.url()
         let antigravityDir = home.appendingPathComponent(".gemini/antigravity", isDirectory: true)
         let indexURL = antigravityDir.appendingPathComponent("agyhub_summaries_proto.pb", isDirectory: false)
         let stateURL = antigravityDir.appendingPathComponent("antigravity_state.pbtxt", isDirectory: false)

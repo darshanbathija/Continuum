@@ -75,9 +75,20 @@ final class AppRuntime: ObservableObject {
         // Mirror Claude Code's local OAuth token into our shared, iCloud-synced
         // Keychain entry so the iPhone and Watch apps can read the same token
         // with zero manual setup. Best-effort — no token, no mirror.
-        if let token = claudeTokenProvider.currentAccessToken {
-            PastedAnthropicTokenProvider.shared().setToken(token)
-            runtimeLogger.info("Mirrored Claude token (\(token.count, privacy: .public) chars) into iCloud Keychain")
+        //
+        // Keep this off `AppRuntime.init`: decrypting a third-party Keychain
+        // item can block on securityd long enough to stall app launch and
+        // hosted XCTest injection. The query itself is still non-interactive,
+        // but it must not be on the main startup path.
+        Task.detached(priority: .utility) { [claudeTokenProvider] in
+            if let token = claudeTokenProvider.currentAccessToken {
+                let didMirror = PastedAnthropicTokenProvider.shared().setToken(token)
+                if didMirror {
+                    runtimeLogger.info("Mirrored Claude token (\(token.count, privacy: .public) chars) into iCloud Keychain")
+                } else {
+                    runtimeLogger.info("Claude token mirror skipped; shared Keychain write was unavailable")
+                }
+            }
         }
         self.claudeModel = AppModel(
             config: .claude,
@@ -284,7 +295,23 @@ final class AppRuntime: ObservableObject {
             runtimeLogger.info("Sessions feature disabled via UserDefaults — daemon not started")
         }
 
+        bootstrapProviderRuntimes()
         runtimeLogger.info("AppRuntime.init COMPLETE instance=\(ObjectIdentifier(self).hashValue)")
+    }
+
+    private func bootstrapProviderRuntimes() {
+        Task(priority: .utility) { @MainActor in
+            OpencodeProcessManager.shared.prepareRuntimeHost()
+        }
+        Task(priority: .utility) { @MainActor in
+            if CodexSDKManager.shared.sdkModeActive {
+                _ = await CodexSDKManager.shared.enableSDKMode()
+            }
+            if AntigravitySidecarManager.shared.sdkModeActive {
+                _ = await AntigravitySidecarManager.shared.enableSDKMode()
+            }
+            await ChatProviderProbe.shared.invalidate()
+        }
     }
 
     /// Compute a fingerprint over only the fields that affect the

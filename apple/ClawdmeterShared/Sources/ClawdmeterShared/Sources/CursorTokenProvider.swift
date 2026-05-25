@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import LocalAuthentication
 import Security
 #if canImport(OSLog)
 import OSLog
@@ -21,11 +22,10 @@ import OSLog
 ///
 /// **Sandbox notes**: `cursor-agent` is a CLI that has no keychain-access-
 /// group entitlement, so its items live in the user's login keychain with
-/// a permissive ACL that allows any user-mode process to read after a
-/// one-time confirmation prompt. From sandboxed Clawdmeter, the first
-/// `SecItemCopyMatching` call may surface a "Clawdmeter wants to use
-/// confidential information stored in the keychain" dialog — the user
-/// clicks Always Allow once and subsequent reads are silent.
+/// a permissive ACL that can ask for user approval. Clawdmeter probes this
+/// non-interactively so switching tabs or opening Settings never surfaces
+/// a macOS SecurityAgent prompt; explicit login still happens through
+/// `cursor-agent login`.
 ///
 /// **iOS / watchOS**: Cursor doesn't ship on those platforms, and the
 /// keychain items are macOS-local anyway. The whole type is wrapped in
@@ -71,7 +71,9 @@ public final class CursorTokenProvider: TokenProvider, @unchecked Sendable {
         return Self.readKeychainPassword(service: Self.refreshTokenService)
     }
 
-    public var hasToken: Bool { currentAccessToken != nil }
+    public var hasToken: Bool {
+        Self.keychainItemExists(service: Self.accessTokenService)
+    }
 
     @discardableResult
     public func refreshIfNeeded() async throws -> Bool {
@@ -102,7 +104,7 @@ public final class CursorTokenProvider: TokenProvider, @unchecked Sendable {
     /// Internal so the v0.28.0 fixture test can exercise the keychain-
     /// missing path without touching the real keychain.
     static func readKeychainPassword(service: String) -> String? {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnData as String: true,
@@ -111,6 +113,7 @@ public final class CursorTokenProvider: TokenProvider, @unchecked Sendable {
             // don't silently flap between which one we return.
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        PassiveKeychainAccess.apply(to: &query)
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess,
@@ -120,6 +123,18 @@ public final class CursorTokenProvider: TokenProvider, @unchecked Sendable {
             return nil
         }
         return token
+    }
+
+    private static func keychainItemExists(service: String) -> Bool {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        PassiveKeychainAccess.apply(to: &query)
+        var result: AnyObject?
+        return SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess
     }
 }
 #endif // os(macOS)

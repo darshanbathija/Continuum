@@ -76,8 +76,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         installObserversIfNeeded()
         applyVisibilityFromPrefs()
-        Task.detached(priority: .utility) {
-            await OpencodeProcessManager.shared.prepareRuntimeHost()
+        Task(priority: .utility) { @MainActor in
+            OpencodeProcessManager.shared.prepareRuntimeHost()
         }
 
         // PR #24a critical-gap fix: surface loopback-port-bind failure

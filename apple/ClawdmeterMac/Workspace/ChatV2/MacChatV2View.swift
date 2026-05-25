@@ -410,7 +410,7 @@ private struct StartPanel: View {
             VStack(spacing: 16) {
                 HStack(spacing: 10) {
                     ForEach(store.selectedVendors, id: \.self) { vendor in
-                        TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 42)
+                        TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 30)
                     }
                 }
                 Text(store.selectedVendorCount == 1 ? "Ask \(store.primaryVendor.displayName)" : "Broadcast to all selected agents")
@@ -448,13 +448,17 @@ private struct ReadOnlyTranscript: View {
     @ObservedObject var client: AgentControlClient
     @State private var envelope: TranscriptEnvelope?
     @State private var failed = false
+    @State private var isLoadingOlder = false
 
     var body: some View {
         TahoeGlass(radius: 20, tone: .panel) {
             if let envelope {
                 TranscriptScroll(
                     items: envelope.messages.map(ChatItem.message),
-                    updateCounter: UInt64(envelope.messages.count)
+                    updateCounter: UInt64(envelope.messages.count),
+                    hasOlderHistory: envelope.truncated,
+                    isLoadingOlder: isLoadingOlder,
+                    onLoadOlder: loadOlder
                 )
             } else if failed {
                 ChatEmptyState(title: "Transcript unavailable", subtitle: "The archived JSONL could not be loaded.")
@@ -467,6 +471,30 @@ private struct ReadOnlyTranscript: View {
             failed = false
             envelope = await client.fetchTranscript(path: path)
             failed = envelope == nil
+        }
+    }
+
+    private func loadOlder() async {
+        guard !isLoadingOlder,
+              let current = envelope,
+              let oldest = current.messages.first
+        else { return }
+        await MainActor.run { isLoadingOlder = true }
+        defer { Task { @MainActor in isLoadingOlder = false } }
+        guard let older = await client.fetchTranscript(path: path, beforeId: oldest.id, limit: 200),
+              !older.messages.isEmpty
+        else {
+            await MainActor.run {
+                envelope = TranscriptEnvelope(path: current.path, messages: current.messages, truncated: false)
+            }
+            return
+        }
+        await MainActor.run {
+            envelope = TranscriptEnvelope(
+                path: current.path,
+                messages: older.messages + current.messages,
+                truncated: older.truncated
+            )
         }
     }
 }
@@ -615,23 +643,65 @@ private struct ProviderColumn: View {
 private struct TranscriptScroll: View {
     let items: [ChatItem]
     let updateCounter: UInt64
+    var hasOlderHistory: Bool = false
+    var isLoadingOlder: Bool = false
+    var onLoadOlder: (() async -> Void)? = nil
     @State private var pinned = true
+    private static let bottomSentinelId = "chat-v2-bottom-sentinel"
+
+    private var visibleItems: ArraySlice<ChatItem> {
+        onLoadOlder == nil ? items.suffix(200) : items[...]
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(items) { item in
+                    if hasOlderHistory, let onLoadOlder {
+                        Button {
+                            Task { await onLoadOlder() }
+                        } label: {
+                            HStack(spacing: 6) {
+                                if isLoadingOlder {
+                                    ProgressView().controlSize(.mini)
+                                } else {
+                                    Image(systemName: "arrow.up.circle")
+                                }
+                                Text(isLoadingOlder ? "Loading earlier…" : "Load earlier messages")
+                            }
+                            .font(TahoeFont.body(11, weight: .semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isLoadingOlder)
+                        .frame(maxWidth: .infinity)
+                    }
+                    ForEach(visibleItems) { item in
                         MessageRow(item: item).id(item.id)
                     }
-                    Color.clear.frame(height: 12).id("bottom")
+                    Color.clear.frame(height: 12).id(Self.bottomSentinelId)
                 }
                 .padding(14)
             }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
+                return visibleBottom >= geometry.contentSize.height - 36
+            } action: { _, isAtBottom in
+                pinned = isAtBottom
+            }
+            .onAppear {
+                pinned = true
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+                }
+            }
             .onChange(of: updateCounter) { _, _ in
                 guard pinned else { return }
-                withAnimation(.easeOut(duration: 0.16)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
                 }
             }
         }

@@ -376,8 +376,9 @@ public struct IOSCodeView: View {
                 recents: recents
             )
         }
-        guard !query.isEmpty else { return baseline }
-        return baseline.compactMap { repo in
+        let collapsedBaseline = TahoeCodeProjectList.collapseDuplicateVisibleNames(baseline)
+        guard !query.isEmpty else { return collapsedBaseline }
+        let matched: [TahoeCodeRepo] = collapsedBaseline.compactMap { repo in
             let matchedSessions = repo.sessions.filter { s in
                 s.title.lowercased().contains(query)
             }
@@ -398,6 +399,7 @@ public struct IOSCodeView: View {
                 recents: repoMatches ? repo.recents : matchedRecents
             )
         }
+        return TahoeCodeProjectList.collapseDuplicateVisibleNames(matched)
     }
 
     private static func isActive(_ session: TahoeCodeSession) -> Bool {

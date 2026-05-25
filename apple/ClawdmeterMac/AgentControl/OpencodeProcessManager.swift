@@ -419,22 +419,27 @@ public final class OpencodeProcessManager {
 
     private nonisolated func cleanRuntimeTempQuarantine() {
         let fm = FileManager.default
-        let tmp = Self.runtimeTempDirectory()
-        try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
-        guard let enumerator = fm.enumerator(
-            at: tmp,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsPackageDescendants]
-        ) else { return }
-        var inspected = 0
-        for case let url as URL in enumerator {
-            inspected += 1
-            if inspected > 2000 { break }
-            let name = url.lastPathComponent
-            guard name.hasSuffix(".dylib"),
-                  name.hasPrefix(".") || name.hasPrefix("bun-") || name.contains("opencode")
-            else { continue }
-            stripQuarantine(at: url)
+        let roots = [
+            Self.runtimeTempDirectory(),
+            URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
+        ]
+        for tmp in roots {
+            try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+            guard let enumerator = fm.enumerator(
+                at: tmp,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsPackageDescendants]
+            ) else { continue }
+            var inspected = 0
+            for case let url as URL in enumerator {
+                inspected += 1
+                if inspected > 4000 { break }
+                let name = url.lastPathComponent
+                guard name.hasSuffix(".dylib"),
+                      name.hasPrefix(".") || name.hasPrefix("bun-") || name.contains("opencode")
+                else { continue }
+                stripQuarantine(at: url)
+            }
         }
     }
 
