@@ -162,12 +162,9 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var providerSettings: some View {
-        // Four-row Providers card. All providers use the same row shape so
+        // Providers card. All providers use the same row shape so
         // their visual rhythm matches: glyph + title + one-line status +
-        // single trailing control (button or toggle). The Codex SDK and
-        // Antigravity SDK rows replace what used to be standalone cards
-        // with Status grids and educational footers; the underlying
-        // CodexSDKManager / AntigravitySidecarManager wiring is unchanged.
+        // single trailing control (button or toggle).
         SettingsCard(title: "Providers",
                      sub: "External agent runtimes Clawdmeter can drive.") {
             VStack(alignment: .leading, spacing: 14) {
@@ -178,6 +175,8 @@ public struct MacSettingsView: View {
                 CodexSDKProviderRow()
                 TahoeHair()
                 AntigravitySDKProviderRow()
+                TahoeHair()
+                CursorSDKProviderRow()
             }
         }
     }
@@ -946,29 +945,161 @@ private struct AntigravitySDKProviderRow: View {
     }
 }
 
+// MARK: - Cursor SDK provider row
+
+private struct CursorSDKProviderRow: View {
+    @Environment(\.tahoe) private var t
+    @State private var state: CursorModelProbeState?
+    @State private var hasKeychainToken: Bool = false
+    @State private var isRefreshing: Bool = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            TahoeProviderGlyph(provider: .cursor, size: 32)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("Cursor SDK")
+                        .font(TahoeFont.body(14, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    statePill
+                }
+                Text(detailLine)
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let binaryPath = state?.binaryPath {
+                    Text("Binary: \(binaryPath)")
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(t.fg2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 12)
+            actionButton
+        }
+        .task { await refresh() }
+    }
+
+    @ViewBuilder
+    private var statePill: some View {
+        let (label, color): (String, Color) = {
+            if isRefreshing || state == nil { return ("Checking…", t.fg4) }
+            guard let state else { return ("Checking…", t.fg4) }
+            if state.binaryPath == nil { return ("Not installed", Color.orange) }
+            if state.authenticated || hasKeychainToken { return ("Ready", Color.green) }
+            return ("Sign-in pending", Color.yellow)
+        }()
+        Text(label)
+            .font(TahoeFont.body(10, weight: .bold))
+            .tracking(0.3)
+            .foregroundStyle(color)
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background { Capsule().fill(color.opacity(0.15)) }
+            .overlay { Capsule().stroke(color.opacity(0.35), lineWidth: 0.5) }
+    }
+
+    private var detailLine: String {
+        guard let state else { return "Probing cursor-agent auth and model access…" }
+        if state.binaryPath == nil {
+            return "Cursor Agent CLI not found. Install cursor-agent so Clawdmeter can start and resume Cursor-backed sessions."
+        }
+        if state.authenticated || hasKeychainToken {
+            let count = max(0, state.models.count)
+            return count > 1
+                ? "Signed in via cursor-agent. \(count) account models are available in the picker."
+                : "Signed in via cursor-agent. Model access will be discovered when Cursor reports account models."
+        }
+        return state.reason ?? "Run `cursor-agent login` to connect Cursor auth."
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        if isRefreshing {
+            ProgressView().controlSize(.small)
+        } else if state?.binaryPath == nil {
+            Button {
+                if let url = URL(string: "https://docs.cursor.com/en/cli") {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                Text("Install docs")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.accent)
+            }
+            .buttonStyle(.plain)
+        } else if state?.authenticated == true || hasKeychainToken {
+            Button {
+                Task { await refresh(force: true) }
+            } label: {
+                Text("Refresh")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.accent)
+            }
+            .buttonStyle(.plain)
+        } else {
+            Button {
+                openTerminalRunningCursorLogin()
+            } label: {
+                Text("Sign in")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.accent)
+            }
+            .buttonStyle(.plain)
+            .help("Open Terminal and run `cursor-agent login`.")
+        }
+    }
+
+    private func refresh(force: Bool = false) async {
+        isRefreshing = true
+        if force {
+            await CursorModelProbe.shared.invalidate()
+        }
+        let nextState = await CursorModelProbe.shared.currentState()
+        let token = await Task.detached(priority: .utility) {
+            CursorTokenProvider().hasToken
+        }.value
+        state = nextState
+        hasKeychainToken = token
+        isRefreshing = false
+    }
+
+    private func openTerminalRunningCursorLogin() {
+        let command = state?.binaryPath ?? "cursor-agent"
+        let escaped = command.replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "\(escaped) login"
+        end tell
+        """
+        let appleScript = NSAppleScript(source: script)
+        var error: NSDictionary?
+        _ = appleScript?.executeAndReturnError(&error)
+    }
+}
+
 // MARK: - Claude Code CLI provider row (v0.22.23)
 
 /// Mirrors `OpencodeProviderRow`'s shape — install + auth status for the
-/// Claude Code CLI. Authentication isn't directly observable (Claude
-/// stores OAuth tokens in macOS Keychain, which requires user-prompted
-/// entitlement to read), so we use `~/.claude/projects/` having any
-/// entries as a proxy for "Claude has been signed in + used at least
-/// once on this machine". A user who just installed but hasn't run
-/// `claude` yet sees a "Signed in?" pending state with a "Sign in"
-/// button that launches Terminal to run `claude` (which kicks off
-/// the OAuth flow).
+/// Claude Code CLI. Uses the same real-home binary resolver as session
+/// spawning and combines it with the Claude Code Keychain token. This keeps
+/// Release builds from mislabeling ~/.local/bin/claude as missing just
+/// because NSHomeDirectory() points at the app sandbox.
 private struct ClaudeCLIProviderRow: View {
     @Environment(\.tahoe) private var t
     @State private var probe: ProbeState = .pending
     @State private var version: String?
     @State private var binaryPath: String?
     @State private var hasUsedClaude: Bool = false
+    @State private var hasKeychainToken: Bool = false
 
     enum ProbeState: Equatable {
         case pending
         case notInstalled
-        case installedNoActivity   // binary present but ~/.claude/projects/ empty
-        case installedActive       // binary present + has activity (probably signed in)
+        case authenticatedNoCLI
+        case installedNeedsLogin
+        case ready
     }
 
     var body: some View {
@@ -985,7 +1116,7 @@ private struct ClaudeCLIProviderRow: View {
                     .font(TahoeFont.body(12))
                     .foregroundStyle(t.fg3)
                     .fixedSize(horizontal: false, vertical: true)
-                if let binaryPath, probe == .installedActive || probe == .installedNoActivity {
+                if let binaryPath, probe == .ready || probe == .installedNeedsLogin {
                     Text("Binary: \(binaryPath)\(version.map { "  ·  \($0)" } ?? "")")
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg2)
@@ -1003,8 +1134,9 @@ private struct ClaudeCLIProviderRow: View {
             switch probe {
             case .pending:           return ("Checking…", t.fg4)
             case .notInstalled:      return ("Not installed", Color.orange)
-            case .installedNoActivity: return ("Sign-in pending", Color.yellow)
-            case .installedActive:   return ("Ready", Color.green)
+            case .authenticatedNoCLI: return ("Auth found", Color.yellow)
+            case .installedNeedsLogin: return ("Sign-in pending", Color.yellow)
+            case .ready:             return ("Ready", Color.green)
             }
         }()
         Text(label)
@@ -1019,13 +1151,17 @@ private struct ClaudeCLIProviderRow: View {
     private var detailLine: String {
         switch probe {
         case .pending:
-            return "Probing the `claude` binary + activity history…"
+            return "Probing the `claude` binary, Claude Code Keychain token, and activity history…"
         case .notInstalled:
             return "Not installed. `npm i -g @anthropic-ai/claude-code` or `brew install anthropic/claude/claude` to enable Claude-backed sessions."
-        case .installedNoActivity:
-            return "Installed, but no project activity in ~/.claude/projects/ yet — run `claude` once in a terminal to sign in via OAuth."
-        case .installedActive:
-            return "Installed and signed in. Clawdmeter spawns Claude sessions via the `claude` CLI."
+        case .authenticatedNoCLI:
+            return "Claude Code auth is present, but the `claude` CLI binary is not on the standard paths. Add it to ~/.local/bin, Homebrew, or Diagnostics overrides."
+        case .installedNeedsLogin:
+            return "CLI installed, but no Claude Code keychain token was found. Run `claude /login` once to finish OAuth."
+        case .ready:
+            return hasKeychainToken
+                ? "Installed and authenticated via Claude Code Keychain. Clawdmeter spawns sessions with the `claude` CLI."
+                : "Installed with local Claude project activity. Clawdmeter can spawn sessions with the `claude` CLI."
         }
     }
 
@@ -1034,7 +1170,7 @@ private struct ClaudeCLIProviderRow: View {
         switch probe {
         case .pending:
             EmptyView()
-        case .notInstalled:
+        case .notInstalled, .authenticatedNoCLI:
             Button {
                 if let url = URL(string: "https://docs.anthropic.com/en/docs/claude-code/setup") {
                     NSWorkspace.shared.open(url)
@@ -1045,7 +1181,7 @@ private struct ClaudeCLIProviderRow: View {
                     .foregroundStyle(t.accent)
             }
             .buttonStyle(.plain)
-        case .installedNoActivity:
+        case .installedNeedsLogin:
             Button {
                 openTerminalRunningClaude()
             } label: {
@@ -1054,10 +1190,10 @@ private struct ClaudeCLIProviderRow: View {
                     .foregroundStyle(t.accent)
             }
             .buttonStyle(.plain)
-            .help("Open Terminal and run `claude` so the OAuth flow can complete.")
-        case .installedActive:
+            .help("Open Terminal and run `claude /login` so the OAuth flow can complete.")
+        case .ready:
             Button {
-                let url = URL(fileURLWithPath: NSHomeDirectory())
+                let url = URL(fileURLWithPath: ClawdmeterRealHome.path())
                     .appendingPathComponent(".claude", isDirectory: true)
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             } label: {
@@ -1079,12 +1215,15 @@ private struct ClaudeCLIProviderRow: View {
         self.binaryPath = detected.binaryPath
         self.version = detected.version
         self.hasUsedClaude = detected.hasActivity
-        if detected.binaryPath == nil {
+        self.hasKeychainToken = detected.hasKeychainToken
+        if detected.binaryPath == nil && detected.hasKeychainToken {
+            self.probe = .authenticatedNoCLI
+        } else if detected.binaryPath == nil {
             self.probe = .notInstalled
-        } else if detected.hasActivity {
-            self.probe = .installedActive
+        } else if detected.hasKeychainToken || detected.hasActivity {
+            self.probe = .ready
         } else {
-            self.probe = .installedNoActivity
+            self.probe = .installedNeedsLogin
         }
     }
 
@@ -1093,10 +1232,12 @@ private struct ClaudeCLIProviderRow: View {
     /// fails (e.g. Terminal denied, sandbox restriction); the help
     /// tooltip on the button explains the manual path.
     private func openTerminalRunningClaude() {
+        let command = binaryPath ?? "claude"
+        let escaped = command.replacingOccurrences(of: "\"", with: "\\\"")
         let script = """
         tell application "Terminal"
             activate
-            do script "claude"
+            do script "\(escaped) /login"
         end tell
         """
         let appleScript = NSAppleScript(source: script)
@@ -1115,27 +1256,19 @@ private enum ClaudeCLIProbe {
         let binaryPath: String?
         let version: String?
         let hasActivity: Bool
+        let hasKeychainToken: Bool
     }
 
     nonisolated static func run() -> Result {
         let path = locateBinary()
         let version: String? = path.flatMap { runVersion(binary: $0) }
         let activity = projectsDirHasEntries()
-        return Result(binaryPath: path, version: version, hasActivity: activity)
+        let token = KeychainTokenProvider().hasToken
+        return Result(binaryPath: path, version: version, hasActivity: activity, hasKeychainToken: token)
     }
 
     private nonisolated static func locateBinary() -> String? {
-        let candidates = [
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-            NSHomeDirectory() + "/.claude/local/claude",
-            NSHomeDirectory() + "/.npm-global/bin/claude",
-            NSHomeDirectory() + "/.local/bin/claude",
-        ]
-        for c in candidates {
-            if FileManager.default.isExecutableFile(atPath: c) { return c }
-        }
-        return nil
+        ShellRunner.locateBinary("claude")
     }
 
     private nonisolated static func runVersion(binary: String) -> String? {
@@ -1158,7 +1291,7 @@ private enum ClaudeCLIProbe {
     }
 
     private nonisolated static func projectsDirHasEntries() -> Bool {
-        let url = URL(fileURLWithPath: NSHomeDirectory())
+        let url = URL(fileURLWithPath: ClawdmeterRealHome.path())
             .appendingPathComponent(".claude/projects", isDirectory: true)
         let kids = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
         return !kids.isEmpty

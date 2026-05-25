@@ -1,5 +1,6 @@
 #if os(macOS) || os(iOS)
 import Foundation
+import LocalAuthentication
 import Security
 
 /// Reads the Claude Code OAuth token from the system Keychain.
@@ -60,7 +61,8 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
     }
 
     public var hasToken: Bool {
-        currentAccessToken != nil
+        lock.lock(); defer { lock.unlock() }
+        return keychainItemExists()
     }
 
     /// Returns true if a refresh was performed; false if no refresh was needed.
@@ -103,6 +105,7 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
         if synchronizable {
             query[kSecAttrSynchronizable as String] = kCFBooleanTrue
         }
+        PassiveKeychainAccess.apply(to: &query)
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
@@ -115,6 +118,22 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
         } catch {
             throw KeychainError.decodeFailed(underlying: error)
         }
+    }
+
+    private func keychainItemExists() -> Bool {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: serviceName,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        if synchronizable {
+            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
+        }
+        PassiveKeychainAccess.apply(to: &query)
+
+        var item: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess
     }
 
     public enum KeychainError: Error {

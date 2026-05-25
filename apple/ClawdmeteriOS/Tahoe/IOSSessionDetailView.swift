@@ -95,6 +95,7 @@ public struct IOSSessionDetailView: View {
     @State private var queuedDrafts: [IOSQueuedCodeDraft]
     @State private var isDispatchingQueuedDraft: Bool = false
     @State private var dispatchedQueuedTurnForCurrentIdle: Bool = false
+    @State private var chatPanePinned: Bool = true
     @State private var attachments: [ComposerAttachment] = []
     @State private var photoPickerItems: [PhotosPickerItem] = []
     @StateObject private var chatStore: iOSChatStore
@@ -600,54 +601,79 @@ public struct IOSSessionDetailView: View {
     /// a session and stays on the Chat tab.
     @ViewBuilder
     private var chatPane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if data.isDemo {
-                    ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
-                        IOSThreadMsg(msg: msg, providerOverride: session?.agent)
-                    }
-                    IOSPlanHaloMini(
-                        steps: planSteps,
-                        canApprove: !approving,
-                        onRefine: { refineAlertShown = true },
-                        onApprove: { Task { await approvePlan() } }
-                    )
-                } else if session == nil {
-                    emptyState(
-                        title: "Session unavailable",
-                        body: "This session may have been archived on your Mac. Go back to see what's still running."
-                    )
-                } else if chatStore.snapshot.items.isEmpty {
-                    emptyState(
-                        title: "No transcript yet",
-                        body: "Messages appear here after the Mac publishes this session's chat snapshot."
-                    )
-                    if !planSteps.isEmpty {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if data.isDemo {
+                        ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
+                            IOSThreadMsg(msg: msg, providerOverride: session?.agent)
+                        }
                         IOSPlanHaloMini(
                             steps: planSteps,
-                            canApprove: hasRealPlan && !approving,
+                            canApprove: !approving,
                             onRefine: { refineAlertShown = true },
                             onApprove: { Task { await approvePlan() } }
                         )
-                    }
-                } else {
-                    ForEach(chatStore.snapshot.items) { item in
-                        IOSWireChatItemRow(item: item, provider: session?.agent ?? .claude)
-                    }
-                    if !planSteps.isEmpty {
-                        IOSPlanHaloMini(
-                            steps: planSteps,
-                            canApprove: hasRealPlan && !approving,
-                            onRefine: { refineAlertShown = true },
-                            onApprove: { Task { await approvePlan() } }
+                    } else if session == nil {
+                        emptyState(
+                            title: "Session unavailable",
+                            body: "This session may have been archived on your Mac. Go back to see what's still running."
                         )
+                    } else if chatStore.snapshot.items.isEmpty {
+                        emptyState(
+                            title: "No transcript yet",
+                            body: "Messages appear here after the Mac publishes this session's chat snapshot."
+                        )
+                        if !planSteps.isEmpty {
+                            IOSPlanHaloMini(
+                                steps: planSteps,
+                                canApprove: hasRealPlan && !approving,
+                                onRefine: { refineAlertShown = true },
+                                onApprove: { Task { await approvePlan() } }
+                            )
+                        }
+                    } else {
+                        ForEach(chatStore.snapshot.items.suffix(200)) { item in
+                            IOSWireChatItemRow(item: item, provider: session?.agent ?? .claude)
+                        }
+                        if !planSteps.isEmpty {
+                            IOSPlanHaloMini(
+                                steps: planSteps,
+                                canApprove: hasRealPlan && !approving,
+                                onRefine: { refineAlertShown = true },
+                                onApprove: { Task { await approvePlan() } }
+                            )
+                        }
                     }
+                    Color.clear.frame(height: 1).id("ios-session-detail-bottom")
+                }
+                .padding(.horizontal, 16).padding(.vertical, 4)
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
+                return visibleBottom >= geometry.contentSize.height - 48
+            } action: { _, isAtBottom in
+                chatPanePinned = isAtBottom
+            }
+            .onChange(of: chatStore.snapshot.updateCounter) { _, _ in
+                guard chatPanePinned else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo("ios-session-detail-bottom", anchor: .bottom)
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 4)
-        }
-        .refreshable {
-            await agentClient.refreshAll()
+            .onAppear {
+                chatPanePinned = true
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo("ios-session-detail-bottom", anchor: .bottom)
+                }
+            }
+            .refreshable {
+                await agentClient.refreshAll()
+            }
         }
     }
 

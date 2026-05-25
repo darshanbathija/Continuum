@@ -636,7 +636,7 @@ private struct AgentMenuChip: View {
             }
         } label: {
             HStack(spacing: 7) {
-                TahoeProviderGlyph(provider: selected.tahoeProvider, size: 16)
+                AgentMenuIcon(provider: selected.tahoeProvider)
                 Text(selected.tahoeProvider.displayName)
                     .font(TahoeFont.body(12, weight: .semibold))
                     .lineLimit(1)
@@ -655,5 +655,21 @@ private struct AgentMenuChip: View {
         .menuIndicator(.hidden)
         .fixedSize(horizontal: true, vertical: false)
         .help("Choose provider")
+    }
+}
+
+private struct AgentMenuIcon: View {
+    let provider: TahoeProvider
+
+    var body: some View {
+        Text(String(provider.displayName.prefix(1)))
+            .font(TahoeFont.body(10, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 16, height: 16)
+            .background(provider.halo.color, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(.white.opacity(0.16), lineWidth: 0.5)
+            }
     }
 }

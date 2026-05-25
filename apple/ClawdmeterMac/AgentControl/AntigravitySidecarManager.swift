@@ -28,6 +28,7 @@
 
 import Foundation
 import OSLog
+import ClawdmeterShared
 
 @MainActor
 public final class AntigravitySidecarManager {
@@ -66,6 +67,18 @@ public final class AntigravitySidecarManager {
     /// Path to the venv's `bin/python` once `uv venv` has run.
     private var venvPython: URL {
         venvRoot.appendingPathComponent("bin/python", isDirectory: false)
+    }
+
+    private var provisioningWorkDirectory: URL {
+        venvRoot.deletingLastPathComponent()
+    }
+
+    private var uvCacheDirectory: URL {
+        let cacheRoot = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return cacheRoot
+            .appendingPathComponent("Clawdmeter", isDirectory: true)
+            .appendingPathComponent("uv", isDirectory: true)
     }
 
     /// v0.22.27: checks that the `google` namespace package is actually
@@ -154,7 +167,7 @@ public final class AntigravitySidecarManager {
             }
             if !FileManager.default.fileExists(atPath: venvPython.path) {
                 provisioningStep = "Creating Python 3.13 venv (~10s)…"
-                try await runUV(uvBinary, args: ["venv", "--python", "3.13", venvRoot.path])
+                try await runUV(uvBinary, args: ["venv", "--no-project", "--python", "3.13", venvRoot.path])
 
                 provisioningStep = "Installing google-antigravity (~5s)…"
                 try await runUV(
@@ -248,17 +261,27 @@ public final class AntigravitySidecarManager {
     /// Run a uv subcommand and wait for it. Captures stderr so failed
     /// installs surface the actual pip error in Diagnostics.
     private func runUV(_ uvBinary: URL, args: [String]) async throws {
+        try FileManager.default.createDirectory(at: provisioningWorkDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: uvCacheDirectory, withIntermediateDirectories: true)
+
         let process = Process()
         process.executableURL = uvBinary
-        process.arguments = args
+        process.arguments = ["--no-config", "--directory", provisioningWorkDirectory.path] + args
+        process.currentDirectoryURL = provisioningWorkDirectory
         let stderr = Pipe()
         process.standardError = stderr
         process.standardOutput = Pipe() // discard stdout
-        // uv reads HOME for cache location; pass through real env so it
-        // works with the user's pip cache + any UV_* config they have.
-        process.environment = ProcessInfo.processInfo.environment
+        var env = ProcessInfo.processInfo.environment
+        // Keep uv fully app-owned. Without this, uv walks up from HOME,
+        // discovers a user pyproject.toml, and sandboxed Release builds
+        // can fail before creating the venv.
+        env["HOME"] = ClawdmeterRealHome.path()
+        env["UV_NO_CONFIG"] = "1"
+        env["UV_NO_PROGRESS"] = "1"
+        env["UV_CACHE_DIR"] = uvCacheDirectory.path
+        process.environment = env
 
-        logger.info("uv \(args.joined(separator: " "), privacy: .public)")
+        logger.info("uv \((process.arguments ?? []).joined(separator: " "), privacy: .public)")
         try process.run()
 
         // Wait for completion off the main actor.

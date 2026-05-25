@@ -209,14 +209,14 @@ struct MacCodeView: View {
         // v0.22.11: load the JSONL transcript whenever the user picks
         // a different RECENT row. TranscriptLoader.load is synchronous
         // I/O (memory-mapped) but we hop off the main actor to avoid
-        // blocking the UI on multi-MB files. Cap at 500 messages —
+        // blocking the UI on multi-MB files. Cap at 200 messages —
         // matches the AgentControlServer chat-history limit and keeps
         // the SwiftUI ForEach tractable.
         .task(id: openJsonlPath) {
             guard let path = openJsonlPath else { return }
             let url = URL(fileURLWithPath: path)
             let loaded = await Task.detached(priority: .userInitiated) {
-                TranscriptLoader.load(from: url, maxMessages: 500)
+                TranscriptLoader.load(from: url, maxMessages: 200)
             }.value
             // Guard against a tap-then-tap race: only commit if the
             // path we just finished loading is still the one the user
@@ -539,15 +539,16 @@ private struct Sidebar: View {
         let nonEmpty = processed.filter {
             (!$0.sessions.isEmpty || !$0.recents.isEmpty) && matchesQuery($0, sessions: $0.sessions)
         }
+        let collapsed = TahoeCodeProjectList.collapseDuplicateVisibleNames(nonEmpty)
         switch sortKey {
         case .lastActive:
             // TahoeCodeSession doesn't carry lastEventAt yet; the
             // server's already-sorted order is "last active first".
-            return nonEmpty
+            return collapsed
         case .name:
-            return nonEmpty.sorted { $0.name.lowercased() < $1.name.lowercased() }
+            return collapsed.sorted { $0.name.lowercased() < $1.name.lowercased() }
         case .liveCount:
-            return nonEmpty.sorted { $0.liveSessionCount > $1.liveSessionCount }
+            return collapsed.sorted { $0.liveSessionCount > $1.liveSessionCount }
         }
     }
 
