@@ -3,6 +3,93 @@ import Foundation
 import Combine
 #endif
 
+public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Identifiable {
+    case chatgpt
+    case claude
+    case antigravity
+    case cursor
+    case openrouter
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .chatgpt: return "ChatGPT"
+        case .claude: return "Claude"
+        case .antigravity: return "Antigravity"
+        case .cursor: return "Cursor"
+        case .openrouter: return "OpenRouter"
+        }
+    }
+
+    public var backingProvider: AgentKind {
+        switch self {
+        case .chatgpt: return .codex
+        case .claude: return .claude
+        case .antigravity: return .gemini
+        case .cursor: return .cursor
+        case .openrouter: return .opencode
+        }
+    }
+
+    public var codexBackend: CodexChatBackend? {
+        self == .chatgpt ? .sdk : nil
+    }
+
+    public var billingProvider: String? {
+        switch self {
+        case .openrouter: return "openrouter"
+        default: return nil
+        }
+    }
+
+    public var defaultEffort: ReasoningEffort? {
+        switch self {
+        case .chatgpt, .claude, .openrouter: return .high
+        case .antigravity, .cursor: return nil
+        }
+    }
+
+    public func models(in catalog: ModelCatalog) -> [ModelCatalogEntry] {
+        switch self {
+        case .chatgpt: return catalog.codex
+        case .claude: return catalog.claude
+        case .antigravity: return catalog.gemini
+        case .cursor: return catalog.cursor
+        case .openrouter: return catalog.opencode
+        }
+    }
+
+    public func defaultModelId(in catalog: ModelCatalog) -> String? {
+        models(in: catalog).first?.id
+    }
+
+    public static func migrated(from provider: AgentKind) -> ChatVendor? {
+        switch provider {
+        case .claude: return .claude
+        case .codex: return .chatgpt
+        case .gemini: return .antigravity
+        case .cursor: return .cursor
+        case .opencode: return .openrouter
+        case .unknown: return nil
+        }
+    }
+}
+
+public struct ChatVendorSelection: Codable, Hashable, Sendable, Identifiable {
+    public let vendor: ChatVendor
+    public var modelId: String?
+    public var effort: ReasoningEffort?
+
+    public var id: ChatVendor { vendor }
+
+    public init(vendor: ChatVendor, modelId: String? = nil, effort: ReasoningEffort? = nil) {
+        self.vendor = vendor
+        self.modelId = modelId
+        self.effort = effort
+    }
+}
+
 /// v0.23 (Chat V2 — T10): cross-platform observable for the V2 chat
 /// composer's pick state. Mac and iOS both bind their composer chips
 /// to this; the underlying `ComposerSendController` (DRY — eng-review
@@ -18,6 +105,13 @@ import Combine
 /// first-send dispatch helper.
 @MainActor
 public final class ChatV2Store: ObservableObject {
+    @Published public var selectedVendors: [ChatVendor]
+    @Published public var selectedModelByVendor: [ChatVendor: String]
+    @Published public var selectedEffortByVendor: [ChatVendor: ReasoningEffort]
+
+    // Legacy provider-mode fields remain public for older call sites and
+    // migration, but Chat V2 now derives runtime behavior from
+    // `selectedVendors.count`.
     @Published public var mode: ChatV2Mode
     @Published public var selectedProvider: AgentKind
     @Published public var broadcastProviders: Set<AgentKind>
@@ -37,28 +131,37 @@ public final class ChatV2Store: ObservableObject {
         // to a sensible default; collectively this gives a working
         // composer state on cold-launch without prompting the user
         // for everything.
+        let hasVendorSelection = defaults.object(forKey: Self.defaultsPrefix + "vendors") != nil
+        let restoredVendors = Self.restoreVendors(defaults: defaults)
+        self.selectedVendors = restoredVendors
+        self.selectedModelByVendor = Self.decodeVendorStringMap(
+            defaults.dictionary(forKey: Self.defaultsPrefix + "modelByVendor") ?? [:]
+        )
+        self.selectedEffortByVendor = Self.decodeVendorEffortMap(
+            defaults.dictionary(forKey: Self.defaultsPrefix + "effortByVendor") ?? [:]
+        )
         let restoredModeRaw = defaults.string(forKey: Self.defaultsPrefix + "mode") ?? ChatV2Mode.broadcast.rawValue
-        self.mode = ChatV2Mode(rawValue: restoredModeRaw) ?? .broadcast
-        let restoredProviderRaw = defaults.string(forKey: Self.defaultsPrefix + "provider") ?? AgentKind.claude.rawValue
-        let restoredProvider = AgentKind(rawValue: restoredProviderRaw) ?? .claude
-        self.selectedProvider = Self.defaultBroadcastProviderOrder.contains(restoredProvider)
-            ? restoredProvider
-            : .claude
-        let restoredBroadcast = defaults.stringArray(forKey: Self.defaultsPrefix + "broadcastProviders") ?? [
-            AgentKind.claude.rawValue,
-            AgentKind.codex.rawValue,
-            AgentKind.gemini.rawValue
-        ]
+        self.mode = ChatV2Mode(rawValue: restoredModeRaw)
+            ?? (restoredVendors.count > 1 ? .broadcast : .solo)
+        let primaryProvider = restoredVendors.first?.backingProvider ?? .codex
+        let restoredProviderRaw = hasVendorSelection
+            ? (defaults.string(forKey: Self.defaultsPrefix + "provider") ?? primaryProvider.rawValue)
+            : primaryProvider.rawValue
+        let restoredProvider = AgentKind(rawValue: restoredProviderRaw) ?? primaryProvider
+        self.selectedProvider = restoredProvider
+        let restoredBroadcast = hasVendorSelection
+            ? (defaults.stringArray(forKey: Self.defaultsPrefix + "broadcastProviders") ?? restoredVendors.map(\.backingProvider.rawValue))
+            : restoredVendors.map(\.backingProvider.rawValue)
         let decodedBroadcast = Set(restoredBroadcast.compactMap(AgentKind.init(rawValue:)))
             .intersection(Self.broadcastCapableProviders)
-        self.broadcastProviders = decodedBroadcast.count >= 2
-            ? decodedBroadcast
-            : Set([.claude, .codex])
-        let restoredReplyRaw = defaults.string(forKey: Self.defaultsPrefix + "replyProvider") ?? AgentKind.claude.rawValue
-        let restoredReplyProvider = AgentKind(rawValue: restoredReplyRaw) ?? .claude
-        self.selectedReplyProvider = Self.defaultBroadcastProviderOrder.contains(restoredReplyProvider)
-            ? restoredReplyProvider
-            : .claude
+        self.broadcastProviders = decodedBroadcast.isEmpty
+            ? Set(restoredVendors.map(\.backingProvider))
+            : decodedBroadcast
+        let restoredReplyRaw = hasVendorSelection
+            ? (defaults.string(forKey: Self.defaultsPrefix + "replyProvider") ?? primaryProvider.rawValue)
+            : primaryProvider.rawValue
+        let restoredReplyProvider = AgentKind(rawValue: restoredReplyRaw) ?? primaryProvider
+        self.selectedReplyProvider = restoredReplyProvider
         self.selectedModelByProvider = Self.decodeStringMap(
             defaults.dictionary(forKey: Self.defaultsPrefix + "modelByProvider") ?? [:]
         )
@@ -77,6 +180,17 @@ public final class ChatV2Store: ObservableObject {
     /// UserDefaults write per modifier — so callers don't need to
     /// debounce.
     public func persist() {
+        selectedVendors = Self.normalizedVendors(selectedVendors)
+        mode = selectedVendors.count > 1 ? .broadcast : .solo
+        selectedProvider = selectedVendors.first?.backingProvider ?? .codex
+        broadcastProviders = Set(selectedVendors.map(\.backingProvider))
+        if !broadcastProviders.contains(selectedReplyProvider) {
+            selectedReplyProvider = selectedProvider
+        }
+        defaults.set(selectedVendors.map(\.rawValue), forKey: Self.defaultsPrefix + "vendors")
+        defaults.set(Self.encodeMap(selectedModelByVendor), forKey: Self.defaultsPrefix + "modelByVendor")
+        defaults.set(Self.encodeMap(selectedEffortByVendor.mapValues { $0.rawValue }),
+                     forKey: Self.defaultsPrefix + "effortByVendor")
         defaults.set(mode.rawValue, forKey: Self.defaultsPrefix + "mode")
         defaults.set(selectedProvider.rawValue, forKey: Self.defaultsPrefix + "provider")
         defaults.set(
@@ -97,49 +211,87 @@ public final class ChatV2Store: ObservableObject {
     /// when the user hasn't picked yet. The V2 model pill reads this
     /// and renders the result.
     public var selectedModel: String? {
-        if let userPick = selectedModelByProvider[selectedProvider], !userPick.isEmpty {
-            return userPick
-        }
-        switch selectedProvider {
-        case .claude:   return ModelCatalog.bundled.claude.first?.id
-        case .codex:    return ModelCatalog.bundled.codex.first?.id
-        case .gemini:   return ModelCatalog.bundled.gemini.first?.id
-        case .opencode: return ModelCatalog.bundled.opencode.first?.id
-        case .cursor:   return nil
-        case .unknown:  return nil
-        }
+        model(for: primaryVendor)
     }
 
     public var selectedEffort: ReasoningEffort? {
-        selectedEffortByProvider[selectedProvider]
+        effort(for: primaryVendor)
     }
 
-    public static let broadcastCapableProviders: Set<AgentKind> = [.claude, .codex, .gemini]
-    public static let defaultBroadcastProviderOrder: [AgentKind] = [.claude, .codex, .gemini]
+    public static let defaultChatVendorOrder: [ChatVendor] = [.chatgpt, .claude, .antigravity, .cursor, .openrouter]
+    public static let broadcastCapableProviders: Set<AgentKind> = Set(defaultChatVendorOrder.map(\.backingProvider))
+    public static let defaultBroadcastProviderOrder: [AgentKind] = defaultChatVendorOrder.map(\.backingProvider)
+
+    public var primaryVendor: ChatVendor {
+        selectedVendors.first ?? .chatgpt
+    }
+
+    public var selectedVendorCount: Int {
+        selectedVendors.count
+    }
+
+    public var selectedVendorSelections: [ChatVendorSelection] {
+        selectedVendors.map { vendor in
+            ChatVendorSelection(
+                vendor: vendor,
+                modelId: model(for: vendor),
+                effort: effort(for: vendor)
+            )
+        }
+    }
 
     public var broadcastProviderOrder: [AgentKind] {
-        Self.defaultBroadcastProviderOrder.filter { broadcastProviders.contains($0) }
+        selectedVendors.map(\.backingProvider)
     }
 
     public var broadcastReady: Bool {
-        broadcastProviderOrder.count >= 2
+        selectedVendors.count >= 2
     }
 
     public func toggleBroadcastProvider(_ provider: AgentKind) {
-        guard Self.broadcastCapableProviders.contains(provider) else { return }
-        if broadcastProviders.contains(provider), broadcastProviders.count > 2 {
-            broadcastProviders.remove(provider)
+        guard let vendor = ChatVendor.migrated(from: provider) else { return }
+        toggleVendor(vendor)
+    }
+
+    public func isVendorSelected(_ vendor: ChatVendor) -> Bool {
+        selectedVendors.contains(vendor)
+    }
+
+    public func toggleVendor(_ vendor: ChatVendor) {
+        if selectedVendors.contains(vendor) {
+            guard selectedVendors.count > 1 else { return }
+            selectedVendors.removeAll { $0 == vendor }
         } else {
-            broadcastProviders.insert(provider)
+            guard selectedVendors.count < 3 else { return }
+            selectedVendors.append(vendor)
         }
-        if !broadcastProviders.contains(selectedReplyProvider),
-           let first = broadcastProviderOrder.first {
-            selectedReplyProvider = first
+        selectedVendors = Self.normalizedVendors(selectedVendors)
+        persist()
+    }
+
+    public func selectModel(_ modelId: String, for vendor: ChatVendor) {
+        selectedModelByVendor[vendor] = modelId
+        if let provider = ChatVendor.migrated(from: vendor.backingProvider)?.backingProvider {
+            selectedModelByProvider[provider] = modelId
+        }
+        persist()
+    }
+
+    public func selectEffort(_ effort: ReasoningEffort?, for vendor: ChatVendor) {
+        if let effort {
+            selectedEffortByVendor[vendor] = effort
+            selectedEffortByProvider[vendor.backingProvider] = effort
+        } else {
+            selectedEffortByVendor.removeValue(forKey: vendor)
+            selectedEffortByProvider.removeValue(forKey: vendor.backingProvider)
         }
         persist()
     }
 
     public func model(for provider: AgentKind) -> String? {
+        if let vendor = selectedVendors.first(where: { $0.backingProvider == provider }) {
+            return model(for: vendor)
+        }
         if let userPick = selectedModelByProvider[provider], !userPick.isEmpty {
             return userPick
         }
@@ -147,24 +299,51 @@ public final class ChatV2Store: ObservableObject {
         case .claude:   return ModelCatalog.bundled.claude.first?.id
         case .codex:    return ModelCatalog.bundled.codex.first?.id
         case .gemini:   return ModelCatalog.bundled.gemini.first?.id
-        case .opencode: return nil
-        case .cursor:   return nil
+        case .opencode: return ModelCatalog.bundled.opencode.first?.id
+        case .cursor:   return ModelCatalog.bundled.cursor.first?.id
         case .unknown:  return nil
         }
     }
 
-    public func effort(for provider: AgentKind) -> ReasoningEffort? {
-        selectedEffortByProvider[provider]
+    public func model(for vendor: ChatVendor, catalog: ModelCatalog = .bundled) -> String? {
+        if let userPick = selectedModelByVendor[vendor], !userPick.isEmpty {
+            return userPick
+        }
+        if let legacyPick = selectedModelByProvider[vendor.backingProvider], !legacyPick.isEmpty {
+            return legacyPick
+        }
+        return vendor.defaultModelId(in: catalog)
     }
 
-    public func frontierSlots() -> [FrontierModelSlot] {
-        broadcastProviderOrder.map { provider in
+    public func effort(for provider: AgentKind) -> ReasoningEffort? {
+        if let vendor = selectedVendors.first(where: { $0.backingProvider == provider }) {
+            return effort(for: vendor)
+        }
+        return selectedEffortByProvider[provider]
+    }
+
+    public func effort(for vendor: ChatVendor, catalog: ModelCatalog = .bundled) -> ReasoningEffort? {
+        let modelId = model(for: vendor, catalog: catalog)
+        if let modelId,
+           let entry = vendor.models(in: catalog).first(where: { $0.id == modelId }),
+           !entry.supportsEffort {
+            return nil
+        }
+        return selectedEffortByVendor[vendor]
+            ?? selectedEffortByProvider[vendor.backingProvider]
+            ?? vendor.defaultEffort
+    }
+
+    public func frontierSlots(catalog: ModelCatalog = .bundled) -> [FrontierModelSlot] {
+        selectedVendors.map { vendor in
             FrontierModelSlot(
-                provider: provider,
-                model: model(for: provider),
-                effort: effort(for: provider),
-                codexChatBackend: provider == .codex ? codexBackendPreference : nil,
-                deepResearch: deepResearch
+                provider: vendor.backingProvider,
+                model: model(for: vendor, catalog: catalog),
+                effort: effort(for: vendor, catalog: catalog),
+                codexChatBackend: vendor == .chatgpt ? codexBackendPreference : nil,
+                deepResearch: deepResearch,
+                chatVendor: vendor,
+                billingProvider: vendor.billingProvider
             )
         }
     }
@@ -177,11 +356,11 @@ public final class ChatV2Store: ObservableObject {
     /// `sendCtl.send(via: store.firstSendKind())`.
     public func firstSendKind() -> SendKind {
         .chatCreateV2(
-            provider: selectedProvider,
+            provider: primaryVendor.backingProvider,
             model: selectedModel,
             effort: selectedEffort,
             deepResearch: deepResearch,
-            codexBackend: selectedProvider == .codex ? codexBackendPreference : nil
+            codexBackend: primaryVendor == .chatgpt ? codexBackendPreference : nil
         )
     }
 
@@ -208,11 +387,41 @@ public final class ChatV2Store: ObservableObject {
         Dictionary(uniqueKeysWithValues: m.map { ($0.key.rawValue, $0.value) })
     }
 
+    private static func encodeMap<V>(_ m: [ChatVendor: V]) -> [String: V] {
+        Dictionary(uniqueKeysWithValues: m.map { ($0.key.rawValue, $0.value) })
+    }
+
+    private static func restoreVendors(defaults: UserDefaults) -> [ChatVendor] {
+        if let raw = defaults.stringArray(forKey: Self.defaultsPrefix + "vendors") {
+            return normalizedVendors(raw.compactMap(ChatVendor.init(rawValue:)))
+        }
+        return [.chatgpt]
+    }
+
+    private static func normalizedVendors(_ vendors: [ChatVendor]) -> [ChatVendor] {
+        var out: [ChatVendor] = []
+        for vendor in vendors {
+            guard defaultChatVendorOrder.contains(vendor), !out.contains(vendor) else { continue }
+            out.append(vendor)
+            if out.count == 3 { break }
+        }
+        return out.isEmpty ? [.chatgpt] : out
+    }
+
     private static func decodeStringMap(_ d: [String: Any]) -> [AgentKind: String] {
         var out: [AgentKind: String] = [:]
         for (k, v) in d {
             guard let agent = AgentKind(rawValue: k), let str = v as? String else { continue }
             out[agent] = str
+        }
+        return out
+    }
+
+    private static func decodeVendorStringMap(_ d: [String: Any]) -> [ChatVendor: String] {
+        var out: [ChatVendor: String] = [:]
+        for (k, v) in d {
+            guard let vendor = ChatVendor(rawValue: k), let str = v as? String else { continue }
+            out[vendor] = str
         }
         return out
     }
@@ -224,6 +433,17 @@ public final class ChatV2Store: ObservableObject {
                   let str = v as? String,
                   let effort = ReasoningEffort(rawValue: str) else { continue }
             out[agent] = effort
+        }
+        return out
+    }
+
+    private static func decodeVendorEffortMap(_ d: [String: Any]) -> [ChatVendor: ReasoningEffort] {
+        var out: [ChatVendor: ReasoningEffort] = [:]
+        for (k, v) in d {
+            guard let vendor = ChatVendor(rawValue: k),
+                  let str = v as? String,
+                  let effort = ReasoningEffort(rawValue: str) else { continue }
+            out[vendor] = effort
         }
         return out
     }

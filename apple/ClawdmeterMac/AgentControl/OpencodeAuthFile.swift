@@ -249,6 +249,20 @@ public actor OpencodeAuthFile {
         return entries.keys.sorted()
     }
 
+    /// API key for a provider when the auth entry is the `api` shape
+    /// Clawdmeter writes. OAuth/wellknown entries intentionally return nil.
+    public func apiKey(providerId: String) async -> String? {
+        let normalized = normalize(providerId)
+        let entries = await readEntries()
+        guard let entry = entries[normalized],
+              (entry["type"] as? String) == "api",
+              let key = entry["key"] as? String,
+              !key.isEmpty else {
+            return nil
+        }
+        return key
+    }
+
     // MARK: - Internal helpers
 
     /// Strip trailing slashes, matching opencode's

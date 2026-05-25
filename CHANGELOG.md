@@ -4,6 +4,34 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.1 build 140] - 2026-05-25 - Chat vendor and model picker unification (`darshanbathija/chat-tab-fixes`)
+
+Chat V2 now has one broadcast-style composer. One selected vendor starts a single-vendor chat; two or three selected vendors create a Frontier broadcast with one child per vendor.
+
+### Added
+
+- **Shared chat vendor selection** - adds `ChatVendor` / `ChatVendorSelection` state with per-vendor model and effort picks, defaulting cold launch to ChatGPT `gpt-5.5` with high effort.
+- **Vendor picker coverage** - adds visible ChatGPT, Claude, Antigravity, Cursor, and OpenRouter vendor chips on Mac and iOS, capped at 1-3 selected vendors.
+- **Provider model catalogs** - wires Claude family picks, Cursor model discovery, and OpenRouter model discovery through the shared `/models` catalog.
+- **HTTP-level route coverage** - adds AgentControlServer tests for solo `/chat-sessions`, one-slot `/chat-sessions/frontier` rejection, Cursor availability success/failure, OpenRouter route metadata, and live route smoke gates.
+
+### Fixed
+
+- **Solo/Broadcast split** - removes the visible Solo/Broadcast toggle from Chat V2 surfaces; selected vendor count now determines solo versus Frontier behavior.
+- **Cursor chat route** - Cursor chat creation no longer returns `cursor_chat_not_supported`; it creates Cursor-backed chat sessions and avoids unsupported plan mode until a real Cursor resume id exists.
+- **OpenRouter runtime metadata** - OpenRouter chats execute through OpenCode while persisting `billingProvider = openrouter`, the OpenRouter model id, and visible `chatVendor = openrouter` metadata.
+- **Provider availability gates** - unavailable Cursor/OpenRouter vendors remain visible but fail closed with route-level 503 reasons instead of silently falling through to another provider.
+- **PTY process cleanup** - PTY master/slave ownership is now idempotent, fixing the live OpenRouter route crash caused by double-closing file descriptors.
+
+### Verification
+
+- `swift test` in `apple/ClawdmeterShared` -> **722 tests passed, 1 skipped**.
+- Focused Mac tests for Chat V2 store, AgentControl server routes, Cursor argv, and OpenRouter auth/model plumbing -> **52 tests passed, 2 live-gated skipped**.
+- Live provider route smoke with `.context/run-live-provider-route-tests` -> **2 tests passed** (Cursor create, OpenRouter create + send).
+- `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (iOS)" -destination "generic/platform=iOS Simulator"` -> **BUILD SUCCEEDED**.
+
+Bumps `MARKETING_VERSION` 0.29.0 -> 0.29.1, `CURRENT_PROJECT_VERSION` 139 -> 140.
+
 ## [0.29.0 build 139] - 2026-05-24 — Desktop Code tab Conductor parity (`darshanbathija/conductor-parity`)
 
 The desktop Code tab now behaves like a real workbench instead of a read-only session viewer. Agents can be launched and resumed from a denser composer, queued while running, reviewed through Plan/Diff/PR/Browser/Terminal panes, protected by checkpoints, and organized through Conductor-style status buckets.

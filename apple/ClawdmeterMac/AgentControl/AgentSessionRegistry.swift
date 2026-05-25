@@ -131,7 +131,9 @@ public final class AgentSessionRegistry: ObservableObject {
         antigravityProjectId: String? = nil,
         frontierGroupId: UUID? = nil,
         frontierChildIndex: Int? = nil,
-        deepResearch: Bool = false
+        deepResearch: Bool = false,
+        chatVendor: ChatVendor? = nil,
+        billingProvider: String? = nil
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -169,7 +171,9 @@ public final class AgentSessionRegistry: ObservableObject {
                 codexBackend: codexChatBackend,
                 geminiBackend: geminiBackend,
                 antigravityConversationId: antigravityConversationId,
-                antigravityProjectId: antigravityProjectId
+                antigravityProjectId: antigravityProjectId,
+                chatVendor: chatVendor,
+                billingProvider: billingProvider
             ),
             effort: effort,
             kind: .chat,
@@ -584,14 +588,16 @@ public final class AgentSessionRegistry: ObservableObject {
         codexBackend: CodexChatBackend?,
         geminiBackend: GeminiBackend?,
         antigravityConversationId: UUID?,
-        antigravityProjectId: String?
+        antigravityProjectId: String?,
+        chatVendor: ChatVendor? = nil,
+        billingProvider: String? = nil
     ) -> SessionRuntimeBinding {
         let runtime = SessionRuntimeKind.inferred(
             agent: agent,
             codexBackend: codexBackend,
             geminiBackend: geminiBackend
         )
-        let billingProvider: String? = {
+        let resolvedBillingProvider: String? = billingProvider ?? {
             switch agent {
             case .claude: return "claude"
             case .codex: return "codex"
@@ -615,8 +621,9 @@ public final class AgentSessionRegistry: ObservableObject {
             externalSessionId: antigravityConversationId?.uuidString,
             projectId: antigravityProjectId,
             providerModelId: model,
-            billingProvider: billingProvider,
-            billingConfidence: billingConfidence
+            billingProvider: resolvedBillingProvider,
+            billingConfidence: billingConfidence,
+            metadata: chatVendor.map { ["chatVendor": $0.rawValue] } ?? [:]
         )
     }
 

@@ -10,7 +10,7 @@
 //      /usr/local/bin/opencode, then $PATH (via ShellRunner.locateBinary
 //      if helpful, but we duplicate the lookup here to keep the manager
 //      self-contained).
-//   2. Free-port allocation — picks an ephemeral TCP port via NWListener.
+//   2. Free-port allocation — picks an ephemeral TCP port via a loopback socket.
 //   3. Spawns `opencode serve --port <p> --hostname 127.0.0.1` with a
 //      per-launch `OPENCODE_SERVER_PASSWORD` token.
 //   4. Health check — polls `GET /` (the Hono server's info endpoint)
@@ -32,7 +32,7 @@
 // instead of the tmux argv path.
 
 import Foundation
-import Network
+import Darwin
 import OSLog
 
 @MainActor
@@ -80,9 +80,9 @@ public final class OpencodeProcessManager {
     /// Port the server is bound to. Nil when not running.
     private var serverPort: Int?
 
-    /// Per-launch token passed via OPENCODE_SERVER_PASSWORD. Every
-    /// SSE client uses this in the Authorization header so a peer on
-    /// the box can't snoop on the server.
+    /// Per-launch password passed via OPENCODE_SERVER_PASSWORD. Every
+    /// HTTP/SSE client uses Basic auth so a peer on the box can't snoop
+    /// on the server.
     private var serverPassword: String?
 
     /// Restart counter — bounded to prevent crash loops eating CPU.
@@ -93,6 +93,10 @@ public final class OpencodeProcessManager {
     /// Supervisor task — monitors serveProcess.isRunning + restarts on
     /// unexpected exit. nil when manager is stopped.
     private var supervisorTask: Task<Void, Never>?
+
+    /// Set during an intentional shutdown so the supervisor does not
+    /// misclassify the terminated process as a crash and relaunch it.
+    private var isStopping = false
 
     // MARK: - Public API
 
@@ -106,6 +110,7 @@ public final class OpencodeProcessManager {
         if case .running(let port) = state {
             return port
         }
+        isStopping = false
         state = .starting
 
         // Step 1: locate the binary.
@@ -137,6 +142,7 @@ public final class OpencodeProcessManager {
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
         var env = ProcessInfo.processInfo.environment
+        env["OPENCODE_SERVER_USERNAME"] = "opencode"
         env["OPENCODE_SERVER_PASSWORD"] = password
         process.environment = env
         // Capture stdout/stderr so a misconfigured spawn surfaces a
@@ -187,6 +193,7 @@ public final class OpencodeProcessManager {
     /// Clean shutdown. Used by AppRuntime's deinit + the Settings panel's
     /// "disable" toggle. Safe to call when already stopped.
     public func stop() {
+        isStopping = true
         supervisorTask?.cancel()
         supervisorTask = nil
         if let proc = serveProcess {
@@ -209,7 +216,8 @@ public final class OpencodeProcessManager {
         guard let port = serverPort, let password = serverPassword else { return nil }
         guard let url = URL(string: "http://127.0.0.1:\(port)\(path)") else { return nil }
         var req = URLRequest(url: url)
-        req.setValue("Bearer \(password)", forHTTPHeaderField: "Authorization")
+        let credentials = Data("opencode:\(password)".utf8).base64EncodedString()
+        req.setValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")
         return req
     }
 
@@ -231,8 +239,9 @@ public final class OpencodeProcessManager {
         process.arguments = ["auth", "list"]
         process.environment = ProcessInfo.processInfo.environment
         let stdout = Pipe()
+        let stderr = Pipe()
         process.standardOutput = stdout
-        process.standardError = Pipe()  // discard
+        process.standardError = stderr
         do {
             try process.run()
         } catch {
@@ -360,34 +369,61 @@ public final class OpencodeProcessManager {
 
     // MARK: - Port allocation
 
-    private enum PortError: Error {
+    private enum PortError: LocalizedError {
         case allocationFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .allocationFailed:
+                return "failed to bind a loopback TCP port"
+            }
+        }
     }
 
-    /// Pick a free ephemeral port. We bind a transient NWListener to
-    /// port 0 (kernel picks), read the assigned port, then immediately
-    /// cancel the listener. There's a TOCTOU race between us releasing
-    /// the port and opencode binding it, but in practice the window is
-    /// microseconds and `opencode serve` would simply error out fast,
-    /// allowing the supervisor to retry on a new port.
+    /// Pick a free ephemeral port. We bind a transient loopback TCP socket to
+    /// port 0 (kernel picks), read the assigned port, then immediately close
+    /// the socket. There's a TOCTOU race between us releasing the port and
+    /// opencode binding it, but in practice the window is tiny and
+    /// `opencode serve` would simply error out fast, allowing the supervisor
+    /// to retry on a new port.
     private func pickFreePort() async throws -> Int {
-        let listener: NWListener
-        do {
-            listener = try NWListener(using: .tcp, on: .any)
-        } catch {
+        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
             throw PortError.allocationFailed
         }
-        listener.start(queue: .global())
-        // Wait for the listener to bind (port becomes non-nil).
-        for _ in 0..<100 {
-            if let port = listener.port?.rawValue {
-                listener.cancel()
-                return Int(port)
+        defer { Darwin.close(fd) }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(0).bigEndian
+        address.sin_addr = in_addr(s_addr: UInt32(INADDR_LOOPBACK).bigEndian)
+
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.bind(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
-            try? await Task.sleep(nanoseconds: 10_000_000)  // 10ms
         }
-        listener.cancel()
-        throw PortError.allocationFailed
+        guard bindResult == 0 else {
+            throw PortError.allocationFailed
+        }
+
+        var boundAddress = sockaddr_in()
+        var boundLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let getsocknameResult = withUnsafeMutablePointer(to: &boundAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.getsockname(fd, sockaddrPointer, &boundLength)
+            }
+        }
+        guard getsocknameResult == 0 else {
+            throw PortError.allocationFailed
+        }
+
+        let port = Int(UInt16(bigEndian: boundAddress.sin_port))
+        guard port > 0 else {
+            throw PortError.allocationFailed
+        }
+        return port
     }
 
     // MARK: - Healthcheck
@@ -434,6 +470,15 @@ public final class OpencodeProcessManager {
 
     @MainActor
     private func handleUnexpectedExit() async {
+        guard !isStopping else {
+            serveProcess = nil
+            serverPort = nil
+            serverPassword = nil
+            restartCount = 0
+            state = .stopped
+            logger.info("opencode serve exited after intentional stop")
+            return
+        }
         // Audit P1 fix: reset state to .stopped BEFORE calling
         // ensureRunning(). Previously this method left `state` at
         // .running, so ensureRunning() saw the cached running-state

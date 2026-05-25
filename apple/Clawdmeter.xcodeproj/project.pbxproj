@@ -11,6 +11,7 @@
 		007D406D3FE59F9F2E15B3A5 /* TmuxControlClientValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E7082E509C8C7F1CB7EE73 /* TmuxControlClientValidationTests.swift */; };
 		0127E090A7799D2F4A7BC9BB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 052C6AEF07A486E8A35669C5 /* Assets.xcassets */; };
 		0190050C63A0552D50548BA8 /* CodexPlanPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCF9A1F1CC3BBCFFE5BFE1B3 /* CodexPlanPane.swift */; };
+		01B028A41B041C03E1587068 /* AgentControlServerChatRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 614324F44782E06C1986B651 /* AgentControlServerChatRouteTests.swift */; };
 		024E7E6118D32B5F735F6477 /* DeepResearchArgvTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3F8ACE81523EC6C4A95705 /* DeepResearchArgvTests.swift */; };
 		02ABAFEED5AAA54ADA6094A2 /* ClawdmeteriOSWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96732148372DBB9D002F93B9 /* ClawdmeteriOSWidgets.swift */; };
 		02F877979649BE4348C031CE /* IOSPermissionResponder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7328B46D75569B7C07ED261D /* IOSPermissionResponder.swift */; };
@@ -389,6 +390,7 @@
 		5FE801BE3944A9DD21D9452C /* LiveActivityCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityCoordinator.swift; sourceTree = "<group>"; };
 		60C622DD99169A6ABCBC6F8C /* UsageStatusChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageStatusChip.swift; sourceTree = "<group>"; };
 		60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSpawner.swift; sourceTree = "<group>"; };
+		614324F44782E06C1986B651 /* AgentControlServerChatRouteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlServerChatRouteTests.swift; sourceTree = "<group>"; };
 		61DCEB1020CBB0E324C60959 /* GeminiLogo.svg */ = {isa = PBXFileReference; path = GeminiLogo.svg; sourceTree = "<group>"; };
 		625F0C2211326A148B15228D /* MobileCommandOutbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCommandOutbox.swift; sourceTree = "<group>"; };
 		631512CE8E98566FEFE5E41B /* CommandRunners.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandRunners.swift; sourceTree = "<group>"; };
@@ -843,6 +845,7 @@
 		6E4F3C864DD3FBCB30E9CE74 /* ClawdmeterMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				614324F44782E06C1986B651 /* AgentControlServerChatRouteTests.swift */,
 				05DEE8E4C784CCD7B7749646 /* AgentSessionRegistryFrontierTests.swift */,
 				DE1F1B18737CE3024BDD5620 /* AgentSpawnerChatArgvTests.swift */,
 				A5D45DC56F208EECABE85A42 /* DaemonChatStoreRegistryRoutingTests.swift */,
@@ -1370,6 +1373,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				01B028A41B041C03E1587068 /* AgentControlServerChatRouteTests.swift in Sources */,
 				FF51BD37342BEEF6FBDBA443 /* AgentSessionRegistryFrontierTests.swift in Sources */,
 				B6476D12C0F54133B30C941B /* AgentSpawnerChatArgvTests.swift in Sources */,
 				9A791C53B086D17E99DAA910 /* ChatV2StoreTests.swift in Sources */,
@@ -1683,7 +1687,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 139;
+				CURRENT_PROJECT_VERSION = 140;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -1702,7 +1706,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.29.0;
+				MARKETING_VERSION = 0.29.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -1939,7 +1943,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 139;
+				CURRENT_PROJECT_VERSION = 140;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1952,7 +1956,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.29.0;
+				MARKETING_VERSION = 0.29.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

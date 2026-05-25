@@ -81,6 +81,38 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
         XCTAssertTrue(group.isEmpty)
     }
 
+    func test_createChat_recordsVisibleVendorAndBillingProviderMetadata() async {
+        let reg = registry()
+        let session = reg.createChat(
+            provider: .opencode,
+            model: "openai/gpt-5.5",
+            chatCwd: "/tmp",
+            chatVendor: .openrouter,
+            billingProvider: "openrouter"
+        )
+
+        let binding = reg.session(id: session.id)?.runtimeBinding
+        XCTAssertEqual(binding?.runtimeKind, .opencodeServer)
+        XCTAssertEqual(binding?.providerModelId, "openai/gpt-5.5")
+        XCTAssertEqual(binding?.billingProvider, "openrouter")
+        XCTAssertEqual(binding?.metadata["chatVendor"], ChatVendor.openrouter.rawValue)
+    }
+
+    func test_createChat_recordsCursorChatVendorMetadata() async {
+        let reg = registry()
+        let session = reg.createChat(
+            provider: .cursor,
+            model: CursorModelCatalog.autoModelId,
+            chatCwd: "/tmp",
+            chatVendor: .cursor
+        )
+
+        let binding = reg.session(id: session.id)?.runtimeBinding
+        XCTAssertEqual(binding?.runtimeKind, .cursorCLI)
+        XCTAssertEqual(binding?.providerModelId, CursorModelCatalog.autoModelId)
+        XCTAssertEqual(binding?.metadata["chatVendor"], ChatVendor.cursor.rawValue)
+    }
+
     // MARK: - clearFrontierGroupBinding
 
     /// After continue-from-winner, the winner's frontierGroupId and

@@ -23,11 +23,11 @@ public final class PseudoTerminal {
     /// File descriptor for the master side of the PTY. Read from this to
     /// receive the subprocess's stdout/stderr; write to this to send input
     /// (keystrokes) to the subprocess.
-    public let masterFD: Int32
+    public private(set) var masterFD: Int32
 
     /// File descriptor for the slave side. Becomes the subprocess's
     /// stdin/stdout/stderr (we dup it 3x in the child).
-    public let slaveFD: Int32
+    public private(set) var slaveFD: Int32
 
     public init() throws {
         var master: Int32 = -1
@@ -42,8 +42,22 @@ public final class PseudoTerminal {
     }
 
     deinit {
-        if masterFD >= 0 { close(masterFD) }
-        if slaveFD >= 0 { close(slaveFD) }
+        closeMaster()
+        closeSlave()
+    }
+
+    public func closeMaster() {
+        guard masterFD >= 0 else { return }
+        let fd = masterFD
+        masterFD = -1
+        close(fd)
+    }
+
+    public func closeSlave() {
+        guard slaveFD >= 0 else { return }
+        let fd = slaveFD
+        slaveFD = -1
+        close(fd)
     }
 
     /// Spawn a subprocess with the slave side of this PTY as its stdin/stdout/stderr.
@@ -65,6 +79,9 @@ public final class PseudoTerminal {
         var fileActions = posix_spawn_file_actions_t(bitPattern: 0)
         posix_spawn_file_actions_init(&fileActions)
         defer { posix_spawn_file_actions_destroy(&fileActions) }
+
+        let masterFD = self.masterFD
+        let slaveFD = self.slaveFD
 
         // Dup slave fd to stdin (0), stdout (1), stderr (2)
         posix_spawn_file_actions_adddup2(&fileActions, slaveFD, 0)
@@ -91,7 +108,7 @@ public final class PseudoTerminal {
                           userInfo: [NSLocalizedDescriptionKey: "posix_spawn failed: \(String(cString: strerror(Int32(spawnResult))))"])
         }
         // Close the slave end in the parent — only the child needs it.
-        close(slaveFD)
+        closeSlave()
         return pid
     }
 }

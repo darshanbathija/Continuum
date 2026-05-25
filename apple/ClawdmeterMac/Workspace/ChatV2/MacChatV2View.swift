@@ -100,6 +100,7 @@ private struct ChatRoot: View {
         .background(TahoeWallpaperView())
         .task {
             await client.refreshSessions()
+            await client.refreshModelCatalog()
             providerMatrix = await client.fetchChatProviders()
         }
     }
@@ -329,62 +330,34 @@ private struct Header: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            modeToggle
             if openTarget?.isFrontier == true {
                 ForEach(children, id: \.id) { child in
                     ProviderSummary(session: child)
                 }
             } else {
-                ForEach(store.mode == .broadcast ? store.broadcastProviderOrder : [store.selectedProvider], id: \.self) { provider in
-                    ProviderDraftSummary(provider: provider, store: store)
+                ForEach(store.selectedVendors, id: \.self) { vendor in
+                    ProviderDraftSummary(vendor: vendor, store: store)
                 }
             }
         }
-    }
-
-    private var modeToggle: some View {
-        TahoeGlass(radius: 14, tone: .chip) {
-            HStack(spacing: 4) {
-                modeButton(.broadcast, "Broadcast")
-                modeButton(.solo, "Solo")
-            }
-            .padding(4)
-        }
-        .frame(width: 190)
-    }
-
-    private func modeButton(_ mode: ChatV2Mode, _ title: String) -> some View {
-        Button {
-            store.mode = mode
-            store.persist()
-        } label: {
-            Text(title)
-                .font(TahoeFont.body(11.5, weight: .semibold))
-                .foregroundStyle(store.mode == mode ? t.fg : t.fg3)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
-                .background(store.mode == mode ? Color.white.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
-        .disabled(openTarget != nil)
     }
 }
 
 @available(macOS 14, *)
 private struct ProviderDraftSummary: View {
     @Environment(\.tahoe) private var t
-    let provider: AgentKind
+    let vendor: ChatVendor
     @ObservedObject var store: ChatV2Store
 
     var body: some View {
         TahoeGlass(radius: 14, tone: .panel) {
             HStack(spacing: 9) {
-                TahoeProviderGlyph(provider: provider.tahoeProvider, size: 22)
+                TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 22)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(provider.tahoeProvider.displayName)
+                    Text(vendor.displayName)
                         .font(TahoeFont.body(12.5, weight: .semibold))
                         .foregroundStyle(t.fg)
-                    Text(store.model(for: provider) ?? "default")
+                    Text(store.model(for: vendor) ?? "default")
                         .font(TahoeFont.mono(10.5))
                         .foregroundStyle(t.fg3)
                         .lineLimit(1)
@@ -392,7 +365,7 @@ private struct ProviderDraftSummary: View {
                 Spacer()
                 Text(store.deepResearch ? "research" : "ready")
                     .font(TahoeFont.body(10, weight: .semibold))
-                    .foregroundStyle(store.deepResearch ? provider.tahoeProvider.halo.color : t.fg4)
+                    .foregroundStyle(store.deepResearch ? vendor.backingProvider.tahoeProvider.halo.color : t.fg4)
             }
             .padding(10)
         }
@@ -436,14 +409,14 @@ private struct StartPanel: View {
         TahoeGlass(radius: 20, tone: .panel) {
             VStack(spacing: 16) {
                 HStack(spacing: 10) {
-                    ForEach(store.mode == .broadcast ? store.broadcastProviderOrder : [store.selectedProvider], id: \.self) { provider in
-                        TahoeProviderGlyph(provider: provider.tahoeProvider, size: 42)
+                    ForEach(store.selectedVendors, id: \.self) { vendor in
+                        TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 42)
                     }
                 }
-                Text(store.mode == .broadcast ? "Broadcast to all selected agents" : "Start a solo chat")
+                Text(store.selectedVendorCount == 1 ? "Ask \(store.primaryVendor.displayName)" : "Broadcast to selected agents")
                     .font(TahoeFont.body(18, weight: .semibold))
                     .foregroundStyle(t.fg)
-                Text(store.mode == .broadcast ? "Send one prompt and compare live replies side by side." : "Use one provider when you already know who should answer.")
+                Text(store.selectedVendorCount == 1 ? "One selected vendor answers this thread." : "Send one prompt and compare live replies side by side.")
                     .font(TahoeFont.body(12.5))
                     .foregroundStyle(t.fg3)
             }
@@ -781,50 +754,77 @@ private struct ComposerBar: View {
 
     @ViewBuilder
     private var providerControls: some View {
-        if store.mode == .broadcast {
-            ForEach(ChatV2Store.defaultBroadcastProviderOrder, id: \.self) { provider in
-                Button { store.toggleBroadcastProvider(provider) } label: {
-                    HStack(spacing: 5) {
-                        TahoeProviderGlyph(provider: provider.tahoeProvider, size: 14)
-                        Text(provider.tahoeProvider.displayName)
-                            .font(TahoeFont.body(11, weight: .semibold))
-                    }
-                    .foregroundStyle(isProviderAvailable(provider) && store.broadcastProviders.contains(provider) ? t.fg : t.fg4)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .background(isProviderAvailable(provider) && store.broadcastProviders.contains(provider) ? Color.white.opacity(0.10) : Color.white.opacity(0.045), in: Capsule())
-                    .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
-                }
-                .buttonStyle(.plain)
-                .disabled(!isProviderAvailable(provider))
-                .help(providerUnavailableReason(provider) ?? provider.tahoeProvider.displayName)
-            }
-        } else {
+        ForEach(ChatV2Store.defaultChatVendorOrder, id: \.self) { vendor in
             Menu {
-                ForEach(ChatV2Store.defaultBroadcastProviderOrder, id: \.self) { provider in
-                    Button {
-                        store.selectedProvider = provider
-                        store.persist()
-                    } label: {
-                        Text(provider.tahoeProvider.displayName)
+                Button {
+                    store.toggleVendor(vendor)
+                } label: {
+                    Text(store.isVendorSelected(vendor) ? "Remove \(vendor.displayName)" : "Add \(vendor.displayName)")
+                }
+                .disabled((store.isVendorSelected(vendor) && store.selectedVendorCount == 1)
+                          || (!store.isVendorSelected(vendor) && store.selectedVendorCount == 3)
+                          || (!store.isVendorSelected(vendor) && !isVendorAvailable(vendor)))
+
+                let models = vendor.models(in: client.modelCatalog)
+                if !models.isEmpty {
+                    Section("Model") {
+                        ForEach(models) { entry in
+                            Button {
+                                store.selectModel(entry.id, for: vendor)
+                            } label: {
+                                HStack {
+                                    Text(entry.displayName)
+                                    if store.model(for: vendor, catalog: client.modelCatalog) == entry.id {
+                                        TahoeIcon("check", size: 10)
+                                    }
+                                }
+                            }
+                        }
                     }
-                    .disabled(!isProviderAvailable(provider))
+                }
+
+                if modelSupportsEffort(vendor) {
+                    Section("Effort") {
+                        ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                            Button {
+                                store.selectEffort(effort, for: vendor)
+                            } label: {
+                                HStack {
+                                    Text(effort.rawValue)
+                                    if store.effort(for: vendor, catalog: client.modelCatalog) == effort {
+                                        TahoeIcon("check", size: 10)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } label: {
-                HStack(spacing: 5) {
-                    TahoeProviderGlyph(provider: store.selectedProvider.tahoeProvider, size: 14)
-                    Text(store.selectedProvider.tahoeProvider.displayName)
-                        .font(TahoeFont.body(11, weight: .semibold))
-                    TahoeIcon("chevD", size: 8)
+                let selected = store.isVendorSelected(vendor)
+                let available = isVendorAvailable(vendor)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 14)
+                        Text(vendor.displayName)
+                            .font(TahoeFont.body(11, weight: .semibold))
+                    }
+                    if selected, let model = compactModelLabel(for: vendor) {
+                        Text(model)
+                            .font(TahoeFont.mono(9))
+                            .foregroundStyle(t.fg4)
+                            .lineLimit(1)
+                    }
                 }
-                .foregroundStyle(t.fg)
+                .foregroundStyle(selected && available ? t.fg : t.fg4)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 6)
-                .background(Color.white.opacity(0.08), in: Capsule())
-                .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
+                .background(selected && available ? Color.white.opacity(0.10) : Color.white.opacity(0.045), in: Capsule())
+                .overlay(Capsule().stroke(selected ? vendor.backingProvider.tahoeProvider.halo.color.opacity(0.42) : t.hairline, lineWidth: 0.5))
             }
             .menuIndicator(.hidden)
             .menuStyle(.borderlessButton)
+            .disabled(!store.isVendorSelected(vendor) && !isVendorAvailable(vendor))
+            .help(providerUnavailableReason(vendor) ?? "\(vendor.displayName) model picker")
         }
     }
 
@@ -850,7 +850,7 @@ private struct ComposerBar: View {
     private var lockedModeChip: some View {
         HStack(spacing: 5) {
             TahoeIcon(openTarget?.isReadOnlyTranscript == true ? "doc" : (openTarget?.isFrontier == true ? "branch" : "chat"), size: 11)
-            Text(openTarget?.isReadOnlyTranscript == true ? "Read-only transcript" : (openTarget?.isFrontier == true ? "Broadcast thread" : "Solo thread"))
+            Text(openTarget?.isReadOnlyTranscript == true ? "Read-only transcript" : (openTarget?.isFrontier == true ? "Broadcast thread" : "Single-vendor thread"))
                 .font(TahoeFont.body(11, weight: .semibold))
         }
         .foregroundStyle(t.fg3)
@@ -916,13 +916,16 @@ private struct ComposerBar: View {
         if openTarget?.isReadOnlyTranscript == true { return "Archived transcript is read-only" }
         if openTarget?.isFrontier == true { return "Follow up with all agents…" }
         if openTarget != nil { return "Reply to this chat…" }
-        if store.mode == .broadcast { return "Ask selected providers…" }
-        return "Ask \(store.selectedProvider.tahoeProvider.displayName)…"
+        return store.selectedVendorCount == 1 ? "Ask \(store.primaryVendor.displayName)…" : "Ask selected providers…"
     }
 
     private var estimatedCost: String {
         if openTarget?.isReadOnlyTranscript == true { return "read-only" }
-        return store.mode == .broadcast || openTarget?.isFrontier == true ? "est. 3x tokens" : "est. 1x tokens"
+        if case .frontier(let groupId) = openTarget {
+            return "est. \(max(2, client.frontierChildren(groupId: groupId).count))x tokens"
+        }
+        if openTarget != nil { return "est. 1x tokens" }
+        return "est. \(store.selectedVendorCount)x tokens"
     }
 
     private func dispatchSend() async {
@@ -936,7 +939,7 @@ private struct ComposerBar: View {
             case .frontier(let groupId):
                 let children = client.frontierChildren(groupId: groupId)
                 guard children.count >= 2 else {
-                    return "Broadcast needs at least two live children — pick a Solo chat to continue."
+                    return "Broadcast needs at least two live children; continue from one selected answer instead."
                 }
                 let perChild = await uploadAndBuildPerChildPrompts(base: trimmed, sessionIds: children.map(\.id))
                 guard let response = await client.sendFrontierPrompt(
@@ -951,9 +954,16 @@ private struct ComposerBar: View {
             case .transcript:
                 return "Archived transcripts are read-only. Start a new chat to continue."
             case nil:
-                if store.mode == .broadcast {
-                    let slots = store.frontierSlots().filter { isProviderAvailable($0.provider) }
-                    guard slots.count >= 2 else { return "At least two broadcast providers must be available." }
+                let selectedVendors = store.selectedVendors
+                let unavailableReasons = selectedVendors.compactMap { providerUnavailableReason($0) }
+                guard unavailableReasons.isEmpty else {
+                    return unavailableReasons.joined(separator: "\n")
+                }
+                if selectedVendors.count >= 2 {
+                    let slots = store.frontierSlots(catalog: client.modelCatalog).filter { slot in
+                        slot.chatVendor.map(isVendorAvailable(_:)) ?? isProviderAvailable(slot.provider)
+                    }
+                    guard slots.count >= 2 else { return "At least two selected providers must be available." }
                     guard let created = await client.createBroadcastChat(slots: slots) else {
                         return client.lastError ?? "Couldn't create broadcast chat."
                     }
@@ -982,11 +992,14 @@ private struct ComposerBar: View {
                     store.clearAttachments()
                     return response.ok ? nil : response.results.compactMap(\.reason).joined(separator: "\n")
                 } else {
+                    let vendor = selectedVendors.first ?? store.primaryVendor
                     guard let session = await client.createChatSession(
-                        provider: store.selectedProvider,
-                        model: store.selectedModel,
-                        codexBackend: store.selectedProvider == .codex ? store.codexBackendPreference : nil,
-                        effort: store.selectedEffort,
+                        provider: vendor.backingProvider,
+                        model: store.model(for: vendor, catalog: client.modelCatalog),
+                        codexBackend: vendor == .chatgpt ? store.codexBackendPreference : nil,
+                        effort: store.effort(for: vendor, catalog: client.modelCatalog),
+                        chatVendor: vendor,
+                        billingProvider: vendor.billingProvider,
                         deepResearch: store.deepResearch
                     ) else {
                         return client.lastError ?? "Couldn't create chat."
@@ -1009,9 +1022,43 @@ private struct ComposerBar: View {
         return entries.contains { $0.capabilityProbePassed }
     }
 
-    private func providerUnavailableReason(_ provider: AgentKind) -> String? {
-        guard !isProviderAvailable(provider) else { return nil }
+    private func isVendorAvailable(_ vendor: ChatVendor) -> Bool {
+        let provider = vendor.backingProvider
+        guard let entries = providerMatrix?.providers.filter({ $0.provider == provider }),
+              !entries.isEmpty else {
+            return true
+        }
+        if vendor == .chatgpt {
+            return entries.contains { $0.codexBackend == .sdk && $0.capabilityProbePassed }
+        }
+        return entries.contains { $0.capabilityProbePassed }
+    }
+
+    private func providerUnavailableReason(_ vendor: ChatVendor) -> String? {
+        guard !isVendorAvailable(vendor) else { return nil }
+        let provider = vendor.backingProvider
+        if vendor == .chatgpt {
+            return providerMatrix?.providers.first {
+                $0.provider == provider && $0.codexBackend == .sdk && !$0.capabilityProbePassed
+            }?.reason
+        }
         return providerMatrix?.providers.first { $0.provider == provider && !$0.capabilityProbePassed }?.reason
+    }
+
+    private func compactModelLabel(for vendor: ChatVendor) -> String? {
+        guard let id = store.model(for: vendor, catalog: client.modelCatalog) else { return nil }
+        if let entry = vendor.models(in: client.modelCatalog).first(where: { $0.id == id }) {
+            return entry.displayName
+        }
+        return id
+    }
+
+    private func modelSupportsEffort(_ vendor: ChatVendor) -> Bool {
+        guard let id = store.model(for: vendor, catalog: client.modelCatalog),
+              let entry = vendor.models(in: client.modelCatalog).first(where: { $0.id == id }) else {
+            return vendor.defaultEffort != nil
+        }
+        return entry.supportsEffort
     }
 
     /// Solo path: upload each attachment to one session's staging dir

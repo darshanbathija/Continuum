@@ -209,7 +209,7 @@ public actor TmuxControlClient {
         readTask?.cancel()
         readTask = nil
         if let pty {
-            close(pty.masterFD)
+            pty.closeMaster()
         }
         pty = nil
         isAlive = false
@@ -228,7 +228,7 @@ public actor TmuxControlClient {
         // silently returned because `pty` was left non-nil; subsequent
         // commands then wrote to a closed file descriptor.
         if let pty {
-            close(pty.masterFD)
+            pty.closeMaster()
         }
         pty = nil
         readTask?.cancel()
@@ -299,21 +299,59 @@ public actor TmuxControlClient {
         // tmux's parser handles single-quoted segments. We quote each arg
         // to prevent re-tokenization on spaces. Backslash + single quote
         // is the escape for a literal single quote.
-        let quoted = child.map { Self.tmuxQuote($0) }.joined(separator: " ")
-        let result = try await command([
-            "new-window",
-            "-P",  // print the new window + primary pane ids
-            "-F", "'#{window_id} #{pane_id}'",
-            "-t", "control",
-            "-c", Self.tmuxQuote(cwd),
-            "--",
-            quoted,
-        ])
-        // Response body is the printed ids, e.g. "@4 %5".
-        let line = result.lines.first?.trimmingCharacters(in: .whitespaces) ?? ""
+        do {
+            let quoted = child.map { Self.tmuxQuote($0) }.joined(separator: " ")
+            let result = try await command([
+                "new-window",
+                "-P",  // print the new window + primary pane ids
+                "-F", "'#{window_id} #{pane_id}'",
+                "-t", "control",
+                "-c", Self.tmuxQuote(cwd),
+                "--",
+                quoted,
+            ])
+            // Response body is the printed ids, e.g. "@4 %5".
+            if let ref = Self.parseWindowRef(from: result.lines.first) {
+                return ref
+            }
+            throw TmuxError.commandFailed("new-window returned unexpected: \(result.lines.first ?? "")")
+        } catch {
+            tmuxLogger.warning("control-mode new-window failed; retrying with fresh tmux client: \(String(describing: error), privacy: .public)")
+            return try await newWindowUsingFreshClient(cwd: cwd, child: child)
+        }
+    }
+
+    private func newWindowUsingFreshClient(cwd: String, child: [String]) async throws -> WindowRef {
+        let result = try await ShellRunner.shared.runOrThrow(
+            executable: configuration.tmuxBinary,
+            arguments: [
+                "-L", configuration.socketName,
+                "new-window",
+                "-P",
+                "-F", "#{window_id} #{pane_id}",
+                "-t", "control",
+                "-c", cwd,
+                "--",
+            ] + child,
+            timeout: 10
+        )
+        let line = result.stdoutString
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)
+        guard let ref = Self.parseWindowRef(from: line) else {
+            throw TmuxError.commandFailed("fresh-client new-window returned unexpected: \(result.stdoutString)")
+        }
+        return ref
+    }
+
+    private static func parseWindowRef(from rawLine: String?) -> WindowRef? {
+        let line = (rawLine ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "'"))
         let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
         guard parts.count == 2, parts[0].hasPrefix("@"), parts[1].hasPrefix("%") else {
-            throw TmuxError.commandFailed("new-window returned unexpected: \(line)")
+            return nil
         }
         return WindowRef(windowId: parts[0], paneId: parts[1])
     }
