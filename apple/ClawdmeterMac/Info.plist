@@ -12,6 +12,19 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<!-- v0.29.7: display-only rebrand to "Continuum". CFBundleName +
+	     PRODUCT_NAME stay as "Clawdmeter" so the on-disk executable
+	     name, bundle identifier (com.clawdmeter.mac), file paths
+	     (~/Library/Application Support/Clawdmeter/), App Group, and
+	     keychain-access-group prefixes don't drift — existing installs
+	     keep their data, paired iPhones stay paired, no migration.
+	     CFBundleDisplayName overrides the name shown in Finder, Dock,
+	     menu bar, About panel, App Switcher, and the Window title. The
+	     full bundle-ID rebrand to com.montaukanalytics.continuum.* is
+	     scheduled for Phase 2 when the new Apple Developer Program
+	     enrollment under accounts@montaukanalytics.xyz is active. -->
+	<key>CFBundleDisplayName</key>
+	<string>Continuum</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -46,11 +59,11 @@
 	<key>LSFileQuarantineEnabled</key>
 	<false/>
 	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Clawdmeter contributors.</string>
+	<string>© 2026 Continuum (Montauk Analytics).</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Clawdmeter records audio for voice dictation in the agent composer (Ctrl+M). Recording only happens while you hold the mic button.</string>
+	<string>Continuum records audio for voice dictation in the agent composer (Ctrl+M). Recording only happens while you hold the mic button.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Clawdmeter uses speech recognition to dictate messages into the agent composer (Ctrl+M). Audio is processed on-device when possible.</string>
+	<string>Continuum uses speech recognition to dictate messages into the agent composer (Ctrl+M). Audio is processed on-device when possible.</string>
 	<!-- v0.7.7: NSUserActivity Handoff for the iOS Codex resume sheet's
 	     "Continue on Mac" button. iPhone advertises an activity with the
 	     threadId; macOS receives it via NSApplicationDelegate's continue:

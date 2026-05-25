@@ -144,7 +144,7 @@ struct ClaudeView: View {
             }
         } else {
             VStack(alignment: .leading) {
-                Text("Clawdmeter")
+                Text("Continuum")
                     .font(.headline)
                 Text("Open app")
                     .font(.caption2)
@@ -162,7 +162,7 @@ struct ClaudeView: View {
             Text("Claude \(snap.usage.sessionPct)% · resets ")
                 + Text(resetDate, style: .relative)
         } else {
-            Text("Clawdmeter offline")
+            Text("Continuum offline")
         }
     }
 }

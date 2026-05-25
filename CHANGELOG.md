@@ -24,7 +24,51 @@ Clawdmeter no longer maintains a parallel "paste an OpenRouter key" affordance f
 - Manual: removing auth.json drops the row to "No upstream providers yet" with an "Auth via CLI" button that opens Terminal with `opencode auth login` queued.
 - `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO` -> pending CI run on the PR (no local macOS toolchain on the build agent).
 
-Bumps `MARKETING_VERSION` 0.29.6 -> 0.29.9, `CURRENT_PROJECT_VERSION` 145 -> 148.
+Bumps `MARKETING_VERSION` 0.29.8 -> 0.29.9, `CURRENT_PROJECT_VERSION` 147 -> 148.
+
+## [0.29.8 build 147] - 2026-05-26 - PRODUCT_NAME flip: `/Applications/Continuum.app` (`rebrand/continuum-product-name`)
+
+Extends the v0.29.7 display-only rebrand: PRODUCT_NAME on the Mac target flips from `Clawdmeter` to `Continuum`, so the `.app` folder users see in `/Applications`, Finder Get Info, Spotlight, and Activity Monitor process names is now `Continuum.app` / `Continuum`. CFBundleName (which mirrors PRODUCT_NAME) also reads `Continuum` now, so the previous display-vs-name split (display "Continuum" but bundle name still "Clawdmeter") is closed.
+
+Bundle identifier stays `com.clawdmeter.mac`. App Group `group.76S62SDSD3.com.clawdmeter`, keychain-access-group prefix, and on-disk data at `~/Library/Application Support/Clawdmeter/` + `~/Library/Containers/com.clawdmeter.mac/` are all untouched — existing installs upgrade with zero data migration. The full bundle-id transition to `com.montaukanalytics.continuum.*` still waits on the Montauk Analytics Developer Program enrollment.
+
+### Migration note
+
+Users upgrading from v0.29.7 or earlier will see BOTH `/Applications/Clawdmeter.app` (legacy) and `/Applications/Continuum.app` (new) after dragging the new DMG into Applications. They're the same app — the new DMG's `INSTALL.txt` tells users to drag the legacy `Clawdmeter.app` to the Trash. Data and pairing carry over automatically (bundle identifier is unchanged).
+
+### Changed
+
+- **`apple/project.yml`** — ClawdmeterMac target: `PRODUCT_NAME: Continuum`. iOS + Watch targets stay on PRODUCT_NAME = Clawdmeter (iOS / Watch home-screen names already update via CFBundleDisplayName; no on-screen file path to rename there).
+- **`tools/build-mac-dmg.sh`** — `APP_NAME = "Continuum"` so the .app folder lookup, xcarchive path (`Continuum.xcarchive`), and DMG verification all line up. The standalone `DISPLAY_NAME` variable introduced in v0.29.7 is gone — APP_NAME does both jobs now.
+- **`INSTALL.txt` inside the DMG** — adds a migration step telling users to trash the legacy Clawdmeter.app.
+
+Bumps `MARKETING_VERSION` 0.29.7 -> 0.29.8, `CURRENT_PROJECT_VERSION` 146 -> 147.
+
+## [0.29.7 build 146] - 2026-05-26 - Continuum display-only rebrand + v0.29.6 DMG launch fix (`rebrand/continuum-display-name`)
+
+Two things in one ship:
+
+**Rebrand (Phase 1: display-only).** The app is now called **Continuum** in every user-visible surface — menu bar, Dock, Finder, App Switcher, Window title, the in-app About panel, copyright, microphone/speech privacy strings, the DMG filename and the volume name it mounts as. The bundle identifier (`com.clawdmeter.mac`), PRODUCT_NAME (`Clawdmeter`), on-disk data path (`~/Library/Application Support/Clawdmeter/`), App Group, and keychain-access-group prefix all stay where they are. No data migration; existing installs upgrade in place; paired iPhones remain paired. Phase 2 (full bundle-id transition to `com.montaukanalytics.continuum.*`, signing identity transfer to the new Apple Developer Program team under `accounts@montaukanalytics.xyz`, and notarization of the DMG) lands when the new team enrollment is active.
+
+**DMG launch fix (critical).** v0.29.6 shipped a DMG that wouldn't launch on a clean install with "Launchd job spawn failed" (error 163). Root cause was in the helper re-sign step I added in v0.29.4: the outer-app re-sign passed entitlements verbatim, so the `$(AppIdentifierPrefix)` macro stayed literal in the signed entitlements blob — Gatekeeper rejected the unexpanded keychain-access-group token and launchd refused to spawn. The same step also added `--options runtime` to the outer app, forcing hardened runtime onto the main binary which xcodebuild had signed without it (library validation can then refuse to load bundled Swift dylibs). Fixed in `tools/build-mac-dmg.sh` by extracting the team id from the outer codesign descriptor, expanding the macro into a temp entitlements file via `sed`, and dropping `--options runtime` from the outer call so only the external helpers (`Vendor/opencode/opencode`, `Vendor/uv/uv`) carry the runtime flag.
+
+### Changed
+
+- **CFBundleDisplayName = "Continuum"** on the Mac + iOS Info.plists. CFBundleName / PRODUCT_NAME stay as `Clawdmeter` so bundle paths don't drift.
+- **DMG filename + mounted volume name** are now `Continuum-x.y.z-arm64.dmg` and `Continuum`. `INSTALL.txt` calls out that the .app on disk is still named `Clawdmeter.app` (internal name) so users don't think they grabbed the wrong package.
+- **Visible Swift strings** rewritten: dashboard window title, agent-server start-failure alert, in-app update CTA copy, "Continuum Support" diagnostics bundle folder, iOS privacy footer copy, iOS / Watch widget titles, Watch navigation title.
+- **Copyright** updated to `© 2026 Continuum (Montauk Analytics).`
+
+### Fixed
+
+- **v0.29.6 DMG won't launch** — see DMG launch fix above. Fully re-signed bundle now passes `codesign --verify --deep --strict` and launches cleanly on a fresh `/Applications` install.
+
+### Known limitations
+
+- The XProtect "Apple could not verify '.bbb…dylib' is free of malware" popup is unchanged; killing that requires notarization, which requires the paid Apple Developer Program enrollment under `accounts@montaukanalytics.xyz`. Tracked separately.
+- GitHub repository name stays at `darshanbathija/Clawdmeter` for now. UpdateNotifier still hits `releases/latest` on that repo, so existing in-app update chip keeps working through the transition.
+
+Bumps `MARKETING_VERSION` 0.29.6 -> 0.29.7, `CURRENT_PROJECT_VERSION` 145 -> 146.
 
 ## [0.29.6 build 145] - 2026-05-25 - Consolidated UI ship fixes (`darshanbathija/conductor-ui-research-v1`)
 

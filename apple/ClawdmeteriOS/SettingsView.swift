@@ -196,7 +196,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Text("Clawdmeter polls the Anthropic API every 60 seconds while the app is open. We never store or send your usage values anywhere else.")
+                    Text("Continuum polls the Anthropic API every 60 seconds while the app is open. We never store or send your usage values anywhere else.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } header: {

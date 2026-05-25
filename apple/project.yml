@@ -137,7 +137,20 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.mac
-        PRODUCT_NAME: Clawdmeter
+        # v0.29.8: PRODUCT_NAME → Continuum so the .app folder users
+        # see in /Applications + Finder + Get Info + Spotlight is
+        # "Continuum.app", not "Clawdmeter.app". Bundle identifier
+        # stays com.clawdmeter.mac so the App Group, keychain prefix,
+        # and on-disk data path (~/Library/Application Support/
+        # Clawdmeter/, sandbox container ~/Library/Containers/
+        # com.clawdmeter.mac/) don't move — existing installs upgrade
+        # in place. Users will end up with both /Applications/
+        # Clawdmeter.app (old) and /Applications/Continuum.app (new)
+        # after first upgrade; the install script in tools/build-mac-
+        # dmg.sh prints a note telling them to drag the old one to
+        # the Trash. Phase 2 bundle-id transition still pending the
+        # Montauk Analytics Developer Program enrollment.
+        PRODUCT_NAME: Continuum
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "76S62SDSD3"
         INFOPLIST_FILE: ClawdmeterMac/Info.plist
