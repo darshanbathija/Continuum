@@ -249,6 +249,58 @@ public actor OpencodeAuthFile {
         return entries.keys.sorted()
     }
 
+    /// Typed view of the entries `opencode auth login` (or any other
+    /// path that touches `auth.json`) has populated. The Settings panel
+    /// uses this to render "N upstream providers available" and a list
+    /// of provider chips without having to re-parse the JSON itself.
+    ///
+    /// Sorted by provider id so the rendered list is stable across
+    /// reads. Empty when the file is missing.
+    public struct UpstreamProvider: Sendable, Equatable {
+        /// Raw provider id as stored in auth.json (e.g. "openrouter").
+        public let id: String
+        /// Auth-record discriminator: "api", "oauth", "wellknown", or
+        /// any future variant opencode adds. Falls back to "configured"
+        /// when the entry has no `type` field.
+        public let type: String
+        /// Human-readable label. Capitalised provider id; callers can
+        /// substitute their own mapping for well-known providers.
+        public let displayName: String
+    }
+
+    public func enumeratedProviders() async -> [UpstreamProvider] {
+        let entries = await readEntries()
+        return entries
+            .map { (id, entry) -> UpstreamProvider in
+                let type = (entry["type"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "configured"
+                return UpstreamProvider(
+                    id: id,
+                    type: type,
+                    displayName: Self.defaultDisplayName(for: id)
+                )
+            }
+            .sorted { $0.id < $1.id }
+    }
+
+    /// Best-effort capitalisation for the handful of providers shipped
+    /// upstream. Anything else falls back to the raw id so a new
+    /// provider doesn't get a wrong label.
+    internal static func defaultDisplayName(for providerId: String) -> String {
+        switch providerId.lowercased() {
+        case "openrouter":   return "OpenRouter"
+        case "anthropic":    return "Anthropic"
+        case "openai":       return "OpenAI"
+        case "moonshotai":   return "Moonshot AI"
+        case "google":       return "Google AI Studio"
+        case "mistral":      return "Mistral"
+        case "groq":         return "Groq"
+        case "xai":          return "xAI"
+        case "deepseek":     return "DeepSeek"
+        case "github-copilot": return "GitHub Copilot"
+        default:             return providerId
+        }
+    }
+
     /// API key for a provider when the auth entry is the `api` shape
     /// Clawdmeter writes. OAuth/wellknown entries intentionally return nil.
     public func apiKey(providerId: String) async -> String? {

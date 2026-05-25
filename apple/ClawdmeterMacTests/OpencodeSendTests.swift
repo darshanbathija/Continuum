@@ -62,28 +62,29 @@ final class OpencodeSendTests: XCTestCase {
         XCTAssertEqual(parts?.first?["text"] as? String, prompt)
     }
 
-    func test_requestBody_openRouterOverrideUsesOpenAPImodelObjectAndVariant() throws {
-        // Local `opencode serve` OpenAPI exposes the override as:
-        //   model: { providerID, modelID }
-        //   variant: "minimal|low|medium|high|xhigh"
-        // It does not accept legacy top-level providerID/modelID fields.
+    func test_requestBody_omitsModelOverride_v0_29_9() throws {
+        // v0.29.9: Clawdmeter no longer second-guesses opencode's
+        // default model. We POST only `parts` and let `opencode serve`
+        // pick the upstream provider/model from the CLI's own state
+        // (populated by `opencode auth login` + `opencode` defaults).
+        //
+        // This test pins that no `model` or `variant` keys appear in
+        // the body Clawdmeter constructs — a regression here would
+        // re-introduce the cross-product bug where the desktop UI's
+        // model selection silently overrode the CLI default a user
+        // had just configured in Terminal.
         let body: [String: Any] = [
-            "parts": [["type": "text", "text": "hello"]],
-            "model": [
-                "providerID": "openrouter",
-                "modelID": "anthropic/claude-sonnet-4.6",
-            ],
-            "variant": "high",
+            "parts": [["type": "text", "text": "hello"]]
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
         let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let model = decoded?["model"] as? [String: Any]
-
+        XCTAssertNil(decoded?["model"])
+        XCTAssertNil(decoded?["variant"])
         XCTAssertNil(decoded?["providerID"])
         XCTAssertNil(decoded?["modelID"])
-        XCTAssertEqual(model?["providerID"] as? String, "openrouter")
-        XCTAssertEqual(model?["modelID"] as? String, "anthropic/claude-sonnet-4.6")
-        XCTAssertEqual(decoded?["variant"] as? String, "high")
+        let parts = decoded?["parts"] as? [[String: Any]]
+        XCTAssertEqual(parts?.count, 1)
+        XCTAssertEqual(parts?.first?["text"] as? String, "hello")
     }
 
     func test_requestBody_preservesPromptWithNewlines() throws {

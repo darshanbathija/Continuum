@@ -4,6 +4,28 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.9 build 148] - 2026-05-26 - OpenCode auth flows through the CLI (`feat/opencode-cli-auth`)
+
+Clawdmeter no longer maintains a parallel "paste an OpenRouter key" affordance for OpenCode. The user's `opencode` CLI session is now the single source of truth — Clawdmeter reads `~/.local/share/opencode/auth.json` to enumerate connected upstream providers and routes chat through the long-running `opencode serve` daemon (which already uses those CLI creds upstream). Settings → Providers → OpenCode now mirrors the Claude Code row's "Auth via CLI" shape.
+
+### Changed
+
+- **Settings → Providers → OpenCode** - the "Activate / Edit API key" sheet is replaced by a status row showing "Using opencode CLI auth — N upstream providers available" plus a list of provider chips. When auth.json is empty or the binary is missing, the row exposes an "Auth via CLI" button that opens Terminal pre-typed with `opencode auth login` (with the same AppleScript+clipboard fallback the Claude row uses for sandboxed builds).
+- **`OpencodeAuthFile`** - exposes `enumeratedProviders()` returning a typed `[UpstreamProvider]` (id, auth type, display name) so the Settings panel doesn't re-parse the JSON itself.
+- **`opencodeMessageBody`** - no longer injects `model.providerID` / `model.modelID` / `variant`. `opencode serve` picks the upstream model from the CLI's own default-model state, so the desktop UI's stale model selection can't silently override what the user just configured in Terminal.
+
+### Removed
+
+- **`OpencodeAPIKeySheet.swift`** - the in-app API-key sheet is gone. The CLI's `opencode auth login` flow is the only supported path; pasting keys directly from Clawdmeter is no longer offered.
+
+### Verification
+
+- Manual: with `~/.local/share/opencode/auth.json` present and an OpenRouter token in it, sending a chat to OpenCode streams a response without Clawdmeter prompting for any key.
+- Manual: removing auth.json drops the row to "No upstream providers yet" with an "Auth via CLI" button that opens Terminal with `opencode auth login` queued.
+- `xcodebuild build -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO` -> pending CI run on the PR (no local macOS toolchain on the build agent).
+
+Bumps `MARKETING_VERSION` 0.29.6 -> 0.29.9, `CURRENT_PROJECT_VERSION` 145 -> 148.
+
 ## [0.29.6 build 145] - 2026-05-25 - Consolidated UI ship fixes (`darshanbathija/conductor-ui-research-v1`)
 
 Consolidates the client-local UI rollout and closes the ship-blocking notification, export, provider-default, and diagnostics issues found during review.

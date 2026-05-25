@@ -1208,128 +1208,200 @@ private struct ProviderDefaultControlRow: View {
 
 /// Settings → Providers → OpenCode row.
 ///
-/// Collapsed UX: one toggle, one button.
-///   - Off (binary missing OR no API key) → "Activate" button. Clicking it
-///     re-probes for the binary, then opens the OpenRouter API key sheet
-///     so the user can paste a key. The toggle moves on once a key lands.
-///   - On (binary present AND ≥1 provider configured) → toggle ON plus an
-///     "Edit API key" button that re-opens the same sheet. Flipping the
-///     toggle off removes every configured provider via
-///     OpencodeAuthFile.removeProvider — equivalent to a global sign-out.
+/// v0.29.9 simplification: Clawdmeter no longer maintains its own
+/// "paste an API key" affordance. The source of truth is the user's
+/// `opencode` CLI auth (`opencode auth login`), which writes to
+/// `~/.local/share/opencode/auth.json`. This row reads that file via
+/// `OpencodeAuthFile.enumeratedProviders()` and surfaces what the CLI
+/// already knows about:
 ///
-/// Power-user affordances (sign in with browser / diagnostic / OAuth
-/// providers) are reachable via OpencodeAPIKeySheet's provider picker
-/// or via the upstream `opencode` CLI. They no longer need top-level
-/// chrome in Settings.
+///   - Auth populated → "Using opencode CLI auth — N upstream providers
+///     available" + a list of provider chips. No edit affordance; the
+///     CLI owns the lifecycle.
+///   - Auth empty / file missing → "Auth via CLI" button that opens
+///     Terminal pre-typed with `opencode auth login` (with the same
+///     AppleScript+clipboard fallback the Claude row uses).
+///   - Binary missing → same "Auth via CLI" button, but the shell
+///     command also covers installing the CLI first.
 private struct OpencodeProviderRow: View {
     @Environment(\.tahoe) private var t
-    @State private var authStatus: [String: String]? = nil
+    @State private var providers: [OpencodeAuthFile.UpstreamProvider] = []
     @State private var hasBinary: Bool = false
-    @State private var apiKeySheet: Bool = false
-    @State private var activating: Bool = false
+    @State private var loaded: Bool = false
 
-    private var isOn: Bool {
-        hasBinary && !(authStatus?.isEmpty ?? true)
-    }
+    private var isSignedIn: Bool { !providers.isEmpty }
 
-    /// One-line status. Keeps the row compact: signed-in surfaces the
-    /// provider name, off-state explains what Activate does.
     private var detailLine: String {
-        if isOn {
-            let provider = authStatus?.keys.sorted().first ?? "provider"
-            return "Signed in via \(displayName(for: provider)). Click Edit API key to swap."
+        if !loaded {
+            return "Probing the opencode CLI and ~/.local/share/opencode/auth.json…"
+        }
+        if isSignedIn {
+            return "Using opencode CLI auth — \(providers.count) upstream provider\(providers.count == 1 ? "" : "s") available."
         }
         if !hasBinary {
-            return "OpenCode CLI not detected. Click Activate to detect it (install via opencode.ai if missing) and paste an OpenRouter key."
+            return "OpenCode CLI not detected. Click Auth via CLI to install it and run `opencode auth login`."
         }
-        return "Paste an OpenRouter (or other) API key to enable OpenCode-backed sessions."
+        return "No upstream providers yet. Click Auth via CLI to run `opencode auth login` in Terminal."
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             TahoeProviderGlyph(provider: .opencode, size: 32)
             VStack(alignment: .leading, spacing: 4) {
-                Text("OpenRouter via OpenCode")
+                Text("OpenCode")
                     .font(TahoeFont.body(14, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Text(detailLine)
                     .font(TahoeFont.body(12))
                     .foregroundStyle(t.fg3)
                     .fixedSize(horizontal: false, vertical: true)
+                if isSignedIn {
+                    providerChips
+                }
             }
             Spacer(minLength: 12)
             trailingControl
         }
         .task { await refreshState() }
-        .sheet(isPresented: $apiKeySheet) {
-            OpencodeAPIKeySheet {
-                Task { await refreshState() }
+    }
+
+    private var providerChips: some View {
+        // Wrap chips in an HStack — the provider count is small (≤10)
+        // and the Settings column is fixed width, so a single line of
+        // chips fits without a flow layout. If new providers push the
+        // count higher this should be revisited.
+        HStack(spacing: 6) {
+            ForEach(providers, id: \.id) { provider in
+                Text(provider.displayName)
+                    .font(TahoeFont.body(10, weight: .semibold))
+                    .tracking(0.2)
+                    .foregroundStyle(t.fg2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background { Capsule().fill(t.fg.opacity(0.08)) }
+                    .overlay { Capsule().stroke(t.fg.opacity(0.18), lineWidth: 0.5) }
+                    .help("\(provider.displayName) · \(provider.type)")
             }
+            Spacer(minLength: 0)
         }
+        .padding(.top, 2)
     }
 
     @ViewBuilder
     private var trailingControl: some View {
-        if isOn {
-            VStack(alignment: .trailing, spacing: 8) {
-                TahoeToggleView(on: Binding(
-                    get: { true },
-                    set: { newValue in
-                        if !newValue { Task { await signOutAll() } }
-                    }
-                ))
-                Button("Edit API key") { apiKeySheet = true }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+        if isSignedIn {
+            Button {
+                openTerminalForOpencodeAuth(installIfMissing: !hasBinary)
+                scheduleReprobe()
+            } label: {
+                Text("Re-auth")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.accent)
             }
+            .buttonStyle(.plain)
+            .help("Open Terminal and run `opencode auth login` to add or replace a provider.")
         } else {
-            Button(activating ? "Activating…" : "Activate") {
-                Task { await activate() }
+            Button {
+                openTerminalForOpencodeAuth(installIfMissing: !hasBinary)
+                scheduleReprobe()
+            } label: {
+                Text("Auth via CLI")
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .foregroundStyle(t.accent)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(activating)
+            .buttonStyle(.plain)
+            .help(hasBinary
+                ? "Open Terminal and run `opencode auth login`."
+                : "Open Terminal to install opencode and run `opencode auth login`.")
         }
     }
 
     // MARK: - Actions
 
-    /// Activate path: ensure the binary is detected, then surface the API
-    /// key sheet. Binary missing isn't a hard stop — the sheet still lets
-    /// the user paste a key, and OpencodeProcessManager.ensureRunning()
-    /// re-probes on the first session spawn.
-    private func activate() async {
-        activating = true
-        await OpencodeProcessManager.shared.reprobe()
-        await refreshState()
-        activating = false
-        apiKeySheet = true
-    }
-
-    /// Toggle-off → remove every configured provider so the row collapses
-    /// back to the Activate state. Auth file is the source of truth; the
-    /// in-memory authStatus is refreshed afterwards.
-    private func signOutAll() async {
-        let providers = await OpencodeAuthFile.shared.providerIds()
-        for id in providers {
-            try? await OpencodeAuthFile.shared.removeProvider(providerId: id)
-        }
-        await OpencodeProcessManager.shared.reprobe()
-        await refreshState()
-    }
-
     private func refreshState() async {
-        hasBinary = OpencodeProcessManager.shared.binaryPath != nil
-        await OpencodeProcessManager.shared.refreshAuthStatus()
-        authStatus = OpencodeProcessManager.shared.authStatus
-        hasBinary = OpencodeProcessManager.shared.binaryPath != nil
+        await OpencodeProcessManager.shared.reprobe()
+        let enumerated = await OpencodeAuthFile.shared.enumeratedProviders()
+        await MainActor.run {
+            providers = enumerated
+            hasBinary = OpencodeProcessManager.shared.binaryPath != nil
+            loaded = true
+        }
     }
 
-    /// Map opencode's internal provider id to the OpencodeAPIKeySheet
-    /// display label so the status string reads "OpenRouter" not
-    /// "openrouter".
-    private func displayName(for providerId: String) -> String {
-        OpencodeAPIKeySheet.Provider(rawValue: providerId)?.displayName
-            ?? providerId
+    private func scheduleReprobe() {
+        Task {
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            await refreshState()
+        }
+    }
+
+    /// AppleScript a Terminal window running `opencode auth login`.
+    /// Mirrors `ClaudeCLIProviderRow.openTerminalForClaudeAuth` —
+    /// including the v0.29.4 fallback that copies the command to the
+    /// clipboard and surfaces an alert if the AppleScript bridge is
+    /// denied (sandboxed builds without apple-events entitlement).
+    private func openTerminalForOpencodeAuth(installIfMissing: Bool) {
+        let command = opencodeAuthCommand(installIfMissing: installIfMissing)
+        let escaped = command
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "\(escaped)"
+        end tell
+        """
+        let appleScript = NSAppleScript(source: script)
+        var error: NSDictionary?
+        let result = appleScript?.executeAndReturnError(&error)
+        if result == nil || error != nil {
+            let detail = (error?["NSAppleScriptErrorMessage"] as? String)
+                ?? (error?["NSAppleScriptErrorBriefMessage"] as? String)
+                ?? "unknown error"
+            NSLog("[Clawdmeter] opencode auth AppleScript failed: \(detail)")
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            let alert = NSAlert()
+            alert.messageText = "Open Terminal manually"
+            alert.informativeText = """
+            Couldn't drive Terminal from Clawdmeter (\(detail)).
+
+            The opencode auth command has been copied to your clipboard. Open Terminal yourself and paste it (⌘V) to finish authentication.
+            """
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Open Terminal")
+            let response = alert.runModal()
+            if response == .alertSecondButtonReturn {
+                if let terminal = NSWorkspace.shared.urlForApplication(
+                    withBundleIdentifier: "com.apple.Terminal"
+                ) {
+                    NSWorkspace.shared.open(terminal)
+                }
+            }
+        }
+    }
+
+    private func opencodeAuthCommand(installIfMissing: Bool) -> String {
+        if !installIfMissing {
+            return "opencode auth login"
+        }
+        let installSteps = """
+        if command -v opencode >/dev/null 2>&1; then
+          opencode auth login
+        elif command -v brew >/dev/null 2>&1; then
+          brew install sst/tap/opencode && opencode auth login
+        elif command -v npm >/dev/null 2>&1; then
+          npm i -g opencode-ai && opencode auth login
+        else
+          echo "Install opencode first: see https://opencode.ai, then run: opencode auth login"
+        fi
+        """
+        return "/bin/zsh -lc \(shellQuotedOpencode(installSteps))"
+    }
+
+    private func shellQuotedOpencode(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
