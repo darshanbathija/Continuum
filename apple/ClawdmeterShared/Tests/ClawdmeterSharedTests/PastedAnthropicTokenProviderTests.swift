@@ -1,3 +1,4 @@
+#if os(iOS) || os(watchOS) || os(macOS)
 import XCTest
 @testable import ClawdmeterShared
 
@@ -67,3 +68,4 @@ final class PastedAnthropicTokenProviderTests: XCTestCase {
                      "Whitespace-only tokens must be treated as empty.")
     }
 }
+#endif

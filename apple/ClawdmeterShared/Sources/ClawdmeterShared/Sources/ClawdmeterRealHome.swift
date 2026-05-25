@@ -6,7 +6,11 @@
 // app's container home (same as `NSHomeDirectory()`), which is exactly
 // what we want there — there's no "real user home" to bypass.
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Resolve the *real* user home directory, bypassing macOS App Sandbox
 /// redirection.
@@ -41,10 +45,16 @@ public enum ClawdmeterRealHome {
         // Defensive fallback: NSHomeDirectoryForUser also reads the pwd
         // database; double-fallback to NSHomeDirectory() (sandbox path) so
         // path-building never returns nil and tests never crash.
+        #if canImport(Darwin)
         if let username = ProcessInfo.processInfo.environment["USER"],
            let real = NSHomeDirectoryForUser(username) {
             return real
         }
+        #else
+        if let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty {
+            return home
+        }
+        #endif
         return NSHomeDirectory()
     }
 

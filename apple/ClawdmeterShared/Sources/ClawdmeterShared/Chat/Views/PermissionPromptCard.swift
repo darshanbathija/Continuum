@@ -1,3 +1,4 @@
+#if canImport(SwiftUI)
 import SwiftUI
 
 /// Cross-platform permission-prompt card lifted from the Mac-only
@@ -189,3 +190,4 @@ public struct PermissionPromptCard: View {
         }
     }
 }
+#endif

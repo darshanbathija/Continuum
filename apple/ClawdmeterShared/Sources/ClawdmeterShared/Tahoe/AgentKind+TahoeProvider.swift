@@ -1,3 +1,4 @@
+#if canImport(SwiftUI)
 import Foundation
 
 /// Cross-platform mapping from the wire-level `AgentKind` to the Tahoe
@@ -22,3 +23,4 @@ public extension AgentKind {
         }
     }
 }
+#endif

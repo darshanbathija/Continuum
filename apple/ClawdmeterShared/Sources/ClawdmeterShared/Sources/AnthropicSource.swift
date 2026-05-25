@@ -78,7 +78,9 @@ public final class AnthropicSource: AISource, @unchecked Sendable {
             let cfg = URLSessionConfiguration.default
             cfg.timeoutIntervalForRequest = 30
             cfg.timeoutIntervalForResource = 60
+            #if canImport(Darwin)
             cfg.waitsForConnectivity = false
+            #endif
             self.urlSession = URLSession(configuration: cfg)
         }
         self.messagesEndpoint = messagesEndpoint

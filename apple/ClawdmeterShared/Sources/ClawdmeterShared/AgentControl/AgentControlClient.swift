@@ -44,8 +44,13 @@ public final class AgentControlClient: ObservableObject {
     @Published public private(set) var isConfigured: Bool = false
     @Published public private(set) var repos: [AgentRepo] = []
     @Published public private(set) var sessions: [AgentSession] = []
+    @Published public private(set) var workspaces: [CodeWorkspaceRecord] = []
     @Published public private(set) var lastPolledAt: Date?
     @Published public private(set) var lastError: String?
+    @Published public private(set) var isDesktopEventSyncConnected: Bool = false
+    @Published public private(set) var desktopEventSyncLastEventAt: Date?
+    @Published public private(set) var desktopEventSyncLastError: String?
+    @Published public private(set) var desktopEventSyncLastSeq: UInt64 = 0
     /// Sessions v2 Phase 0: fetched from `GET /models`. Defaults to the
     /// bundled catalog so the iOS UI works while paired Mac is unreachable.
     @Published public private(set) var modelCatalog: ModelCatalog = .bundled
@@ -61,6 +66,8 @@ public final class AgentControlClient: ObservableObject {
     private let httpPortOverride: Int?
     private let wsPortOverride: Int?
     private let tokenOverride: String?
+    private var desktopEventSyncTask: Task<Void, Never>?
+    private var desktopEventResyncTask: Task<Void, Never>?
 
     #if DEBUG
     public static let codeTabVerificationSessionId = UUID(uuidString: "8D70F169-9D3A-45C8-9F7F-04E02E55A201")!
@@ -104,6 +111,11 @@ public final class AgentControlClient: ObservableObject {
         self.wsPortOverride = wsPort
         self.tokenOverride = token
         self.isConfigured = true
+    }
+
+    deinit {
+        desktopEventSyncTask?.cancel()
+        desktopEventResyncTask?.cancel()
     }
 
     #if DEBUG
@@ -469,11 +481,32 @@ public final class AgentControlClient: ObservableObject {
     }
 
     private func sendChecked(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await runRequest(request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw ClientHTTPError.badStatus(http.statusCode, http.value(forHTTPHeaderField: "Retry-After"))
         }
         return data
+    }
+
+    private func runRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        struct NetResult: Sendable {
+            let data: Data
+            let response: URLResponse
+        }
+
+        let result: NetResult = try await withCheckedThrowingContinuation { continuation in
+            let task = URLSession.shared.dataTask(with: request) { data, response, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let data, let response {
+                    continuation.resume(returning: NetResult(data: data, response: response))
+                } else {
+                    continuation.resume(throwing: URLError(.unknown))
+                }
+            }
+            task.resume()
+        }
+        return (result.data, result.response)
     }
 
     @MainActor
@@ -481,6 +514,9 @@ public final class AgentControlClient: ObservableObject {
         await refreshHealth()
         await refreshRepos()
         await refreshSessions()
+        if supportsWorkspaces {
+            await refreshWorkspaces()
+        }
         await refreshModelCatalog()
     }
 
@@ -547,6 +583,11 @@ public final class AgentControlClient: ObservableObject {
     }
 
     @MainActor
+    public var supportsWorkspaces: Bool {
+        AgentControlWireVersion.supportsWorkspaces(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
     public var supportsCodeWorkbenchRemote: Bool {
         AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: serverWireVersion)
     }
@@ -554,6 +595,168 @@ public final class AgentControlClient: ObservableObject {
     @MainActor
     public var supportsAntigravityPlan: Bool {
         AgentControlWireVersion.supportsAntigravityPlan(serverWireVersion: serverWireVersion)
+    }
+
+    // MARK: - Desktop event sync
+
+    /// Keep the iOS/macOS client mirror aligned with the paired Mac's live
+    /// session registry. The daemon already exposes an `events` WebSocket
+    /// with cursor replay; this loop consumes it and uses HTTP refreshes as
+    /// the authoritative state repair path for incremental events.
+    @MainActor
+    public func startDesktopEventSync() {
+        guard desktopEventSyncTask == nil else { return }
+        desktopEventSyncTask = Task { [weak self] in
+            await self?.runDesktopEventSyncLoop()
+        }
+    }
+
+    @MainActor
+    public func stopDesktopEventSync() {
+        desktopEventSyncTask?.cancel()
+        desktopEventSyncTask = nil
+        desktopEventResyncTask?.cancel()
+        desktopEventResyncTask = nil
+        isDesktopEventSyncConnected = false
+    }
+
+    @MainActor
+    private func runDesktopEventSyncLoop() async {
+        var attempt = 0
+        while !Task.isCancelled {
+            guard let host, let token else {
+                isDesktopEventSyncConnected = false
+                desktopEventSyncLastError = "Not paired with a Mac."
+                await sleepDesktopEventSync(seconds: 5)
+                continue
+            }
+            guard let url = URL(string: "ws://\(Self.urlHostLiteral(host)):\(wsPort)/") else {
+                isDesktopEventSyncConnected = false
+                desktopEventSyncLastError = "Bad daemon WebSocket URL."
+                await sleepDesktopEventSync(seconds: 5)
+                continue
+            }
+
+            do {
+                try await runDesktopEventSocket(url: url, token: token)
+                attempt = 0
+            } catch is CancellationError {
+                break
+            } catch {
+                attempt += 1
+                isDesktopEventSyncConnected = false
+                desktopEventSyncLastError = error.localizedDescription
+                clientLogger.debug("desktop event sync dropped: \(error.localizedDescription)")
+                await sleepDesktopEventSync(seconds: backoffDelay(forDesktopEventAttempt: attempt))
+            }
+        }
+        isDesktopEventSyncConnected = false
+    }
+
+    @MainActor
+    private func runDesktopEventSocket(url: URL, token: String) async throws {
+        let task = URLSession.shared.webSocketTask(with: URLRequest(url: url, timeoutInterval: 8))
+        task.resume()
+        defer { task.cancel(with: .goingAway, reason: nil) }
+
+        let envelope: [String: Any] = [
+            "op": "events",
+            "token": token,
+            "since": desktopEventSyncLastSeq
+        ]
+        let body = try JSONSerialization.data(withJSONObject: envelope)
+        try await task.send(.data(body))
+        isDesktopEventSyncConnected = true
+        desktopEventSyncLastError = nil
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        while !Task.isCancelled {
+            let message = try await task.receive()
+            let data: Data
+            switch message {
+            case .data(let body):
+                data = body
+            case .string(let string):
+                data = Data(string.utf8)
+            @unknown default:
+                continue
+            }
+            let event = try decoder.decode(AgentEvent.self, from: data)
+            await applyDesktopSyncEvent(event, scheduleAuthoritativeRefresh: true)
+        }
+    }
+
+    @MainActor
+    internal func applyDesktopSyncEvent(
+        _ event: AgentEvent,
+        scheduleAuthoritativeRefresh: Bool
+    ) async {
+        desktopEventSyncLastSeq = max(desktopEventSyncLastSeq, event.eventSeq)
+        desktopEventSyncLastEventAt = event.at
+        switch event.kind {
+        case .snapshot:
+            guard let data = event.payload.data(using: .utf8) else { return }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let snapshot = try? decoder.decode(AgentEventSnapshot.self, from: data) else { return }
+            desktopEventSyncLastSeq = max(desktopEventSyncLastSeq, snapshot.asOfSeq)
+            publishSessions(snapshot.sessions)
+            if supportsWorkspaces {
+                await refreshWorkspaces()
+            }
+        case .sessionDeleted:
+            sessions.removeAll { $0.id == event.sessionId }
+            publishSessions(sessions)
+            if scheduleAuthoritativeRefresh {
+                scheduleDesktopEventAuthoritativeRefresh()
+            }
+        case .sessionCreated, .statusChanged, .planReady, .doneDetected, .paused, .tmuxServerLost, .tmuxServerRecovered:
+            if scheduleAuthoritativeRefresh {
+                scheduleDesktopEventAuthoritativeRefresh()
+            }
+        }
+    }
+
+    @MainActor
+    private func scheduleDesktopEventAuthoritativeRefresh() {
+        desktopEventResyncTask?.cancel()
+        desktopEventResyncTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            } catch {
+                return
+            }
+            await self?.refreshSessions()
+            if self?.supportsWorkspaces == true {
+                await self?.refreshWorkspaces()
+            }
+        }
+    }
+
+    @MainActor
+    private func publishSessions(_ next: [AgentSession]) {
+        sessions = next
+        lastPolledAt = Date()
+        lastError = nil
+        NotificationCenter.default.post(
+            name: .agentControlSessionsRefreshed,
+            object: self,
+            userInfo: ["sessions": sessions]
+        )
+    }
+
+    private func sleepDesktopEventSync(seconds: TimeInterval) async {
+        do {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        } catch {
+            // Cancellation is the normal stop path.
+        }
+    }
+
+    private func backoffDelay(forDesktopEventAttempt attempt: Int) -> TimeInterval {
+        let base = min(30.0, pow(2.0, Double(max(0, attempt - 1))))
+        return base + Double.random(in: 0...(base * 0.2))
     }
 
     // MARK: - Sessions v2 mid-session controls
@@ -923,7 +1126,7 @@ public final class AgentControlClient: ObservableObject {
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 30
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await runRequest(req)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw ArtifactError.badStatus(http.statusCode)
         }
@@ -961,7 +1164,7 @@ public final class AgentControlClient: ObservableObject {
         guard let path = comps.url?.absoluteString,
               let request = makeRequest(path: path) else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await runRequest(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 return nil
             }
@@ -1054,18 +1257,7 @@ public final class AgentControlClient: ObservableObject {
             let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            self.sessions = try decoder.decode([AgentSession].self, from: data)
-            self.lastError = nil
-            // Sessions v2 Phase 10: keep the aggregate Live Activity +
-            // watch bridge in sync. These live in the iOS app target
-            // (LiveActivityCoordinator, WatchPlanBridgeIOS) and can't be
-            // referenced from Shared. Post a notification instead; the
-            // iOS-app-side observer handles the bridging.
-            NotificationCenter.default.post(
-                name: .agentControlSessionsRefreshed,
-                object: self,
-                userInfo: ["sessions": sessions]
-            )
+            publishSessions(try decoder.decode([AgentSession].self, from: data))
         } catch {
             self.lastError = error.localizedDescription
             clientLogger.debug("refreshSessions failed: \(error.localizedDescription)")
@@ -1571,17 +1763,28 @@ public final class AgentControlClient: ObservableObject {
     /// Macs (wire < 16) return 404; this method yields an empty array.
     @MainActor
     public func listWorkspaces() async -> [CodeWorkspaceRecord] {
+        if let serverWireVersion, serverWireVersion < AgentControlWireVersion.workspacesMinimum {
+            workspaces = []
+            return []
+        }
         guard let request = makeRequest(path: "/workspaces", method: "GET") else { return [] }
         do {
             let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let envelope = try decoder.decode(WorkspaceListResponse.self, from: data)
+            workspaces = envelope.workspaces
+            lastError = nil
             return envelope.workspaces
         } catch {
             self.lastError = error.localizedDescription
             return []
         }
+    }
+
+    @MainActor
+    public func refreshWorkspaces() async {
+        _ = await listWorkspaces()
     }
 
     /// `PATCH /workspaces/:id`. Updates provider defaults; returns the
@@ -1609,7 +1812,14 @@ public final class AgentControlClient: ObservableObject {
             decoder.dateDecodingStrategy = .iso8601
             // PATCH returns the updated record at the top level + an
             // optional receipt key — decode just the record.
-            return try decoder.decode(CodeWorkspaceRecord.self, from: data)
+            let updated = try decoder.decode(CodeWorkspaceRecord.self, from: data)
+            if let idx = workspaces.firstIndex(where: { $0.id == updated.id }) {
+                workspaces[idx] = updated
+            } else {
+                workspaces.append(updated)
+            }
+            lastError = nil
+            return updated
         } catch {
             self.lastError = error.localizedDescription
             return nil
@@ -1892,7 +2102,7 @@ public final class AgentControlClient: ObservableObject {
     public func fetchUsage() async -> UsageEnvelope? {
         guard let request = makeRequest(path: "/usage") else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await runRequest(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 return nil
             }
@@ -1911,7 +2121,7 @@ public final class AgentControlClient: ObservableObject {
     public func fetchAnalytics() async -> UsageHistorySnapshot? {
         guard let request = makeRequest(path: "/analytics") else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await runRequest(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 return nil
             }
@@ -2084,7 +2294,7 @@ public final class AgentControlClient: ObservableObject {
               let request = makeRequest(path: query)
         else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await runRequest(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 clientLogger.warning("transcript fetch HTTP \(http.statusCode) for \(path)")
                 return nil

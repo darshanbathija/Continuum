@@ -71,12 +71,14 @@ public struct UsageStore: Sendable {
     ///   2. `~/Library/Application Support/Clawdmeter` (dev / non-sandboxed)
     public static var containerURL: URL? {
         let fm = FileManager.default
+        #if canImport(Darwin)
         for group in appGroups {
             if let url = fm.containerURL(forSecurityApplicationGroupIdentifier: group) {
                 logger.debug("UsageStore.containerURL → \(url.path, privacy: .public) (group=\(group, privacy: .public))")
                 return url
             }
         }
+        #endif
         // Fall back to a fixed user-library path that both the menu bar app
         // and any sandbox-disabled extensions can read directly. Works on
         // macOS where sandbox can be turned off; on iOS this branch is dead

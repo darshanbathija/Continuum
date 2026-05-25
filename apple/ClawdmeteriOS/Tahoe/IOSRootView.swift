@@ -5,6 +5,7 @@ import ClawdmeterShared
 /// between the four tabs (Chat / Live / Analytics / Code). Ports the
 /// `ios-shell.jsx::IOSTabBar` floating glass capsule.
 public struct IOSRootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var theme: TahoeThemeStore
     @State private var tab: Tab
     @State private var pushedScreen: Screen?
@@ -93,7 +94,25 @@ public struct IOSRootView: View {
         // P1 fix: pull live session data on first appearance and whenever
         // we return to the foreground. Without this, the daemon-mirrored
         // session list stays empty until the user interacts with the Mac.
-        .task { await agentClient.refreshAll() }
+        .task {
+            await agentClient.refreshAll()
+            agentClient.startDesktopEventSync()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                Task {
+                    await agentClient.refreshAll()
+                    agentClient.startDesktopEventSync()
+                }
+            case .background:
+                agentClient.stopDesktopEventSync()
+            case .inactive:
+                break
+            @unknown default:
+                break
+            }
+        }
         .sheet(isPresented: $newSessionPresented) {
             NewSessionSheet(client: agentClient, isPresented: $newSessionPresented)
         }

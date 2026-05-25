@@ -154,30 +154,40 @@ public protocol LinuxDrawingArea: LinuxUIWidget {
 public enum LinuxUI {
     /// Globally selected adapter. Configure exactly once at app entry
     /// (`main.swift`) via `configure(adapter:)`. After that it's a frozen
-    /// reference — reads are lock-free.
+    /// reference guarded by the storage lock below.
     ///
-    /// P1-Linux-6: previously declared as `nonisolated(unsafe) public static var`,
-    /// which allowed unsynchronized writes from any thread. Background
-    /// tasks (tray poll loop, HTTP server) read it concurrently with the
-    /// main thread's initial assignment. Now there's a tiny lock guarding
-    /// the install path and reads only happen after install, so the
-    /// `nonisolated(unsafe)` escape hatch is unnecessary.
-    private static let adapterLock = NSLock()
-    private static var _adapter: LinuxUIAdapter = StubAdapter()
+    /// P1-Linux-6: the adapter is mutable during app startup and read by
+    /// UI helpers afterward, so keep the mutation inside a single locked
+    /// storage object instead of exposing global mutable state to Swift 6's
+    /// concurrency checker.
+    private final class AdapterStorage: @unchecked Sendable {
+        private let lock = NSLock()
+        private var adapter: LinuxUIAdapter = StubAdapter()
+
+        func get() -> LinuxUIAdapter {
+            lock.lock()
+            defer { lock.unlock() }
+            return adapter
+        }
+
+        func set(_ adapter: LinuxUIAdapter) {
+            lock.lock()
+            defer { lock.unlock() }
+            self.adapter = adapter
+        }
+    }
+
+    private static let adapterStorage = AdapterStorage()
 
     public static var adapter: LinuxUIAdapter {
-        adapterLock.lock()
-        defer { adapterLock.unlock() }
-        return _adapter
+        adapterStorage.get()
     }
 
     /// Install the production adapter exactly once. Subsequent calls log
     /// and ignore — flipping the adapter mid-run was never supported and
     /// almost certainly indicates a bug.
     public static func configure(adapter: LinuxUIAdapter) {
-        adapterLock.lock()
-        defer { adapterLock.unlock() }
-        _adapter = adapter
+        adapterStorage.set(adapter)
     }
 
     public static func window(title: String) -> LinuxWindow {

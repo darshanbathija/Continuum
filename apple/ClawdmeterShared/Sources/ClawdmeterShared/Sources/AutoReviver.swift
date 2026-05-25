@@ -109,7 +109,7 @@ public final class AutoReviver: ObservableObject {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (_, response) = try await session.data(for: request)
+            let (_, response) = try await runRequest(request)
             if let http = response as? HTTPURLResponse {
                 if (200..<300).contains(http.statusCode) {
                     fireCount += 1
@@ -124,5 +124,26 @@ public final class AutoReviver: ObservableObject {
             lastResult = Result(outcome: .networkError, at: now)
             logger.error("AutoReviver: network error \(String(describing: error))")
         }
+    }
+
+    private func runRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        struct NetResult: Sendable {
+            let data: Data
+            let response: URLResponse
+        }
+
+        let result: NetResult = try await withCheckedThrowingContinuation { continuation in
+            let task = session.dataTask(with: request) { data, response, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let data, let response {
+                    continuation.resume(returning: NetResult(data: data, response: response))
+                } else {
+                    continuation.resume(throwing: URLError(.unknown))
+                }
+            }
+            task.resume()
+        }
+        return (result.data, result.response)
     }
 }
