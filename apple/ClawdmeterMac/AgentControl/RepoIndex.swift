@@ -157,12 +157,17 @@ public actor RepoIndex {
                                 // up as `<scheduled-task>...` first user
                                 // messages and aren't user-driven work.
                                 if result.isScheduledTask { continue }
+                                let title = result.prompt ?? Self.inferredRecentTitle(
+                                    provider: .claude,
+                                    cwd: cwd,
+                                    jsonlURL: jsonl
+                                )
                                 recentByRepo[key, default: []].append(
                                     RecentSession(
                                         path: jsonl.path,
                                         lastModified: mtime,
                                         provider: .claude,
-                                        firstPrompt: result.prompt,
+                                        firstPrompt: title,
                                         customName: aliases[jsonl.path]
                                     )
                                 )
@@ -191,12 +196,18 @@ public actor RepoIndex {
             // Same scheduled-task filter as the Claude side — drop them
             // before they reach the sidebar.
             if result.isScheduledTask { continue }
+            let jsonl = URL(fileURLWithPath: meta.path)
+            let title = result.prompt ?? Self.inferredRecentTitle(
+                provider: .codex,
+                cwd: meta.cwd,
+                jsonlURL: jsonl
+            )
             recentByRepo[key, default: []].append(
                 RecentSession(
                     path: meta.path,
                     lastModified: meta.mtime,
                     provider: .codex,
-                    firstPrompt: result.prompt,
+                    firstPrompt: title,
                     customName: aliases[meta.path]
                 )
             )
@@ -528,6 +539,187 @@ public actor RepoIndex {
     /// string keep working without dealing with the scheduled-task flag.
     nonisolated static func cachedFirstUserPrompt(at url: URL, mtime: Date) -> String? {
         cachedFirstPromptResult(at: url, mtime: mtime).prompt
+    }
+
+    /// Some Codex/Conductor JSONLs have no real user prompt because they
+    /// were created as continuation/title-generation runs. In that case,
+    /// prefer transcript content first, then the live branch/feature name.
+    /// That keeps old rows from being silently relabeled when the checkout
+    /// later moves to a different branch.
+    nonisolated static func inferredRecentTitle(
+        provider _: AgentKind,
+        cwd: String,
+        jsonlURL: URL
+    ) -> String? {
+        if let summary = latestAssistantSummaryTitle(from: jsonlURL) {
+            return summary
+        }
+        if let branch = branchTitle(at: cwd) {
+            return branch
+        }
+        return pathFeatureTitle(from: cwd)
+    }
+
+    private nonisolated static func branchTitle(at cwd: String) -> String? {
+        let fm = FileManager.default
+        var dir = URL(fileURLWithPath: cwd, isDirectory: true)
+        for _ in 0..<5 {
+            let gitURL = dir.appendingPathComponent(".git")
+            var isDirectory: ObjCBool = false
+            if fm.fileExists(atPath: gitURL.path, isDirectory: &isDirectory) {
+                if isDirectory.boolValue {
+                    if let title = branchTitle(fromHeadFile: gitURL.appendingPathComponent("HEAD")) {
+                        return title
+                    }
+                } else if let marker = try? String(contentsOf: gitURL, encoding: .utf8) {
+                    let prefix = "gitdir:"
+                    let trimmed = marker.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.hasPrefix(prefix) {
+                        let raw = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        let gitDir = raw.hasPrefix("/")
+                            ? URL(fileURLWithPath: raw)
+                            : dir.appendingPathComponent(raw)
+                        if let title = branchTitle(fromHeadFile: gitDir.appendingPathComponent("HEAD")) {
+                            return title
+                        }
+                    }
+                }
+            }
+            let parent = dir.deletingLastPathComponent()
+            if parent.path == dir.path { break }
+            dir = parent
+        }
+        return nil
+    }
+
+    private nonisolated static func branchTitle(fromHeadFile headURL: URL) -> String? {
+        guard let head = try? String(contentsOf: headURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !head.isEmpty else { return nil }
+        let raw: String
+        if head.hasPrefix("ref: refs/heads/") {
+            raw = String(head.dropFirst("ref: refs/heads/".count))
+        } else {
+            raw = head
+        }
+        let lower = raw.lowercased()
+        guard lower != "main", lower != "master", lower != "head", raw.count < 120 else {
+            return nil
+        }
+        return cleanBranchTitle(raw)
+    }
+
+    private nonisolated static func cleanBranchTitle(_ raw: String) -> String? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.contains("/") {
+            let parts = text.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            if parts.count >= 2,
+               ["darshanbathija", "codex", "claude"].contains(parts[0].lowercased()) {
+                text = parts.dropFirst().joined(separator: "/")
+            }
+        }
+        return cleanRecentTitle(text, maxLength: 80)
+    }
+
+    private nonisolated static func pathFeatureTitle(from cwd: String) -> String? {
+        guard cwd.contains("/.claude/worktrees/") || cwd.contains("/.git/worktrees/") else {
+            return nil
+        }
+        return cleanRecentTitle(URL(fileURLWithPath: cwd).lastPathComponent, maxLength: 80)
+    }
+
+    private nonisolated static func latestAssistantSummaryTitle(from url: URL) -> String? {
+        for line in tailLines(from: url).reversed() {
+            guard let json = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                  let candidate = assistantSummaryCandidate(from: json),
+                  let title = cleanRecentTitle(candidate, maxLength: 96) else { continue }
+            return title
+        }
+        return nil
+    }
+
+    private nonisolated static func tailLines(from url: URL, maxBytes: UInt64 = 512 * 1024) -> [Data] {
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? fh.close() }
+        guard let size = try? fh.seekToEnd() else { return [] }
+        let offset = size > maxBytes ? size - maxBytes : 0
+        do {
+            try fh.seek(toOffset: offset)
+            guard let data = try fh.readToEnd(), !data.isEmpty else { return [] }
+            var lines = data.split(separator: UInt8(0x0A)).map { Data($0) }
+            if offset > 0, !lines.isEmpty {
+                lines.removeFirst()
+            }
+            return lines
+        } catch {
+            return []
+        }
+    }
+
+    private nonisolated static func assistantSummaryCandidate(from json: [String: Any]) -> String? {
+        if json["type"] as? String == "event_msg",
+           let payload = json["payload"] as? [String: Any],
+           payload["type"] as? String == "agent_message",
+           let message = payload["message"] as? String {
+            return message
+        }
+        if json["type"] as? String == "response_item",
+           let payload = json["payload"] as? [String: Any] {
+            return assistantSummaryCandidate(from: payload)
+        }
+        if let role = json["role"] as? String, role == "assistant",
+           let text = textFromContent(json["content"]) {
+            return text
+        }
+        if let message = json["message"] as? [String: Any],
+           let role = message["role"] as? String, role == "assistant",
+           let text = textFromContent(message["content"]) {
+            return text
+        }
+        if json["type"] as? String == "assistant",
+           let message = json["message"] as? [String: Any],
+           let text = textFromContent(message["content"]) {
+            return text
+        }
+        return nil
+    }
+
+    private nonisolated static func textFromContent(_ content: Any?) -> String? {
+        if let text = content as? String {
+            return text
+        }
+        guard let blocks = content as? [[String: Any]] else { return nil }
+        let parts = blocks.compactMap { block -> String? in
+            if let text = block["text"] as? String { return text }
+            if let text = block["output_text"] as? String { return text }
+            return nil
+        }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " ")
+    }
+
+    private nonisolated static func cleanRecentTitle(_ raw: String, maxLength: Int) -> String? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let citationRange = text.range(of: "<oai-mem-citation>") {
+            text.removeSubrange(citationRange.lowerBound..<text.endIndex)
+        }
+        text = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "`\"'")))
+        while text.contains("  ") {
+            text = text.replacingOccurrences(of: "  ", with: " ")
+        }
+        guard !text.isEmpty else { return nil }
+        let lower = text.lowercased()
+        if ["done", "ok", "okay", "completed"].contains(lower) {
+            return nil
+        }
+        if text.count > maxLength {
+            let idx = text.index(text.startIndex, offsetBy: maxLength)
+            text = String(text[..<idx]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+        }
+        return text
     }
 
     /// Extract the first real user prompt from a JSONL. Used as the

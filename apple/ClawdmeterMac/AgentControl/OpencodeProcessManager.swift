@@ -34,6 +34,9 @@
 import Foundation
 import Network
 import OSLog
+import Darwin
+
+private let opencodeRuntimePrepLogger = Logger(subsystem: "com.clawdmeter.mac", category: "OpencodeRuntimePrep")
 
 @MainActor
 public final class OpencodeProcessManager {
@@ -96,6 +99,18 @@ public final class OpencodeProcessManager {
 
     // MARK: - Public API
 
+    /// Best-effort launch preparation for the bundled OpenCode runtime.
+    /// Bun extracts hidden `.dylib` files into tmp before running; if the
+    /// bundled runtime carries quarantine, macOS can surface a scary
+    /// ".bbb...dylib Not Opened" Gatekeeper dialog when the Code tab probes
+    /// providers. Stage the bundled binary into Application Support and
+    /// strip quarantine from the staged runtime + any stale extracted dylibs
+    /// before the first provider probe runs.
+    public nonisolated func prepareRuntimeHost() {
+        _ = stageBundledRuntimeIfNeeded()
+        cleanRuntimeTempQuarantine()
+    }
+
     /// Idempotent: discovers the binary, picks a free port, spawns the
     /// server, waits for healthcheck. Returns the running port on
     /// success, nil on failure (state set to .failed or .notInstalled).
@@ -116,6 +131,7 @@ public final class OpencodeProcessManager {
             return nil
         }
         binaryPath = binary
+        prepareBinaryForLaunch(atPath: binary)
 
         // Step 2: pick a free port.
         let port: Int
@@ -136,9 +152,7 @@ public final class OpencodeProcessManager {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
-        var env = ProcessInfo.processInfo.environment
-        env["OPENCODE_SERVER_PASSWORD"] = password
-        process.environment = env
+        process.environment = opencodeEnvironment(overrides: ["OPENCODE_SERVER_PASSWORD": password])
         // Capture stdout/stderr so a misconfigured spawn surfaces a
         // useful lastError instead of vanishing into the void. The
         // supervisor task drains these pipes on exit.
@@ -226,10 +240,11 @@ public final class OpencodeProcessManager {
             authStatus = await Self.authStatusFromFile()
             return
         }
+        prepareBinaryForLaunch(atPath: binary)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["auth", "list"]
-        process.environment = ProcessInfo.processInfo.environment
+        process.environment = opencodeEnvironment()
         let stdout = Pipe()
         process.standardOutput = stdout
         process.standardError = Pipe()  // discard
@@ -303,7 +318,7 @@ public final class OpencodeProcessManager {
             withExtension: nil,
             subdirectory: "Vendor/opencode"
         ), FileManager.default.isExecutableFile(atPath: bundled.path) {
-            return bundled.path
+            return stageBundledRuntimeIfNeeded(source: bundled)?.path ?? bundled.path
         }
         // Dev-iteration fallback: when running from Xcode debug Bundle.main
         // points at DerivedData. Walk up to find the source tree path.
@@ -317,6 +332,153 @@ public final class OpencodeProcessManager {
             dir = dir.deletingLastPathComponent()
         }
         return nil
+    }
+
+    private nonisolated func prepareBinaryForLaunch(atPath path: String) {
+        stripQuarantineRecursively(at: URL(fileURLWithPath: path))
+        cleanRuntimeTempQuarantine()
+    }
+
+    private nonisolated func stageBundledRuntimeIfNeeded(source explicitSource: URL? = nil) -> URL? {
+        let fm = FileManager.default
+        let source = explicitSource ?? Bundle.main.url(
+            forResource: "opencode",
+            withExtension: nil,
+            subdirectory: "Vendor/opencode"
+        )
+        guard let source, fm.isExecutableFile(atPath: source.path) else { return nil }
+        let runtimeDir = Self.runtimeDirectory()
+        let destination = runtimeDir.appendingPathComponent("opencode")
+        do {
+            try fm.createDirectory(at: runtimeDir, withIntermediateDirectories: true)
+            if shouldCopyRuntime(from: source, to: destination) {
+                if fm.fileExists(atPath: destination.path) {
+                    try fm.removeItem(at: destination)
+                }
+                try fm.copyItem(at: source, to: destination)
+            }
+            chmod(destination.path, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH)
+            guard filesAreEqual(source, destination) else {
+                opencodeRuntimePrepLogger.info("staged opencode did not match bundled source; refusing staged runtime")
+                return nil
+            }
+            stripQuarantineRecursively(at: runtimeDir)
+            cleanRuntimeTempQuarantine()
+            return fm.isExecutableFile(atPath: destination.path) ? destination : nil
+        } catch {
+            opencodeRuntimePrepLogger.info("staging bundled opencode failed: \(error.localizedDescription, privacy: .public)")
+            stripQuarantineRecursively(at: source)
+            return nil
+        }
+    }
+
+    private nonisolated func shouldCopyRuntime(from source: URL, to destination: URL) -> Bool {
+        !filesAreEqual(source, destination)
+    }
+
+    private nonisolated func opencodeEnvironment(overrides: [String: String] = [:]) -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        let tmp = Self.runtimeTempDirectory()
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        env["TMPDIR"] = tmp.path.hasSuffix("/") ? tmp.path : tmp.path + "/"
+        for (key, value) in overrides {
+            env[key] = value
+        }
+        return env
+    }
+
+    private nonisolated static func runtimeDirectory() -> URL {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return base
+            .appendingPathComponent("Clawdmeter", isDirectory: true)
+            .appendingPathComponent("Runtimes", isDirectory: true)
+            .appendingPathComponent("OpenCode", isDirectory: true)
+    }
+
+    private nonisolated static func runtimeTempDirectory() -> URL {
+        let fm = FileManager.default
+        let base = fm.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return base
+            .appendingPathComponent("Clawdmeter", isDirectory: true)
+            .appendingPathComponent("Runtimes", isDirectory: true)
+            .appendingPathComponent("OpenCodeTmp", isDirectory: true)
+    }
+
+    private nonisolated func cleanRuntimeTempQuarantine() {
+        let fm = FileManager.default
+        let tmp = Self.runtimeTempDirectory()
+        try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        guard let enumerator = fm.enumerator(
+            at: tmp,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsPackageDescendants]
+        ) else { return }
+        var inspected = 0
+        for case let url as URL in enumerator {
+            inspected += 1
+            if inspected > 2000 { break }
+            let name = url.lastPathComponent
+            guard name.hasSuffix(".dylib"),
+                  name.hasPrefix(".") || name.hasPrefix("bun-") || name.contains("opencode")
+            else { continue }
+            stripQuarantine(at: url)
+        }
+    }
+
+    private nonisolated func filesAreEqual(_ lhs: URL, _ rhs: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: lhs.path), fm.fileExists(atPath: rhs.path) else { return false }
+        let lhsValues = try? lhs.resourceValues(forKeys: [.fileSizeKey])
+        let rhsValues = try? rhs.resourceValues(forKeys: [.fileSizeKey])
+        guard lhsValues?.fileSize == rhsValues?.fileSize else { return false }
+        guard let left = try? FileHandle(forReadingFrom: lhs),
+              let right = try? FileHandle(forReadingFrom: rhs) else {
+            return false
+        }
+        defer {
+            try? left.close()
+            try? right.close()
+        }
+        let chunkSize = 1024 * 1024
+        while true {
+            let leftData = left.readData(ofLength: chunkSize)
+            let rightData = right.readData(ofLength: chunkSize)
+            if leftData != rightData { return false }
+            if leftData.isEmpty { return true }
+        }
+    }
+
+    private nonisolated func stripQuarantineRecursively(at url: URL) {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return }
+        stripQuarantine(at: url)
+        guard isDirectory.boolValue,
+              let enumerator = fm.enumerator(
+                at: url,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsPackageDescendants]
+              ) else { return }
+        var inspected = 0
+        for case let child as URL in enumerator {
+            inspected += 1
+            if inspected > 2000 { break }
+            stripQuarantine(at: child)
+        }
+    }
+
+    private nonisolated func stripQuarantine(at url: URL) {
+        let result = url.path.withCString { path in
+            removexattr(path, "com.apple.quarantine", 0)
+        }
+        if result != 0 {
+            let err = errno
+            guard err != ENOATTR && err != ENOENT else { return }
+            opencodeRuntimePrepLogger.debug("remove quarantine failed for \(url.path, privacy: .private): errno \(err, privacy: .public)")
+        }
     }
 
     /// Re-run binary discovery + auth-status probe, restart `opencode

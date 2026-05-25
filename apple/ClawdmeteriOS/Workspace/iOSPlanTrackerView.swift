@@ -1,7 +1,8 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// iOS plan tracker — vertical timeline of steps parsed from `planText`
+/// iOS plan tracker — vertical timeline of steps parsed from pending or
+/// approved plan text
 /// using the shared `ChatMessageOrdering.extractStepCandidates` heuristic
 /// (which has 12-test coverage in ClawdmeterShared).
 ///
@@ -19,9 +20,19 @@ struct iOSPlanTrackerView: View {
     @State private var manuallyCompleted: Set<String> = []
     @State private var isApproving: Bool = false
 
+    private var displayPlanText: String? {
+        for candidate in [session.planText, session.approvedPlanText] {
+            guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty
+            else { continue }
+            return trimmed
+        }
+        return nil
+    }
+
     var body: some View {
         Group {
-            if let planText = session.planText, !planText.isEmpty {
+            if displayPlanText != nil {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Plan - \(steps.count) steps")
@@ -108,7 +119,7 @@ struct iOSPlanTrackerView: View {
     }
 
     private var steps: [String] {
-        guard let planText = session.planText else { return [] }
+        guard let planText = displayPlanText else { return [] }
         let candidates = ChatMessageOrdering.extractStepCandidates(from: planText)
         if !candidates.isEmpty { return candidates }
         // Fall back to per-line splitting if the heuristic returned nothing.

@@ -417,6 +417,8 @@ public struct IOSSessionDetailView: View {
                 tabs.append(.plan)
             } else if let plan = s.planText, !plan.isEmpty {
                 tabs.append(.plan)
+            } else if let plan = s.approvedPlanText, !plan.isEmpty {
+                tabs.append(.plan)
             } else if s.status == .planning {
                 tabs.append(.plan)
             }

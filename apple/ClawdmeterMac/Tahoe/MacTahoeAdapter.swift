@@ -141,10 +141,12 @@ extension AppRuntime {
                 recents: recents
             )
         }
+        let uniqueRepos = TahoeCodeProjectList.collapseDuplicateVisibleNames(mappedRepos)
+
         // Pick the first session in the first repo with sessions as the
         // initial open id — matches the demo fixture's default.
-        let firstOpen = mappedRepos.first(where: { !$0.sessions.isEmpty })?.sessions.first?.id
-        return TahoeCodeBindings(repos: mappedRepos, openSessionId: firstOpen)
+        let firstOpen = uniqueRepos.first(where: { !$0.sessions.isEmpty })?.sessions.first?.id
+        return TahoeCodeBindings(repos: uniqueRepos, openSessionId: firstOpen)
     }
 
     private func tahoeSession(_ s: AgentSession, now: Date) -> TahoeCodeSession {
