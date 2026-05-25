@@ -1153,9 +1153,9 @@ private struct ClaudeCLIProviderRow: View {
         case .pending:
             return "Probing the `claude` binary, Claude Code Keychain token, and activity history…"
         case .notInstalled:
-            return "Not installed. `npm i -g @anthropic-ai/claude-code` or `brew install anthropic/claude/claude` to enable Claude-backed sessions."
+            return "Claude Code CLI is not installed. Use the button to open Terminal, install the CLI with npm or Homebrew, and run `claude /login`."
         case .authenticatedNoCLI:
-            return "Claude Code auth is present, but the `claude` CLI binary is not on the standard paths. Add it to ~/.local/bin, Homebrew, or Diagnostics overrides."
+            return "Claude Code auth is present, but the `claude` CLI binary is not on the standard paths. Use the button to install or expose the CLI and refresh auth."
         case .installedNeedsLogin:
             return "CLI installed, but no Claude Code keychain token was found. Run `claude /login` once to finish OAuth."
         case .ready:
@@ -1172,18 +1172,19 @@ private struct ClaudeCLIProviderRow: View {
             EmptyView()
         case .notInstalled, .authenticatedNoCLI:
             Button {
-                if let url = URL(string: "https://docs.anthropic.com/en/docs/claude-code/setup") {
-                    NSWorkspace.shared.open(url)
-                }
+                openTerminalForClaudeAuth(installIfMissing: true)
+                scheduleAuthReprobe()
             } label: {
-                Text("Install docs")
+                Text("Auth via CLI")
                     .font(TahoeFont.body(12, weight: .semibold))
                     .foregroundStyle(t.accent)
             }
             .buttonStyle(.plain)
+            .help("Open Terminal to install Claude Code if needed, then run `claude /login`.")
         case .installedNeedsLogin:
             Button {
-                openTerminalRunningClaude()
+                openTerminalForClaudeAuth(installIfMissing: false)
+                scheduleAuthReprobe()
             } label: {
                 Text("Sign in")
                     .font(TahoeFont.body(12, weight: .semibold))
@@ -1227,22 +1228,53 @@ private struct ClaudeCLIProviderRow: View {
         }
     }
 
+    private func scheduleAuthReprobe() {
+        Task {
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            await refreshProbe()
+        }
+    }
+
     /// AppleScript a Terminal window that runs `claude` so the user
     /// can complete the OAuth handshake inline. No-op if the script
     /// fails (e.g. Terminal denied, sandbox restriction); the help
     /// tooltip on the button explains the manual path.
-    private func openTerminalRunningClaude() {
-        let command = binaryPath ?? "claude"
-        let escaped = command.replacingOccurrences(of: "\"", with: "\\\"")
+    private func openTerminalForClaudeAuth(installIfMissing: Bool) {
+        let command = claudeAuthCommand(installIfMissing: installIfMissing)
+        let escaped = command
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
         let script = """
         tell application "Terminal"
             activate
-            do script "\(escaped) /login"
+            do script "\(escaped)"
         end tell
         """
         let appleScript = NSAppleScript(source: script)
         var error: NSDictionary?
         _ = appleScript?.executeAndReturnError(&error)
+    }
+
+    private func claudeAuthCommand(installIfMissing: Bool) -> String {
+        if !installIfMissing, let binaryPath {
+            return "\(shellQuoted(binaryPath)) /login"
+        }
+        let installSteps = """
+        if command -v claude >/dev/null 2>&1; then
+          claude /login
+        elif command -v npm >/dev/null 2>&1; then
+          npm i -g @anthropic-ai/claude-code && claude /login
+        elif command -v brew >/dev/null 2>&1; then
+          brew install anthropic/claude/claude && claude /login
+        else
+          echo "Install npm or Homebrew, then run: npm i -g @anthropic-ai/claude-code && claude /login"
+        fi
+        """
+        return "/bin/zsh -lc \(shellQuoted(installSteps))"
+    }
+
+    private func shellQuoted(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 

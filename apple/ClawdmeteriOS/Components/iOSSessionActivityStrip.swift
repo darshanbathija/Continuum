@@ -15,32 +15,34 @@ struct iOSSessionActivityStrip: View {
     @State private var pulseToggle: Bool = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            indicator
-            VStack(alignment: .leading, spacing: 1) {
-                Text(stateLabel)
-                    .font(.caption.weight(.semibold))
-                if !idle {
-                    Text("\(durationLabel) · \(tokenLabel)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+        Group {
+            if !idle {
+                HStack(spacing: 10) {
+                    indicator
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(stateLabel)
+                            .font(.caption.weight(.semibold))
+                        Text("\(durationLabel) · \(tokenLabel)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if let cost = costLabel {
+                        Text(cost)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
-            }
-            Spacer()
-            if let cost = costLabel {
-                Text(cost)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(SessionsV2Theme.surfaceElev0)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-        .onAppear {
-            if !reduceMotion {
-                pulseToggle = true
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(SessionsV2Theme.surfaceElev0)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(accessibilityLabel)
+                .onAppear {
+                    if !reduceMotion {
+                        pulseToggle = true
+                    }
+                }
             }
         }
     }
@@ -79,11 +81,11 @@ struct iOSSessionActivityStrip: View {
     }
 
     private var durationLabel: String {
-        let elapsed = Int(Date().timeIntervalSince(session.createdAt))
-        let mins = elapsed / 60
-        let secs = elapsed % 60
-        if mins == 0 { return "\(secs)s" }
-        return "\(mins)m \(secs)s"
+        let elapsed = max(0, Date().timeIntervalSince(session.createdAt))
+        if elapsed < 60 { return String(format: "%.2fs", elapsed) }
+        let mins = Int(elapsed) / 60
+        let secs = elapsed - Double(mins * 60)
+        return String(format: "%dm %.2fs", mins, secs)
     }
 
     private var tokenLabel: String {

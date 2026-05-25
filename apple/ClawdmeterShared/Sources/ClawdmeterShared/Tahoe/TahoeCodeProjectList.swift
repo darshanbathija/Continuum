@@ -10,9 +10,7 @@ public enum TahoeCodeProjectList {
         var indexByVisibleName: [String: Int] = [:]
 
         for repo in repos {
-            let visibleKey = repo.name
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
+            let visibleKey = normalizedVisibleName(repo.name)
             let dedupeKey = visibleKey.isEmpty ? repo.key.lowercased() : visibleKey
 
             guard let existingIndex = indexByVisibleName[dedupeKey] else {
@@ -29,6 +27,14 @@ public enum TahoeCodeProjectList {
         }
 
         return output
+    }
+
+    private static func normalizedVisibleName(_ name: String) -> String {
+        name
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private static func appendUniqueSessions(

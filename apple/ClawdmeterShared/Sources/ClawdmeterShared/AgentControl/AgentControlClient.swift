@@ -197,7 +197,13 @@ public final class AgentControlClient: ObservableObject {
         self.lastPolledAt = now
         self.lastError = nil
         self.codeTabVerificationFixtureInstalled = true
-        self.codeTabVerificationSnapshots = [sessionId: Self.makeCodeTabVerificationSnapshot(sessionId: sessionId, now: now)]
+        self.codeTabVerificationSnapshots = [
+            sessionId: Self.makeCodeTabVerificationSnapshot(
+                sessionId: sessionId,
+                now: now,
+                itemCount: Self.codeTabVerificationLongChatItemCount()
+            )
+        ]
         self.codeTabVerificationDiffs = [sessionId: Self.makeCodeTabVerificationDiff()]
         self.codeTabVerificationPRs = [sessionId: Self.makeCodeTabVerificationPR()]
     }
@@ -222,7 +228,21 @@ public final class AgentControlClient: ObservableObject {
         return codeTabVerificationPRs[sessionId]
     }
 
-    private static func makeCodeTabVerificationSnapshot(sessionId: UUID, now: Date) -> WireChatSnapshot {
+    private static func codeTabVerificationLongChatItemCount(arguments: [String] = ProcessInfo.processInfo.arguments) -> Int? {
+        let prefix = "--ios-code-demo-long-chat="
+        for argument in arguments where argument.hasPrefix(prefix) {
+            let raw = String(argument.dropFirst(prefix.count))
+            guard let value = Int(raw), value > 0 else { return nil }
+            return min(value, 10_000)
+        }
+        return arguments.contains("--ios-code-demo-long-chat") ? 4_000 : nil
+    }
+
+    private static func makeCodeTabVerificationSnapshot(
+        sessionId: UUID,
+        now: Date,
+        itemCount: Int? = nil
+    ) -> WireChatSnapshot {
         let toolCall = ChatMessage(
             id: "tool-call-test",
             kind: .toolCall,
@@ -255,33 +275,35 @@ public final class AgentControlClient: ObservableObject {
             body: "4 files changed, 182 insertions(+), 47 deletions(-)",
             at: now.addingTimeInterval(-174)
         )
+        let baseItems: [ChatItem] = [
+            .message(ChatMessage(
+                id: "user-goal",
+                kind: .userText,
+                title: "You",
+                body: "Make settlement writes idempotent under concurrent fills.",
+                at: now.addingTimeInterval(-420)
+            )),
+            .message(ChatMessage(
+                id: "assistant-plan",
+                kind: .assistantText,
+                title: "Claude",
+                body: "I found the race in `writeSettlement`. The fix is a DB-backed uniqueness guarantee plus a narrower cache invalidation path.",
+                at: now.addingTimeInterval(-360)
+            )),
+            .toolRun(id: "test-run", pairs: [ToolPair(id: "test-run", call: toolCall, result: toolResult)]),
+            .toolRun(id: "diff-run", pairs: [ToolPair(id: "diff-run", call: diffCall, result: diffResult)]),
+            .message(ChatMessage(
+                id: "assistant-ready",
+                kind: .assistantText,
+                title: "Claude",
+                body: "Plan is ready for approval. CI and diff review are clean enough to proceed.",
+                at: now.addingTimeInterval(-100)
+            ))
+        ]
+        let items = itemCount.map { Self.makeLongCodeTabVerificationItems(count: $0, now: now) } ?? baseItems
         return WireChatSnapshot(
             sessionId: sessionId,
-            items: [
-                .message(ChatMessage(
-                    id: "user-goal",
-                    kind: .userText,
-                    title: "You",
-                    body: "Make settlement writes idempotent under concurrent fills.",
-                    at: now.addingTimeInterval(-420)
-                )),
-                .message(ChatMessage(
-                    id: "assistant-plan",
-                    kind: .assistantText,
-                    title: "Claude",
-                    body: "I found the race in `writeSettlement`. The fix is a DB-backed uniqueness guarantee plus a narrower cache invalidation path.",
-                    at: now.addingTimeInterval(-360)
-                )),
-                .toolRun(id: "test-run", pairs: [ToolPair(id: "test-run", call: toolCall, result: toolResult)]),
-                .toolRun(id: "diff-run", pairs: [ToolPair(id: "diff-run", call: diffCall, result: diffResult)]),
-                .message(ChatMessage(
-                    id: "assistant-ready",
-                    kind: .assistantText,
-                    title: "Claude",
-                    body: "Plan is ready for approval. CI and diff review are clean enough to proceed.",
-                    at: now.addingTimeInterval(-100)
-                ))
-            ],
+            items: items,
             planSteps: [
                 PlanStep(id: "1", text: "Replace settlement dedupe with an atomic insert path.", isComplete: true),
                 PlanStep(id: "2", text: "Add a unique index on settlements.fill_id.", isComplete: true),
@@ -325,6 +347,62 @@ public final class AgentControlClient: ObservableObject {
             updateCounter: 42,
             currentTurnState: .streaming
         )
+    }
+
+    private static func makeLongCodeTabVerificationItems(count: Int, now: Date) -> [ChatItem] {
+        guard count > 0 else { return [] }
+        let boundedCount = min(count, 10_000)
+        let start = now.addingTimeInterval(-Double(boundedCount) * 18)
+        return (0..<boundedCount).map { index in
+            let at = start.addingTimeInterval(Double(index) * 18)
+            switch index % 6 {
+            case 0:
+                return .message(ChatMessage(
+                    id: "long-user-\(index)",
+                    kind: .userText,
+                    title: "You",
+                    body: "Follow-up \(index): verify settlement replay behavior for shard \(index % 17).",
+                    at: at
+                ))
+            case 1, 2, 4:
+                return .message(ChatMessage(
+                    id: "long-assistant-\(index)",
+                    kind: .assistantText,
+                    title: "Claude",
+                    body: """
+                    Checked shard \(index % 17) and kept the write path idempotent. The current evidence points to a safe database uniqueness guard plus a narrow cache invalidation.
+                    Next check: replay \(200 + index % 37) fills and confirm no duplicate settlement rows.
+                    """,
+                    at: at
+                ))
+            case 3:
+                let call = ChatMessage(
+                    id: "long-tool-call-\(index)",
+                    kind: .toolCall,
+                    title: "bash",
+                    body: "Run replay shard \(index % 17)",
+                    detail: "pnpm test settlement-store -- --shard \(index % 17)",
+                    at: at,
+                    bashResult: BashResult(command: "pnpm test settlement-store -- --shard \(index % 17)", cwd: "/Users/darshanbathija/workspaces/defx-frontend")
+                )
+                let result = ChatMessage(
+                    id: "long-tool-result-\(index)",
+                    kind: .toolResult,
+                    title: "bash",
+                    body: "\(200 + index % 37) replayed fills, 0 duplicate settlements, 0 stale cache reads",
+                    at: at.addingTimeInterval(4)
+                )
+                return .toolRun(id: "long-tool-run-\(index)", pairs: [ToolPair(id: "long-tool-pair-\(index)", call: call, result: result)])
+            default:
+                return .message(ChatMessage(
+                    id: "long-meta-\(index)",
+                    kind: .meta,
+                    title: "meta",
+                    body: "Checkpoint \(index): context compacted, retaining settlement-store evidence and test outputs.",
+                    at: at
+                ))
+            }
+        }
     }
 
     private static func makeCodeTabVerificationDiff() -> [GitDiffFile] {

@@ -99,6 +99,9 @@ public struct IOSSessionDetailView: View {
     @State private var attachments: [ComposerAttachment] = []
     @State private var photoPickerItems: [PhotosPickerItem] = []
     @StateObject private var chatStore: iOSChatStore
+    #if DEBUG && canImport(UIKit)
+    @StateObject private var scrollPerfProbe = IOSScrollPerformanceProbe()
+    #endif
 
     public init(
         agentClient: AgentControlClient,
@@ -162,6 +165,13 @@ public struct IOSSessionDetailView: View {
         agentClient.sessions.first { $0.id == sessionId }
     }
 
+    private var navigationSubtitle: String {
+        guard let realAgentSession else { return session?.subtitle ?? "—" }
+        let status = session?.subtitle ?? realAgentSession.status.rawValue
+        let model = effectiveModelId(for: realAgentSession) ?? "default"
+        return "\(status) · \(model) · \(effortText(for: realAgentSession))"
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             // Custom nav bar — title chip shows real session metadata.
@@ -186,7 +196,7 @@ public struct IOSSessionDetailView: View {
                                 Circle().fill(statusColor(session?.status ?? .done))
                                     .frame(width: 7, height: 7)
                                     .shadow(color: (session?.status == .running) ? statusColor(.running) : .clear, radius: 3, x: 0, y: 0)
-                                Text(session?.subtitle ?? "—")
+                                Text(navigationSubtitle)
                                     .font(TahoeFont.body(10.5))
                                     .foregroundStyle(t.fg3)
                             }
@@ -253,7 +263,7 @@ public struct IOSSessionDetailView: View {
                         if !attachments.isEmpty {
                             attachmentStrip
                         }
-                        if !isPlanApprovalMode && !composerChips.isEmpty {
+                        if !composerChips.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 6) {
                                     ForEach(composerChips, id: \.id) { chip in
@@ -344,6 +354,11 @@ public struct IOSSessionDetailView: View {
             .presentationDetents([.medium, .large])
         }
         .task(id: sessionId) {
+            #if DEBUG
+            if agentClient.codeTabVerificationChatSnapshot(sessionId: sessionId) != nil {
+                return
+            }
+            #endif
             await chatStore.refresh()
             chatStore.start()
         }
@@ -602,77 +617,115 @@ public struct IOSSessionDetailView: View {
     @ViewBuilder
     private var chatPane: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if data.isDemo {
-                        ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
-                            IOSThreadMsg(msg: msg, providerOverride: session?.agent)
-                        }
-                        IOSPlanHaloMini(
-                            steps: planSteps,
-                            canApprove: !approving,
-                            onRefine: { refineAlertShown = true },
-                            onApprove: { Task { await approvePlan() } }
-                        )
-                    } else if session == nil {
-                        emptyState(
-                            title: "Session unavailable",
-                            body: "This session may have been archived on your Mac. Go back to see what's still running."
-                        )
-                    } else if chatStore.snapshot.items.isEmpty {
-                        emptyState(
-                            title: "No transcript yet",
-                            body: "Messages appear here after the Mac publishes this session's chat snapshot."
-                        )
-                        if !planSteps.isEmpty {
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        if data.isDemo {
+                            ForEach(Array(TahoeDemo.thread.enumerated()), id: \.offset) { _, msg in
+                                IOSThreadMsg(msg: msg, providerOverride: session?.agent)
+                            }
                             IOSPlanHaloMini(
                                 steps: planSteps,
-                                canApprove: hasRealPlan && !approving,
+                                canApprove: !approving,
                                 onRefine: { refineAlertShown = true },
                                 onApprove: { Task { await approvePlan() } }
                             )
-                        }
-                    } else {
-                        ForEach(chatStore.snapshot.items.suffix(200)) { item in
-                            IOSWireChatItemRow(item: item, provider: session?.agent ?? .claude)
-                        }
-                        if !planSteps.isEmpty {
-                            IOSPlanHaloMini(
-                                steps: planSteps,
-                                canApprove: hasRealPlan && !approving,
-                                onRefine: { refineAlertShown = true },
-                                onApprove: { Task { await approvePlan() } }
+                        } else if session == nil {
+                            emptyState(
+                                title: "Session unavailable",
+                                body: "This session may have been archived on your Mac. Go back to see what's still running."
                             )
+                        } else if chatStore.snapshot.items.isEmpty {
+                            emptyState(
+                                title: "No transcript yet",
+                                body: "Messages appear here after the Mac publishes this session's chat snapshot."
+                            )
+                            if !planSteps.isEmpty {
+                                IOSPlanHaloMini(
+                                    steps: planSteps,
+                                    canApprove: hasRealPlan && !approving,
+                                    onRefine: { refineAlertShown = true },
+                                    onApprove: { Task { await approvePlan() } }
+                                )
+                            }
+                        } else {
+                            ForEach(chatStore.snapshot.items) { item in
+                                IOSWireChatItemRow(item: item, provider: session?.agent ?? .claude)
+                            }
+                            if !planSteps.isEmpty {
+                                IOSPlanHaloMini(
+                                    steps: planSteps,
+                                    canApprove: hasRealPlan && !approving,
+                                    onRefine: { refineAlertShown = true },
+                                    onApprove: { Task { await approvePlan() } }
+                                )
+                            }
                         }
+                        Color.clear.frame(height: 1).id("ios-session-detail-bottom")
                     }
-                    Color.clear.frame(height: 1).id("ios-session-detail-bottom")
+                    .padding(.horizontal, 16).padding(.vertical, 4)
                 }
-                .padding(.horizontal, 16).padding(.vertical, 4)
-            }
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
-                return visibleBottom >= geometry.contentSize.height - 48
-            } action: { _, isAtBottom in
-                chatPanePinned = isAtBottom
-            }
-            .onChange(of: chatStore.snapshot.updateCounter) { _, _ in
-                guard chatPanePinned else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo("ios-session-detail-bottom", anchor: .bottom)
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
+                    return visibleBottom >= geometry.contentSize.height - 64
+                } action: { _, isAtBottom in
+                    chatPanePinned = isAtBottom
                 }
-            }
-            .onAppear {
-                chatPanePinned = true
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo("ios-session-detail-bottom", anchor: .bottom)
+                .onChange(of: chatStore.snapshot.updateCounter) { _, _ in
+                    guard chatPanePinned else { return }
+                    scrollChatPaneToBottom(proxy, animated: false)
+                }
+                .onAppear {
+                    chatPanePinned = true
+                    scrollChatPaneToBottom(proxy, animated: false)
+                    #if DEBUG && canImport(UIKit)
+                    scrollPerfProbe.start(
+                        label: "IOSSessionDetailView.chatPane",
+                        itemCount: chatStore.snapshot.items.count
+                    )
+                    #endif
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 80_000_000)
+                        scrollChatPaneToBottom(proxy, animated: false)
+                    }
+                }
+                .onDisappear {
+                    #if DEBUG && canImport(UIKit)
+                    scrollPerfProbe.stopAndLog(reason: "disappear")
+                    #endif
+                }
+                if !chatPanePinned && !chatStore.snapshot.items.isEmpty {
+                    Button {
+                        scrollChatPaneToBottom(proxy, animated: true)
+                    } label: {
+                        Label("Latest", systemImage: "arrow.down.circle.fill")
+                            .font(.footnote.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.thinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 18)
+                    .padding(.bottom, 14)
                 }
             }
             .refreshable {
                 await agentClient.refreshAll()
+            }
+        }
+    }
+
+    private func scrollChatPaneToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        chatPanePinned = true
+        if animated {
+            withAnimation(.easeInOut(duration: 0.32)) {
+                proxy.scrollTo("ios-session-detail-bottom", anchor: .bottom)
+            }
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo("ios-session-detail-bottom", anchor: .bottom)
             }
         }
     }
@@ -741,14 +794,11 @@ public struct IOSSessionDetailView: View {
                 isAccent: true
             )
         ]
-        let model = realAgentSession.runtimeBinding?.providerModelId ?? realAgentSession.model
-        if let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let model = effectiveModelId(for: realAgentSession) {
             chips.append(ComposerChipModel(id: "model", icon: "code", text: model, isAccent: false))
         }
         chips.append(ComposerChipModel(id: "mode", icon: "branch", text: realAgentSession.mode.rawValue.capitalized, isAccent: false))
-        if let effort = realAgentSession.effort {
-            chips.append(ComposerChipModel(id: "effort", icon: "gauge", text: effort.rawValue.uppercased(), isAccent: false))
-        }
+        chips.append(ComposerChipModel(id: "effort", icon: "gauge", text: effortText(for: realAgentSession), isAccent: false))
         if !chatStore.snapshot.sourceEntries.isEmpty {
             chips.append(ComposerChipModel(id: "sources", icon: "link", text: "\(chatStore.snapshot.sourceEntries.count) sources", isAccent: false))
         }
@@ -759,6 +809,29 @@ public struct IOSSessionDetailView: View {
             chips.append(ComposerChipModel(id: "attachments", icon: "paperclip", text: "\(attachments.count) attached", isAccent: false))
         }
         return chips
+    }
+
+    private func effectiveModelId(for session: AgentSession) -> String? {
+        let explicit = [
+            session.runtimeBinding?.providerModelId,
+            session.model
+        ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        if let explicit { return explicit }
+        return ComposerStore.ChipDefaults.for(agent: session.agent, catalog: agentClient.modelCatalog).modelId
+    }
+
+    private func effortText(for session: AgentSession) -> String {
+        if let effort = session.effort {
+            return effort.rawValue.uppercased()
+        }
+        if let modelId = effectiveModelId(for: session),
+           let entry = agentClient.modelCatalog.entry(forId: modelId),
+           !entry.supportsEffort {
+            return "DEFAULT"
+        }
+        return ComposerStore.ChipDefaults.for(agent: session.agent, catalog: agentClient.modelCatalog).effort?.rawValue.uppercased() ?? "DEFAULT"
     }
 
     private func composerChip(_ chip: ComposerChipModel) -> some View {
@@ -1283,6 +1356,111 @@ private struct IOSThreadMsg: View {
         }
     }
 }
+
+#if DEBUG && canImport(UIKit)
+@MainActor
+private final class IOSScrollPerformanceProbe: NSObject, ObservableObject {
+    private var displayLink: CADisplayLink?
+    private var lastTimestamp: CFTimeInterval?
+    private var startedAt: CFTimeInterval = 0
+    private var intervalsMs: [Double] = []
+    private var label: String = ""
+    private var itemCount: Int = 0
+
+    private var enabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--ios-code-demo-scroll-probe")
+    }
+
+    private var durationSeconds: Double {
+        let prefix = "--ios-code-demo-scroll-probe-seconds="
+        for argument in ProcessInfo.processInfo.arguments where argument.hasPrefix(prefix) {
+            let raw = String(argument.dropFirst(prefix.count))
+            if let value = Double(raw), value > 0 {
+                return min(value, 60)
+            }
+        }
+        return 12
+    }
+
+    private var warmupSeconds: Double {
+        let prefix = "--ios-code-demo-scroll-probe-warmup="
+        for argument in ProcessInfo.processInfo.arguments where argument.hasPrefix(prefix) {
+            let raw = String(argument.dropFirst(prefix.count))
+            if let value = Double(raw), value >= 0 {
+                return min(value, 10)
+            }
+        }
+        return 1
+    }
+
+    func start(label: String, itemCount: Int) {
+        guard enabled, displayLink == nil else { return }
+        self.label = label
+        self.itemCount = itemCount
+        intervalsMs = []
+        lastTimestamp = nil
+        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        startedAt = CACurrentMediaTime()
+        displayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    func stopAndLog(reason: String) {
+        guard let link = displayLink else { return }
+        link.invalidate()
+        displayLink = nil
+        guard !intervalsMs.isEmpty else {
+            print("IOS_SCROLL_PROBE label=\(label) reason=\(reason) items=\(itemCount) samples=0")
+            return
+        }
+        let sorted = intervalsMs.sorted()
+        let p50 = percentile(sorted, fraction: 0.50)
+        let p95 = percentile(sorted, fraction: 0.95)
+        let p99 = percentile(sorted, fraction: 0.99)
+        let maxInterval = sorted.last ?? 0
+        let over20 = intervalsMs.filter { $0 > 20 }.count
+        let over33 = intervalsMs.filter { $0 > 33.4 }.count
+        let average = intervalsMs.reduce(0, +) / Double(intervalsMs.count)
+        let fps = average > 0 ? 1_000 / average : 0
+        print(String(
+            format: "IOS_SCROLL_PROBE label=%@ reason=%@ items=%d samples=%d p50=%.2fms p95=%.2fms p99=%.2fms max=%.2fms over20=%d over33=%d avgFps=%.1f",
+            label,
+            reason,
+            itemCount,
+            intervalsMs.count,
+            p50,
+            p95,
+            p99,
+            maxInterval,
+            over20,
+            over33,
+            fps
+        ))
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        let elapsed = link.timestamp - startedAt
+        if let lastTimestamp, elapsed >= warmupSeconds {
+            intervalsMs.append((link.timestamp - lastTimestamp) * 1_000)
+        }
+        lastTimestamp = link.timestamp
+        if elapsed >= durationSeconds {
+            stopAndLog(reason: "duration")
+        }
+    }
+
+    private func percentile(_ sorted: [Double], fraction: Double) -> Double {
+        guard !sorted.isEmpty else { return 0 }
+        let clamped = min(max(fraction, 0), 1)
+        let index = Int((Double(sorted.count - 1) * clamped).rounded())
+        return sorted[index]
+    }
+
+    deinit {
+        displayLink?.invalidate()
+    }
+}
+#endif
 
 private struct IOSPlanHaloMini: View {
     @Environment(\.tahoe) private var t

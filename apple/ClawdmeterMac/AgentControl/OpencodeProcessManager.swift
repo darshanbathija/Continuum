@@ -170,6 +170,7 @@ public final class OpencodeProcessManager {
 
         do {
             try process.run()
+            cleanRuntimeTempQuarantine()
         } catch {
             let detail = "opencode serve spawn failed: \(error.localizedDescription)"
             lastError = detail
@@ -198,6 +199,7 @@ public final class OpencodeProcessManager {
         }
 
         // Step 5: kick off the supervisor + best-effort auth probe.
+        cleanRuntimeTempQuarantine()
         state = .running(port: port)
         restartCount = 0
         startSupervisor()
@@ -260,6 +262,7 @@ public final class OpencodeProcessManager {
         process.standardError = stderr
         do {
             try process.run()
+            cleanRuntimeTempQuarantine()
         } catch {
             logger.info("opencode auth list spawn failed: \(error.localizedDescription, privacy: .public)")
             authStatus = await Self.authStatusFromFile()
@@ -269,6 +272,7 @@ public final class OpencodeProcessManager {
         await Task.detached {
             process.waitUntilExit()
         }.value
+        cleanRuntimeTempQuarantine()
         guard process.terminationStatus == 0 else {
             logger.info("opencode auth list returned \(process.terminationStatus, privacy: .public)")
             authStatus = await Self.authStatusFromFile()
@@ -346,6 +350,9 @@ public final class OpencodeProcessManager {
 
     private nonisolated func prepareBinaryForLaunch(atPath path: String) {
         stripQuarantineRecursively(at: URL(fileURLWithPath: path))
+        stripQuarantineRecursively(at: Self.runtimeDirectory())
+        stripQuarantineRecursively(at: Self.runtimeTempDirectory())
+        stripQuarantineRecursively(at: Self.runtimeCacheDirectory())
         cleanRuntimeTempQuarantine()
     }
 
@@ -389,8 +396,18 @@ public final class OpencodeProcessManager {
     private nonisolated func opencodeEnvironment(overrides: [String: String] = [:]) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         let tmp = Self.runtimeTempDirectory()
+        let cache = Self.runtimeCacheDirectory()
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        env["TMPDIR"] = tmp.path.hasSuffix("/") ? tmp.path : tmp.path + "/"
+        try? FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        stripQuarantineRecursively(at: tmp)
+        stripQuarantineRecursively(at: cache)
+        let tmpPath = tmp.path.hasSuffix("/") ? tmp.path : tmp.path + "/"
+        env["TMPDIR"] = tmpPath
+        env["TMP"] = tmp.path
+        env["TEMP"] = tmp.path
+        env["BUN_TMPDIR"] = tmp.path
+        env["BUN_INSTALL_CACHE_DIR"] = cache.path
+        env["XDG_CACHE_HOME"] = cache.path
         for (key, value) in overrides {
             env[key] = value
         }
@@ -417,14 +434,26 @@ public final class OpencodeProcessManager {
             .appendingPathComponent("OpenCodeTmp", isDirectory: true)
     }
 
+    private nonisolated static func runtimeCacheDirectory() -> URL {
+        let fm = FileManager.default
+        let base = fm.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return base
+            .appendingPathComponent("Clawdmeter", isDirectory: true)
+            .appendingPathComponent("Runtimes", isDirectory: true)
+            .appendingPathComponent("OpenCodeCache", isDirectory: true)
+    }
+
     private nonisolated func cleanRuntimeTempQuarantine() {
         let fm = FileManager.default
         let roots = [
             Self.runtimeTempDirectory(),
+            Self.runtimeCacheDirectory(),
             URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
         ]
         for tmp in roots {
             try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+            stripQuarantine(at: tmp)
             guard let enumerator = fm.enumerator(
                 at: tmp,
                 includingPropertiesForKeys: [.isRegularFileKey],
