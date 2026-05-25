@@ -99,6 +99,9 @@ public struct IOSSessionDetailView: View {
     @State private var attachments: [ComposerAttachment] = []
     @State private var photoPickerItems: [PhotosPickerItem] = []
     @StateObject private var chatStore: iOSChatStore
+    #if DEBUG && canImport(UIKit)
+    @StateObject private var scrollPerfProbe = IOSScrollPerformanceProbe()
+    #endif
 
     public init(
         agentClient: AgentControlClient,
@@ -351,6 +354,11 @@ public struct IOSSessionDetailView: View {
             .presentationDetents([.medium, .large])
         }
         .task(id: sessionId) {
+            #if DEBUG
+            if agentClient.codeTabVerificationChatSnapshot(sessionId: sessionId) != nil {
+                return
+            }
+            #endif
             await chatStore.refresh()
             chatStore.start()
         }
@@ -641,7 +649,7 @@ public struct IOSSessionDetailView: View {
                                 )
                             }
                         } else {
-                            ForEach(chatStore.snapshot.items.suffix(200)) { item in
+                            ForEach(chatStore.snapshot.items) { item in
                                 IOSWireChatItemRow(item: item, provider: session?.agent ?? .claude)
                             }
                             if !planSteps.isEmpty {
@@ -670,10 +678,21 @@ public struct IOSSessionDetailView: View {
                 .onAppear {
                     chatPanePinned = true
                     scrollChatPaneToBottom(proxy, animated: false)
+                    #if DEBUG && canImport(UIKit)
+                    scrollPerfProbe.start(
+                        label: "IOSSessionDetailView.chatPane",
+                        itemCount: chatStore.snapshot.items.count
+                    )
+                    #endif
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 80_000_000)
                         scrollChatPaneToBottom(proxy, animated: false)
                     }
+                }
+                .onDisappear {
+                    #if DEBUG && canImport(UIKit)
+                    scrollPerfProbe.stopAndLog(reason: "disappear")
+                    #endif
                 }
                 if !chatPanePinned && !chatStore.snapshot.items.isEmpty {
                     Button {
@@ -1337,6 +1356,111 @@ private struct IOSThreadMsg: View {
         }
     }
 }
+
+#if DEBUG && canImport(UIKit)
+@MainActor
+private final class IOSScrollPerformanceProbe: NSObject, ObservableObject {
+    private var displayLink: CADisplayLink?
+    private var lastTimestamp: CFTimeInterval?
+    private var startedAt: CFTimeInterval = 0
+    private var intervalsMs: [Double] = []
+    private var label: String = ""
+    private var itemCount: Int = 0
+
+    private var enabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--ios-code-demo-scroll-probe")
+    }
+
+    private var durationSeconds: Double {
+        let prefix = "--ios-code-demo-scroll-probe-seconds="
+        for argument in ProcessInfo.processInfo.arguments where argument.hasPrefix(prefix) {
+            let raw = String(argument.dropFirst(prefix.count))
+            if let value = Double(raw), value > 0 {
+                return min(value, 60)
+            }
+        }
+        return 12
+    }
+
+    private var warmupSeconds: Double {
+        let prefix = "--ios-code-demo-scroll-probe-warmup="
+        for argument in ProcessInfo.processInfo.arguments where argument.hasPrefix(prefix) {
+            let raw = String(argument.dropFirst(prefix.count))
+            if let value = Double(raw), value >= 0 {
+                return min(value, 10)
+            }
+        }
+        return 1
+    }
+
+    func start(label: String, itemCount: Int) {
+        guard enabled, displayLink == nil else { return }
+        self.label = label
+        self.itemCount = itemCount
+        intervalsMs = []
+        lastTimestamp = nil
+        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        startedAt = CACurrentMediaTime()
+        displayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    func stopAndLog(reason: String) {
+        guard let link = displayLink else { return }
+        link.invalidate()
+        displayLink = nil
+        guard !intervalsMs.isEmpty else {
+            print("IOS_SCROLL_PROBE label=\(label) reason=\(reason) items=\(itemCount) samples=0")
+            return
+        }
+        let sorted = intervalsMs.sorted()
+        let p50 = percentile(sorted, fraction: 0.50)
+        let p95 = percentile(sorted, fraction: 0.95)
+        let p99 = percentile(sorted, fraction: 0.99)
+        let maxInterval = sorted.last ?? 0
+        let over20 = intervalsMs.filter { $0 > 20 }.count
+        let over33 = intervalsMs.filter { $0 > 33.4 }.count
+        let average = intervalsMs.reduce(0, +) / Double(intervalsMs.count)
+        let fps = average > 0 ? 1_000 / average : 0
+        print(String(
+            format: "IOS_SCROLL_PROBE label=%@ reason=%@ items=%d samples=%d p50=%.2fms p95=%.2fms p99=%.2fms max=%.2fms over20=%d over33=%d avgFps=%.1f",
+            label,
+            reason,
+            itemCount,
+            intervalsMs.count,
+            p50,
+            p95,
+            p99,
+            maxInterval,
+            over20,
+            over33,
+            fps
+        ))
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        let elapsed = link.timestamp - startedAt
+        if let lastTimestamp, elapsed >= warmupSeconds {
+            intervalsMs.append((link.timestamp - lastTimestamp) * 1_000)
+        }
+        lastTimestamp = link.timestamp
+        if elapsed >= durationSeconds {
+            stopAndLog(reason: "duration")
+        }
+    }
+
+    private func percentile(_ sorted: [Double], fraction: Double) -> Double {
+        guard !sorted.isEmpty else { return 0 }
+        let clamped = min(max(fraction, 0), 1)
+        let index = Int((Double(sorted.count - 1) * clamped).rounded())
+        return sorted[index]
+    }
+
+    deinit {
+        displayLink?.invalidate()
+    }
+}
+#endif
 
 private struct IOSPlanHaloMini: View {
     @Environment(\.tahoe) private var t
