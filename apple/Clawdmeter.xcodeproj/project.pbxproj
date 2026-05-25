@@ -184,7 +184,6 @@
 		BBC17451B2115D6D2351BA97 /* UpdatesUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7490B2B75179425CAFC62D /* UpdatesUI.swift */; };
 		BDD2A7A6A1192473FA46DB66 /* SessionSidebarGrouperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 693EC2D069F0436FA3D69AAC /* SessionSidebarGrouperTests.swift */; };
 		BEE0A480281823DFA1BC2157 /* UpdateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCCD51F6F0D51468D1C0C5DB /* UpdateCoordinator.swift */; };
-		BF3D84A2CC51C4E84A4D9BC5 /* OpencodeAPIKeySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96AE77A43186A113E838F820 /* OpencodeAPIKeySheet.swift */; };
 		BF953F6EFA5428F1648B071A /* IOSLiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C5DB1E465D5AE0EA5AB19D /* IOSLiveView.swift */; };
 		C0B6077013D39D05387FD7E4 /* iOSPlanTrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08ACE23C4B4D169F54F10A1 /* iOSPlanTrackerView.swift */; };
 		C15F6B1B18050515ACE534FC /* SessionActivityStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64C634F7C5D8CBEF39FAA084 /* SessionActivityStrip.swift */; };
@@ -455,7 +454,6 @@
 		9627A91FACDEA2C678CC412A /* OpenCodeHelper.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OpenCodeHelper.entitlements; sourceTree = "<group>"; };
 		96732148372DBB9D002F93B9 /* ClawdmeteriOSWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawdmeteriOSWidgets.swift; sourceTree = "<group>"; };
 		96A2F50347CBD669083BB20A /* SidecarAskCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarAskCoordinatorTests.swift; sourceTree = "<group>"; };
-		96AE77A43186A113E838F820 /* OpencodeAPIKeySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeAPIKeySheet.swift; sourceTree = "<group>"; };
 		96C2DF0BC33E8B4A3197CFDD /* DaemonChatStoreRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonChatStoreRegistry.swift; sourceTree = "<group>"; };
 		96C446A0B7936EDEA144F30E /* SourcesPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesPane.swift; sourceTree = "<group>"; };
 		976BD1912D2C80461031FF26 /* SessionLauncherModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLauncherModel.swift; sourceTree = "<group>"; };
@@ -981,7 +979,6 @@
 				AD6B023408F49EF49E556DC5 /* MacSettingsView.swift */,
 				08A7E1550F933A4D19DC48D9 /* MacTahoeAdapter.swift */,
 				9B3AA024217929E481D26844 /* MacUsageView.swift */,
-				96AE77A43186A113E838F820 /* OpencodeAPIKeySheet.swift */,
 				18DCEE84E585CFA9E05B9805 /* OpencodeSetupSheet.swift */,
 				8B1A00A70CD4E6DD901790A3 /* PlanCompletionSurfaces.swift */,
 			);
@@ -1514,7 +1511,6 @@
 				11BA8BA021A2FF248DDE4965 /* ModePicker.swift in Sources */,
 				55897A9C8B2A15A2A1C231C5 /* ModelPicker.swift in Sources */,
 				16AAD267657983FF56851AD3 /* NotificationDispatcher.swift in Sources */,
-				BF3D84A2CC51C4E84A4D9BC5 /* OpencodeAPIKeySheet.swift in Sources */,
 				72E7AC4665316C7AEDDD59D0 /* OpencodeAuthFile.swift in Sources */,
 				4EF86569A8E9F50930A51AF1 /* OpencodeProcessManager.swift in Sources */,
 				69BB1B4EA6D9FED589AC46BD /* OpencodeSSEAdapter.swift in Sources */,
@@ -1727,7 +1723,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 147;
+				CURRENT_PROJECT_VERSION = 148;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -1746,7 +1742,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.29.8;
+				MARKETING_VERSION = 0.29.9;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -1983,7 +1979,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 147;
+				CURRENT_PROJECT_VERSION = 148;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1996,7 +1992,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.29.8;
+				MARKETING_VERSION = 0.29.9;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

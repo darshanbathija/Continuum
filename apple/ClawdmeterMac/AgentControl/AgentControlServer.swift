@@ -5962,34 +5962,20 @@ public final class AgentControlServer {
         }
     }
 
+    /// Body posted to `opencode serve`'s `/session/<id>/message`
+    /// endpoint. v0.29.9: stripped of the `model`/`variant` override —
+    /// auth and model selection now flow entirely from the user's
+    /// `opencode` CLI configuration (`opencode auth login` + the CLI's
+    /// own default-model state). The serve daemon picks the upstream
+    /// provider and model from its own state; Clawdmeter no longer
+    /// second-guesses that selection.
     private func opencodeMessageBody(session: AgentSession, prompt: String) -> [String: Any] {
-        var body: [String: Any] = [
+        _ = session
+        return [
             "parts": [
                 ["type": "text", "text": prompt]
             ]
         ]
-        if session.runtimeBinding?.billingProvider == "openrouter",
-           let model = session.model,
-           !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           model != "opencode-default" {
-            body["model"] = [
-                "providerID": "openrouter",
-                "modelID": model
-            ]
-            if let effort = session.effort {
-                body["variant"] = openRouterVariant(for: effort)
-            }
-        }
-        return body
-    }
-
-    private func openRouterVariant(for effort: ReasoningEffort) -> String {
-        switch effort {
-        case .max:
-            return ReasoningEffort.xhigh.rawValue
-        default:
-            return effort.rawValue
-        }
     }
 
     private func sendChatSDKPrompt(
