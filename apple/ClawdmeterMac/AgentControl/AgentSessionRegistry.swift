@@ -288,13 +288,20 @@ public final class AgentSessionRegistry: ObservableObject {
     }
 
     public func setPlanText(id: UUID, planText: String) {
-        update(id: id) { s in with(s, planText: planText) }
+        guard let current = session(id: id), current.planText != planText else { return }
+        bumpEventSeq(id: id)
+        update(id: id) { s in
+            with(s, planText: planText, lastEventSeq: s.lastEventSeq + 1)
+        }
     }
 
     public func markPlanApproved(id: UUID) {
+        guard let current = session(id: id) else { return }
+        let approved = Self.reviewableApprovedPlanText(from: current)
+        guard current.planText != nil || current.approvedPlanText != approved else { return }
+        bumpEventSeq(id: id)
         update(id: id) { s in
-            let approved = Self.reviewableApprovedPlanText(from: s)
-            return with(s, planText: .some(nil), approvedPlanText: approved)
+            with(s, planText: .some(nil), approvedPlanText: approved, lastEventSeq: s.lastEventSeq + 1)
         }
     }
 

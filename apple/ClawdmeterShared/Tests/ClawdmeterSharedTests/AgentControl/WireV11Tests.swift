@@ -15,10 +15,10 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsEighteen() {
-        // v18 (2026-05-25, iOS Code workbench parity): adds remote
-        // Mac-backed run-profile and checkpoint lifecycle endpoints.
-        XCTAssertEqual(AgentControlWireVersion.current, 18)
+    func test_currentWireVersionIsNineteen() {
+        // v19 (2026-05-25, session lifecycle): adds lifecycle snapshots,
+        // reducer state, and lifecycle subscribe support.
+        XCTAssertEqual(AgentControlWireVersion.current, 19)
     }
 
     func test_workspacesMinimumIsSixteen() {
@@ -40,6 +40,10 @@ final class WireV11Tests: XCTestCase {
         XCTAssertFalse(AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: nil))
         XCTAssertFalse(AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: 17))
         XCTAssertTrue(AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: 18))
+        XCTAssertEqual(AgentControlWireVersion.lifecycleMinimum, 19)
+        XCTAssertFalse(AgentControlWireVersion.supportsLifecycle(serverWireVersion: nil))
+        XCTAssertFalse(AgentControlWireVersion.supportsLifecycle(serverWireVersion: 18))
+        XCTAssertTrue(AgentControlWireVersion.supportsLifecycle(serverWireVersion: 19))
     }
 
     func test_opencodeMinimumIsThirteen() {

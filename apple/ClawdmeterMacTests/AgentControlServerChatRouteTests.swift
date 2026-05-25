@@ -92,6 +92,39 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         _ = try? await requestRaw(path: "/sessions/\(session.id.uuidString)", method: "DELETE")
     }
 
+    func test_lifecycleRouteAndClientReturnSnapshot() async throws {
+        let session = registry.create(
+            repoKey: tempDir.path,
+            repoDisplayName: "Route Test",
+            agent: .claude,
+            model: "sonnet",
+            goal: "Verify lifecycle route",
+            worktreePath: tempDir.path,
+            tmuxWindowId: "@test",
+            tmuxPaneId: "%test",
+            planMode: true,
+            mode: .worktree
+        )
+        registry.setPlanText(id: session.id, planText: "1. Verify route")
+
+        let raw = try await requestRaw(path: "/sessions/\(session.id.uuidString)/lifecycle", method: "GET")
+        XCTAssertEqual(raw.status, 200)
+        let response = try decode(SessionLifecycleSnapshotResponse.self, from: raw.data)
+        XCTAssertEqual(response.snapshot.sessionId, session.id)
+        XCTAssertEqual(response.snapshot.phase, .awaitingApproval)
+        XCTAssertEqual(response.snapshot.nextAction?.kind, .approvePlan)
+
+        let client = AgentControlClient(
+            host: "127.0.0.1",
+            httpPort: Int(try XCTUnwrap(server.boundPort)),
+            wsPort: Int(server.boundWsPort ?? 0),
+            token: server.localLoopbackToken
+        )
+        let clientSnapshot = await client.fetchLifecycle(sessionId: session.id)
+        XCTAssertEqual(clientSnapshot?.sessionId, session.id)
+        XCTAssertEqual(clientSnapshot?.phase, .awaitingApproval)
+    }
+
     func test_oneSlotFrontierRequest_isRejectedByActualRoute() async throws {
         let request = CreateFrontierRequest(
             clientRequestId: UUID(),

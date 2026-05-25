@@ -671,6 +671,11 @@ public final class AgentControlClient: ObservableObject {
     }
 
     @MainActor
+    public var supportsLifecycle: Bool {
+        AgentControlWireVersion.supportsLifecycle(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
     public var supportsAntigravityPlan: Bool {
         AgentControlWireVersion.supportsAntigravityPlan(serverWireVersion: serverWireVersion)
     }
@@ -1920,6 +1925,22 @@ public final class AgentControlClient: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             return try decoder.decode(CodeRunProfileResponse.self, from: data).profile
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    @MainActor
+    public func fetchLifecycle(sessionId: UUID) async -> SessionLifecycleSnapshot? {
+        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/lifecycle", method: "GET") else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(SessionLifecycleSnapshotResponse.self, from: data).snapshot
         } catch {
             self.lastError = error.localizedDescription
             return nil

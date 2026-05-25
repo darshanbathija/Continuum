@@ -120,7 +120,11 @@ public enum AgentControlWireVersion {
     /// run profile endpoints plus checkpoint create / restore-preview /
     /// restore endpoints so iOS can expose the same Code workbench lifecycle
     /// without pretending it can run local shell commands on-device.
-    public static let current: Int = 18
+    /// v19 (2026-05-25, lifecycle spine): adds `SessionLifecycleSnapshot`,
+    /// the `GET /sessions/:id/lifecycle` endpoint, and the
+    /// `lifecycle-subscribe` WS op. v18 `AgentSession.status` remains the
+    /// compatibility status for older clients.
+    public static let current: Int = 19
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -235,6 +239,9 @@ public enum AgentControlWireVersion {
     /// endpoints to iOS: run profile start/stop/snapshot and checkpoint
     /// create / restore-preview / restore.
     public static let codeWorkbenchRemoteMinimum: Int = 18
+    /// Minimum wire version that exposes the unified lifecycle snapshot
+    /// spine (`GET /sessions/:id/lifecycle` + `lifecycle-subscribe` WS).
+    public static let lifecycleMinimum: Int = 19
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -379,6 +386,12 @@ public enum AgentControlWireVersion {
     public static func supportsCodeWorkbenchRemote(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= codeWorkbenchRemoteMinimum
+    }
+
+    /// Whether the paired Mac exposes unified lifecycle snapshots.
+    public static func supportsLifecycle(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= lifecycleMinimum
     }
 }
 
