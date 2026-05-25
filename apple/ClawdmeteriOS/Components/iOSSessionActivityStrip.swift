@@ -81,11 +81,13 @@ struct iOSSessionActivityStrip: View {
     }
 
     private var durationLabel: String {
+        // v0.29.4: one decimal place — matches Mac LiveSessionActivityIndicator
+        // and avoids fake-precision noise at sub-second refresh rates.
         let elapsed = max(0, Date().timeIntervalSince(session.createdAt))
-        if elapsed < 60 { return String(format: "%.2fs", elapsed) }
+        if elapsed < 60 { return String(format: "%.1fs", elapsed) }
         let mins = Int(elapsed) / 60
         let secs = elapsed - Double(mins * 60)
-        return String(format: "%dm %.2fs", mins, secs)
+        return String(format: "%dm %.1fs", mins, secs)
     }
 
     private var tokenLabel: String {

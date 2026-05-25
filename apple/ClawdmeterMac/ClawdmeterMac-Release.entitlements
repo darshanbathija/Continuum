@@ -114,7 +114,72 @@
 		     work that reads ~/.cursor/cli-config.json (for plan auth
 		     metadata) needs the file-system grant here. -->
 		<string>/.cursor/</string>
+		<!-- v0.29.4: cursor-agent's actual binary lives under
+		     ~/.local/share/cursor-agent/versions/<rev>/cursor-agent;
+		     ~/.local/bin/cursor-agent is a symlink to it. The sandbox
+		     follows the symlink at exec time, so without this exception
+		     the kernel denies execution of the real binary and
+		     CursorModelProbe gets back nothing — Settings → Providers
+		     → Cursor's model chooser then shows only "Auto" because
+		     `cursor-agent list-models` never ran. Read-only is
+		     enough: we don't write to the cursor-agent install tree.
+		-->
+		<string>/.local/share/cursor-agent/</string>
 	</array>
+
+	<!--
+	  v0.29.4: Homebrew install prefixes.
+
+	  Many users install the agent CLIs (codex, claude, gh, git) via
+	  npm/Homebrew rather than the personal-install routes under ~/.
+	  - Apple Silicon: /opt/homebrew/bin/ + /opt/homebrew/lib/...
+	  - Intel:         /usr/local/bin/   + /usr/local/lib/...
+
+	  Without these exceptions, `FileManager.isExecutableFile` returns
+	  false for /opt/homebrew/bin/codex even though the file is there
+	  and chmod +x. The new-session dialog then reports "Agent CLI not
+	  found on PATH: codex" and the Start button is blocked.
+
+	  Read-only is enough: we only need to stat + exec these binaries;
+	  installs and upgrades happen via the user's own `brew` / `npm`
+	  invocations outside our process.
+	-->
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
+	<array>
+		<string>/opt/homebrew/</string>
+		<string>/usr/local/</string>
+	</array>
+	<!--
+	  v0.29.4: AppleScript automation to Terminal.app.
+
+	  Why: Settings → Providers → Claude Code shows an "Auth via CLI"
+	  button that runs `claude /login` in a fresh Terminal window so the
+	  user can complete the OAuth handshake. The implementation uses
+	  `NSAppleScript` to `tell application "Terminal" / do script "…"`.
+	  In a sandboxed app, AppleScript bridges to other apps are blocked
+	  by default — the script silently fails with errAEEventNotPermitted
+	  (-1743) and the button does nothing.
+
+	  Fix: declare the apple-events entitlement and scope it to Terminal
+	  via `com.apple.security.scripting-targets`. On first click macOS
+	  prompts the user once for permission ("Clawdmeter wants to control
+	  Terminal"). Approved -> AppleScript flows through -> Terminal
+	  opens with the install / login script -> user finishes OAuth.
+
+	  Trade-off: narrow. We declare exactly one target (Terminal) so
+	  the entitlement can't be used to drive Safari, Mail, or any other
+	  app. The user still has to approve the automation prompt — the
+	  entitlement only makes the prompt *possible*. Without it the
+	  prompt never appears and the script is rejected at the sandbox
+	  boundary.
+	-->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.temporary-exception.apple-events</key>
+	<array>
+		<string>com.apple.Terminal</string>
+	</array>
+
 	<!-- iCloud KV sync — paid Developer Program only. -->
 	<!--
 	<key>com.apple.developer.icloud-services</key>

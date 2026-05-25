@@ -124,6 +124,15 @@ public enum CursorModelCatalog {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
+        // v0.29.4: cursor-agent 2026.05.20+ uses an `id - Display Name` line
+        // format (e.g. `composer-2.5 - Composer 2.5 Fast (default)`). Strip
+        // everything after the first " - " so the model ID isn't polluted
+        // with the human-readable label. Order matters: do this BEFORE the
+        // double-space/tab trim so an ID that happens to contain no whitespace
+        // still gets cleaned.
+        if let dashRange = value.range(of: " - ") {
+            value = String(value[..<dashRange.lowerBound])
+        }
         if let separator = value.range(of: "  ") ?? value.range(of: "\t") {
             value = String(value[..<separator.lowerBound])
         }

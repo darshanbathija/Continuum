@@ -75,8 +75,13 @@ struct ModelEffortChip: View {
 // MARK: - Context + Usage chip
 
 /// Right-side composer chip that opens the context window + plan usage
-/// rows. The ring renders the most-saturated meter (context / 5h / weekly)
-/// so the user sees the closest cap at a glance.
+/// rows. The ring shows the active session's context-window utilisation
+/// (e.g. 336.2k / 1.0M = 33%). v0.29.4: this used to be `max(context,
+/// 5h, weekly)` which meant a 75%-full weekly bucket pegged the ring at
+/// 75% even though the chat session was only using 33% of its window —
+/// users couldn't tell at a glance how much room they had left in the
+/// current model's prompt. Plan caps still live one click away in the
+/// popover, where each meter has its own row.
 struct ContextUsageChip: View {
     let info: UsageStatusInfo
 
@@ -96,7 +101,7 @@ struct ContextUsageChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("Show context + plan usage")
+        .help("Context window utilisation — click for plan usage")
         .popover(isPresented: $showingPopover, arrowEdge: .top) {
             ContextUsagePopover(info: info)
         }
@@ -122,17 +127,12 @@ struct ContextUsageChip: View {
     }
 
     private var contextFraction: CGFloat {
-        var pieces: [CGFloat] = []
-        if let limit = info.contextLimitTokens, limit > 0 {
-            pieces.append(min(1.0, CGFloat(info.contextUsedTokens) / CGFloat(limit)))
-        }
-        if let s = info.sessionPct {
-            pieces.append(min(1.0, CGFloat(s) / 100.0))
-        }
-        if let w = info.weeklyPct {
-            pieces.append(min(1.0, CGFloat(w) / 100.0))
-        }
-        return pieces.max() ?? 0
+        // v0.29.4: context-window only. If the model's limit is unknown
+        // (legacy assistant turns with no `usage` payload yet) we render
+        // an empty ring rather than borrowing the plan caps — the popover
+        // is the right place to see plan progress.
+        guard let limit = info.contextLimitTokens, limit > 0 else { return 0 }
+        return min(1.0, CGFloat(info.contextUsedTokens) / CGFloat(limit))
     }
 
     private func ringColor(_ fraction: CGFloat) -> Color {

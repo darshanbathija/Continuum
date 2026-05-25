@@ -277,11 +277,19 @@ private struct Legend: View {
         HStack(spacing: 14) {
             ForEach(TahoeProvider.allCases) { p in
                 HStack(spacing: 6) {
+                    // v0.29.4: match the SpendChart's bar gradient
+                    // (`halo → glow`) instead of the previous
+                    // `glow → base`. The old recipe rendered Codex as
+                    // a dark gray chip even though the chart bars use
+                    // OpenAI's bright blue — users couldn't tell which
+                    // legend entry mapped to which bar color. Halo is
+                    // the same hue family per provider so the chip now
+                    // visually keys the bar above it.
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(LinearGradient(colors: [p.glow.color, p.base.color],
+                        .fill(LinearGradient(colors: [p.halo.color, p.glow.color],
                                              startPoint: .top, endPoint: .bottom))
                         .frame(width: 9, height: 9)
-                        .shadow(color: p.base.color(opacity: 0.6), radius: 3, x: 0, y: 0)
+                        .shadow(color: p.halo.color(opacity: 0.6), radius: 3, x: 0, y: 0)
                     Text(p.displayName)
                         .font(TahoeFont.body(11))
                         .foregroundStyle(t.fg2)

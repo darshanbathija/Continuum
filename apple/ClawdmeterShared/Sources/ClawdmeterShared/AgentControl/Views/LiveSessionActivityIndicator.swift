@@ -82,11 +82,13 @@ public struct LiveSessionActivityIndicator: View {
     }
 
     private var elapsedString: String {
+        // v0.29.4: one decimal — the pill ticks 10x/sec, and the second
+        // decimal place is noise at that refresh rate.
         let s = elapsedSeconds
-        if s < 60 { return String(format: "%.2fs", s) }
+        if s < 60 { return String(format: "%.1fs", s) }
         let m = Int(s) / 60
         let r = s - Double(m * 60)
-        return String(format: "%dm %.2fs", m, r)
+        return String(format: "%dm %.1fs", m, r)
     }
 
     private var accent: Color {

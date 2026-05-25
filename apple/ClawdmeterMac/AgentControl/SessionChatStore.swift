@@ -156,6 +156,20 @@ public final class SessionChatStore: ObservableObject {
         public var contextWindowUsedTokens: Int {
             lastInputTokens + lastCacheCreationTokens + lastCacheReadTokens
         }
+
+        /// v0.29.4: start-of-current-turn timestamp for the live activity
+        /// pill. The pill used to take `lastEventAt` (most recent ANY
+        /// event), so reopening a long-running session showed "0.0s ·
+        /// thinking…" and counted up from the click — wrong: it should
+        /// reflect how long the model has been working on the current
+        /// task. The most recent `.userText` message's timestamp marks
+        /// the beginning of the current turn; the agent has been working
+        /// ever since. Once a turn settles (no new events for the activity
+        /// window) the indicator hides itself, so this property doesn't
+        /// need to clamp on turn-complete — `isActive` does.
+        public var currentTurnStartedAt: Date? {
+            messages.last(where: { $0.kind == .userText })?.at
+        }
     }
 
     @Published public private(set) var snapshot: ChatSnapshot = .empty

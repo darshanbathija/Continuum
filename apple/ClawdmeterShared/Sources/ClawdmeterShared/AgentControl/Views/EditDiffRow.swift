@@ -11,8 +11,12 @@ import SwiftUI
 ///
 /// Tap → toggles a disclosure that surfaces the full file path, the
 /// capped edit preview/diff payload when available, and the matched
-/// tool_result body. On macOS, hovering temporarily opens the disclosure
-/// so the diff can be inspected without committing row state.
+/// tool_result body.
+///
+/// v0.29.4: removed the hover-to-peek behavior. Users reported diffs
+/// auto-opening when scrolling past them was disorienting — the disclosure
+/// would flash open and closed as the pointer crossed each row. The
+/// state is now click-only.
 public struct EditDiffRow: View {
     /// Structured summary parsed at ingest time from the tool_use input.
     public let stats: EditStats
@@ -26,7 +30,6 @@ public struct EditDiffRow: View {
     public let density: TranscriptDensity
 
     @State private var isExpanded: Bool = false
-    @State private var isHovering: Bool = false
 
     public init(
         stats: EditStats,
@@ -67,7 +70,7 @@ public struct EditDiffRow: View {
         }
         .padding(8)
         #else
-        DisclosureGroup(isExpanded: expandedBinding) {
+        DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(stats.filePath)
                     .font(.caption.monospaced())
@@ -143,15 +146,7 @@ public struct EditDiffRow: View {
             Color.secondary.opacity(0.08),
             in: RoundedRectangle(cornerRadius: 10)
         )
-        .modifier(EditDiffHoverModifier(isHovering: $isHovering))
         #endif
-    }
-
-    private var expandedBinding: Binding<Bool> {
-        Binding(
-            get: { isExpanded || isHovering },
-            set: { isExpanded = $0 }
-        )
     }
 
     private var previewTitle: String {
@@ -202,18 +197,6 @@ public struct EditDiffRow: View {
 
     private var deletionsColor: Color {
         Color(red: 0xE6 / 255.0, green: 0x4B / 255.0, blue: 0x4B / 255.0)
-    }
-}
-
-private struct EditDiffHoverModifier: ViewModifier {
-    @Binding var isHovering: Bool
-
-    func body(content: Content) -> some View {
-        #if os(macOS)
-        content.onHover { isHovering = $0 }
-        #else
-        content
-        #endif
     }
 }
 
