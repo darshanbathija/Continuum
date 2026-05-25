@@ -63,7 +63,7 @@ struct ClawdmeterMacApp: App {
         // status items conditionally, which `MenuBarExtra(isInserted:)`
         // can't do without triggering Tahoe's KVO loop. `NSStatusItem`
         // (managed by AppDelegate) supports `.isVisible` natively.
-        Window("Clawdmeter", id: "dashboard") {
+        Window("Continuum", id: "dashboard") {
             // Tahoe 26 redesign: the new MacRootView owns the four
             // titlebar tabs (Chat / Usage / Code / Settings) and the
             // global TahoeThemeStore. The runtime is threaded in so the

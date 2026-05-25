@@ -220,7 +220,7 @@ enum SupportBundleWriter {
     static func create(auditFolderURL: URL, wireEntries: [String], outputRoot: URL? = nil) throws -> URL {
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
-        let root = (outputRoot ?? downloads).appendingPathComponent("Clawdmeter Support", isDirectory: true)
+        let root = (outputRoot ?? downloads).appendingPathComponent("Continuum Support", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let bundle = root.appendingPathComponent("support-\(Self.stamp())", isDirectory: true)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)

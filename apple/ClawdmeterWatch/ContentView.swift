@@ -77,7 +77,7 @@ struct ContentView: View {
             .padding(.horizontal, 8)
         }
         .containerBackground(.fill.tertiary, for: .navigation)
-        .navigationTitle("Clawdmeter")
+        .navigationTitle("Continuum")
     }
 
     @ViewBuilder

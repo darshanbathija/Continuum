@@ -27,7 +27,15 @@ cd "$REPO_ROOT"
 
 SCHEME="Clawdmeter (Mac)"
 PROJECT="apple/Clawdmeter.xcodeproj"
+# APP_NAME stays "Clawdmeter" because the xcodebuild PRODUCT_NAME is
+# Clawdmeter — the bundle on disk, the executable, the xcarchive path,
+# and the .app folder all need to keep that name for paths to resolve.
+# v0.29.7 display rebrand: users see "Continuum" via CFBundleDisplayName
+# in the .app's Info.plist; the DMG filename, mounted volume, and on-
+# screen build log all switch to Continuum so it's the only name the
+# user actually encounters during install.
 APP_NAME="Clawdmeter"
+DISPLAY_NAME="Continuum"
 DIST_DIR="$REPO_ROOT/dist"
 BUILD_DIR="$REPO_ROOT/.build/mac-dmg"
 ARCHIVE_PATH="$BUILD_DIR/Clawdmeter.xcarchive"
@@ -46,10 +54,10 @@ if [[ -z "$VERSION" ]]; then
       apple/ClawdmeterMac/Info.plist 2>/dev/null || echo "0.1.0")"
 fi
 
-DMG_NAME="${APP_NAME}-${VERSION}-arm64.dmg"
+DMG_NAME="${DISPLAY_NAME}-${VERSION}-arm64.dmg"
 DMG_PATH="$DIST_DIR/$DMG_NAME"
 
-echo "▸ Building Clawdmeter v${VERSION} (arm64 / macOS Release)"
+echo "▸ Building ${DISPLAY_NAME} v${VERSION} (arm64 / macOS Release)"
 echo "  scheme:    $SCHEME"
 echo "  project:   $PROJECT"
 echo "  output:    $DMG_PATH"
@@ -176,6 +184,12 @@ HELPER_BINARIES=(
 # pipe through openssl so no early-exit consumer can SIGPIPE codesign.
 CERT_DIR="$(mktemp -d)"
 codesign -d --extract-certificates="$CERT_DIR/cert" "$APP_PATH" 2>/dev/null || true
+# Always read the full codesign descriptor so the outer-resign step
+# below can pull the TeamIdentifier out of it (needed to expand the
+# `$(AppIdentifierPrefix)` macro in the entitlements file). The SIGPIPE
+# guard via `|| true` keeps `set -euo pipefail` from killing the script
+# if `codesign` writes to stderr before its stdout consumer closes.
+CODESIGN_INFO="$(codesign -dvvv "$APP_PATH" 2>&1 || true)"
 SIGNING_IDENTITY=""
 if [[ -f "$CERT_DIR/cert0" ]]; then
   SIGNING_IDENTITY="$(openssl x509 -inform DER -in "$CERT_DIR/cert0" \
@@ -185,7 +199,6 @@ if [[ -f "$CERT_DIR/cert0" ]]; then
 fi
 # Fallback to the CN if SHA1 extraction failed for any reason.
 if [[ -z "$SIGNING_IDENTITY" ]]; then
-  CODESIGN_INFO="$(codesign -dvvv "$APP_PATH" 2>&1 || true)"
   SIGNING_IDENTITY="$(printf '%s\n' "$CODESIGN_INFO" \
       | grep -E '^Authority=Apple Development' \
       | head -n1 \
@@ -207,12 +220,45 @@ if [[ -n "$SIGNING_IDENTITY" && -f "$HELPER_ENT" ]]; then
   done
   # Re-sign the outer app so its sealed-resources manifest matches the
   # updated helpers (otherwise --deep verify rejects the bundle).
-  codesign --force \
-    --sign "$SIGNING_IDENTITY" \
-    --options runtime \
-    --entitlements "$REPO_ROOT/apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements" \
-    --timestamp=none \
-    "$APP_PATH" 2>&1 | sed 's/^/    /' || echo "    ⚠ outer codesign failed"
+  #
+  # Two subtleties:
+  #
+  # 1. `$(AppIdentifierPrefix)` macros — Xcode expands these at sign
+  #    time using the project's resolved team prefix. Standalone
+  #    `codesign --entitlements` does NOT expand them; it would embed
+  #    the literal `$(AppIdentifierPrefix)com.clawdmeter` as the
+  #    keychain-access-group, which Gatekeeper / launchd reject ("the
+  #    application cannot be opened for an unexpected reason …
+  #    Launchd job spawn failed", error 163). Expand the macro into a
+  #    temp entitlements file using the team id we already extracted
+  #    from the outer binary's CMS chain.
+  #
+  # 2. `--options runtime` on the outer app — the main app was signed
+  #    by xcodebuild with `flags=0x0(none)`, NOT the hardened runtime.
+  #    Adding `runtime` post-hoc enables library validation on the
+  #    main binary's children, which can refuse to load bundled
+  #    Swift / SwiftUI dylibs that were signed without the runtime
+  #    flag. Helpers (opencode, uv) get hardened runtime because
+  #    they're external pre-built binaries; the main Mac app stays
+  #    on its xcodebuild defaults.
+  TEAM_ID="$(printf '%s\n' "$CODESIGN_INFO" \
+      | grep -E '^TeamIdentifier=' \
+      | head -n1 \
+      | sed 's/^TeamIdentifier=//' || true)"
+  if [[ -z "$TEAM_ID" ]]; then
+    echo "    ⚠ Skipping outer re-sign — could not determine team id"
+  else
+    OUTER_ENT="$(mktemp -t outer-ent.XXXXXX.plist)"
+    sed "s|\$(AppIdentifierPrefix)|${TEAM_ID}.|g" \
+        "$REPO_ROOT/apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements" \
+        > "$OUTER_ENT"
+    codesign --force \
+      --sign "$SIGNING_IDENTITY" \
+      --entitlements "$OUTER_ENT" \
+      --timestamp=none \
+      "$APP_PATH" 2>&1 | sed 's/^/    /' || echo "    ⚠ outer codesign failed"
+    rm -f "$OUTER_ENT"
+  fi
 else
   echo "⚠ Skipping helper re-sign — no Apple Development identity on outer app"
 fi
@@ -228,19 +274,25 @@ cp -R "$APP_PATH" "$STAGING_DIR/"
 ln -s /Applications "$STAGING_DIR/Applications"
 
 # Drop a short README into the DMG so users see install instructions on mount.
+# The .app on disk is still named "Clawdmeter.app" (bundle PRODUCT_NAME)
+# even though Finder, the Dock, and the menu bar show it as "Continuum"
+# via CFBundleDisplayName. Call out the file name so first-time installers
+# don't think they grabbed the wrong DMG.
 cat > "$STAGING_DIR/INSTALL.txt" <<'README'
-Clawdmeter for Mac
-==================
+Continuum for Mac
+=================
 
-1. Drag Clawdmeter.app into the Applications folder.
-2. First launch: right-click Clawdmeter.app → Open → "Open" in the dialog.
-   (macOS asks once because Clawdmeter is signed with a personal Apple
-    Developer team, not notarized. After the first Open, Gatekeeper
-    remembers and never asks again.)
-3. The Clawdmeter icon appears in the menu bar. Click it to view your
+1. Drag Clawdmeter.app into the Applications folder. (Finder shows it
+   as "Continuum" — same app, internal name kept stable for now while
+   the entity transition lands.)
+2. First launch: right-click Continuum in Applications → Open → "Open"
+   in the dialog. macOS asks once because Continuum is signed with a
+   personal Apple Developer team, not notarized. After the first Open,
+   Gatekeeper remembers and never asks again.
+3. The Continuum icon appears in the menu bar. Click it to view your
    Claude / Codex usage; click "Open dashboard" for the full window.
 
-For the source, the watchOS / iOS apps, and the original ESP32 firmware:
+Source, watchOS / iOS apps, and release notes:
 https://github.com/darshanbathija/Clawdmeter
 README
 
@@ -252,7 +304,7 @@ README
 echo "▸ Building DMG…"
 rm -f "$DMG_PATH"
 hdiutil create \
-  -volname "$APP_NAME" \
+  -volname "$DISPLAY_NAME" \
   -srcfolder "$STAGING_DIR" \
   -ov \
   -format UDZO \
@@ -267,7 +319,12 @@ echo "✓ DMG: $DMG_PATH ($SIZE)"
 # ────────────────────────────────────────────────────────────────────────
 
 echo "▸ Verifying DMG…"
-MOUNT_POINT=$(hdiutil attach -nobrowse -readonly "$DMG_PATH" | tail -1 | awk '{print $3}')
+# hdiutil's `attach` output can include multiple lines when other DMGs
+# are already mounted or when the disk has both a partition map and a
+# data partition. Grep for the first /Volumes/... path explicitly so
+# we always land on the new mount, not the last-line of stale output.
+MOUNT_POINT=$(hdiutil attach -nobrowse -readonly "$DMG_PATH" 2>&1 \
+  | grep -o '/Volumes/[^ ]*' | head -1)
 if [[ -d "$MOUNT_POINT/${APP_NAME}.app" ]]; then
   echo "✓ DMG mounts and contains ${APP_NAME}.app"
   codesign --verify --deep --strict "$MOUNT_POINT/${APP_NAME}.app" 2>&1 | head -3 || true

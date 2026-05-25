@@ -16,6 +16,13 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<!-- v0.29.7: Continuum display-only rebrand. See Mac Info.plist
+	     for full rationale. CFBundleName + PRODUCT_NAME stay as
+	     Clawdmeter so the bundle id, App Group, and keychain prefix
+	     don't drift — existing iOS installs keep their pairing,
+	     iCloud Keychain entry, and on-disk state. -->
+	<key>CFBundleDisplayName</key>
+	<string>Continuum</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

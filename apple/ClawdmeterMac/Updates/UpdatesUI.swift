@@ -92,7 +92,7 @@ struct UpdateChip: View {
 
     private func helpText(for label: String) -> String {
         if label.hasPrefix("Move to") {
-            return "Clawdmeter is running from a temporary location. Move it to /Applications to enable updates."
+            return "Continuum is running from a temporary location. Move it to /Applications to enable updates."
         }
         return "A new version of Clawdmeter is available — click for details."
     }
@@ -132,7 +132,7 @@ struct UpdatePopoverContent: View {
 
     @ViewBuilder
     private func updateAvailableBody(version: String) -> some View {
-        Text("Clawdmeter \(version) is available")
+        Text("Continuum \(version) is available")
             .font(.system(size: 15, weight: .semibold))
 
         if let release = coordinator.wrapped?.availableUpdate {
@@ -191,7 +191,7 @@ struct UpdatePopoverContent: View {
         Text("Move Clawdmeter to Applications")
             .font(.system(size: 15, weight: .semibold))
 
-        Text("Clawdmeter is running from a temporary location and can't be updated in place. Drag it to your Applications folder, then reopen.")
+        Text("Continuum is running from a temporary location and can't be updated in place. Drag it to your Applications folder, then reopen.")
             .font(.system(size: 12))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
