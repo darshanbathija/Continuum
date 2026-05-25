@@ -378,6 +378,8 @@ private struct SidebarPane: View {
     @State private var collapsedStatusGroupIDs: Set<String> = []
     @State private var sidebarViewportHeight: CGFloat = 0
     @State private var sidebarContentHeight: CGFloat = 0
+    @State private var hoveredSessionId: UUID?
+    @State private var hoveredRecentPath: String?
 
     private var grouping: SessionGrouping {
         SessionGrouping(rawValue: groupingRaw) ?? .repo
@@ -964,7 +966,8 @@ private struct SidebarPane: View {
     /// icon are gone — v0.4.1 made the row continuable from the
     /// composer so calling it read-only was misleading.
     private func recentSessionRow(_ recent: RecentSession, isOpen: Bool, repo: AgentRepo, showRepoChip: Bool = false) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        let isHovered = hoveredRecentPath == recent.path
+        return HStack(alignment: .top, spacing: 8) {
             providerBadge(for: recent)
             VStack(alignment: .leading, spacing: 2) {
                 Text(recentTitle(recent))
@@ -979,10 +982,25 @@ private struct SidebarPane: View {
         .padding(.leading, 14)
         .padding(.trailing, 14)
         .padding(.vertical, 5)
-        .background(isOpen ? terraCotta.opacity(0.15) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 5))
+        .background(
+            isOpen
+                ? terraCotta.opacity(0.15)
+                : (isHovered ? t.hair2.opacity(colorScheme == .dark ? 1.0 : 1.35) : Color.clear),
+            in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(isOpen ? terraCotta.opacity(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
+        )
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
+        .onHover { inside in
+            if inside {
+                hoveredRecentPath = recent.path
+            } else if hoveredRecentPath == recent.path {
+                hoveredRecentPath = nil
+            }
+        }
         .help(recent.path)
         .contextMenu {
             Button("Continue here", systemImage: "play.fill") {
@@ -1210,7 +1228,8 @@ private struct SidebarPane: View {
     }
 
     private func sessionRow(_ session: AgentSession, isOpen: Bool, depth: Int = 0) -> some View {
-        Button(action: {
+        let isHovered = hoveredSessionId == session.id
+        return Button(action: {
             model.openSessionId = session.id
             model.openOutsideJSONLPath = nil
         }) {
@@ -1278,30 +1297,92 @@ private struct SidebarPane: View {
             .padding(.vertical, 7)
             .background(isOpen
                 ? t.accentAlpha(colorScheme == .dark ? 0.18 : 0.12)
-                : Color.clear,
+                : (isHovered ? t.hair2.opacity(colorScheme == .dark ? 1.0 : 1.35) : Color.clear),
                 in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(isOpen ? t.accentAlpha(0.35) : .clear, lineWidth: 0.5)
+                    .stroke(isOpen ? t.accentAlpha(0.35) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
             )
             .padding(.horizontal, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { inside in
+            if inside {
+                hoveredSessionId = session.id
+            } else if hoveredSessionId == session.id {
+                hoveredSessionId = nil
+            }
+        }
         .opacity(session.archivedAt != nil ? 0.6 : 1.0)
         .animation(.easeOut(duration: 0.18), value: session.status)
     }
 
     private func sessionTitle(_ session: AgentSession) -> String {
-        // v0.5.4 — user-supplied customName wins. Fall back to the
-        // session's stated goal, then to a synthesized provider+status
-        // label so brand-new sessions are still identifiable.
         if let custom = session.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !custom.isEmpty {
             return custom
         }
-        if let goal = session.goal, !goal.isEmpty { return goal }
+        if let goal = Self.cleanSidebarTitle(session.goal) { return goal }
+        if let branch = branchLikeTitle(for: session) { return branch }
+        if let summary = latestAssistantSummary(for: session) { return summary }
         return "\(session.agent.rawValue.capitalized) · \(session.status.rawValue)"
+    }
+
+    private func latestAssistantSummary(for session: AgentSession) -> String? {
+        guard let store = model.chatStore(for: session) else { return nil }
+        for message in store.snapshot.messages.reversed() where message.kind == .assistantText {
+            if let title = Self.cleanSidebarTitle(message.body) {
+                return title
+            }
+        }
+        return nil
+    }
+
+    private func branchLikeTitle(for session: AgentSession) -> String? {
+        for raw in [session.worktreePath, session.runtimeCwd] {
+            guard let raw, let title = Self.branchLikeTitle(fromPath: raw, repoDisplayName: session.repoDisplayName) else {
+                continue
+            }
+            return title
+        }
+        return nil
+    }
+
+    private static func branchLikeTitle(fromPath path: String, repoDisplayName: String) -> String? {
+        let url = URL(fileURLWithPath: path)
+        let last = url.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !last.isEmpty, last != "/", last != repoDisplayName else { return nil }
+        let lower = last.lowercased()
+        if path.contains("/.claude/worktrees/") || path.contains("/.git/worktrees/") {
+            return last
+        }
+        if lower.contains("-") || lower.contains("_") || lower.contains("/") {
+            return last
+        }
+        return nil
+    }
+
+    private static func cleanSidebarTitle(_ raw: String?) -> String? {
+        guard var text = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            return nil
+        }
+        if let citationRange = text.range(of: "<oai-mem-citation>") {
+            text.removeSubrange(citationRange.lowerBound..<text.endIndex)
+        }
+        text = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+        while text.contains("  ") {
+            text = text.replacingOccurrences(of: "  ", with: " ")
+        }
+        text = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "`\"'")))
+        guard !text.isEmpty else { return nil }
+        if text.count > 96 {
+            let idx = text.index(text.startIndex, offsetBy: 96)
+            text = String(text[..<idx]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+        }
+        return text
     }
 
     private func sessionSubtitle(_ session: AgentSession) -> String {
@@ -2858,84 +2939,58 @@ private struct ChatThreadScroll: View {
     var body: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
-                // Phase 1 of the WhatsApp-smooth Sessions plan: migrated
-                // from `ScrollView { LazyVStack }` with per-row `.id(item.id)`
-                // + per-row .onAppear/.onDisappear pin tracking to native
-                // `List`. AppKit List backs this on macOS; if pin behavior
-                // degrades on very long sessions (5k+ items), the
-                // documented fall-back is `LazyVStack` WITHOUT `.id` per row
-                // — keep identity stable via ForEach `id: \.id` and drive
-                // pin state from the single bottom sentinel below.
-                List {
-                    if store.snapshot.items.isEmpty && !store.isLoading {
-                        emptyState
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets())
-                    } else {
-                        ForEach(store.snapshot.items) { item in
-                            itemRow(item)
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                                .listRowInsets(rowInsets)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if store.snapshot.items.isEmpty && !store.isLoading {
+                            emptyState
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            ForEach(store.snapshot.items) { item in
+                                itemRow(item)
+                                    .padding(rowInsets)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         }
+                        if showPlanHalo {
+                            InlinePlanHalo(
+                                session: session,
+                                onRefine: onPlanRefine,
+                                onApprove: onPlanApprove,
+                                canApprove: canApprovePlan
+                            )
+                            .padding(rowInsets)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        HStack {
+                            LiveSessionActivityIndicator(
+                                agent: session.agent,
+                                lastEventAt: store.snapshot.lastEventAt
+                            )
+                            Spacer()
+                        }
+                        .padding(rowInsets)
+                        Color.clear
+                            .frame(height: 1)
+                            .id(Self.bottomSentinelId)
+                            .onAppear { userPinnedToBottom = true }
+                            .onDisappear { userPinnedToBottom = false }
                     }
-                    if showPlanHalo {
-                        InlinePlanHalo(
-                            session: session,
-                            onRefine: onPlanRefine,
-                            onApprove: onPlanApprove,
-                            canApprove: canApprovePlan
-                        )
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets())
-                    }
-                    // v0.7.16: thinking-indicator is now a footer row in
-                    // the List instead of a floating overlay. The old
-                    // overlay sat on top of the chat content at the
-                    // bottom-leading corner with `.allowsHitTesting(false)`
-                    // — when the user scrolled to the tail, the pill
-                    // covered the last 1-2 lines of the most recent
-                    // message. Inline-as-footer means the indicator
-                    // takes its own band below the last bubble and
-                    // scrolls with the content. The view self-hides
-                    // when `isActive` is false, so idle sessions get
-                    // zero vertical space.
-                    HStack {
-                        LiveSessionActivityIndicator(
-                            agent: session.agent,
-                            lastEventAt: store.snapshot.lastEventAt
-                        )
-                        Spacer()
-                    }
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(rowInsets)
-                    // Single-row pin sentinel — replaces the per-row
-                    // .onAppear/.onDisappear pin tracking that fired on
-                    // every chat-item row. One callback per scroll-edge
-                    // event instead of N per scroll-frame.
-                    Color.clear
-                        .frame(height: 1)
-                        .id(Self.bottomSentinelId)
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets())
-                        .onAppear { userPinnedToBottom = true }
-                        .onDisappear { userPinnedToBottom = false }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .onChange(of: store.snapshot.items.count) { _, _ in
-                    stickToBottomIfPinned(proxy, items: store.snapshot.items.count)
+                .onChange(of: store.snapshot.updateCounter) { _, counter in
+                    stickToBottomIfPinned(proxy, updateCounter: counter)
                 }
                 .onAppear {
+                    userPinnedToBottom = true
                     proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
                     lastScrollItemCount = store.snapshot.items.count
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                         proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
                     }
+                }
+                .onDisappear {
+                    autoScrollTask?.cancel()
+                    autoScrollTask = nil
                 }
 
                 // Jump-to-latest CTA. Visible whenever the user has
@@ -2963,9 +3018,8 @@ private struct ChatThreadScroll: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
                 // v0.7.16: thinking-indicator overlay removed. It's now
-                // a footer row inside the List above (see comment there).
+                // a footer row inside the transcript flow above.
             }
-            .animation(.easeOut(duration: 0.18), value: userPinnedToBottom)
         }
     }
 
@@ -2979,6 +3033,7 @@ private struct ChatThreadScroll: View {
     @State private var userPinnedToBottom: Bool = true
 
     @State private var lastScrollItemCount: Int = 0
+    @State private var autoScrollTask: Task<Void, Never>?
 
     private var rowInsets: EdgeInsets {
         switch density {
@@ -3007,30 +3062,22 @@ private struct ChatThreadScroll: View {
         }
     }
 
-    private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, items: Int) {
+    private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, updateCounter _: UInt64) {
+        let items = store.snapshot.items.count
         let delta = items - lastScrollItemCount
         lastScrollItemCount = items
-        // Only auto-scroll when the user is currently watching the tail.
-        // Reading history shouldn't be interrupted by a new agent turn.
         guard userPinnedToBottom else { return }
-        // Skip animation for big jumps (paste-of-history) or while the
-        // store is still doing its initial backfill — animating each step
-        // produces a visible scroll-blur.
-        let animate = !(delta > 5 || store.isLoading)
-        // Coalesce rapid bumps via a 50ms debounce so a streaming reply
-        // that grows the items array on every commit doesn't animate
-        // scroll-to-latest per token. The single belt-and-suspenders
-        // re-scroll after 100ms catches late-arriving layout passes.
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            guard userPinnedToBottom else { return }
-            if animate {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
-                }
-            } else {
-                proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+        autoScrollTask?.cancel()
+        autoScrollTask = Task { @MainActor in
+            if delta <= 5 && !store.isLoading {
+                try? await Task.sleep(nanoseconds: 25_000_000)
             }
+            guard !Task.isCancelled else { return }
+            userPinnedToBottom = true
+            proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+            try? await Task.sleep(nanoseconds: 90_000_000)
+            guard !Task.isCancelled, userPinnedToBottom else { return }
+            proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
         }
     }
 

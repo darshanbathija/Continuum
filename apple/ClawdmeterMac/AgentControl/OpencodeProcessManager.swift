@@ -34,6 +34,7 @@
 import Foundation
 import Network
 import OSLog
+import Darwin
 
 @MainActor
 public final class OpencodeProcessManager {
@@ -96,6 +97,18 @@ public final class OpencodeProcessManager {
 
     // MARK: - Public API
 
+    /// Best-effort launch preparation for the bundled OpenCode runtime.
+    /// Bun extracts hidden `.dylib` files into tmp before running; if the
+    /// bundled runtime carries quarantine, macOS can surface a scary
+    /// ".bbb...dylib Not Opened" Gatekeeper dialog when the Code tab probes
+    /// providers. Stage the bundled binary into Application Support and
+    /// strip quarantine from the staged runtime + any stale extracted dylibs
+    /// before the first provider probe runs.
+    public func prepareRuntimeHost() {
+        _ = stageBundledRuntimeIfNeeded()
+        cleanTemporaryDylibQuarantine()
+    }
+
     /// Idempotent: discovers the binary, picks a free port, spawns the
     /// server, waits for healthcheck. Returns the running port on
     /// success, nil on failure (state set to .failed or .notInstalled).
@@ -116,6 +129,7 @@ public final class OpencodeProcessManager {
             return nil
         }
         binaryPath = binary
+        prepareBinaryForLaunch(atPath: binary)
 
         // Step 2: pick a free port.
         let port: Int
@@ -226,6 +240,7 @@ public final class OpencodeProcessManager {
             authStatus = await Self.authStatusFromFile()
             return
         }
+        prepareBinaryForLaunch(atPath: binary)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["auth", "list"]
@@ -303,7 +318,7 @@ public final class OpencodeProcessManager {
             withExtension: nil,
             subdirectory: "Vendor/opencode"
         ), FileManager.default.isExecutableFile(atPath: bundled.path) {
-            return bundled.path
+            return stageBundledRuntimeIfNeeded(source: bundled)?.path ?? bundled.path
         }
         // Dev-iteration fallback: when running from Xcode debug Bundle.main
         // points at DerivedData. Walk up to find the source tree path.
@@ -317,6 +332,108 @@ public final class OpencodeProcessManager {
             dir = dir.deletingLastPathComponent()
         }
         return nil
+    }
+
+    private func prepareBinaryForLaunch(atPath path: String) {
+        stripQuarantineRecursively(at: URL(fileURLWithPath: path))
+        cleanTemporaryDylibQuarantine()
+    }
+
+    private func stageBundledRuntimeIfNeeded(source explicitSource: URL? = nil) -> URL? {
+        let fm = FileManager.default
+        let source = explicitSource ?? Bundle.main.url(
+            forResource: "opencode",
+            withExtension: nil,
+            subdirectory: "Vendor/opencode"
+        )
+        guard let source, fm.isExecutableFile(atPath: source.path) else { return nil }
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let runtimeDir = base
+            .appendingPathComponent("Clawdmeter", isDirectory: true)
+            .appendingPathComponent("Runtimes", isDirectory: true)
+            .appendingPathComponent("OpenCode", isDirectory: true)
+        let destination = runtimeDir.appendingPathComponent("opencode")
+        do {
+            try fm.createDirectory(at: runtimeDir, withIntermediateDirectories: true)
+            if shouldCopyRuntime(from: source, to: destination) {
+                if fm.fileExists(atPath: destination.path) {
+                    try fm.removeItem(at: destination)
+                }
+                try fm.copyItem(at: source, to: destination)
+            }
+            chmod(destination.path, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH)
+            stripQuarantineRecursively(at: runtimeDir)
+            return fm.isExecutableFile(atPath: destination.path) ? destination : nil
+        } catch {
+            logger.info("staging bundled opencode failed: \(error.localizedDescription, privacy: .public)")
+            stripQuarantineRecursively(at: source)
+            return nil
+        }
+    }
+
+    private func shouldCopyRuntime(from source: URL, to destination: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: destination.path) else { return true }
+        let sourceValues = try? source.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let destinationValues = try? destination.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        if sourceValues?.fileSize != destinationValues?.fileSize { return true }
+        if let sourceDate = sourceValues?.contentModificationDate,
+           let destinationDate = destinationValues?.contentModificationDate,
+           sourceDate > destinationDate {
+            return true
+        }
+        return false
+    }
+
+    private func cleanTemporaryDylibQuarantine() {
+        let fm = FileManager.default
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        guard let enumerator = fm.enumerator(
+            at: tmp,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsPackageDescendants]
+        ) else { return }
+        var inspected = 0
+        for case let url as URL in enumerator {
+            inspected += 1
+            if inspected > 2000 { break }
+            let name = url.lastPathComponent
+            guard name.hasSuffix(".dylib"),
+                  name.hasPrefix(".") || name.hasPrefix("bun-") || name.contains("opencode")
+            else { continue }
+            stripQuarantine(at: url)
+        }
+    }
+
+    private func stripQuarantineRecursively(at url: URL) {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return }
+        stripQuarantine(at: url)
+        guard isDirectory.boolValue,
+              let enumerator = fm.enumerator(
+                at: url,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsPackageDescendants]
+              ) else { return }
+        var inspected = 0
+        for case let child as URL in enumerator {
+            inspected += 1
+            if inspected > 2000 { break }
+            stripQuarantine(at: child)
+        }
+    }
+
+    private func stripQuarantine(at url: URL) {
+        let result = url.path.withCString { path in
+            removexattr(path, "com.apple.quarantine", 0)
+        }
+        if result != 0 {
+            let err = errno
+            guard err != ENOATTR && err != ENOENT else { return }
+            logger.debug("remove quarantine failed for \(url.path, privacy: .private): errno \(err, privacy: .public)")
+        }
     }
 
     /// Re-run binary discovery + auth-status probe, restart `opencode

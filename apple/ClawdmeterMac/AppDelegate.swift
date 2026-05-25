@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         installObserversIfNeeded()
         applyVisibilityFromPrefs()
+        OpencodeProcessManager.shared.prepareRuntimeHost()
 
         // PR #24a critical-gap fix: surface loopback-port-bind failure
         // explicitly. If `loopbackClient == nil` the agent control server
