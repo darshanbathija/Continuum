@@ -200,6 +200,15 @@ struct SessionWorkspaceView: View {
                 workbenchState.setReviewPaneVisible(!workbenchState.showingReviewPane)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeReviewPane)) { note in
+            if let raw = note.userInfo?["tab"] as? String,
+               let tab = WorkbenchPaneTab(rawValue: raw) {
+                workbenchState.selectRightPane(tab)
+            }
+            withAnimation(.easeOut(duration: 0.18)) {
+                workbenchState.setReviewPaneVisible(true)
+            }
+        }
         .task {
             await launcher.refreshProviderAvailability()
         }
@@ -4372,6 +4381,7 @@ private struct TerminalTabContainer: View {
 extension Notification.Name {
     static let focusSidebarSearch = Notification.Name("clawdmeter.workspace.focusSidebarSearch")
     static let toggleCodeReviewPane = Notification.Name("clawdmeter.workspace.toggleCodeReviewPane")
+    static let openCodeReviewPane = Notification.Name("clawdmeter.workspace.openCodeReviewPane")
     static let popOutSession = Notification.Name("clawdmeter.workspace.popOutSession")
     /// Posted to open the raw tmux Cmd+T overlay on a specific session.
     /// (Wave B: chat-first; terminal demoted to overlay.)

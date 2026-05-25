@@ -3,7 +3,7 @@ import AppKit
 import CoreImage.CIFilterBuiltins
 import ClawdmeterShared
 
-/// Compact pairing UI used by the dashboard's "Sync with iPhone"
+/// Compact pairing UI used by the dashboard's Pair with iPhone affordance.
 /// toolbar button. Shows the QR code + a Copy URL CTA so users don't
 /// have to dig into Settings → Sessions to pair a phone.
 ///
@@ -204,4 +204,3 @@ struct PairingQRPopoverContent: View {
         return NSImage(cgImage: cg, size: NSSize(width: 200, height: 200))
     }
 }
-

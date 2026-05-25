@@ -47,14 +47,17 @@ struct PermissionModeChip: View {
             // the right-side model chip.
             HStack(spacing: 6) {
                 Text(mode.shortLabel)
-                    .font(.system(size: 11, weight: mode == .bypass ? .semibold : .medium))
+                    .font(.system(size: 12, weight: mode == .bypass ? .bold : .semibold))
                     .foregroundStyle(mode == .bypass ? Color.yellow : .primary)
+                    .lineLimit(1)
+                    .frame(minWidth: 50, alignment: .leading)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .frame(minHeight: 32)
             .background(
                 mode == .bypass
                     ? AnyShapeStyle(Color.yellow.opacity(0.15))

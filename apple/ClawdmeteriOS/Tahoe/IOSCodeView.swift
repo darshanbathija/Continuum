@@ -45,19 +45,22 @@ public struct IOSCodeView: View {
     /// entry. Nil keeps the row read-only (Previews + cold-launch).
     var agentClient: AgentControlClient?
     var outbox: MobileCommandOutbox?
+    var onPairWithDesktop: () -> Void
 
     public init(
         data: TahoeCodeBindings = .demo,
         onOpenDetail: @escaping (UUID) -> Void = { _ in },
         onNewSession: @escaping () -> Void = {},
         agentClient: AgentControlClient? = nil,
-        outbox: MobileCommandOutbox? = nil
+        outbox: MobileCommandOutbox? = nil,
+        onPairWithDesktop: @escaping () -> Void = {}
     ) {
         self.data = data
         self.onOpenDetail = onOpenDetail
         self.onNewSession = onNewSession
         self.agentClient = agentClient
         self.outbox = outbox
+        self.onPairWithDesktop = onPairWithDesktop
     }
 
     @State private var searchQuery: String = ""
@@ -73,7 +76,7 @@ public struct IOSCodeView: View {
                 HStack(spacing: 10) {
                     IOSRoundIconBtn("folder", action: { workspaceSwitcherPresented = true })
                     if let agentClient {
-                        IOSDesktopSyncBadge(client: agentClient)
+                        IOSDesktopSyncBadge(client: agentClient, onPair: onPairWithDesktop)
                     }
                     Spacer()
                     IOSRoundIconBtn("plus", action: onNewSession)
@@ -81,6 +84,12 @@ public struct IOSCodeView: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 18)
                 .padding(.bottom, 10)
+
+                if let agentClient {
+                    IOSDesktopPairingCTA(client: agentClient, onPair: onPairWithDesktop)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
+                }
 
                 // Search — PR #26 D5. Real TextField that filters
                 // sessions by title + goal across visible repos.
@@ -412,28 +421,33 @@ public struct IOSCodeView: View {
 private struct IOSDesktopSyncBadge: View {
     @Environment(\.tahoe) private var t
     @ObservedObject var client: AgentControlClient
+    var onPair: () -> Void
 
     var body: some View {
         let connected = client.isDesktopEventSyncConnected
-        HStack(spacing: 6) {
-            Circle()
-                .fill(connected ? Color.green : (client.isConfigured ? Color.orange : t.fg4))
-                .frame(width: 7, height: 7)
-            Text(label)
-                .font(TahoeFont.body(11, weight: .semibold))
-                .foregroundStyle(connected ? t.fg2 : t.fg3)
+        Button(action: onPair) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(connected ? Color.green : (client.isConfigured ? Color.orange : t.fg4))
+                    .frame(width: 7, height: 7)
+                Text(label)
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(connected ? t.fg2 : t.fg3)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(t.dark ? Color.white.opacity(0.07) : Color.white.opacity(0.82))
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .stroke(t.hairline, lineWidth: 0.6)
+                    }
+            }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 32)
-        .background {
-            Capsule(style: .continuous)
-                .fill(t.dark ? Color.white.opacity(0.07) : Color.white.opacity(0.82))
-                .overlay {
-                    Capsule(style: .continuous)
-                        .stroke(t.hairline, lineWidth: 0.6)
-                }
-        }
+        .buttonStyle(.plain)
         .accessibilityLabel(label)
+        .accessibilityHint("Opens desktop pairing.")
     }
 
     private var label: String {

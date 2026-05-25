@@ -66,20 +66,26 @@ struct iOSModelEffortPill: View {
                 Text(summaryText)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(minWidth: 96, maxWidth: 180, alignment: .leading)
                 if let effort = selectedEffort, modelSupportsEffort {
                     Text(effortLabel(effort))
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 9)
+            .frame(minHeight: 36)
             .background(Color(.tertiarySystemBackground), in: Capsule())
         }
         .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var summaryText: String {

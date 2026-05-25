@@ -182,6 +182,8 @@ public struct IOSRootView: View {
                         agentClient: agentClient,
                         showingSettings: $settingsPresented
                     )
+                } onPairWithDesktop: {
+                    pushedScreen = .pairing
                 }
             case .code:
                 // v0.22.30: drop `focusedRepoKey:` — IOSCodeView init
@@ -195,7 +197,8 @@ public struct IOSRootView: View {
                     },
                     onNewSession: { newSessionPresented = true },
                     agentClient: agentClient,
-                    outbox: outbox
+                    outbox: outbox,
+                    onPairWithDesktop: { pushedScreen = .pairing }
                 )
                 .refreshable {
                     await agentClient.refreshAll()

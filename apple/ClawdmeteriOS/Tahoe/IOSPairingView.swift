@@ -85,7 +85,7 @@ public struct IOSPairingView: View {
                     .font(TahoeFont.rounded(18, weight: .heavy))
                     .tracking(-0.3)
                     .foregroundStyle(t.fg)
-                Text("Open Clawdmeter on your Mac → Sync with iPhone. Both devices need to be on the same Tailnet.")
+                Text("Open Clawdmeter on your Mac → Pair with iPhone. Both devices need to be on the same Tailnet.")
                     .font(TahoeFont.body(14))
                     .foregroundStyle(t.fg3)
                     .multilineTextAlignment(.center)

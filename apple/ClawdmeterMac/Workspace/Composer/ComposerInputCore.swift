@@ -238,6 +238,7 @@ struct ComposerInputCore: View {
                 selectedEffort: $store.effort,
                 modelSupportsEffort: modelSupportsEffort
             )
+            .layoutPriority(2)
             if !isReadOnly, onChangePermissionMode != nil {
                 // v0.7.12 revert: `PermissionModeChip` Menu (matches
                 // Claude Code's compact "Auto ▾" pattern — single
@@ -253,6 +254,7 @@ struct ComposerInputCore: View {
                         onChangePermissionMode?(newMode)
                     }
                 )
+                .layoutPriority(1)
             }
             attachButton
             codeContextChip
@@ -274,23 +276,17 @@ struct ComposerInputCore: View {
                 // composer (`Opus 4.7 (1M) · Max` etc.) reflects the
                 // active agent instead of stale Claude defaults when
                 // the user switches to Codex / Gemini.
-                Picker("Agent", selection: Binding(
-                    get: { store.agent },
-                    set: { newAgent in
+                AgentMenuChip(
+                    selected: store.agent,
+                    availableAgents: availableAgents,
+                    onSelect: { newAgent in
                         guard newAgent != store.agent else { return }
                         store.resetChipsForAgent(newAgent, catalog: catalog)
                         if newAgent == .cursor, store.permissionMode == .plan {
                             onChangePermissionMode?(.ask)
                         }
                     }
-                )) {
-                    ForEach(availableAgents, id: \.self) { agent in
-                        Text(agent.tahoeProvider.displayName).tag(agent)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: CGFloat(max(3, availableAgents.count)) * 78)
-                .labelsHidden()
+                )
             }
 
             Spacer(minLength: 6)
@@ -619,4 +615,45 @@ struct ComposerInputCore: View {
     }
 
     private var terraCotta: Color { SessionsV2Theme.accent }
+}
+
+private struct AgentMenuChip: View {
+    @Environment(\.tahoe) private var t
+    let selected: AgentKind
+    let availableAgents: [AgentKind]
+    let onSelect: (AgentKind) -> Void
+
+    var body: some View {
+        Menu {
+            Section("Provider") {
+                ForEach(availableAgents, id: \.self) { agent in
+                    Button {
+                        onSelect(agent)
+                    } label: {
+                        Label(agent.tahoeProvider.displayName, systemImage: agent == selected ? "checkmark" : "")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                TahoeProviderGlyph(provider: selected.tahoeProvider, size: 16)
+                Text(selected.tahoeProvider.displayName)
+                    .font(TahoeFont.body(12, weight: .semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+            }
+            .foregroundStyle(t.fg)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .frame(minHeight: 32)
+            .background(Color.secondary.opacity(0.10), in: Capsule(style: .continuous))
+            .contentShape(Capsule(style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("Choose provider")
+    }
 }
