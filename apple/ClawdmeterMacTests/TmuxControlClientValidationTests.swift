@@ -9,6 +9,26 @@ import XCTest
 /// offending arg; nothing in the existing test suite covers it.
 final class TmuxControlClientValidationTests: XCTestCase {
 
+    private enum AsyncWaitError: Error {
+        case timedOut
+    }
+
+    private func nextValue(from stream: AsyncStream<Data>) async throws -> Data? {
+        try await withThrowingTaskGroup(of: Data?.self) { group in
+            group.addTask {
+                var iterator = stream.makeAsyncIterator()
+                return await iterator.next()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 500_000_000)
+                throw AsyncWaitError.timedOut
+            }
+            let result = try await group.next() ?? nil
+            group.cancelAll()
+            return result
+        }
+    }
+
     // MARK: - Happy path
 
     func test_validateArgs_acceptsClean() throws {
@@ -16,6 +36,22 @@ final class TmuxControlClientValidationTests: XCTestCase {
         XCTAssertNoThrow(try TmuxControlClient.validateArgs(["new-window"]))
         XCTAssertNoThrow(try TmuxControlClient.validateArgs(["send-keys", "-t", "session:1", "echo hi"]))
         XCTAssertNoThrow(try TmuxControlClient.validateArgs(["paste-buffer", "-d", "-t", "session:1.0"]))
+    }
+
+    func test_subscribeToPaneFansOutToMultipleViewers() async throws {
+        let tmux = TmuxControlClient()
+        let first = await tmux.subscribeToPane("%7")
+        let second = await tmux.subscribeToPane("7")
+        let payload = Data("shared-output".utf8)
+
+        async let firstValue = nextValue(from: first)
+        async let secondValue = nextValue(from: second)
+        await tmux.publishOutputForPane("7", bytes: payload)
+
+        let firstReceived = try await firstValue
+        let secondReceived = try await secondValue
+        XCTAssertEqual(firstReceived, payload)
+        XCTAssertEqual(secondReceived, payload)
     }
 
     // MARK: - Control byte rejection

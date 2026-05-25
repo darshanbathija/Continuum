@@ -87,9 +87,6 @@ public struct MacInProcessTerminalView: NSViewRepresentable {
         func disconnect() {
             subscriptionTask?.cancel()
             subscriptionTask = nil
-            let client = tmuxClient
-            let paneId = self.paneId
-            Task { await client.unsubscribeFromPane(paneId) }
         }
 
         // MARK: - TerminalViewDelegate

@@ -14,6 +14,14 @@ enum IOSTerminalCommand: Equatable {
     case reconnect(UUID)
 }
 
+enum IOSTerminalConnectionState: Equatable {
+    case idle
+    case connecting
+    case connected
+    case disconnected
+    case failed(String)
+}
+
 struct iOSTerminalView: UIViewRepresentable {
 
     let sessionId: UUID
@@ -24,9 +32,17 @@ struct iOSTerminalView: UIViewRepresentable {
     /// session's primary pane (preserves single-pane behavior).
     var paneId: String? = nil
     @Binding var command: IOSTerminalCommand?
+    var onConnectionStateChange: (IOSTerminalConnectionState) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(sessionId: sessionId, host: host, wsPort: wsPort, token: token, paneId: paneId)
+        Coordinator(
+            sessionId: sessionId,
+            host: host,
+            wsPort: wsPort,
+            token: token,
+            paneId: paneId,
+            onConnectionStateChange: onConnectionStateChange
+        )
     }
 
     func makeUIView(context: Context) -> TerminalView {
@@ -39,6 +55,7 @@ struct iOSTerminalView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: TerminalView, context: Context) {
+        context.coordinator.onConnectionStateChange = onConnectionStateChange
         guard let command else { return }
         switch command {
         case .send(_, let text):
@@ -101,17 +118,30 @@ struct iOSTerminalView: UIViewRepresentable {
         weak var terminalView: TerminalView?
         private var task: URLSessionWebSocketTask?
         private var ctrlEngaged = false
+        var onConnectionStateChange: (IOSTerminalConnectionState) -> Void
 
-        init(sessionId: UUID, host: String, wsPort: Int, token: String, paneId: String?) {
+        init(
+            sessionId: UUID,
+            host: String,
+            wsPort: Int,
+            token: String,
+            paneId: String?,
+            onConnectionStateChange: @escaping (IOSTerminalConnectionState) -> Void
+        ) {
             self.sessionId = sessionId
             self.host = host
             self.wsPort = wsPort
             self.token = token
             self.paneId = paneId
+            self.onConnectionStateChange = onConnectionStateChange
         }
 
         func connect() {
-            guard let url = URL(string: "ws://\(AgentControlClient.urlHostLiteral(host)):\(wsPort)/") else { return }
+            setState(.connecting)
+            guard let url = URL(string: "ws://\(AgentControlClient.urlHostLiteral(host)):\(wsPort)/") else {
+                setState(.failed("Bad terminal tunnel URL."))
+                return
+            }
             var request = URLRequest(url: url)
             request.timeoutInterval = 10
             let task = URLSession.shared.webSocketTask(with: request)
@@ -124,7 +154,15 @@ struct iOSTerminalView: UIViewRepresentable {
             ]
             if let paneId { envelope["paneId"] = paneId }
             if let data = try? JSONSerialization.data(withJSONObject: envelope) {
-                task.send(.data(data)) { _ in }
+                task.send(.data(data)) { [weak self] error in
+                    Task { @MainActor in
+                        if let error {
+                            self?.setState(.failed(error.localizedDescription))
+                        } else {
+                            self?.setState(.connected)
+                        }
+                    }
+                }
             }
             readLoop()
         }
@@ -132,6 +170,7 @@ struct iOSTerminalView: UIViewRepresentable {
         func disconnect() {
             task?.cancel(with: .goingAway, reason: nil)
             task = nil
+            setState(.disconnected)
         }
 
         private func readLoop() {
@@ -144,8 +183,17 @@ struct iOSTerminalView: UIViewRepresentable {
                     }
                 } else if case .failure(let err) = result {
                     iosTermLogger.debug("WS receive: \(err.localizedDescription)")
+                    Task { @MainActor in
+                        if self.task != nil {
+                            self.setState(.failed(err.localizedDescription))
+                        }
+                    }
                 }
             }
+        }
+
+        private func setState(_ state: IOSTerminalConnectionState) {
+            onConnectionStateChange(state)
         }
 
         private func dispatch(message: URLSessionWebSocketTask.Message) {

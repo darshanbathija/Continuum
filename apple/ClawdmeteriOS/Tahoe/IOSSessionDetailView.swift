@@ -509,7 +509,16 @@ public struct IOSSessionDetailView: View {
             iOSSourcesPane(chatStore: chatStore, outbox: outbox, sessionId: sessionId)
         case .browser:
             if let s = realAgentSession {
-                iOSRunPreviewPane(client: agentClient, outbox: outbox, session: s)
+                iOSRunPreviewPane(
+                    client: agentClient,
+                    outbox: outbox,
+                    session: s,
+                    onOpenTerminal: {
+                        if visibleTabs.contains(.terminal) {
+                            selectedTab = .terminal
+                        }
+                    }
+                )
             } else {
                 emptyState(title: "No session", body: "Session unavailable.")
             }

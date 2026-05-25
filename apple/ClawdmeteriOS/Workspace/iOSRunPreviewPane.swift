@@ -10,6 +10,7 @@ struct iOSRunPreviewPane: View {
     @ObservedObject var client: AgentControlClient
     @ObservedObject var outbox: MobileCommandOutbox
     let session: AgentSession
+    var onOpenTerminal: (() -> Void)? = nil
 
     @State private var profile: CodeRunProfileSnapshot?
     @State private var runCommand: String = ""
@@ -186,8 +187,11 @@ struct iOSRunPreviewPane: View {
                 iconButton("stop.fill", disabled: !isRunning) {
                     Task { await stopRun() }
                 }
-                iconButton("terminal", disabled: false) {
+                iconButton(showingOutput ? "list.bullet.rectangle.fill" : "list.bullet.rectangle", disabled: false) {
                     showingOutput.toggle()
+                }
+                iconButton("terminal", disabled: !hasTerminalTunnel) {
+                    onOpenTerminal?()
                 }
             }
             statusRow
@@ -387,6 +391,12 @@ struct iOSRunPreviewPane: View {
 
     private var isRunning: Bool {
         profile?.status == .running || profile?.status == .starting
+    }
+
+    private var hasTerminalTunnel: Bool {
+        if !(session.tmuxPaneId?.isEmpty ?? true) { return true }
+        if !(session.tmuxWindowId?.isEmpty ?? true) { return true }
+        return !session.terminalPanes.isEmpty
     }
 
     private var statusLabel: String {
