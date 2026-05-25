@@ -2074,6 +2074,10 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// Plan text from Claude's last `ExitPlanMode` tool call. `nil` when
     /// the session is not in plan mode or no plan has been emitted yet.
     public let planText: String?
+    /// Last plan the user approved before the daemon respawned the runtime
+    /// with write access. Kept separate from `planText` so approval can clear
+    /// pending CTA state without losing the reviewable plan file.
+    public let approvedPlanText: String?
     /// Wall-clock when the session was created (server's local time, UTC).
     public let createdAt: Date
     /// Most recent event the server observed (heartbeat / message / tool call).
@@ -2238,6 +2242,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         tmuxPaneId: String?,
         status: AgentSessionStatus,
         planText: String?,
+        approvedPlanText: String? = nil,
         createdAt: Date,
         lastEventAt: Date,
         lastEventSeq: UInt64,
@@ -2276,6 +2281,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.tmuxPaneId = tmuxPaneId
         self.status = status
         self.planText = planText
+        self.approvedPlanText = approvedPlanText
         self.createdAt = createdAt
         self.lastEventAt = lastEventAt
         self.lastEventSeq = lastEventSeq
@@ -2319,6 +2325,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.tmuxPaneId = try c.decodeIfPresent(String.self, forKey: .tmuxPaneId)
         self.status = try c.decode(AgentSessionStatus.self, forKey: .status)
         self.planText = try c.decodeIfPresent(String.self, forKey: .planText)
+        self.approvedPlanText = try c.decodeIfPresent(String.self, forKey: .approvedPlanText)
         self.createdAt = try c.decode(Date.self, forKey: .createdAt)
         self.lastEventAt = try c.decode(Date.self, forKey: .lastEventAt)
         self.lastEventSeq = try c.decode(UInt64.self, forKey: .lastEventSeq)
@@ -2403,7 +2410,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id, repoKey, repoDisplayName, agent, model, goal,
              worktreePath, tmuxWindowId, tmuxPaneId,
-             status, planText, createdAt, lastEventAt, lastEventSeq,
+             status, planText, approvedPlanText, createdAt, lastEventAt, lastEventSeq,
              mode, archivedAt,
              terminalPanes, scheduledFollowUps, parentSessionId,
              // v15 Code V2 control-plane fields.

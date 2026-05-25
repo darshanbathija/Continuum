@@ -291,6 +291,13 @@ public final class AgentSessionRegistry: ObservableObject {
         update(id: id) { s in with(s, planText: planText) }
     }
 
+    public func markPlanApproved(id: UUID) {
+        update(id: id) { s in
+            let approved = Self.reviewableApprovedPlanText(from: s)
+            return with(s, planText: .some(nil), approvedPlanText: approved)
+        }
+    }
+
     /// Update the in-place cwd/worktree metadata (used when the user switches
     /// the mode picker on a live session and we re-spawn the agent in a new
     /// directory).
@@ -502,6 +509,7 @@ public final class AgentSessionRegistry: ObservableObject {
         status: AgentSessionStatus? = nil,
         model: String?? = nil,
         planText: String?? = nil,
+        approvedPlanText: String?? = nil,
         worktreePath: String?? = nil,
         tmuxWindowId: String?? = nil,
         tmuxPaneId: String?? = nil,
@@ -537,6 +545,7 @@ public final class AgentSessionRegistry: ObservableObject {
             tmuxPaneId: Self.resolve(tmuxPaneId, fallback: s.tmuxPaneId),
             status: status ?? s.status,
             planText: Self.resolve(planText, fallback: s.planText),
+            approvedPlanText: Self.resolve(approvedPlanText, fallback: s.approvedPlanText),
             createdAt: s.createdAt,
             lastEventAt: Date(),
             lastEventSeq: lastEventSeq ?? s.lastEventSeq,
@@ -580,6 +589,17 @@ public final class AgentSessionRegistry: ObservableObject {
             antigravityProjectId: Self.resolve(antigravityProjectId, fallback: s.antigravityProjectId),
             deepResearch: s.deepResearch
         )
+    }
+
+    private static func reviewableApprovedPlanText(from session: AgentSession) -> String? {
+        guard let raw = session.planText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty
+        else { return session.approvedPlanText }
+        if session.agent == .codex,
+           raw.hasPrefix("Codex is running in read-only plan mode.") {
+            return session.approvedPlanText
+        }
+        return raw
     }
 
     private static func makeRuntimeBinding(
