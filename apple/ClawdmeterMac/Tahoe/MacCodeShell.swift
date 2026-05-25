@@ -1,4 +1,5 @@
 import SwiftUI
+import ClawdmeterShared
 
 /// Production Code tab shell.
 ///
@@ -8,9 +9,10 @@ import SwiftUI
 /// ingestion, composer state, permission prompts, and review panes.
 struct MacCodeShell: View {
     @ObservedObject var model: SessionsModel
+    @ObservedObject var presentationStore: SessionPresentationStore
 
     var body: some View {
-        SessionWorkspaceView(model: model)
+        SessionWorkspaceView(model: model, presentationStore: presentationStore)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)

@@ -101,7 +101,15 @@ private struct ChatRoot: View {
         .task {
             await client.refreshSessions()
             await client.refreshModelCatalog()
+            await client.refreshProviderDefaults()
+            store.applyProviderDefaults(client.providerDefaults, catalog: client.modelCatalog)
             providerMatrix = await client.fetchChatProviders()
+        }
+        .onChange(of: client.providerDefaults) { _, defaults in
+            store.applyProviderDefaults(defaults, catalog: client.modelCatalog)
+        }
+        .onReceive(client.$modelCatalog) { catalog in
+            store.applyProviderDefaults(client.providerDefaults, catalog: catalog)
         }
     }
 

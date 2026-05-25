@@ -119,7 +119,7 @@ struct PairingSettingsView: View {
                     .foregroundStyle(.red)
             }
         } header: {
-            Text("Pair iPhone")
+            Text("Pair with iPhone")
         } footer: {
             Text("Scan the QR with Clawdmeter on your iPhone, or paste the URL after tapping **Copy pairing URL**.")
                 .font(.callout)
@@ -350,4 +350,3 @@ struct PairingSettingsView: View {
         return NSImage(cgImage: cg, size: NSSize(width: 140, height: 140))
     }
 }
-

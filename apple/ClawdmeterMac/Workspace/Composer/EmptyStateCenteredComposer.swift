@@ -12,15 +12,17 @@ struct EmptyStateCenteredComposer: View {
 
     @ObservedObject var model: SessionsModel
     @ObservedObject var launcher: SessionLauncherModel
+    @ObservedObject var presentationStore: SessionPresentationStore
     @StateObject private var store: ComposerStore = {
         let s = ComposerStore(mode: .emptyState(repoKey: nil, agent: .claude))
         s.resetChipsForRepo(nil, defaults: .default)
         return s
     }()
 
-    init(model: SessionsModel, launcher: SessionLauncherModel) {
+    init(model: SessionsModel, launcher: SessionLauncherModel, presentationStore: SessionPresentationStore) {
         self.model = model
         self.launcher = launcher
+        self.presentationStore = presentationStore
     }
 
     var body: some View {
@@ -42,6 +44,7 @@ struct EmptyStateCenteredComposer: View {
                 Divider()
                 ComposerInputCore(
                     store: store,
+                    presentationStore: presentationStore,
                     catalog: launcher.modelCatalog,
                     agentForModelPicker: store.agent,
                     modelSupportsEffort: modelSupportsEffort,

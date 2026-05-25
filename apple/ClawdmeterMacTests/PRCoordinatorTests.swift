@@ -51,6 +51,7 @@ final class PRCoordinatorTests: XCTestCase {
             body: "",
             reviewState: nil,
             checksRollup: "success",
+            checks: [],
             lastChecked: Date(),
             source: .daemon
         )
@@ -70,6 +71,7 @@ final class PRCoordinatorTests: XCTestCase {
             body: "",
             reviewState: nil,
             checksRollup: "success",
+            checks: [],
             lastChecked: Date(),
             source: .daemon
         )
@@ -86,6 +88,7 @@ final class PRCoordinatorTests: XCTestCase {
             body: base.body,
             reviewState: base.reviewState,
             checksRollup: nil,
+            checks: [],
             lastChecked: base.lastChecked,
             source: base.source
         )

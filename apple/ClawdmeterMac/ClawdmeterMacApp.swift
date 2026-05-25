@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import ClawdmeterShared
 
 /// Mac menu bar app entry point.
@@ -10,15 +11,21 @@ import ClawdmeterShared
 // MARK: - v0.22.9: In-app tab navigation notifications
 
 extension Notification.Name {
-    /// Posted from menu items (Cmd+1..Cmd+5) or the Settings menu (Cmd+,)
+    /// Posted from menu items (Cmd+1..Cmd+4) or the Settings menu (Cmd+,)
     /// to switch the dashboard window's active tab. MacRootView observes
     /// this and updates its `@State tab`. Carries `userInfo["tab"]` ==
-    /// "chat"|"usage"|"code"|"design"|"settings".
+    /// "chat"|"usage"|"code"|"settings".
     static let clawdmeterSwitchTab = Notification.Name("clawdmeter.switchTab")
     /// v0.22.19: ⌘K from anywhere flips to the Code tab and focuses the
     /// sidebar Search field. MacRootView listens — it flips the tab if
     /// needed and re-emits to the Sidebar via FocusState binding.
     static let clawdmeterFocusCodeSearch = Notification.Name("clawdmeter.focusCodeSearch")
+    static let clawdmeterOpenGlobalPalette = Notification.Name("clawdmeter.openGlobalPalette")
+    static let clawdmeterOpenShortcutSheet = Notification.Name("clawdmeter.openShortcutSheet")
+    static let clawdmeterOpenFilePicker = Notification.Name("clawdmeter.openFilePicker")
+    static let clawdmeterExportSession = Notification.Name("clawdmeter.exportSession")
+    static let clawdmeterShowTransientToast = Notification.Name("clawdmeter.showTransientToast")
+    static let clawdmeterInsertComposerText = Notification.Name("clawdmeter.insertComposerText")
 }
 
 @main
@@ -78,12 +85,10 @@ struct ClawdmeterMacApp: App {
         .windowResizability(.contentMinSize)
         // v0.22.9: app + view-level command groups. Cmd+, swaps the
         // dashboard's active tab to Settings (instead of opening the
-        // separate Settings window scene we deleted). Cmd+1..Cmd+5
+        // separate Settings window scene we deleted). Cmd+1..Cmd+4
         // jump between the dashboard tabs. The previous hidden
-        // `Button.keyboardShortcut(...)` hack inside MacRootView's
-        // .background was unreliable (the button had to be in the
-        // first-responder chain). Hosting the shortcuts in the menu
-        // bar via CommandGroup/CommandMenu makes them always-active.
+        // Menu items stay discoverable here; keyboard dispatch is owned by
+        // MacRootView so client-local shortcut overrides can replace defaults.
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
@@ -95,24 +100,24 @@ struct ClawdmeterMacApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
-            CommandMenu("View") {
+            CommandGroup(after: .toolbar) {
                 Button("Chat") { Self.postSwitchTab("chat") }
-                    .keyboardShortcut("1", modifiers: .command)
                 Button("Usage") { Self.postSwitchTab("usage") }
-                    .keyboardShortcut("2", modifiers: .command)
                 Button("Code") { Self.postSwitchTab("code") }
-                    .keyboardShortcut("3", modifiers: .command)
-                Button("Design") { Self.postSwitchTab("design") }
-                    .keyboardShortcut("4", modifiers: .command)
                 Button("Settings") { Self.postSwitchTab("settings") }
-                    .keyboardShortcut("5", modifiers: .command)
                 Divider()
-                // v0.22.19: ⌘K flips to the Code tab and focuses the
-                // sidebar Search field. The button shows "Search Code"
-                // in the View menu so it's discoverable + matches the
-                // existing CommandMenu pattern. MacRootView bridges
-                // this app-level notification to the live workspace
-                // sidebar's focus notification after switching tabs.
+                Button("Command Palette") {
+                    NotificationCenter.default.post(name: .clawdmeterOpenGlobalPalette, object: nil)
+                }
+                Button("Keyboard Shortcuts") {
+                    NotificationCenter.default.post(name: .clawdmeterOpenShortcutSheet, object: nil)
+                }
+                Button("Open File…") {
+                    NotificationCenter.default.post(name: .clawdmeterOpenFilePicker, object: nil)
+                }
+                Button("Export Open Session…") {
+                    NotificationCenter.default.post(name: .clawdmeterExportSession, object: nil)
+                }
                 Button("Search Code") {
                     NotificationCenter.default.post(
                         name: .clawdmeterSwitchTab,
@@ -124,7 +129,21 @@ struct ClawdmeterMacApp: App {
                         object: nil
                     )
                 }
-                .keyboardShortcut("k", modifiers: .command)
+                Button("Find in Transcript") {
+                    NotificationCenter.default.post(name: .transcriptFind, object: nil)
+                }
+                Button("Next Transcript Match") {
+                    NotificationCenter.default.post(name: .transcriptNextMatch, object: nil)
+                }
+                Button("Previous Transcript Match") {
+                    NotificationCenter.default.post(name: .transcriptPreviousMatch, object: nil)
+                }
+                Button("Next Attention Session") {
+                    NotificationCenter.default.post(name: .sessionNextAttention, object: nil)
+                }
+                Button("Toggle Review Pane") {
+                    NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil)
+                }
             }
         }
         // v0.22.6 fix: hide the native macOS titlebar so the Tahoe
@@ -161,6 +180,12 @@ struct ClawdmeterMacApp: App {
             }
         }
         .defaultSize(width: 720, height: 720)
+
+        Window("Status HUD", id: "status-hud") {
+            StatusHUDView(runtime: runtime)
+                .onAppear { appDelegate.configure(runtime: runtime) }
+        }
+        .defaultSize(width: 420, height: 360)
 
         // v0.22.9: dropped the legacy `Settings { TabView { ... } }`
         // scene that opened a separate (broken-looking, light/dark-

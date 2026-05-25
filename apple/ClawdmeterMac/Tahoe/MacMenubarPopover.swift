@@ -5,7 +5,7 @@ import ClawdmeterShared
 /// Replacement for `PopoverView`. Provider segmented + stacked meters.
 /// Ports `mac-dashboard.jsx::MacMenubarPopover`.
 ///
-/// v0.12 button-wiring pass: the "Open dashboard" and "Sync iPhone"
+/// v0.12 button-wiring pass: the "Open dashboard" and "Pair with iPhone"
 /// ghost buttons in the footer now invoke caller-provided callbacks
 /// (`onOpenDashboard`, `onSyncIPhone`). `ProviderStatusController`
 /// wires them to `AppDelegate.showDashboard()` and a popover hosting
@@ -239,7 +239,7 @@ public struct MacMenubarPopover: View {
                 TahoeGhostButton(size: .s, action: onSyncIPhone) {
                     HStack(spacing: 4) {
                         TahoeIcon("qr", size: 10)
-                        Text("Sync iPhone")
+                        Text("Pair with iPhone")
                     }
                 }
                 .frame(maxWidth: .infinity)

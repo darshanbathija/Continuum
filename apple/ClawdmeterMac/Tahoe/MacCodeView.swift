@@ -1395,6 +1395,7 @@ private struct RunningRow: View {
 
 private struct PlanHalo: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var auraGlow: Bool = false
     var session: TahoeCodeSession?
     var isDemo: Bool
@@ -1439,10 +1440,16 @@ private struct PlanHalo: View {
                 .blur(radius: 8)
                 .padding(-28)
                 .allowsHitTesting(false)
-                // Motion polish: subtle aura breath (4s, ±15% opacity).
-                .opacity(auraGlow ? 1.0 : 0.85)
-                .animation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: auraGlow)
-                .onAppear { auraGlow = true }
+                // Motion polish: subtle aura breath, held static for Reduce Motion.
+                .opacity(reduceMotion ? 0.90 : (auraGlow ? 1.0 : 0.85))
+                .animation(reduceMotion ? nil : .easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: auraGlow)
+                .onAppear {
+                    guard !reduceMotion else { return }
+                    auraGlow = true
+                }
+                .onChange(of: reduceMotion) { _, newValue in
+                    auraGlow = !newValue
+                }
 
             TahoeGlass(radius: 20, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -1552,6 +1559,7 @@ private extension String {
 
 private struct ComposerBar: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var state: MacCodeView.ComposerState
     /// Demo bindings keep the JSX literal placeholder text and the
     /// LiveTicker fixture. Production composer shows a neutral prompt and
@@ -1645,15 +1653,20 @@ private struct ComposerBar: View {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(t.accentAlpha(0.45), lineWidth: 1)
                         .shadow(color: t.accentAlpha(0.30), radius: 11, x: 0, y: 0)
-                        // Motion polish: 1.8s pulse on the running-state rim,
-                        // matches JSX `@keyframes pulse{0%,100%{opacity:.7}50%{opacity:1}}`.
-                        .opacity(pulse ? 1.0 : 0.7)
-                        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                        .onAppear { pulse = true }
+                        // Motion polish: running-state rim pulse, held static for Reduce Motion.
+                        .opacity(reduceMotion ? 0.85 : (pulse ? 1.0 : 0.7))
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+                        .onAppear {
+                            guard !reduceMotion else { return }
+                            pulse = true
+                        }
                         .onDisappear { pulse = false }
                 }
             }
             .animation(.easeInOut(duration: 0.25), value: state)
+            .onChange(of: reduceMotion) { _, newValue in
+                if newValue { pulse = false }
+            }
         }
         .padding(.horizontal, 18).padding(.bottom, 18)
     }

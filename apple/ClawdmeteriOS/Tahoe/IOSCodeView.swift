@@ -1,5 +1,8 @@
 import SwiftUI
 import ClawdmeterShared
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// iOS Code (Sessions) tab — search + production session cards.
 /// Ports `ios-live.jsx::IOSSessions`.
@@ -45,6 +48,7 @@ public struct IOSCodeView: View {
     /// entry. Nil keeps the row read-only (Previews + cold-launch).
     var agentClient: AgentControlClient?
     var outbox: MobileCommandOutbox?
+    @ObservedObject var presentationStore: SessionPresentationStore
     var onPairWithDesktop: () -> Void
 
     public init(
@@ -53,6 +57,7 @@ public struct IOSCodeView: View {
         onNewSession: @escaping () -> Void = {},
         agentClient: AgentControlClient? = nil,
         outbox: MobileCommandOutbox? = nil,
+        presentationStore: SessionPresentationStore? = nil,
         onPairWithDesktop: @escaping () -> Void = {}
     ) {
         self.data = data
@@ -60,7 +65,16 @@ public struct IOSCodeView: View {
         self.onNewSession = onNewSession
         self.agentClient = agentClient
         self.outbox = outbox
+        self.presentationStore = presentationStore ?? Self.defaultPresentationStore()
         self.onPairWithDesktop = onPairWithDesktop
+    }
+
+    private static func defaultPresentationStore() -> SessionPresentationStore {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return SessionPresentationStore(
+            storeURL: SessionPresentationStore.defaultStoreURL(appSupportDirectory: appSupport)
+        )
     }
 
     @State private var searchQuery: String = ""
@@ -151,12 +165,13 @@ public struct IOSCodeView: View {
                 } else {
                     VStack(spacing: 14) {
                         ForEach(visible) { repo in
-                            IOSRepoCard(
-                                repo: repo,
-                                onOpen: onOpenDetail,
-                                agentClient: agentClient,
-                                outbox: outbox
-                            )
+                        IOSRepoCard(
+                            repo: repo,
+                            onOpen: onOpenDetail,
+                            agentClient: agentClient,
+                            outbox: outbox,
+                            presentationStore: presentationStore
+                        )
                         }
                     }
                     .padding(.horizontal, 16).padding(.bottom, 30)
@@ -467,11 +482,47 @@ private struct IOSRepoCard: View {
     /// call `unarchiveSession(id:)`. Nil keeps the row read-only.
     var agentClient: AgentControlClient?
     var outbox: MobileCommandOutbox?
+    @ObservedObject var presentationStore: SessionPresentationStore
     @State private var restoringSessionId: UUID? = nil
+
+    private var repoBadge: RepoIdentityBadge {
+        if let cached = presentationStore.snapshot.repoIdentityBadges[repo.key] {
+            return cached
+        }
+        return RepoIdentityResolver.badge(repoKey: repo.key, displayName: repo.name)
+    }
 
     var body: some View {
         TahoeGlass(radius: 22, tone: .raised) {
             VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    RepoIdentityBadgeView(badge: repoBadge, size: 28)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(repo.name)
+                            .font(TahoeFont.body(13.5, weight: .bold))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text("\(repo.sessions.count) active · \(repo.recents.count) recent")
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(t.fg4)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    if repo.liveSessionCount > 0 {
+                        Text("\(repo.liveSessionCount)")
+                            .font(TahoeFont.mono(11, weight: .bold))
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 7)
+                            .frame(height: 22)
+                            .background(Color.green.opacity(0.14), in: Capsule(style: .continuous))
+                            .accessibilityLabel("\(repo.liveSessionCount) live sessions")
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+                TahoeHair().padding(.leading, 58)
                 ForEach(Array(repo.sessions.enumerated()), id: \.offset) { i, s in
                     if i > 0 {
                         TahoeHair().padding(.leading, 58)
@@ -484,20 +535,39 @@ private struct IOSRepoCard: View {
                                     .font(TahoeFont.body(14, weight: .semibold))
                                     .foregroundStyle(t.fg)
                                     .lineLimit(1)
+                                    .truncationMode(.middle)
                                 HStack(spacing: 6) {
                                     StatusDot(status: s.status)
                                     Text(s.subtitle)
                                         .font(TahoeFont.body(11.5))
                                         .foregroundStyle(t.fg3)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
                                 }
+                                statusBadges(for: s)
                             }
-                            Spacer()
-                            statusBadges(for: s)
+                            .layoutPriority(1)
+                            Spacer(minLength: 8)
                             TahoeIcon("chevR", size: 14).foregroundStyle(t.fg4)
                         }
                         .padding(.horizontal, 16).padding(.vertical, 14)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("Open Session", systemImage: "arrow.right") { onOpen(s.id) }
+                        Button(presentationStore.snapshot.pinnedSessionIds.contains(s.id) ? "Unpin" : "Pin", systemImage: "pin") {
+                            try? presentationStore.togglePin(s.id)
+                        }
+                        Button(presentationStore.snapshot.unreadSessionIds.contains(s.id) ? "Mark Read" : "Mark Unread", systemImage: "circle.fill") {
+                            try? presentationStore.markUnread(s.id, unread: !presentationStore.snapshot.unreadSessionIds.contains(s.id))
+                        }
+                        Button(presentationStore.snapshot.mutedSessionIds.contains(s.id) ? "Unmute" : "Mute", systemImage: "bell.slash") {
+                            try? presentationStore.setMuted(s.id, muted: !presentationStore.snapshot.mutedSessionIds.contains(s.id))
+                        }
+                        Button("Copy Session ID", systemImage: "doc.on.doc") {
+                            UIPasteboard.general.string = s.id.uuidString
+                        }
+                    }
                 }
                 if !repo.recents.isEmpty {
                     TahoeHair()
@@ -570,19 +640,45 @@ private struct IOSRepoCard: View {
 
     @ViewBuilder
     private func statusBadges(for session: TahoeCodeSession) -> some View {
+        let items = statusBadgeItems(for: session)
+        if !items.isEmpty {
+            HStack(spacing: 5) {
+                ForEach(items.prefix(3)) { item in
+                    smallBadge(item.text, icon: item.icon, tone: item.tone)
+                }
+                if items.count > 3 {
+                    smallBadge("+\(items.count - 3)", icon: "ellipsis", tone: t.fg3)
+                        .accessibilityLabel("More session states: \(items.dropFirst(3).map(\.text).joined(separator: ", "))")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 3)
+        }
+    }
+
+    private func statusBadgeItems(for session: TahoeCodeSession) -> [IOSSessionBadgeItem] {
+        var items: [IOSSessionBadgeItem] = []
         let pending = outbox?.pending.filter { $0.sessionId == session.id }.count ?? 0
         let failed = outbox?.failed.filter { $0.sessionId == session.id }.count ?? 0
-        HStack(spacing: 5) {
-            if session.status == .planning {
-                smallBadge("Plan", icon: "sparkles", tone: t.accent)
-            }
-            if pending > 0 {
-                smallBadge("\(pending)", icon: "arrowU", tone: t.fg3)
-            }
-            if failed > 0 {
-                smallBadge("\(failed)", icon: "x", tone: .red)
-            }
+        if presentationStore.snapshot.pinnedSessionIds.contains(session.id) {
+            items.append(.init(text: "Pin", icon: "pin", tone: t.accent))
         }
+        if presentationStore.snapshot.unreadSessionIds.contains(session.id) {
+            items.append(.init(text: "New", icon: "circle", tone: .blue))
+        }
+        if presentationStore.snapshot.mutedSessionIds.contains(session.id) {
+            items.append(.init(text: "Mute", icon: "bellSlash", tone: t.fg4))
+        }
+        if session.status == .planning {
+            items.append(.init(text: "Plan", icon: "sparkles", tone: t.accent))
+        }
+        if pending > 0 {
+            items.append(.init(text: "\(pending)", icon: "arrowU", tone: t.fg3))
+        }
+        if failed > 0 {
+            items.append(.init(text: "\(failed)", icon: "x", tone: .red))
+        }
+        return items
     }
 
     private func smallBadge(_ text: String, icon: String, tone: Color) -> some View {
@@ -596,6 +692,14 @@ private struct IOSRepoCard: View {
         .frame(height: 20)
         .background(tone.opacity(0.14), in: Capsule(style: .continuous))
     }
+}
+
+private struct IOSSessionBadgeItem: Identifiable {
+    let text: String
+    let icon: String
+    let tone: Color
+
+    var id: String { "\(icon):\(text)" }
 }
 
 private struct StatusDot: View {

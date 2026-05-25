@@ -11,6 +11,7 @@ public struct IOSRootView: View {
     @State private var pushedScreen: Screen?
     @State private var newSessionPresented: Bool = false
     @State private var settingsPresented: Bool = false
+    @StateObject private var presentationStore: SessionPresentationStore
     // v0.27.0: focusedCodeRepoKey state is unused now that the Design
     // → Code handoff is gone. Kept as a placeholder for future
     // repo-pre-selection work from other entry points.
@@ -43,6 +44,11 @@ public struct IOSRootView: View {
         self.screenshotDemo = demo
         _theme = State(initialValue: TahoeThemeStore.loaded())
         _tab = State(initialValue: demo ? .code : .chat)
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        _presentationStore = StateObject(wrappedValue: SessionPresentationStore(
+            storeURL: SessionPresentationStore.defaultStoreURL(appSupportDirectory: appSupport)
+        ))
         if demo, args.contains("--ios-code-demo-detail") {
             #if DEBUG
             _pushedScreen = State(initialValue: .sessionDetail(AgentControlClient.codeTabVerificationSessionId))
@@ -119,7 +125,7 @@ public struct IOSRootView: View {
         .sheet(isPresented: $settingsPresented) {
             // v0.22.29: pass agentClient so SettingsView can surface
             // Pair-with-Mac (Scan QR + Paste URL + Forget pairing).
-            SettingsView(model: usageModel, agentClient: agentClient)
+            SettingsView(model: usageModel, agentClient: agentClient, presentationStore: presentationStore)
         }
     }
 
@@ -160,6 +166,7 @@ public struct IOSRootView: View {
                 outbox: outbox,
                 sessionId: id,
                 data: code,
+                presentationStore: presentationStore,
                 onBack: { pushedScreen = nil }
             )
         case nil:
@@ -198,6 +205,7 @@ public struct IOSRootView: View {
                     onNewSession: { newSessionPresented = true },
                     agentClient: agentClient,
                     outbox: outbox,
+                    presentationStore: presentationStore,
                     onPairWithDesktop: { pushedScreen = .pairing }
                 )
                 .refreshable {
@@ -327,7 +335,7 @@ public struct IOSRoundIconBtn: View {
 /// Glass card pinned above the floating tab bar whenever the
 /// AgentControlClient hasn't received a pairing token yet. Solves the
 /// "Chat/Code tabs are blank with no flow forward" feedback —
-/// every tab now has a visible "Pair iPhone" CTA the user can act on
+/// every tab now has a visible "Pair with Mac" CTA the user can act on
 /// without hunting through Settings or the Analytics tab's
 /// LiveGaugesHeader (which is where the only previous CTA lived).
 public struct IOSUnpairedBanner: View {
@@ -358,7 +366,7 @@ public struct IOSUnpairedBanner: View {
                 }
                 Spacer()
                 Button(action: onPair) {
-                    Text("Pair iPhone")
+                    Text("Pair with Mac")
                         .font(TahoeFont.body(12, weight: .bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14).padding(.vertical, 8)
@@ -370,7 +378,7 @@ public struct IOSUnpairedBanner: View {
                         }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Pair iPhone with your Mac")
+                .accessibilityLabel("Pair with Mac")
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
         }

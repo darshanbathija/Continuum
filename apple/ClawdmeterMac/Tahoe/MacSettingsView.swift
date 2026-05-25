@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import ClawdmeterShared
 
 /// Mac Settings — drives the global TahoeThemeStore so flipping a switch
@@ -17,6 +18,7 @@ public struct MacSettingsView: View {
     @ObservedObject var claudeModel: AppModel
     @ObservedObject var codexModel: AppModel
     @ObservedObject var geminiModel: AppModel
+    @ObservedObject var presentationStore: SessionPresentationStore
     /// v0.22.9: runtime threaded in so the consolidated settings page
     /// can embed PairingSettingsView (needs AppRuntime for the daemon
     /// + pairing token shape). Optional so Previews don't have to
@@ -27,6 +29,7 @@ public struct MacSettingsView: View {
     /// off whichever provider supports it (Claude is the canonical one
     /// today). Setter fans out to every provider that supports auto-revive.
     @SceneStorage("clawdmeter.mac.settings.selectedSection") private var selectedSectionRaw: String = SettingsSection.visual.rawValue
+    @State private var settingsSearch: String = ""
 
     // v0.22.9: dropped to `internal` because the `runtime` parameter
     // exposes `AppRuntime`, which lives in the Mac target (not the
@@ -38,13 +41,15 @@ public struct MacSettingsView: View {
         claudeModel: AppModel,
         codexModel: AppModel,
         geminiModel: AppModel,
-        runtime: AppRuntime? = nil
+        runtime: AppRuntime? = nil,
+        presentationStore: SessionPresentationStore
     ) {
         self.theme = theme
         self.claudeModel = claudeModel
         self.codexModel = codexModel
         self.geminiModel = geminiModel
         self.runtime = runtime
+        self.presentationStore = presentationStore
     }
 
     /// Composite auto-revive state. True when any provider that supports
@@ -70,19 +75,24 @@ public struct MacSettingsView: View {
 
     public var body: some View {
         VStack(spacing: 18) {
-            SettingsHeader(onReset: { theme.resetToDefaults() })
+            SettingsHeader(search: $settingsSearch, onReset: { theme.resetToDefaults() })
 
             HStack(alignment: .top, spacing: 18) {
                 SettingsSidebar(
-                    selection: selectedSection,
+                    selection: displayedSection ?? selectedSection,
+                    query: settingsSearch,
                     onSelect: { selectedSectionRaw = $0.rawValue }
                 )
                 .frame(width: 220)
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        SettingsSectionHeader(section: selectedSection)
-                        selectedSectionContent
+                        if let displayedSection {
+                            SettingsSectionHeader(section: displayedSection)
+                            selectedSectionContent(for: displayedSection)
+                        } else {
+                            noMatchingSettings
+                        }
                     }
                     .frame(maxWidth: 920)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -95,15 +105,34 @@ public struct MacSettingsView: View {
         .frame(maxWidth: 1180, maxHeight: .infinity, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.horizontal, 6).padding(.bottom, 20).padding(.top, 20)
+        .onChange(of: settingsSearch) { _, _ in
+            syncSelectedSectionToSearch()
+        }
     }
 
     private var selectedSection: SettingsSection {
         SettingsSection(rawValue: selectedSectionRaw) ?? .visual
     }
 
+    private var matchingSections: [SettingsSection] {
+        SettingsSection.matching(query: settingsSearch)
+    }
+
+    private var displayedSection: SettingsSection? {
+        let matches = matchingSections
+        guard !matches.isEmpty else { return nil }
+        return matches.contains(selectedSection) ? selectedSection : matches[0]
+    }
+
+    private func syncSelectedSectionToSearch() {
+        let matches = matchingSections
+        guard !matches.isEmpty, !matches.contains(selectedSection) else { return }
+        selectedSectionRaw = matches[0].rawValue
+    }
+
     @ViewBuilder
-    private var selectedSectionContent: some View {
-        switch selectedSection {
+    private func selectedSectionContent(for section: SettingsSection) -> some View {
+        switch section {
         case .visual:
             visualSettings
         case .providers:
@@ -112,6 +141,23 @@ public struct MacSettingsView: View {
             deviceSettings
         case .diagnostics:
             diagnosticsSettings
+        case .notifications:
+            notificationSettings
+        case .externalTools:
+            externalToolSettings
+        case .shortcuts:
+            shortcutSettings
+        case .whatsNew:
+            whatsNewSettings
+        }
+    }
+
+    private var noMatchingSettings: some View {
+        SettingsCard(title: "No settings found",
+                     sub: "Try a different search term or clear the field.") {
+            Text("No matching settings sections.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
         }
     }
 
@@ -156,6 +202,29 @@ public struct MacSettingsView: View {
             TahoeHair().padding(.vertical, 14)
             SettingsRow(label: "Accent", hint: "Used on the primary button, active tab, and the iPhone Live ring.") {
                 AccentPicker(value: $theme.accent)
+            }
+        }
+
+        SettingsCard(title: "Code and diff themes",
+                     sub: "Shared presentation defaults for code blocks, diffs, and review panes.") {
+            SettingsRow(label: "Syntax theme", hint: "Changes code/diff contrast without changing the global app theme.") {
+                Picker("Syntax theme", selection: syntaxThemeBinding) {
+                    ForEach(CodeSyntaxTheme.allCases, id: \.self) { theme in
+                        Text(theme.label).tag(theme)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 150)
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Diff layout", hint: "Unified is dense; split keeps additions and deletions in separate columns.") {
+                Picker("Diff layout", selection: diffDisplayModeBinding) {
+                    ForEach(DiffDisplayMode.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
             }
         }
     }
@@ -229,6 +298,217 @@ public struct MacSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+
+    @ViewBuilder
+    private var notificationSettings: some View {
+        SettingsCard(title: "Notifications",
+                     sub: "Client-local banner, chime, DND, batching, and preview behavior.") {
+            SettingsRow(label: "Do Not Disturb", hint: "Suppresses banners and sounds. Sidebar badges and unread state remain visible.") {
+                TahoeToggleView(on: notificationPreferenceBinding(\.dndEnabled))
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Batch banners", hint: "Group rapid session events into fewer notifications.") {
+                TahoeToggleView(on: notificationPreferenceBinding(\.batchBanners))
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Play chimes", hint: "Audible completion and attention cues when DND is off.") {
+                TahoeToggleView(on: notificationPreferenceBinding(\.playChimes))
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Show sensitive previews", hint: "Include prompt and transcript snippets in notification previews.") {
+                TahoeToggleView(on: notificationPreferenceBinding(\.sensitivePreviews))
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Test chime", hint: "Plays the configured in-app chime without sending a banner.") {
+                Button("Play") {
+                    ChimeAudioPlayer.shared.playCompletion()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var externalToolSettings: some View {
+        SettingsCard(title: "External tools",
+                     sub: "Configure where file, PR, and terminal actions open.") {
+            SettingsRow(label: "Editor", hint: "Used by transcript and diff file-line actions before falling back to Finder.") {
+                Picker("Editor", selection: externalEditorBinding) {
+                    Text("Xcode").tag("xed")
+                    Text("Finder").tag("finder")
+                    Text("System default").tag("default")
+                }
+                .labelsHidden()
+                .frame(width: 170)
+            }
+            TahoeHair().padding(.vertical, 14)
+            SettingsRow(label: "Recent file actions", hint: "Paths opened from transcript or diff chips stay local on this Mac.") {
+                VStack(alignment: .trailing, spacing: 3) {
+                    ForEach(presentationStore.snapshot.recentPathActions.prefix(3), id: \.self) { path in
+                        Text(path)
+                            .font(TahoeFont.mono(10.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    if presentationStore.snapshot.recentPathActions.isEmpty {
+                        Text("No file actions yet")
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: 260, alignment: .trailing)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var shortcutSettings: some View {
+        SettingsCard(title: "Keyboard shortcuts",
+                     sub: "Client-local overrides apply immediately to the command palette and global shortcut dispatcher.") {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(ClawdmeterShortcutRegistry.defaults) { shortcut in
+                    SettingsRow(label: shortcut.label, hint: "\(shortcut.scope.rawValue.capitalized) · default \(shortcut.displayChord)") {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            HStack(spacing: 8) {
+                                TextField(shortcut.displayChord, text: shortcutOverrideBinding(shortcut.id))
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(TahoeFont.mono(11))
+                                    .frame(width: 96)
+                                Button("Reset") {
+                                    try? presentationStore.setShortcutOverride(id: shortcut.id, chord: nil)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(presentationStore.snapshot.shortcutOverrides[shortcut.id] == nil)
+                            }
+                            if let conflict = shortcutConflict(for: shortcut) {
+                                Text(conflict)
+                                    .font(TahoeFont.body(10.5, weight: .semibold))
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                    if shortcut.id != ClawdmeterShortcutRegistry.defaults.last?.id {
+                        TahoeHair().padding(.vertical, 10)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var whatsNewSettings: some View {
+        SettingsCard(title: "What's New",
+                     sub: "Recent local UI rollout notes and shortcuts.") {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Command palette, transcript find, local session presentation state, prompt history, and PR/diff/terminal action menus are enabled in this build.", systemImage: "sparkles")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(.primary)
+                Button("Open changelog") {
+                    let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("CHANGELOG.md")
+                    NSWorkspace.shared.open(url)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                if !presentationStore.snapshot.exportedSessionURLs.isEmpty {
+                    TahoeHair().padding(.vertical, 6)
+                    Text("Recent exports")
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                    ForEach(presentationStore.snapshot.exportedSessionURLs.prefix(3), id: \.self) { path in
+                        Text(path)
+                            .font(TahoeFont.mono(10.5))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+        }
+    }
+
+    private func notificationPreferenceBinding(_ keyPath: WritableKeyPath<NotificationPresentationPreferences, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { presentationStore.snapshot.notificationPreferences[keyPath: keyPath] },
+            set: { newValue in
+                var prefs = presentationStore.snapshot.notificationPreferences
+                prefs[keyPath: keyPath] = newValue
+                try? presentationStore.setNotificationPreferences(prefs)
+            }
+        )
+    }
+
+    private var externalEditorBinding: Binding<String> {
+        Binding(
+            get: { presentationStore.snapshot.externalEditorIdentifier ?? "xed" },
+            set: { try? presentationStore.setExternalEditorIdentifier($0) }
+        )
+    }
+
+    private var syntaxThemeBinding: Binding<CodeSyntaxTheme> {
+        Binding(
+            get: { presentationStore.snapshot.syntaxTheme },
+            set: { try? presentationStore.setSyntaxTheme($0) }
+        )
+    }
+
+    private func shortcutConflict(for shortcut: ClawdmeterShortcut) -> String? {
+        let registry = ClawdmeterShortcutRegistry()
+        let candidate = registry.displayChord(for: shortcut, overrides: presentationStore.snapshot.shortcutOverrides)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty else { return nil }
+        let normalized = normalizeShortcutChord(candidate)
+        let conflicts = ClawdmeterShortcutRegistry.defaults.filter { other in
+            other.id != shortcut.id
+                && normalizeShortcutChord(registry.displayChord(for: other, overrides: presentationStore.snapshot.shortcutOverrides)) == normalized
+        }
+        guard let first = conflicts.first else { return nil }
+        return "Conflicts with \(first.label)"
+    }
+
+    private func normalizeShortcutChord(_ chord: String) -> String {
+        let canonical = chord
+            .replacingOccurrences(of: "Command", with: "⌘")
+            .replacingOccurrences(of: "Cmd", with: "⌘")
+            .replacingOccurrences(of: "Shift", with: "⇧")
+            .replacingOccurrences(of: "Option", with: "⌥")
+            .replacingOccurrences(of: "Alt", with: "⌥")
+            .replacingOccurrences(of: "Control", with: "⌃")
+            .replacingOccurrences(of: "Ctrl", with: "⌃")
+            .replacingOccurrences(of: " ", with: "")
+            .uppercased()
+        let hasCommand = canonical.contains("⌘")
+        let hasShift = canonical.contains("⇧")
+        let hasOption = canonical.contains("⌥")
+        let hasControl = canonical.contains("⌃")
+        let key = canonical
+            .replacingOccurrences(of: "⌘", with: "")
+            .replacingOccurrences(of: "⇧", with: "")
+            .replacingOccurrences(of: "⌥", with: "")
+            .replacingOccurrences(of: "⌃", with: "")
+        return [
+            hasCommand ? "⌘" : "",
+            hasShift ? "⇧" : "",
+            hasOption ? "⌥" : "",
+            hasControl ? "⌃" : ""
+        ].joined() + key
+    }
+
+    private var diffDisplayModeBinding: Binding<DiffDisplayMode> {
+        Binding(
+            get: { presentationStore.snapshot.diffDisplayMode },
+            set: { try? presentationStore.setDiffDisplayMode($0) }
+        )
+    }
+
+    private func shortcutOverrideBinding(_ id: String) -> Binding<String> {
+        Binding(
+            get: { presentationStore.snapshot.shortcutOverrides[id] ?? "" },
+            set: { try? presentationStore.setShortcutOverride(id: id, chord: $0) }
+        )
+    }
 }
 
 private struct SettingsUnavailableBadge: View {
@@ -250,6 +530,10 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case providers
     case devices
     case diagnostics
+    case notifications
+    case externalTools
+    case shortcuts
+    case whatsNew
 
     var id: String { rawValue }
 
@@ -259,6 +543,10 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .providers: return "Providers"
         case .devices: return "Devices"
         case .diagnostics: return "Diagnostics"
+        case .notifications: return "Notifications"
+        case .externalTools: return "External Tools"
+        case .shortcuts: return "Shortcuts"
+        case .whatsNew: return "What's New"
         }
     }
 
@@ -272,6 +560,14 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "Quota behavior, iPhone mirroring, Live Activities, and pairing."
         case .diagnostics:
             return "Debug bundles, source checks, cache tools, and wire inspection."
+        case .notifications:
+            return "DND, batching, chimes, previews, and event toggles."
+        case .externalTools:
+            return "Editor, Finder, terminal, GitHub, and file action preferences."
+        case .shortcuts:
+            return "Searchable shortcut overrides and reset controls."
+        case .whatsNew:
+            return "Recent UI improvements and changelog links."
         }
     }
 
@@ -281,6 +577,20 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .providers: return "terminal"
         case .devices: return "link"
         case .diagnostics: return "gear"
+        case .notifications: return "bell"
+        case .externalTools: return "external"
+        case .shortcuts: return "command"
+        case .whatsNew: return "sparkles"
+        }
+    }
+
+    static func matching(query: String) -> [SettingsSection] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return SettingsSection.allCases }
+        return SettingsSection.allCases.filter { section in
+            section.title.lowercased().contains(needle)
+                || section.subtitle.lowercased().contains(needle)
+                || section.rawValue.lowercased().contains(needle)
         }
     }
 }
@@ -288,7 +598,12 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 private struct SettingsSidebar: View {
     @Environment(\.tahoe) private var t
     var selection: SettingsSection
+    var query: String
     var onSelect: (SettingsSection) -> Void
+
+    private var visibleSections: [SettingsSection] {
+        SettingsSection.matching(query: query)
+    }
 
     var body: some View {
         TahoeGlass(radius: 20, tone: .panel) {
@@ -300,7 +615,7 @@ private struct SettingsSidebar: View {
                     .padding(.horizontal, 10)
                     .padding(.bottom, 4)
 
-                ForEach(SettingsSection.allCases) { section in
+                ForEach(visibleSections) { section in
                     SettingsSidebarRow(
                         section: section,
                         isSelected: section == selection,
@@ -385,6 +700,7 @@ private struct SettingsSectionHeader: View {
 
 private struct SettingsHeader: View {
     @Environment(\.tahoe) private var t
+    @Binding var search: String
     var onReset: () -> Void
     var body: some View {
         HStack(alignment: .lastTextBaseline) {
@@ -398,6 +714,25 @@ private struct SettingsHeader: View {
                     .foregroundStyle(t.fg3)
             }
             Spacer()
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(t.fg3)
+                TextField("Search settings", text: $search)
+                    .textFieldStyle(.plain)
+                    .frame(width: 180)
+                if !search.isEmpty {
+                    Button(action: { search = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(t.fg3)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear settings search")
+                }
+            }
+            .font(TahoeFont.body(12))
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(t.hair2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             TahoeGhostButton(size: .s, action: onReset) {
                 HStack(spacing: 5) {
                     TahoeIcon("refresh", size: 10)

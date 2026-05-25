@@ -18,6 +18,7 @@ import SwiftUI
 /// The user feedback that triggered this: "there's no way to know that
 /// the session is still moving forward and claude/codex is working."
 public struct LiveSessionActivityIndicator: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Provider drives the accent + symbol.
     public let agent: AgentKind
     /// Most-recent observed event on the JSONL. nil → hide.
@@ -61,12 +62,15 @@ public struct LiveSessionActivityIndicator: View {
                 .overlay(
                     Capsule().stroke(accent.opacity(0.25), lineWidth: 0.5)
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
                 .onAppear { startTicker() }
                 .onDisappear { stopTicker() }
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: isActive)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isActive)
+        .onChange(of: reduceMotion) { _, _ in
+            if isActive { startTicker() }
+        }
     }
 
     // MARK: - Derived
@@ -150,9 +154,9 @@ public struct LiveSessionActivityIndicator: View {
 
     private func startTicker() {
         stopTicker()
-        // Hundredths display without turning the whole transcript into a
-        // timer; only this footer view owns the tick.
-        ticker = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+        // Hundredths are useful for live motion; Reduce Motion downgrades
+        // to a one-second ticker and static glyphs.
+        ticker = Timer.scheduledTimer(withTimeInterval: reduceMotion ? 1.0 : 0.05, repeats: true) { _ in
             Task { @MainActor in
                 self.now = Date()
             }
@@ -170,6 +174,7 @@ public struct LiveSessionActivityIndicator: View {
 /// 8-point asterisk that rotates 360° / 1.4s, mirroring the Anthropic
 /// brand mark's idle animation.
 private struct ClaudeAsteriskSpinner: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let color: Color
     let size: CGFloat
     @State private var rotation: Double = 0
@@ -180,9 +185,13 @@ private struct ClaudeAsteriskSpinner: View {
             .foregroundStyle(color)
             .rotationEffect(.degrees(rotation))
             .onAppear {
+                guard !reduceMotion else { return }
                 withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
                     rotation = 360
                 }
+            }
+            .onChange(of: reduceMotion) { _, newValue in
+                if newValue { rotation = 0 }
             }
     }
 }
@@ -191,6 +200,7 @@ private struct ClaudeAsteriskSpinner: View {
 /// in its CLI status line. SwiftUI primitive so we don't need a custom
 /// glyph asset.
 private struct CodexPulseSpinner: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let color: Color
     let size: CGFloat
     @State private var phase: Double = 0
@@ -206,9 +216,13 @@ private struct CodexPulseSpinner: View {
         }
         .frame(width: size, height: size)
         .onAppear {
+            guard !reduceMotion else { return }
             withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
                 phase = 1
             }
+        }
+        .onChange(of: reduceMotion) { _, newValue in
+            if newValue { phase = 0 }
         }
     }
 

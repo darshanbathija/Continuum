@@ -17,6 +17,7 @@ import ClawdmeterShared
 /// (the same bug that caused the pre-G0 blank-detail regression).
 struct SessionWorkspaceView: View {
     @ObservedObject var model: SessionsModel
+    @ObservedObject var presentationStore: SessionPresentationStore
 
     /// User's explicit toggle for the review pane. Default OFF so Sessions
     /// + chat get the full window by default; the user opts into the
@@ -32,6 +33,7 @@ struct SessionWorkspaceView: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Minimum width required to render the review pane at its full
     /// content-respecting width (≥440pt) without crushing sidebar + chat.
@@ -56,7 +58,11 @@ struct SessionWorkspaceView: View {
             t.pageBg.opacity(t.dark ? 0.35 : 0.18)
             HSplitView {
                 TahoeGlass(radius: 20, tone: .panel) {
-                    SidebarPane(model: model, workbenchState: workbenchState)
+                    SidebarPane(
+                        model: model,
+                        workbenchState: workbenchState,
+                        presentationStore: presentationStore
+                    )
                 }
                 .frame(width: 260)
                 .padding(.trailing, 5)
@@ -76,6 +82,7 @@ struct SessionWorkspaceView: View {
                                     model: model,
                                     catalog: launcher.modelCatalog,
                                     workbenchState: workbenchState,
+                                    presentationStore: presentationStore,
                                     density: workbenchState.density,
                                     onDensityChange: { workbenchState.setDensity($0) },
                                     onModeSwitch: { newMode in
@@ -113,7 +120,7 @@ struct SessionWorkspaceView: View {
                                 selectedTab: selectedRightPaneBinding,
                                 onExpand: { tab in
                                     workbenchState.selectRightPane(tab)
-                                    withAnimation(.easeOut(duration: 0.18)) {
+                                    animateWorkspaceChange(.easeOut(duration: 0.18)) {
                                         workbenchState.setReviewPaneVisible(true)
                                     }
                                 }
@@ -131,9 +138,10 @@ struct SessionWorkspaceView: View {
                             chatStore: model.chatStore(for: session),
                             model: model,
                             workbenchState: workbenchState,
+                            presentationStore: presentationStore,
                             selectedTab: selectedRightPaneBinding,
                             onClose: {
-                                withAnimation(.easeOut(duration: 0.18)) {
+                                animateWorkspaceChange(.easeOut(duration: 0.18)) {
                                     workbenchState.setReviewPaneVisible(false)
                                 }
                             },
@@ -188,7 +196,7 @@ struct SessionWorkspaceView: View {
                 .zIndex(20)
             }
         }
-        .animation(.easeOut(duration: 0.16), value: showingWorkspaceSwitcher)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showingWorkspaceSwitcher)
         .onAppear {
             restorePersistedSessionSelectionIfPossible()
         }
@@ -197,7 +205,7 @@ struct SessionWorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleCodeReviewPane)) { _ in
             guard workbenchState.workspaceWidth >= Self.reviewPaneThreshold else { return }
-            withAnimation(.easeOut(duration: 0.18)) {
+            animateWorkspaceChange(.easeOut(duration: 0.18)) {
                 workbenchState.setReviewPaneVisible(!workbenchState.showingReviewPane)
             }
         }
@@ -206,16 +214,18 @@ struct SessionWorkspaceView: View {
                let tab = WorkbenchPaneTab(rawValue: raw) {
                 workbenchState.selectRightPane(tab)
             }
-            withAnimation(.easeOut(duration: 0.18)) {
+            animateWorkspaceChange(.easeOut(duration: 0.18)) {
                 workbenchState.setReviewPaneVisible(true)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openWorkspaceSwitcher)) { _ in
+            showingWorkspaceSwitcher = true
         }
         .task {
             await launcher.refreshProviderAvailability()
         }
         .background(KeyboardShortcuts(
-            model: model,
-            onWorkspaceSwitcher: { showingWorkspaceSwitcher = true }
+            model: model
         ))
     }
 
@@ -224,6 +234,18 @@ struct SessionWorkspaceView: View {
             get: { workbenchState.selectedRightPane },
             set: { workbenchState.selectRightPane($0) }
         )
+    }
+
+    private func animateWorkspaceChange(_ animation: Animation, _ updates: () -> Void) {
+        if reduceMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                updates()
+            }
+        } else {
+            withAnimation(animation, updates)
+        }
     }
 
     private func restorePersistedSessionSelectionIfPossible() {
@@ -244,7 +266,6 @@ struct SessionWorkspaceView: View {
     /// View menu reserves Cmd+1..5 for top-level tab switching.
     private struct KeyboardShortcuts: View {
         @ObservedObject var model: SessionsModel
-        let onWorkspaceSwitcher: () -> Void
         var body: some View {
             ZStack {
                 ForEach(1...9, id: \.self) { index in
@@ -253,31 +274,9 @@ struct SessionWorkspaceView: View {
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(index)")),
                                       modifiers: [.command, .option])
-                    .opacity(0)
-                    .frame(width: 0, height: 0)
+                        .opacity(0)
+                        .frame(width: 0, height: 0)
                 }
-                Button("") {
-                    NotificationCenter.default.post(
-                        name: .focusSidebarSearch, object: nil
-                    )
-                }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .opacity(0)
-                .frame(width: 0, height: 0)
-                // G17 sub-chat: Cmd+; branches off the open session.
-                Button("") {
-                    guard let parentId = model.openSessionId else { return }
-                    Task { _ = await model.spawnSubchat(parentId: parentId) }
-                }
-                .keyboardShortcut(";", modifiers: [.command])
-                .opacity(0)
-                .frame(width: 0, height: 0)
-                Button("") {
-                    onWorkspaceSwitcher()
-                }
-                .keyboardShortcut("o", modifiers: [.command])
-                .opacity(0)
-                .frame(width: 0, height: 0)
             }
             .allowsHitTesting(false)
         }
@@ -286,7 +285,7 @@ struct SessionWorkspaceView: View {
     // MARK: - Center empty state — Codex-style centered composer
 
     private var centerEmpty: some View {
-        EmptyStateCenteredComposer(model: model, launcher: launcher)
+        EmptyStateCenteredComposer(model: model, launcher: launcher, presentationStore: presentationStore)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -353,6 +352,7 @@ struct SessionWorkspaceView: View {
 private struct SidebarPane: View {
     @ObservedObject var model: SessionsModel
     @ObservedObject var workbenchState: WorkbenchState
+    @ObservedObject var presentationStore: SessionPresentationStore
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
     @FocusState private var searchFocused: Bool
@@ -381,6 +381,10 @@ private struct SidebarPane: View {
     @State private var sidebarContentHeight: CGFloat = 0
     @State private var hoveredSessionId: UUID?
     @State private var hoveredRecentPath: String?
+    @State private var colorTagTarget: AgentSession?
+    @State private var colorTagInput: String = ""
+    @State private var showingColorTagAlert = false
+    @State private var comparisonPair: SessionComparisonPair?
 
     private var grouping: SessionGrouping {
         SessionGrouping(rawValue: groupingRaw) ?? .repo
@@ -412,13 +416,13 @@ private struct SidebarPane: View {
             TextField("Name", text: $renameInput)
                 .textFieldStyle(.roundedBorder)
             Button("Save") {
-                model.registry.rename(id: target.id, name: renameInput)
+                try? presentationStore.setTitleOverride(target.id, title: renameInput)
                 showingRenameAlert = false
                 renameTarget = nil
                 renameInput = ""
             }
             Button("Clear name", role: .destructive) {
-                model.registry.rename(id: target.id, name: nil)
+                try? presentationStore.setTitleOverride(target.id, title: nil)
                 showingRenameAlert = false
                 renameTarget = nil
                 renameInput = ""
@@ -429,7 +433,7 @@ private struct SidebarPane: View {
                 renameInput = ""
             }
         } message: { target in
-            Text("Currently: \(target.displayLabel)")
+            Text("Currently: \(sessionTitle(target))")
         }
         // v0.5.10 — Recent JSONL row rename alert. Same canonical Bool
         // + presenting payload pattern as the session-rename alert.
@@ -460,6 +464,36 @@ private struct SidebarPane: View {
             }
         } message: { target in
             Text("Currently: \(recentTitle(target))")
+        }
+        .alert(
+            "Color tag",
+            isPresented: $showingColorTagAlert,
+            presenting: colorTagTarget
+        ) { target in
+            TextField("Tag name", text: $colorTagInput)
+                .textFieldStyle(.roundedBorder)
+            Button("Save") {
+                try? presentationStore.setColorTag(target.id, tag: colorTagInput)
+                showingColorTagAlert = false
+                colorTagTarget = nil
+                colorTagInput = ""
+            }
+            Button("Clear tag", role: .destructive) {
+                try? presentationStore.setColorTag(target.id, tag: nil)
+                showingColorTagAlert = false
+                colorTagTarget = nil
+                colorTagInput = ""
+            }
+            Button("Cancel", role: .cancel) {
+                showingColorTagAlert = false
+                colorTagTarget = nil
+                colorTagInput = ""
+            }
+        } message: { target in
+            Text("Use a short label like Review, Bug, Docs, or Ship for \(sessionTitle(target)).")
+        }
+        .sheet(item: $comparisonPair) { pair in
+            SessionComparisonSheet(pair: pair, model: model)
         }
     }
 
@@ -753,7 +787,25 @@ private struct SidebarPane: View {
             if grouping != .status && statusFilter != .archived && !model.showArchived && s.archivedAt != nil { return false }
             return true
         }
-        return model.filter(sessions: all)
+        return presentationSorted(model.filter(sessions: all))
+    }
+
+    private func presentationSorted(_ sessions: [AgentSession]) -> [AgentSession] {
+        let pins = presentationStore.snapshot.pinnedSessionIds
+        return sessions.sorted { lhs, rhs in
+            let lhsPin = pins.firstIndex(of: lhs.id)
+            let rhsPin = pins.firstIndex(of: rhs.id)
+            switch (lhsPin, rhsPin) {
+            case let (l?, r?):
+                return l < r
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            case (nil, nil):
+                return lhs.lastEventAt > rhs.lastEventAt
+            }
+        }
     }
 
     private var reviewSessionIds: Set<UUID> {
@@ -893,7 +945,7 @@ private struct SidebarPane: View {
             if !model.showArchived, session.archivedAt != nil { return false }
             return true
         }
-        let visibleSessions = model.filter(sessions: allSessions).filter(sidebarStatusPasses)
+        let visibleSessions = presentationSorted(model.filter(sessions: allSessions).filter(sidebarStatusPasses))
         let rootSessions = visibleSessions.filter { $0.parentSessionId == nil }
         let isExpanded = model.expandedRepoKeys.contains(repo.key)
         let recentSessions = repo.recentSessions
@@ -1139,42 +1191,6 @@ private struct SidebarPane: View {
         return ForEach(Array(flat.enumerated()), id: \.element.0.id) { _, pair in
             let (s, d) = pair
             sessionRow(s, isOpen: model.openSessionId == s.id, depth: d)
-                .contextMenu {
-                    Button("Pop out", systemImage: "rectangle.portrait.on.rectangle.portrait") {
-                        NotificationCenter.default.post(
-                            name: .popOutSession,
-                            object: nil,
-                            userInfo: ["sessionId": s.id]
-                        )
-                    }
-                    Button("Copy session ID", systemImage: "doc.on.doc") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(s.id.uuidString, forType: .string)
-                    }
-                    Button("Reveal JSONL in Finder", systemImage: "doc.text.magnifyingglass") {
-                        if let url = model.chatStore(for: s)?.currentFileURL {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
-                        }
-                    }
-                    Divider()
-                    Button("Rename…") {
-                        renameTarget = s
-                        renameInput = s.customName ?? ""
-                        showingRenameAlert = true
-                    }
-                    if s.archivedAt == nil {
-                        Button("Archive") { model.registry.archive(id: s.id) }
-                    } else {
-                        Button("Unarchive") { model.registry.unarchive(id: s.id) }
-                    }
-                    Button("New sub-chat (⌘;)") {
-                        Task { _ = await model.spawnSubchat(parentId: s.id) }
-                    }
-                    Divider()
-                    Button("End session", role: .destructive) {
-                        Task { await model.endSession(id: s.id) }
-                    }
-                }
         }
     }
 
@@ -1236,9 +1252,16 @@ private struct SidebarPane: View {
 
     private func sessionRow(_ session: AgentSession, isOpen: Bool, depth: Int = 0) -> some View {
         let isHovered = hoveredSessionId == session.id
+        let isPinned = presentationStore.snapshot.pinnedSessionIds.contains(session.id)
+        let isUnread = presentationStore.snapshot.unreadSessionIds.contains(session.id)
+        let isMuted = presentationStore.snapshot.mutedSessionIds.contains(session.id)
+        let tag = presentationStore.snapshot.colorTags[session.id]
+        let reasons = attentionReasons(for: session)
+        let repoBadge = repoIdentityBadge(for: session)
         return Button(action: {
             model.openSessionId = session.id
             model.openOutsideJSONLPath = nil
+            try? presentationStore.markUnread(session.id, unread: false)
         }) {
             HStack(alignment: .top, spacing: 8) {
                 if depth > 0 {
@@ -1247,11 +1270,17 @@ private struct SidebarPane: View {
                         .foregroundStyle(.tertiary)
                         .padding(.leading, CGFloat(depth - 1) * 12)
                 }
-                TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 20)
+                RepoIdentityBadgeView(badge: repoBadge, size: 22)
+                    .overlay(alignment: .bottomTrailing) {
+                        TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 11)
+                            .padding(2)
+                            .background(.regularMaterial, in: Circle())
+                    }
                     .overlay(alignment: .bottomTrailing) {
                         Circle()
                             .fill(statusColor(session.status))
                             .frame(width: 6, height: 6)
+                            .offset(x: 3, y: 3)
                             .shadow(color: session.status == .running ? statusColor(session.status).opacity(0.75) : .clear, radius: 4)
                     }
                 VStack(alignment: .leading, spacing: 2) {
@@ -1268,9 +1297,50 @@ private struct SidebarPane: View {
                             .font(TahoeFont.body(10.5))
                             .foregroundStyle(t.fg3)
                             .lineLimit(1)
+                        if let tag, !tag.isEmpty {
+                            Text(tag)
+                                .font(TahoeFont.body(9.5, weight: .semibold))
+                                .foregroundStyle(colorTagTint(tag))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(colorTagTint(tag).opacity(0.14), in: Capsule())
+                        }
                     }
                 }
                 Spacer()
+                if isHovered {
+                    SessionHoverActions(
+                        isPinned: isPinned,
+                        isMuted: isMuted,
+                        onPin: { try? presentationStore.togglePin(session.id) },
+                        onMute: { try? presentationStore.setMuted(session.id, muted: !isMuted) },
+                        onArchive: {
+                            model.registry.archive(id: session.id)
+                            postArchiveUndoToast(for: session)
+                        }
+                    )
+                }
+                if isUnread {
+                    Circle()
+                        .fill(t.accent)
+                        .frame(width: 7, height: 7)
+                        .help("Unread")
+                }
+                if isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(t.accent)
+                        .help("Pinned")
+                }
+                if isMuted {
+                    Image(systemName: "bell.slash.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .help("Muted")
+                }
+                ForEach(reasons.prefix(2), id: \.self) { reason in
+                    AttentionBadge(reason: reason)
+                }
                 if session.archivedAt != nil {
                     Image(systemName: "archivebox.fill")
                         .font(.system(size: 9))
@@ -1323,9 +1393,185 @@ private struct SidebarPane: View {
         }
         .opacity(session.archivedAt != nil ? 0.6 : 1.0)
         .animation(.easeOut(duration: 0.18), value: session.status)
+        .help(hoverHelp(for: session, reasons: reasons))
+        .contextMenu {
+            sessionContextMenu(session)
+        }
+        .onAppear {
+            cacheRepoIdentityIfNeeded(repoBadge)
+        }
+    }
+
+    private func repoIdentityBadge(for session: AgentSession) -> RepoIdentityBadge {
+        let key = session.repoKey ?? session.runtimeCwd ?? session.worktreePath ?? session.repoDisplayName
+        if let cached = presentationStore.snapshot.repoIdentityBadges[key] {
+            return cached
+        }
+        let remoteURL = remoteOriginURL(for: session)
+        return RepoIdentityResolver.badge(repoKey: key, displayName: session.repoDisplayName, remoteURL: remoteURL)
+    }
+
+    private func remoteOriginURL(for session: AgentSession) -> String? {
+        for raw in [session.effectiveCwd, session.worktreePath, session.runtimeCwd, session.repoKey] {
+            guard let root = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !root.isEmpty else { continue }
+            let expanded = NSString(string: root).expandingTildeInPath
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { continue }
+            if let remote = Self.gitRemoteOriginURL(repoRoot: expanded) {
+                return remote
+            }
+        }
+        return nil
+    }
+
+    private static func gitRemoteOriginURL(repoRoot: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", NSString(string: repoRoot).expandingTildeInPath, "config", "--get", "remote.origin.url"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let text = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return text?.isEmpty == false ? text : nil
+        } catch {
+            return nil
+        }
+    }
+
+    private func cacheRepoIdentityIfNeeded(_ badge: RepoIdentityBadge) {
+        guard presentationStore.snapshot.repoIdentityBadges[badge.repoKey] == nil else { return }
+        try? presentationStore.cacheRepoIdentity(badge)
+    }
+
+    @ViewBuilder
+    private func sessionContextMenu(_ session: AgentSession) -> some View {
+        let isPinned = presentationStore.snapshot.pinnedSessionIds.contains(session.id)
+        let isUnread = presentationStore.snapshot.unreadSessionIds.contains(session.id)
+        let isMuted = presentationStore.snapshot.mutedSessionIds.contains(session.id)
+        Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin.fill") {
+            try? presentationStore.togglePin(session.id)
+        }
+        if isPinned {
+            Button("Move Pin Up", systemImage: "arrow.up") {
+                try? presentationStore.movePinnedSession(session.id, offset: -1)
+            }
+            Button("Move Pin Down", systemImage: "arrow.down") {
+                try? presentationStore.movePinnedSession(session.id, offset: 1)
+            }
+        }
+        Button(isUnread ? "Mark Read" : "Mark Unread", systemImage: isUnread ? "circle" : "circle.fill") {
+            try? presentationStore.markUnread(session.id, unread: !isUnread)
+        }
+        Button(isMuted ? "Unmute Session" : "Mute Session", systemImage: isMuted ? "bell" : "bell.slash") {
+            try? presentationStore.setMuted(session.id, muted: !isMuted)
+        }
+        Menu("Snooze", systemImage: "moon.zzz") {
+            Button("1 hour") { try? presentationStore.snooze(session.id, until: Date().addingTimeInterval(60 * 60)) }
+            Button("Today") { try? presentationStore.snooze(session.id, until: Calendar.current.startOfDay(for: Date()).addingTimeInterval(24 * 60 * 60)) }
+            Button("Clear Snooze") { try? presentationStore.snooze(session.id, until: nil) }
+        }
+        Button("Color Tag…", systemImage: "tag") {
+            colorTagTarget = session
+            colorTagInput = presentationStore.snapshot.colorTags[session.id] ?? ""
+            showingColorTagAlert = true
+        }
+        Divider()
+        Button("Pop out", systemImage: "rectangle.portrait.on.rectangle.portrait") {
+            NotificationCenter.default.post(
+                name: .popOutSession,
+                object: nil,
+                userInfo: ["sessionId": session.id]
+            )
+        }
+        Button("Compare with Open Session", systemImage: "rectangle.split.2x1") {
+            if let open = model.openSession, open.id != session.id {
+                comparisonPair = SessionComparisonPair(left: open, right: session)
+            }
+        }
+        .disabled(model.openSession == nil || model.openSession?.id == session.id)
+        Button("Copy session ID", systemImage: "doc.on.doc") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(session.id.uuidString, forType: .string)
+        }
+        Button("Reveal JSONL in Finder", systemImage: "doc.text.magnifyingglass") {
+            if let url = model.chatStore(for: session)?.currentFileURL {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        }
+        .disabled(model.chatStore(for: session)?.currentFileURL == nil)
+        if let raw = session.prMirrorState?.prURL, let url = URL(string: raw) {
+            Button("Open Pull Request", systemImage: "arrow.up.right.square") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        Divider()
+        Button("Rename…", systemImage: "pencil") {
+            renameTarget = session
+            renameInput = presentationStore.snapshot.titleOverrides[session.id] ?? session.customName ?? ""
+            showingRenameAlert = true
+        }
+        if session.archivedAt == nil {
+            Button("Archive", systemImage: "archivebox") {
+                model.registry.archive(id: session.id)
+                postArchiveUndoToast(for: session)
+            }
+        } else {
+            Button("Unarchive", systemImage: "archivebox.fill") {
+                model.registry.unarchive(id: session.id)
+            }
+        }
+        Button("New sub-chat (⌘;)", systemImage: "bubble.left.and.bubble.right") {
+            Task { _ = await model.spawnSubchat(parentId: session.id) }
+        }
+        Divider()
+        Button("End session", role: .destructive) {
+            Task { await model.endSession(id: session.id) }
+        }
+    }
+
+    private func attentionReasons(for session: AgentSession) -> [AttentionReason] {
+        AttentionReasonResolver.reasons(
+            for: session,
+            unread: presentationStore.snapshot.unreadSessionIds.contains(session.id),
+            outboxPending: workbenchState.queuedSendCount(for: session.id) > 0,
+            providerBlocked: model.chatStore(for: session)?.pendingPermissionPrompt != nil,
+            snoozedUntil: presentationStore.snapshot.snoozedUntil[session.id]
+        )
+    }
+
+    private func hoverHelp(for session: AgentSession, reasons: [AttentionReason]) -> String {
+        var rows = [
+            sessionTitle(session),
+            "\(session.repoDisplayName) · \(session.agent.rawValue.capitalized) · \(session.status.rawValue)",
+            "Updated \(session.lastEventAt.formatted(date: .abbreviated, time: .shortened))"
+        ]
+        if !reasons.isEmpty {
+            rows.append("Attention: \(reasons.map(\.label).joined(separator: ", "))")
+        }
+        if let tag = presentationStore.snapshot.colorTags[session.id], !tag.isEmpty {
+            rows.append("Tag: \(tag)")
+        }
+        return rows.joined(separator: "\n")
+    }
+
+    private func colorTagTint(_ tag: String) -> Color {
+        let palette: [Color] = [.blue, .green, .orange, .pink, .purple, .teal, terraCotta]
+        let seed = tag.unicodeScalars.reduce(0) { ($0 &+ Int($1.value)) }
+        return palette[abs(seed) % palette.count]
     }
 
     private func sessionTitle(_ session: AgentSession) -> String {
+        if let title = presentationStore.snapshot.titleOverrides[session.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return title
+        }
         if let custom = session.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !custom.isEmpty {
             return custom
@@ -1463,14 +1709,114 @@ private struct SidebarPane: View {
     }
 }
 
+private struct SessionComparisonPair: Identifiable {
+    let left: AgentSession
+    let right: AgentSession
+
+    var id: String { "\(left.id.uuidString)-\(right.id.uuidString)" }
+}
+
+private struct SessionComparisonSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.tahoe) private var t
+    let pair: SessionComparisonPair
+    @ObservedObject var model: SessionsModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Compare Sessions")
+                    .font(TahoeFont.body(18, weight: .bold))
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            HStack(alignment: .top, spacing: 12) {
+                comparisonColumn(pair.left)
+                comparisonColumn(pair.right)
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 760, minHeight: 430)
+        .background(t.pageBg)
+    }
+
+    private func comparisonColumn(_ session: AgentSession) -> some View {
+        let store = model.chatStore(for: session)
+        let todos = store?.snapshot.codexTodos ?? []
+        let openTodos = todos.filter { $0.status != "completed" }.count
+        return TahoeGlass(radius: 16, tone: .panel) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.displayLabel)
+                            .font(TahoeFont.body(13, weight: .bold))
+                            .lineLimit(1)
+                        Text("\(session.agent.rawValue) · \(session.status.rawValue)")
+                            .font(TahoeFont.mono(10.5))
+                            .foregroundStyle(t.fg3)
+                    }
+                }
+                comparisonRow("Repo", session.repoDisplayName)
+                comparisonRow("Branch", session.prMirrorState?.branchName ?? session.worktreePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "none")
+                comparisonRow("Last event", Self.relative(session.lastEventAt))
+                comparisonRow("Plan", session.planText == nil ? "none" : "present")
+                comparisonRow("PR", session.prMirrorState?.prURL ?? "none")
+                comparisonRow("TODOs", todos.isEmpty ? "none" : "\(openTodos) open / \(todos.count) total")
+                TahoeHairline()
+                Text("Recent Activity")
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                Text(activityPreview(for: session, store: store))
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg2)
+                    .lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .textSelection(.enabled)
+                Spacer()
+            }
+            .padding(14)
+        }
+        .frame(maxWidth: .infinity, minHeight: 350, alignment: .topLeading)
+    }
+
+    private func comparisonRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .foregroundStyle(t.fg3)
+                .frame(width: 70, alignment: .leading)
+            Text(value)
+                .font(TahoeFont.body(11.5))
+                .foregroundStyle(t.fg)
+                .lineLimit(2)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func activityPreview(for session: AgentSession, store: SessionChatStore?) -> String {
+        if let last = store?.snapshot.items.last {
+            return String(describing: last).prefix(700).description
+        }
+        return session.goal ?? session.customName ?? "No transcript rows loaded for this session yet."
+    }
+
+    private static func relative(_ date: Date) -> String {
+        RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+    }
+}
+
 private struct StatusPulseDot: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let color: Color
     let isLive: Bool
     @State private var pulse = false
 
     var body: some View {
         ZStack {
-            if isLive {
+            if isLive && !reduceMotion {
                 Circle()
                     .stroke(color.opacity(0.35), lineWidth: 1.5)
                     .frame(width: pulse ? 14 : 7, height: pulse ? 14 : 7)
@@ -1482,18 +1828,87 @@ private struct StatusPulseDot: View {
         }
         .frame(width: 14, height: 14)
         .onAppear {
-            guard isLive else { return }
+            guard isLive, !reduceMotion else { return }
             withAnimation(.easeOut(duration: 1.3).repeatForever(autoreverses: false)) {
                 pulse = true
             }
         }
         .onChange(of: isLive) { _, newValue in
             pulse = false
-            guard newValue else { return }
+            guard newValue, !reduceMotion else { return }
             withAnimation(.easeOut(duration: 1.3).repeatForever(autoreverses: false)) {
                 pulse = true
             }
         }
+        .onChange(of: reduceMotion) { _, newValue in
+            if newValue { pulse = false }
+        }
+    }
+}
+
+private struct AttentionBadge: View {
+    let reason: AttentionReason
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: 15, height: 15)
+            .background(tint.opacity(0.13), in: Circle())
+            .help(reason.label)
+            .accessibilityLabel(reason.label)
+    }
+
+    private var icon: String {
+        switch reason {
+        case .awaitingInput: return "hand.raised.fill"
+        case .planReady: return "doc.text.fill"
+        case .pullRequest: return "arrow.triangle.pull"
+        case .checksFailed: return "xmark.octagon.fill"
+        case .providerBlocked: return "lock.fill"
+        case .unread: return "circle.fill"
+        case .outboxPending: return "tray.and.arrow.down.fill"
+        case .degraded: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch reason {
+        case .checksFailed, .providerBlocked, .degraded: return .red
+        case .awaitingInput, .planReady: return .orange
+        case .pullRequest, .outboxPending: return .blue
+        case .unread: return .accentColor
+        }
+    }
+}
+
+private struct SessionHoverActions: View {
+    let isPinned: Bool
+    let isMuted: Bool
+    let onPin: () -> Void
+    let onMute: () -> Void
+    let onArchive: () -> Void
+
+    var body: some View {
+        HStack(spacing: 3) {
+            hoverButton(icon: isPinned ? "pin.slash" : "pin", label: isPinned ? "Unpin" : "Pin", action: onPin)
+            hoverButton(icon: isMuted ? "bell" : "bell.slash", label: isMuted ? "Unmute" : "Mute", action: onMute)
+            hoverButton(icon: "archivebox", label: "Archive", action: onArchive)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
+    private func hoverButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .semibold))
+                .frame(width: 18, height: 18)
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -1727,6 +2142,7 @@ private struct CenterThread: View {
     @ObservedObject var model: SessionsModel
     let catalog: ModelCatalog
     @ObservedObject var workbenchState: WorkbenchState
+    @ObservedObject var presentationStore: SessionPresentationStore
     let density: TranscriptDensity
     let onDensityChange: (TranscriptDensity) -> Void
     let onModeSwitch: (SessionMode) -> Void
@@ -1763,6 +2179,7 @@ private struct CenterThread: View {
         model: SessionsModel,
         catalog: ModelCatalog,
         workbenchState: WorkbenchState,
+        presentationStore: SessionPresentationStore,
         density: TranscriptDensity,
         onDensityChange: @escaping (TranscriptDensity) -> Void,
         onModeSwitch: @escaping (SessionMode) -> Void
@@ -1772,6 +2189,7 @@ private struct CenterThread: View {
         self.model = model
         self.catalog = catalog
         self.workbenchState = workbenchState
+        self.presentationStore = presentationStore
         self.density = density
         self.onDensityChange = onDensityChange
         self.onModeSwitch = onModeSwitch
@@ -1940,6 +2358,7 @@ private struct CenterThread: View {
                     if session.archivedAt == nil {
                         Button("Archive") {
                             model.registry.archive(id: session.id)
+                            postArchiveUndoToast(for: session)
                             workbenchState.clearSessionState(sessionId: session.id)
                             AttachmentStaging.cleanup(sessionId: session.id)
                             if let wt = session.worktreePath {
@@ -2229,6 +2648,7 @@ private struct CenterThread: View {
                 store: store,
                 session: session,
                 model: model,
+                presentationStore: presentationStore,
                 density: density,
                 showPlanHalo: shouldShowInlinePlanHalo,
                 canApprovePlan: !isReadOnly,
@@ -2258,6 +2678,7 @@ private struct CenterThread: View {
     private var composerArea: some View {
         ComposerInputCore(
             store: composerStore,
+            presentationStore: presentationStore,
             catalog: catalog,
             agentForModelPicker: session.agent,
             modelSupportsEffort: modelSupportsEffort,
@@ -2826,6 +3247,7 @@ private struct CenterThread: View {
 
 private struct InlinePlanHalo: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let session: AgentSession
     let onRefine: () -> Void
     let onApprove: () -> Void
@@ -2850,10 +3272,16 @@ private struct InlinePlanHalo: View {
                 )
                 .blur(radius: 8)
                 .padding(-28)
-                .opacity(auraGlow ? 1 : 0.82)
+                .opacity(reduceMotion ? 0.88 : (auraGlow ? 1 : 0.82))
                 .allowsHitTesting(false)
-                .animation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: auraGlow)
-                .onAppear { auraGlow = true }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: auraGlow)
+                .onAppear {
+                    guard !reduceMotion else { return }
+                    auraGlow = true
+                }
+                .onChange(of: reduceMotion) { _, newValue in
+                    auraGlow = !newValue
+                }
 
             TahoeGlass(radius: 20, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -2963,12 +3391,14 @@ private struct ChatThreadScroll: View {
     @ObservedObject var store: SessionChatStore
     let session: AgentSession
     let model: SessionsModel
+    @ObservedObject var presentationStore: SessionPresentationStore
     let density: TranscriptDensity
     let showPlanHalo: Bool
     let canApprovePlan: Bool
     let onPlanRefine: () -> Void
     let onPlanApprove: () -> Void
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// IDs of expanded disclosure groups. Per-row `@State` would be ideal
     /// (A5 codex finding) but with LazyVStack recycling that loses state
@@ -2981,6 +3411,10 @@ private struct ChatThreadScroll: View {
     /// scroll-view level so picks survive list recycling during
     /// streaming bumps.
     @State private var askUserQuestionSelections: [String: [String: Set<String>]] = [:]
+    @State private var showingFindBar = false
+    @State private var findQuery = ""
+    @State private var selectedMatchIndex: Int?
+    @FocusState private var findFocused: Bool
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -2998,6 +3432,7 @@ private struct ChatThreadScroll: View {
                         } else {
                             ForEach(store.snapshot.items) { item in
                                 itemRow(item)
+                                    .id(item.id)
                                     .padding(rowInsets)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -3061,6 +3496,32 @@ private struct ChatThreadScroll: View {
                     autoScrollTask = nil
                     userPinnedToBottom = true
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .transcriptFind)) { _ in
+                    showingFindBar = true
+                    findFocused = true
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .transcriptNextMatch)) { _ in
+                    jumpToFindMatch(proxy, delta: 1)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .transcriptPreviousMatch)) { _ in
+                    jumpToFindMatch(proxy, delta: -1)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .transcriptLatest)) { _ in
+                    Task { @MainActor in await jumpToBottom(proxy, animated: true) }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .transcriptLastUser)) { _ in
+                    jumpToLastUserMessage(proxy)
+                }
+
+                if showingFindBar {
+                    VStack {
+                        transcriptFindBar(proxy)
+                            .padding(.top, 10)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
 
                 // Jump-to-latest CTA. Visible whenever the user has
                 // scrolled away from the bottom (a new turn lands while
@@ -3072,7 +3533,10 @@ private struct ChatThreadScroll: View {
                             await jumpToBottom(proxy, animated: true)
                         }
                     }) {
-                        Label("Jump to latest", systemImage: "arrow.down.circle.fill")
+                        Label(
+                            unreadWhileReading > 0 ? "Jump to latest (\(unreadWhileReading))" : "Jump to latest",
+                            systemImage: "arrow.down.circle.fill"
+                        )
                             .font(.system(size: 11, weight: .semibold))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
@@ -3102,6 +3566,7 @@ private struct ChatThreadScroll: View {
     @State private var userPinnedToBottom: Bool = true
 
     @State private var lastScrollItemCount: Int = 0
+    @State private var unreadWhileReading: Int = 0
     @State private var autoScrollTask: Task<Void, Never>?
     @State private var isLoadingEarlierHistory: Bool = false
     @State private var suppressBottomGeometryUntil: Date = .distantPast
@@ -3130,6 +3595,109 @@ private struct ChatThreadScroll: View {
         case .compact: return 16
         case .balanced: return 40
         case .detailed: return nil
+        }
+    }
+
+    private var findMatches: [SessionChatStore.ChatMessage] {
+        let q = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+        return store.snapshot.messages.filter {
+            $0.body.localizedCaseInsensitiveContains(q)
+                || $0.title.localizedCaseInsensitiveContains(q)
+                || ($0.detail?.localizedCaseInsensitiveContains(q) == true)
+        }
+    }
+
+    private func transcriptFindBar(_ proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(t.fg3)
+            TextField("Find in transcript", text: $findQuery)
+                .textFieldStyle(.plain)
+                .focused($findFocused)
+                .onSubmit { jumpToFindMatch(proxy, delta: 1) }
+            Text(findStatusLabel)
+                .font(TahoeFont.mono(10.5))
+                .foregroundStyle(t.fg3)
+                .frame(minWidth: 54, alignment: .trailing)
+            Button(action: { jumpToFindMatch(proxy, delta: -1) }) {
+                Image(systemName: "chevron.up")
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .disabled(findMatches.isEmpty)
+            .help("Previous match (⌘⇧G)")
+            Button(action: { jumpToFindMatch(proxy, delta: 1) }) {
+                Image(systemName: "chevron.down")
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .disabled(findMatches.isEmpty)
+            .help("Next match (⌘G)")
+            Button(action: {
+                findQuery = ""
+                selectedMatchIndex = nil
+                showingFindBar = false
+            }) {
+                Image(systemName: "xmark")
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .help("Close find")
+        }
+        .font(TahoeFont.body(12))
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(t.hairline, lineWidth: 0.5)
+        )
+        .frame(maxWidth: 460)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var findStatusLabel: String {
+        let matches = findMatches
+        guard !matches.isEmpty else {
+            return findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "0"
+        }
+        let current = (selectedMatchIndex ?? 0) + 1
+        return "\(current)/\(matches.count)"
+    }
+
+    private func jumpToFindMatch(_ proxy: ScrollViewProxy, delta: Int) {
+        let matches = findMatches
+        guard !matches.isEmpty else {
+            showingFindBar = true
+            findFocused = true
+            return
+        }
+        let current = selectedMatchIndex ?? (delta < 0 ? 0 : -1)
+        let next = (current + delta + matches.count) % matches.count
+        selectedMatchIndex = next
+        userPinnedToBottom = false
+        scrollTranscript(proxy, to: matches[next].id, anchor: .center)
+    }
+
+    private func jumpToLastUserMessage(_ proxy: ScrollViewProxy) {
+        guard let message = store.snapshot.messages.last(where: { $0.kind == .userText }) else { return }
+        userPinnedToBottom = false
+        scrollTranscript(proxy, to: message.id, anchor: .center)
+    }
+
+    private func scrollTranscript(_ proxy: ScrollViewProxy, to id: String, anchor: UnitPoint) {
+        if reduceMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(id, anchor: anchor)
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(id, anchor: anchor)
+            }
         }
     }
 
@@ -3173,9 +3741,13 @@ private struct ChatThreadScroll: View {
 
     private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, updateCounter: UInt64) {
         let items = store.snapshot.items.count
+        let previousItems = lastScrollItemCount
         lastScrollItemCount = items
         guard !isLoadingEarlierHistory else { return }
-        guard userPinnedToBottom else { return }
+        if !userPinnedToBottom && items > previousItems {
+            unreadWhileReading += items - previousItems
+        }
+        guard userPinnedToBottom, items >= previousItems else { return }
         autoScrollTask?.cancel()
         autoScrollTask = Task { @MainActor in
             await Task.yield()
@@ -3188,8 +3760,9 @@ private struct ChatThreadScroll: View {
     private func jumpToBottom(_ proxy: ScrollViewProxy, animated: Bool) async {
         suppressBottomGeometryUntil = Date().addingTimeInterval(0.35)
         userPinnedToBottom = true
-        if animated {
-            withAnimation(.easeInOut(duration: 0.32)) {
+        unreadWhileReading = 0
+        if animated && !reduceMotion {
+            withAnimation(.easeOut(duration: 0.18)) {
                 proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
             }
         } else {
@@ -3300,14 +3873,73 @@ private struct ChatThreadScroll: View {
 
     @ViewBuilder
     private func messageRow(_ msg: SessionChatStore.ChatMessage) -> some View {
-        switch msg.kind {
-        case .userText:      userBubble(msg)
-        case .assistantText: assistantBubble(msg)
-        case .toolCall, .toolResult:
-            // Should never hit: tool messages are folded into ChatItem.toolRun.
-            EmptyView()
-        case .meta:          metaRow(msg)
+        Group {
+            switch msg.kind {
+            case .userText:      userBubble(msg)
+            case .assistantText: assistantBubble(msg)
+            case .toolCall, .toolResult:
+                // Should never hit: tool messages are folded into ChatItem.toolRun.
+                EmptyView()
+            case .meta:          metaRow(msg)
+            }
         }
+        .id(msg.id)
+        .background(messageHighlight(msg), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(alignment: .topLeading) {
+            if isBookmarked(msg.id) {
+                Image(systemName: "bookmark.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                    .padding(.leading, 2)
+                    .padding(.top, 1)
+                    .help("Bookmarked")
+            }
+        }
+        .contextMenu {
+            messageActions(msg)
+        }
+    }
+
+    @ViewBuilder
+    private func messageActions(_ msg: SessionChatStore.ChatMessage) -> some View {
+        Button("Copy Message", systemImage: "doc.on.doc") {
+            copyToPasteboard(msg.body)
+        }
+        Button("Quote Reply", systemImage: "quote.bubble") {
+            let quoted = msg.body
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .map { "> \($0)" }
+                .joined(separator: "\n")
+            ComposerInsertionInbox.shared.enqueue(text: "\(quoted)\n\n", autoSend: false)
+        }
+        Button(isBookmarked(msg.id) ? "Remove Bookmark" : "Bookmark", systemImage: isBookmarked(msg.id) ? "bookmark.slash" : "bookmark") {
+            try? presentationStore.toggleMessageBookmark(sessionId: session.id, messageId: msg.id)
+        }
+        Button("Copy Message ID", systemImage: "number") {
+            copyToPasteboard(msg.id)
+        }
+    }
+
+    private func isBookmarked(_ messageId: String) -> Bool {
+        presentationStore.snapshot.messageBookmarks[session.id]?.contains(messageId) == true
+    }
+
+    private func messageHighlight(_ msg: SessionChatStore.ChatMessage) -> Color {
+        let matches = findMatches
+        guard !matches.isEmpty,
+              matches.contains(where: { $0.id == msg.id })
+        else { return .clear }
+        if let selectedMatchIndex,
+           matches.indices.contains(selectedMatchIndex),
+           matches[selectedMatchIndex].id == msg.id {
+            return t.accentAlpha(0.18)
+        }
+        return Color.yellow.opacity(t.dark ? 0.16 : 0.22)
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     // MARK: - Tool run rendering
@@ -3507,11 +4139,27 @@ private struct ChatThreadScroll: View {
             TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 26)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
-                MarkdownRenderer(source: msg.body)
+                MarkdownRenderer(source: msg.body, syntaxTheme: presentationStore.snapshot.syntaxTheme)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                TranscriptPathLinkStrip(links: pathLinks(in: msg.body), presentationStore: presentationStore)
             }
             Spacer(minLength: 64)
         }
+    }
+
+    private func pathLinks(in body: String) -> [ResolvablePathLink] {
+        guard let root = transcriptPathRoot else { return [] }
+        return Array(ResolvablePathLinkParser.links(in: body, repoRoot: root).prefix(8))
+    }
+
+    private var transcriptPathRoot: URL? {
+        for raw in [session.runtimeCwd, session.worktreePath, session.repoKey] {
+            guard let path = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { continue }
+            if path.hasPrefix("/") || path.hasPrefix("~") {
+                return URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+            }
+        }
+        return nil
     }
 
     // toolCallCard / toolResultCard removed — replaced by toolRunGroup +
@@ -3752,6 +4400,7 @@ private struct ReviewPane: View {
     let chatStore: SessionChatStore?
     @ObservedObject var model: SessionsModel
     @ObservedObject var workbenchState: WorkbenchState
+    @ObservedObject var presentationStore: SessionPresentationStore
     @Binding var selectedTab: WorkbenchPaneTab
     let onClose: () -> Void
     let onApprove: () -> Void
@@ -3832,7 +4481,11 @@ private struct ReviewPane: View {
                 chatStore: chatStore
             )
         case .diff:
-            TahoeDiffPreviewPane(repoCwd: session.effectiveCwd)
+            TahoeDiffPreviewPane(
+                sessionId: session.id,
+                repoCwd: session.effectiveCwd,
+                presentationStore: presentationStore
+            )
         case .sources:
             TahoeSourcesPreviewPane(chatStore: chatStore)
         case .artifacts:
@@ -3848,6 +4501,7 @@ private struct ReviewPane: View {
         case .pr:
             TahoePRCompactPane(
                 coordinator: model.prCoordinator(for: session),
+                chatStore: chatStore,
                 onBeforeMerge: {
                     await createCheckpoint(summary: "Before PR merge")
                 }
@@ -4027,46 +4681,361 @@ private struct TahoeReviewPlanRows: View {
 
 private struct TahoeDiffPreviewPane: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let sessionId: UUID
     let repoCwd: String
+    @ObservedObject var presentationStore: SessionPresentationStore
     @State private var lines: [DiffLine] = []
     @State private var isLoading = false
+    @State private var focusedPath: String?
+    @State private var hoveredPath: String?
 
     var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            VStack(alignment: .leading, spacing: 0) {
-                if isLoading {
-                    HStack(spacing: 7) {
-                        ProgressView().controlSize(.small)
-                        Text("Loading diff…")
-                            .font(TahoeFont.body(11.5))
-                            .foregroundStyle(t.fg3)
-                    }
-                    .padding(16)
-                } else if lines.isEmpty {
-                    TahoeEmptyReviewState(icon: "diff", title: "No local diff", body: "The worktree has no visible git diff.")
-                        .frame(minWidth: 330)
-                        .padding(16)
-                } else {
-                    ForEach(lines) { line in
-                        HStack(spacing: 0) {
-                            Text(line.sign)
-                                .frame(width: 14, alignment: .leading)
-                                .opacity(0.75)
-                            Text(line.text)
-                                .textSelection(.enabled)
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                diffToolbar(proxy: proxy)
+                TahoeHairline()
+                ScrollView([.vertical, .horizontal]) {
+                    VStack(alignment: .leading, spacing: 0) {
+                    if isLoading {
+                        HStack(spacing: 7) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading diff...")
+                                .font(TahoeFont.body(11.5))
+                                .foregroundStyle(t.fg3)
                         }
-                        .font(TahoeFont.mono(11.5))
-                        .foregroundStyle(line.foreground(t))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 1)
-                        .background(line.background(t))
+                        .padding(16)
+                    } else if lines.isEmpty {
+                        TahoeEmptyReviewState(icon: "diff", title: "No local diff", body: "The worktree has no visible git diff.")
+                            .frame(minWidth: 330)
+                            .padding(16)
+                    } else {
+                        ForEach(visibleLines) { line in
+                            diffLineRow(line)
+                        }
                     }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(t.dark ? Color.black.opacity(0.18) : Color.black.opacity(0.03))
         }
-        .background(t.dark ? Color.black.opacity(0.18) : Color.black.opacity(0.03))
         .task(id: repoCwd) { await load() }
+    }
+
+    private func diffToolbar(proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 8) {
+            Text("\(changedPaths.count) files")
+                .font(TahoeFont.body(11, weight: .semibold))
+                .foregroundStyle(t.fg3)
+            Text("\(unviewedPaths.count) unviewed")
+                .font(TahoeFont.body(11))
+                .foregroundStyle(unviewedPaths.isEmpty ? t.fg4 : t.accent)
+            Spacer()
+            Picker("Diff layout", selection: diffModeBinding) {
+                ForEach(DiffDisplayMode.allCases, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 132)
+            .labelsHidden()
+            Button("Next") { jumpToNextUnviewed(proxy: proxy) }
+                .font(TahoeFont.body(11, weight: .semibold))
+                .buttonStyle(.plain)
+                .disabled(unviewedPaths.isEmpty)
+                .help("Jump to the next unviewed file")
+            Button("Mark all viewed") { markAllViewed() }
+                .font(TahoeFont.body(11, weight: .semibold))
+                .buttonStyle(.plain)
+                .disabled(changedPaths.isEmpty)
+                .help("Persist viewed state for all changed files")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func diffLineRow(_ line: DiffLine) -> some View {
+        if let path = Self.path(fromDiffHeader: line.text) {
+            let viewed = isViewed(path)
+            let focused = focusedPath == path
+            HStack(spacing: 8) {
+                Image(systemName: viewed ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(viewed ? .green : t.fg3)
+                Text(path)
+                    .font(TahoeFont.mono(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                    .textSelection(.enabled)
+                if let disposition = presentationStore.snapshot.fileReviewDispositions[sessionId]?[path] {
+                    Text(disposition.label)
+                        .font(TahoeFont.body(10, weight: .bold))
+                        .foregroundStyle(disposition == .approved ? .green : .orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(t.hair2, in: Capsule(style: .continuous))
+                }
+                Spacer()
+                if hoveredPath == path {
+                    Text(diffSummary(for: path))
+                        .font(TahoeFont.mono(10))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .trailing)))
+                }
+                Button("Mark reviewed") {
+                    try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .approved)
+                }
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .buttonStyle(.plain)
+                Button("Flag changes") {
+                    try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .changesRequested)
+                }
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .buttonStyle(.plain)
+                Button(viewed ? "Viewed" : "Mark viewed") {
+                    markViewed(path)
+                }
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .buttonStyle(.plain)
+                .disabled(viewed)
+                Button("Open") { open(path) }
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .buttonStyle(.plain)
+            }
+            .id(Self.headerID(for: path))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(focused ? t.accentAlpha(0.18) : (viewed ? t.hair2.opacity(0.45) : t.accentAlpha(0.10)))
+            .onHover { inside in
+                hoveredPath = inside ? path : (hoveredPath == path ? nil : hoveredPath)
+            }
+            .contextMenu {
+                Button("Mark viewed") { markViewed(path) }.disabled(viewed)
+                Button("Mark file reviewed") { try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .approved) }
+                Button("Flag file changes") { try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .changesRequested) }
+                Button("Clear review disposition") { try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: nil) }
+                Button("Copy path") { copy(path) }
+                Button("Open file") { open(path) }
+            }
+        } else if line.kind == .hunk, let hunkId = line.hunkId {
+            let collapsed = isHunkCollapsed(hunkId)
+            HStack(spacing: 8) {
+                Button {
+                    try? presentationStore.setDiffHunkCollapsed(sessionId: sessionId, hunkId: hunkId, collapsed: !collapsed)
+                } label: {
+                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                Text(line.text)
+                    .font(TahoeFont.mono(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                    .textSelection(.enabled)
+                Spacer()
+                Button("Explain") {
+                    ComposerInsertionInbox.shared.enqueue(text: "Explain this diff hunk:\n\n```diff\n\(hunkText(hunkId))\n```\n", autoSend: false)
+                }
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+            .background(t.hair2)
+            .contextMenu {
+                Button(collapsed ? "Expand hunk" : "Collapse hunk") {
+                    try? presentationStore.setDiffHunkCollapsed(sessionId: sessionId, hunkId: hunkId, collapsed: !collapsed)
+                }
+                Button("Copy hunk") { copy(hunkText(hunkId)) }
+                Button("Explain hunk") {
+                    ComposerInsertionInbox.shared.enqueue(text: "Explain this diff hunk:\n\n```diff\n\(hunkText(hunkId))\n```\n", autoSend: false)
+                }
+            }
+        } else if presentationStore.snapshot.diffDisplayMode == .split {
+            splitDiffLineRow(line)
+        } else {
+            HStack(spacing: 0) {
+                Text(line.sign)
+                    .frame(width: 14, alignment: .leading)
+                    .opacity(0.75)
+                diffContentView(line)
+            }
+            .font(TahoeFont.mono(11.5))
+            .foregroundStyle(diffForeground(for: line))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 1)
+            .background(diffBackground(for: line))
+            .contextMenu {
+                Button("Copy line") { copy(line.text) }
+                Button("Explain hunk") {
+                    ComposerInsertionInbox.shared.enqueue(text: "Explain this diff hunk:\n\n```diff\n\(line.text)\n```\n", autoSend: false)
+                }
+            }
+        }
+    }
+
+    private func splitDiffLineRow(_ line: DiffLine) -> some View {
+        HStack(spacing: 0) {
+            diffSplitCell(line, shows: line.kind == .del || line.kind == .context, isAddition: false)
+            diffSplitCell(line, shows: line.kind == .add || line.kind == .context, isAddition: true)
+        }
+        .contextMenu {
+            Button("Copy line") { copy(line.text) }
+            Button("Explain line") {
+                ComposerInsertionInbox.shared.enqueue(text: "Explain this diff line:\n\n```diff\n\(line.text)\n```\n", autoSend: false)
+            }
+        }
+    }
+
+    private func diffSplitCell(_ line: DiffLine, shows: Bool, isAddition: Bool) -> some View {
+        Group {
+            if shows {
+                diffContentView(line)
+            } else {
+                Text("")
+            }
+        }
+        .font(TahoeFont.mono(11.5))
+        .foregroundStyle((line.kind == .add && isAddition) ? additionForeground : (line.kind == .del && !isAddition) ? removalForeground : diffForeground(for: line))
+        .frame(width: 420, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 1)
+        .background((line.kind == .add && isAddition) ? additionBackground : (line.kind == .del && !isAddition) ? removalBackground : Color.clear)
+    }
+
+    @ViewBuilder
+    private func diffContentView(_ line: DiffLine) -> some View {
+        if let segments = intraLineSegments(for: line) {
+            HStack(spacing: 0) {
+                Text(segments.prefix)
+                Text(segments.changed)
+                    .background(intraLineHighlight(for: line), in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+                Text(segments.suffix)
+            }
+            .textSelection(.enabled)
+        } else {
+            Text(line.displayText)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var syntaxTheme: CodeSyntaxTheme {
+        presentationStore.snapshot.syntaxTheme
+    }
+
+    private var additionForeground: Color {
+        switch syntaxTheme {
+        case .tahoe: return Color(.sRGB, red: 0.32, green: 0.92, blue: 0.66)
+        case .graphite: return t.dark ? Color(.sRGB, red: 0.76, green: 0.88, blue: 0.76) : Color(.sRGB, red: 0.10, green: 0.45, blue: 0.20)
+        case .xcode: return t.dark ? Color(.sRGB, red: 0.46, green: 0.95, blue: 0.60) : Color(.sRGB, red: 0.03, green: 0.45, blue: 0.18)
+        }
+    }
+
+    private var removalForeground: Color {
+        switch syntaxTheme {
+        case .tahoe: return Color(.sRGB, red: 1.0, green: 0.48, blue: 0.54)
+        case .graphite: return t.dark ? Color(.sRGB, red: 0.92, green: 0.72, blue: 0.72) : Color(.sRGB, red: 0.58, green: 0.16, blue: 0.18)
+        case .xcode: return t.dark ? Color(.sRGB, red: 1.0, green: 0.50, blue: 0.60) : Color(.sRGB, red: 0.70, green: 0.04, blue: 0.16)
+        }
+    }
+
+    private var additionBackground: Color {
+        switch syntaxTheme {
+        case .tahoe: return Color.green.opacity(t.dark ? 0.16 : 0.10)
+        case .graphite: return Color.gray.opacity(t.dark ? 0.18 : 0.12)
+        case .xcode: return Color(.sRGB, red: 0.18, green: 0.72, blue: 0.36, opacity: t.dark ? 0.18 : 0.12)
+        }
+    }
+
+    private var removalBackground: Color {
+        switch syntaxTheme {
+        case .tahoe: return Color.red.opacity(t.dark ? 0.16 : 0.10)
+        case .graphite: return Color.gray.opacity(t.dark ? 0.16 : 0.10)
+        case .xcode: return Color(.sRGB, red: 0.86, green: 0.12, blue: 0.20, opacity: t.dark ? 0.18 : 0.12)
+        }
+    }
+
+    private func diffForeground(for line: DiffLine) -> Color {
+        switch line.kind {
+        case .add: return additionForeground
+        case .del: return removalForeground
+        case .hunk, .meta: return t.fg3
+        case .context:
+            switch syntaxTheme {
+            case .tahoe: return t.dark ? Color(.sRGB, red: 0.78, green: 0.90, blue: 0.90) : Color(.sRGB, red: 0.14, green: 0.26, blue: 0.28)
+            case .graphite: return t.fg2
+            case .xcode: return t.dark ? Color(.sRGB, red: 0.74, green: 0.80, blue: 0.94) : Color(.sRGB, red: 0.08, green: 0.18, blue: 0.38)
+            }
+        }
+    }
+
+    private func diffBackground(for line: DiffLine) -> Color {
+        switch line.kind {
+        case .add: return additionBackground
+        case .del: return removalBackground
+        case .hunk: return t.hair2
+        default:
+            switch syntaxTheme {
+            case .tahoe: return t.dark ? Color(.sRGB, red: 0.05, green: 0.09, blue: 0.10, opacity: 0.35) : Color(.sRGB, red: 0.90, green: 0.97, blue: 0.98, opacity: 0.45)
+            case .graphite: return t.dark ? Color.white.opacity(0.025) : Color.black.opacity(0.025)
+            case .xcode: return t.dark ? Color(.sRGB, red: 0.05, green: 0.06, blue: 0.10, opacity: 0.42) : Color(.sRGB, red: 0.95, green: 0.98, blue: 1.0, opacity: 0.50)
+            }
+        }
+    }
+
+    private func intraLineHighlight(for line: DiffLine) -> Color {
+        switch line.kind {
+        case .add: return additionForeground.opacity(0.28)
+        case .del: return removalForeground.opacity(0.28)
+        default: return t.accentAlpha(0.18)
+        }
+    }
+
+    private func intraLineSegments(for line: DiffLine) -> (prefix: String, changed: String, suffix: String)? {
+        guard line.kind == .add || line.kind == .del,
+              let counterpart = nearestOppositeLine(for: line)
+        else { return nil }
+        let old = Array(line.displayText)
+        let other = Array(counterpart.displayText)
+        guard !old.isEmpty, !other.isEmpty else { return nil }
+
+        var prefixCount = 0
+        while prefixCount < old.count,
+              prefixCount < other.count,
+              old[prefixCount] == other[prefixCount] {
+            prefixCount += 1
+        }
+
+        var suffixCount = 0
+        while suffixCount + prefixCount < old.count,
+              suffixCount + prefixCount < other.count,
+              old[old.count - 1 - suffixCount] == other[other.count - 1 - suffixCount] {
+            suffixCount += 1
+        }
+
+        let changedEnd = max(prefixCount, old.count - suffixCount)
+        guard changedEnd > prefixCount else { return nil }
+        return (
+            String(old[..<prefixCount]),
+            String(old[prefixCount..<changedEnd]),
+            suffixCount == 0 ? "" : String(old[(old.count - suffixCount)...])
+        )
+    }
+
+    private func nearestOppositeLine(for line: DiffLine) -> DiffLine? {
+        let opposite: DiffLine.Kind = line.kind == .add ? .del : .add
+        return lines
+            .filter { $0.hunkId == line.hunkId && $0.kind == opposite && abs($0.index - line.index) <= 6 }
+            .min { abs($0.index - line.index) < abs($1.index - line.index) }
+    }
+
+    private func diffSummary(for path: String) -> String {
+        let block = diffBlock(for: path)
+        let additions = block.filter { $0.hasPrefix("+") && !$0.hasPrefix("+++") }.count
+        let removals = block.filter { $0.hasPrefix("-") && !$0.hasPrefix("---") }.count
+        let hunks = block.filter { $0.hasPrefix("@@") }.count
+        return "\(hunks) hunk\(hunks == 1 ? "" : "s") · +\(additions) -\(removals)"
     }
 
     @MainActor
@@ -4093,23 +5062,167 @@ private struct TahoeDiffPreviewPane: View {
             process.waitUntilExit()
             let data = output.fileHandleForReading.readDataToEndOfFile()
             let text = String(data: data, encoding: .utf8) ?? ""
-            return text
+            let rawLines = text
                 .split(separator: "\n", omittingEmptySubsequences: false)
-                .prefix(220)
-                .map { DiffLine(String($0)) }
+                .map(String.init)
+            return annotate(rawLines)
         } catch {
-            return [DiffLine("Unable to load diff: \(error.localizedDescription)", forcedKind: .meta)]
+            return [DiffLine("Unable to load diff: \(error.localizedDescription)", index: 0, forcedKind: .meta)]
         }
+    }
+
+    nonisolated private static func annotate(_ rawLines: [String]) -> [DiffLine] {
+        var currentPath: String?
+        var currentHunk: String?
+        return rawLines.enumerated().map { index, text in
+            if let path = path(fromDiffHeader: text) {
+                currentPath = path
+                currentHunk = nil
+            } else if text.hasPrefix("@@") {
+                currentHunk = "\(currentPath ?? "diff"):\(text)"
+            }
+            return DiffLine(text, index: index, hunkId: currentHunk, path: currentPath)
+        }
+    }
+
+    private var visibleLines: [DiffLine] {
+        var output: [DiffLine] = []
+        var skippingHunk: String?
+        for line in lines {
+            if Self.path(fromDiffHeader: line.text) != nil {
+                skippingHunk = nil
+                output.append(line)
+                continue
+            }
+            if line.kind == .hunk, let hunkId = line.hunkId {
+                output.append(line)
+                skippingHunk = isHunkCollapsed(hunkId) ? hunkId : nil
+                continue
+            }
+            if let skippingHunk, line.hunkId == skippingHunk {
+                continue
+            }
+            output.append(line)
+        }
+        return output
+    }
+
+    private var diffModeBinding: Binding<DiffDisplayMode> {
+        Binding(
+            get: { presentationStore.snapshot.diffDisplayMode },
+            set: { try? presentationStore.setDiffDisplayMode($0) }
+        )
+    }
+
+    private var changedPaths: [String] {
+        var seen: Set<String> = []
+        return lines.compactMap { Self.path(fromDiffHeader: $0.text) }.filter { seen.insert($0).inserted }
+    }
+
+    private var unviewedPaths: [String] {
+        changedPaths.filter { !isViewed($0) }
+    }
+
+    private func isViewed(_ path: String) -> Bool {
+        let hash = contentHash(for: path)
+        return presentationStore.snapshot.viewedFiles[sessionId]?.contains {
+            $0.path == path && $0.contentHash == hash
+        } == true
+    }
+
+    private func markViewed(_ path: String) {
+        try? presentationStore.recordViewedFile(sessionId: sessionId, path: path, contentHash: contentHash(for: path))
+    }
+
+    private func markAllViewed() {
+        for path in changedPaths {
+            markViewed(path)
+        }
+    }
+
+    private func jumpToNextUnviewed(proxy: ScrollViewProxy) {
+        guard let path = unviewedPaths.first else { return }
+        focusedPath = path
+        if reduceMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(Self.headerID(for: path), anchor: .top)
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(Self.headerID(for: path), anchor: .top)
+            }
+        }
+    }
+
+    private func contentHash(for path: String) -> String {
+        let text = diffBlock(for: path).joined(separator: "\n")
+        return ClawdmeterTextUtilities.stableContentHash(text)
+    }
+
+    private func isHunkCollapsed(_ hunkId: String) -> Bool {
+        presentationStore.snapshot.collapsedDiffHunks[sessionId]?.contains(hunkId) == true
+    }
+
+    private func hunkText(_ hunkId: String) -> String {
+        lines.filter { $0.hunkId == hunkId }.map(\.text).joined(separator: "\n")
+    }
+
+    private func diffBlock(for path: String) -> [String] {
+        var block: [String] = []
+        var collecting = false
+        for line in lines {
+            if let headerPath = Self.path(fromDiffHeader: line.text) {
+                if collecting { break }
+                collecting = headerPath == path
+            }
+            if collecting {
+                block.append(line.text)
+            }
+        }
+        return block
+    }
+
+    private func open(_ path: String) {
+        try? presentationStore.recordPathAction(path)
+        let url = URL(fileURLWithPath: repoCwd).appendingPathComponent(path)
+        NSWorkspace.shared.open(url)
+    }
+
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    nonisolated private static func path(fromDiffHeader line: String) -> String? {
+        guard line.hasPrefix("diff --git ") else { return nil }
+        let parts = line.split(separator: " ")
+        guard parts.count >= 4 else { return nil }
+        let raw = String(parts[3])
+        if raw.hasPrefix("b/") { return String(raw.dropFirst(2)) }
+        return raw
+    }
+
+    nonisolated private static func headerID(for path: String) -> String {
+        "diff-header-\(path)"
     }
 
     private struct DiffLine: Identifiable {
         enum Kind { case meta, hunk, add, del, context }
-        let id = UUID()
+        let id: String
         let text: String
+        let index: Int
         let kind: Kind
+        let hunkId: String?
+        let path: String?
 
-        init(_ text: String, forcedKind: Kind? = nil) {
+        init(_ text: String, index: Int, hunkId: String? = nil, path: String? = nil, forcedKind: Kind? = nil) {
+            self.id = "\(index)-\(text)"
             self.text = text
+            self.index = index
+            self.hunkId = hunkId
+            self.path = path
             if let forcedKind {
                 self.kind = forcedKind
             } else if text.hasPrefix("@@") {
@@ -4130,6 +5243,15 @@ private struct TahoeDiffPreviewPane: View {
             case .add: return "+"
             case .del: return "-"
             default: return ""
+            }
+        }
+
+        var displayText: String {
+            switch kind {
+            case .add, .del:
+                return text.isEmpty ? text : String(text.dropFirst())
+            default:
+                return text
             }
         }
 
@@ -4219,6 +5341,7 @@ private struct TahoeSourcesPreviewPane: View {
 private struct TahoePRCompactPane: View {
     @Environment(\.tahoe) private var t
     @ObservedObject var coordinator: PRCoordinator
+    let chatStore: SessionChatStore?
     let onBeforeMerge: (() async -> Bool)?
     @State private var localActionError: String?
 
@@ -4233,6 +5356,10 @@ private struct TahoePRCompactPane: View {
                     Text("\(state.url.host() ?? "github.com") · #\(state.number) · \(state.state.lowercased())")
                         .font(TahoeFont.mono(11.5))
                         .foregroundStyle(t.fg3)
+                        .contextMenu {
+                            Button("Copy PR URL") { copy(state.url.absoluteString) }
+                            Button("Copy PR Number") { copy("#\(state.number)") }
+                        }
 
                     TahoeGlass(radius: 12, tone: .chip) {
                         VStack(alignment: .leading, spacing: 0) {
@@ -4243,19 +5370,38 @@ private struct TahoePRCompactPane: View {
                             prStatusRow("review", state.reviewState ?? "pending", state.reviewState == "APPROVED")
                             prStatusRow("ci", state.checksRollup ?? "unknown", state.checksRollup == "success")
                             prStatusRow("changes", "+\(state.additions) -\(state.deletions)", true)
+                            prStatusRow("todos", todoGateLabel, todoGatePassed)
+                            if !state.checks.isEmpty {
+                                TahoeHair().padding(.vertical, 6)
+                                ForEach(state.checks) { check in
+                                    prCheckRow(check)
+                                }
+                            }
                         }
                         .padding(12)
                     }
 
-                    Button(action: { NSWorkspace.shared.open(state.url) }) {
+                    Menu {
+                        Button("Open on GitHub") { NSWorkspace.shared.open(state.url) }
+                        Button("Open checks") { openChecks(state) }
+                        Button("Open deployments") { openDeployments(state) }
+                        Button("Copy URL") { copy(state.url.absoluteString) }
+                        Button("Copy Number") { copy("#\(state.number)") }
+                        Button("Rerun failed checks") { Task { await rerunFailedChecks(state) } }
+                            .disabled(PRCoordinator.repoSlug(from: state.url) == nil || failedCheckRunIDs(state).isEmpty)
+                        Button("Ask agent to fix checks") { enqueueFixChecksPrompt(state) }
+                    } label: {
                         HStack(spacing: 6) {
                             TahoeIcon("pull", size: 12)
-                            Text("Open PR on GitHub")
+                            Text("PR Actions")
                                 .font(TahoeFont.body(12, weight: .bold))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .bold))
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.plain)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                     .padding(.vertical, 9)
                     .background(
                         LinearGradient(colors: [t.accent, t.accentDeepC], startPoint: .top, endPoint: .bottom),
@@ -4268,10 +5414,14 @@ private struct TahoePRCompactPane: View {
                             TahoeGhostButton(size: .m, action: { Task { await coordinator.approve() } }) {
                                 Text("Approve")
                             }
-                            TahoeGhostButton(size: .m, action: { Task { await merge(state) } }) {
-                                Text(PRCoordinator.canMerge(snapshot: state, canUseDaemonActions: true) ? "Merge" : "Merge blocked")
+                            TahoeGhostButton(size: .m, action: { enqueueReviewRequestPrompt(state) }) {
+                                Text("Request changes")
                             }
-                            .disabled(!PRCoordinator.canMerge(snapshot: state, canUseDaemonActions: true))
+                            TahoeGhostButton(size: .m, action: { Task { await merge(state) } }) {
+                                Text(canMerge(state) ? "Merge" : "Merge blocked")
+                            }
+                            .disabled(!canMerge(state))
+                            .help(todoGatePassed ? "Merge this PR" : "Open TODOs must be completed before merge")
                         }
                     }
                 } else {
@@ -4287,6 +5437,10 @@ private struct TahoePRCompactPane: View {
                             TahoeGhostButton(size: .m, action: { Task { await coordinator.createPR() } }) {
                                 TahoeIcon("pull", size: 11)
                                 Text("Create PR")
+                            }
+                            TahoeGhostButton(size: .m, action: { enqueueDraftPRPrompt() }) {
+                                TahoeIcon("doc", size: 11)
+                                Text("Draft PR")
                             }
                         }
                     }
@@ -4328,8 +5482,135 @@ private struct TahoePRCompactPane: View {
         .padding(.vertical, 6)
     }
 
+    private func prCheckRow(_ check: PRCheckMirror) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(check.state == .success ? Color.green : (check.state == .failure ? Color.red : Color.yellow))
+                .frame(width: 9, height: 9)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(check.name)
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                    .lineLimit(1)
+                if let url = check.url {
+                    Text(url)
+                        .font(TahoeFont.mono(9.5))
+                        .foregroundStyle(t.fg4)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer()
+            Text(check.state.rawValue)
+                .font(TahoeFont.mono(10.5))
+                .foregroundStyle(t.fg3)
+        }
+        .padding(.vertical, 5)
+        .contextMenu {
+            if let raw = check.url, let url = URL(string: raw) {
+                Button("Open check") { NSWorkspace.shared.open(url) }
+            }
+            Button("Copy check name") { copy(check.name) }
+            if let runID = runID(from: check.url) {
+                Button("Rerun this check") { Task { await rerunCheck(runID: runID, state: coordinator.snapshot) } }
+            }
+        }
+    }
+
+    private var todoGateLabel: String {
+        let todos = chatStore?.snapshot.codexTodos ?? []
+        guard !todos.isEmpty else { return "none" }
+        let open = todos.filter { $0.status != "completed" }.count
+        return open == 0 ? "clear" : "\(open) open"
+    }
+
+    private var todoGatePassed: Bool {
+        (chatStore?.snapshot.codexTodos ?? []).allSatisfy { $0.status == "completed" }
+    }
+
+    private func canMerge(_ state: PRCoordinator.Snapshot) -> Bool {
+        PRCoordinator.canMerge(snapshot: state, canUseDaemonActions: coordinator.canUseDaemonActions)
+            && todoGatePassed
+    }
+
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    private func openChecks(_ state: PRCoordinator.Snapshot) {
+        guard let identity = PRCoordinator.approvalIdentity(for: state),
+              let url = URL(string: "https://github.com/\(identity.repo)/pull/\(identity.number)/checks")
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func openDeployments(_ state: PRCoordinator.Snapshot) {
+        guard let identity = PRCoordinator.approvalIdentity(for: state),
+              let url = URL(string: "https://github.com/\(identity.repo)/deployments")
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func enqueueFixChecksPrompt(_ state: PRCoordinator.Snapshot) {
+        ComposerInsertionInbox.shared.enqueue(text: "Inspect PR #\(state.number), read the failing checks, fix the errors, and rerun the focused tests.\n", autoSend: false)
+    }
+
+    private func enqueueReviewRequestPrompt(_ state: PRCoordinator.Snapshot) {
+        ComposerInsertionInbox.shared.enqueue(text: "Review PR #\(state.number) and leave a concise request-changes summary covering the unresolved issues.\n", autoSend: false)
+    }
+
+    private func enqueueDraftPRPrompt() {
+        ComposerInsertionInbox.shared.enqueue(text: "Create a draft PR with a concise title, a tested-change summary, verification steps, and known risks.\n", autoSend: false)
+    }
+
+    @MainActor
+    private func rerunFailedChecks(_ state: PRCoordinator.Snapshot) async {
+        for runID in failedCheckRunIDs(state) {
+            await rerunCheck(runID: runID, state: state)
+        }
+        coordinator.refreshNow()
+    }
+
+    @MainActor
+    private func rerunCheck(runID: String, state: PRCoordinator.Snapshot?) async {
+        guard let state, let identity = PRCoordinator.approvalIdentity(for: state) else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["gh", "run", "rerun", runID, "--repo", identity.repo]
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                localActionError = nil
+            } else {
+                let stderr = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                localActionError = stderr.isEmpty ? "Failed to rerun check \(runID)." : String(stderr.prefix(220))
+            }
+        } catch {
+            localActionError = "Failed to run gh: \(error.localizedDescription)"
+        }
+    }
+
+    private func failedCheckRunIDs(_ state: PRCoordinator.Snapshot) -> [String] {
+        state.checks
+            .filter { $0.state == .failure }
+            .compactMap { runID(from: $0.url) }
+    }
+
+    private func runID(from rawURL: String?) -> String? {
+        guard let rawURL, let range = rawURL.range(of: #"/actions/runs/([0-9]+)"#, options: .regularExpression) else { return nil }
+        let match = String(rawURL[range])
+        return match.split(separator: "/").last.map(String.init)
+    }
+
     private func merge(_ state: PRCoordinator.Snapshot) async {
-        guard PRCoordinator.canMerge(snapshot: state, canUseDaemonActions: coordinator.canUseDaemonActions) else { return }
+        guard canMerge(state) else {
+            localActionError = todoGatePassed ? "Merge is blocked by checks." : "Merge is blocked until open TODOs are completed."
+            return
+        }
         if let onBeforeMerge {
             guard await onBeforeMerge() else {
                 localActionError = "Safety checkpoint failed. Merge cancelled."
@@ -4345,6 +5626,8 @@ private struct TahoeTerminalCompactPane: View {
     @Environment(\.tahoe) private var t
     let session: AgentSession
     let chatStore: SessionChatStore?
+    @State private var scrollLocked = false
+    @State private var lockedLines: [TerminalLine]?
 
     private var lines: [TerminalLine] {
         let pairs = (chatStore?.snapshot.items ?? []).flatMap { item -> [ToolPair] in
@@ -4369,19 +5652,32 @@ private struct TahoeTerminalCompactPane: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                if lines.isEmpty {
-                    TerminalLine(text: "$ _", color: .muted).view(t)
-                } else {
-                    ForEach(lines) { line in
-                        line.view(t)
+        VStack(spacing: 0) {
+            terminalToolbar
+            TahoeHairline()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if displayedLines.isEmpty {
+                        TerminalLine(text: "$ _", color: .muted).view(t)
+                    } else {
+                        ForEach(displayedLines) { line in
+                            line.view(t)
+                                .contextMenu {
+                                    Button("Copy line") { copy(line.text) }
+                                    Button("Explain error") {
+                                        ComposerInsertionInbox.shared.enqueue(text: "Explain this terminal output and suggest the next fix:\n\n```\n\(line.text)\n```\n", autoSend: false)
+                                    }
+                                    Button("Send to agent") {
+                                        ComposerInsertionInbox.shared.enqueue(text: "@terminal \(line.text)\n", autoSend: false)
+                                    }
+                                }
+                        }
                     }
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(t.dark ? Color.black.opacity(0.30) : Color.black.opacity(0.04))
         .contextMenu {
@@ -4389,6 +5685,78 @@ private struct TahoeTerminalCompactPane: View {
                 NotificationCenter.default.post(name: .showRawTerminal, object: nil, userInfo: ["sessionId": session.id])
             }
         }
+    }
+
+    private var terminalToolbar: some View {
+        HStack(spacing: 8) {
+            Button("@terminal") {
+                ComposerInsertionInbox.shared.enqueue(text: "@terminal ", autoSend: false)
+            }
+            .font(TahoeFont.body(11, weight: .semibold))
+            .buttonStyle(.plain)
+            .help("Mention the terminal in the composer")
+            Toggle("Scroll lock", isOn: scrollLockBinding)
+                .toggleStyle(.checkbox)
+                .font(TahoeFont.body(11))
+                .help("Keep the preview from following new terminal lines")
+            Spacer()
+            ForEach(detectedPorts, id: \.self) { port in
+                Button(":\(port)") {
+                    if let url = URL(string: "http://127.0.0.1:\(port)") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .font(TahoeFont.mono(10.5, weight: .semibold))
+                .buttonStyle(.plain)
+                .help("Open localhost:\(port)")
+            }
+            Button("Live") {
+                NotificationCenter.default.post(name: .showRawTerminal, object: nil, userInfo: ["sessionId": session.id])
+            }
+            .font(TahoeFont.body(11, weight: .semibold))
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
+    private var detectedPorts: [Int] {
+        let text = displayedLines.map(\.text).joined(separator: "\n")
+        guard let regex = try? NSRegularExpression(pattern: #"(?:localhost|127\.0\.0\.1|0\.0\.0\.0):([0-9]{2,5})|port\s+([0-9]{2,5})"#, options: [.caseInsensitive]) else {
+            return []
+        }
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        var out: [Int] = []
+        for match in regex.matches(in: text, range: nsRange) {
+            for idx in 1...2 {
+                guard let range = Range(match.range(at: idx), in: text),
+                      let port = Int(text[range]),
+                      (1...65535).contains(port),
+                      !out.contains(port)
+                else { continue }
+                out.append(port)
+            }
+        }
+        return Array(out.prefix(4))
+    }
+
+    private var displayedLines: [TerminalLine] {
+        lockedLines ?? lines
+    }
+
+    private var scrollLockBinding: Binding<Bool> {
+        Binding(
+            get: { scrollLocked },
+            set: { newValue in
+                scrollLocked = newValue
+                lockedLines = newValue ? lines : nil
+            }
+        )
+    }
+
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 
     private struct TerminalLine: Identifiable {
@@ -4580,9 +5948,35 @@ extension Notification.Name {
     /// Posted to open the raw tmux Cmd+T overlay on a specific session.
     /// (Wave B: chat-first; terminal demoted to overlay.)
     static let showRawTerminal = Notification.Name("clawdmeter.workspace.showRawTerminal")
+    static let transcriptFind = Notification.Name("clawdmeter.workspace.transcriptFind")
+    static let transcriptNextMatch = Notification.Name("clawdmeter.workspace.transcriptNextMatch")
+    static let transcriptPreviousMatch = Notification.Name("clawdmeter.workspace.transcriptPreviousMatch")
+    static let transcriptLatest = Notification.Name("clawdmeter.workspace.transcriptLatest")
+    static let transcriptLastUser = Notification.Name("clawdmeter.workspace.transcriptLastUser")
+    static let composerHistory = Notification.Name("clawdmeter.workspace.composerHistory")
+    static let composerSend = Notification.Name("clawdmeter.workspace.composerSend")
+    static let composerQueue = Notification.Name("clawdmeter.workspace.composerQueue")
+    static let composerToggleDictation = Notification.Name("clawdmeter.workspace.composerToggleDictation")
+    static let openWorkspaceSwitcher = Notification.Name("clawdmeter.workspace.openWorkspaceSwitcher")
+    static let sessionNextAttention = Notification.Name("clawdmeter.workspace.sessionNextAttention")
     /// Posted by iOS via the daemon's compose-draft WS event to seed the
     /// Mac empty-state composer with iPhone-typed prompt text (X1).
     static let composeDraftIncoming = Notification.Name("clawdmeter.workspace.composeDraftIncoming")
+}
+
+private func postArchiveUndoToast(for session: AgentSession) {
+    let toast = TransientToast(
+        title: "Archived \(session.displayLabel)",
+        actionTitle: "Undo",
+        actionID: "unarchive:\(session.id.uuidString)",
+        duration: 5,
+        isDestructiveRecovery: true
+    )
+    NotificationCenter.default.post(
+        name: .clawdmeterShowTransientToast,
+        object: nil,
+        userInfo: ["toast": toast]
+    )
 }
 
 /// Workspace-level width preference. Drives responsive collapsing of the
@@ -4608,6 +6002,115 @@ private struct SidebarContentHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         let next = nextValue()
         if next > 0 { value = next }
+    }
+}
+
+private struct TranscriptPathLinkStrip: View {
+    @Environment(\.tahoe) private var t
+
+    let links: [ResolvablePathLink]
+    @ObservedObject var presentationStore: SessionPresentationStore
+
+    var body: some View {
+        if !links.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(links) { link in
+                        TranscriptPathLinkButton(link: link, presentationStore: presentationStore)
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Referenced files")
+        }
+    }
+}
+
+private struct TranscriptPathLinkButton: View {
+    @Environment(\.tahoe) private var t
+
+    let link: ResolvablePathLink
+    @ObservedObject var presentationStore: SessionPresentationStore
+
+    private var exists: Bool {
+        FileManager.default.fileExists(atPath: link.absolutePath)
+    }
+
+    private var lineLabel: String {
+        if let end = link.lineEnd, end != link.lineStart {
+            return "\(link.lineStart)-\(end)"
+        }
+        return "\(link.lineStart)"
+    }
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 5) {
+                Image(systemName: exists ? "doc.text.magnifyingglass" : "exclamationmark.triangle")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("\((link.path as NSString).lastPathComponent):\(lineLabel)")
+                    .font(TahoeFont.mono(11))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .foregroundStyle(exists ? t.fg2 : t.fg3)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(t.dark ? Color.white.opacity(0.055) : Color.black.opacity(0.045), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(t.hairline, lineWidth: 0.7)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!exists)
+        .help(exists ? "Open \(link.path) at line \(lineLabel)" : "File not found: \(link.path)")
+        .accessibilityLabel(exists ? "Open \(link.path) line \(lineLabel)" : "File not found \(link.path)")
+        .contextMenu {
+            Button("Copy Relative Path") { copy(link.path) }
+            Button("Copy Absolute Path") { copy(link.absolutePath) }
+            Button("Reveal in Finder") { reveal() }
+                .disabled(!exists)
+        }
+    }
+
+    private func open() {
+        guard exists else { return }
+        try? presentationStore.recordPathAction(link.path)
+        let preference = presentationStore.snapshot.externalEditorIdentifier ?? "xed"
+        if preference == "finder" {
+            reveal()
+            return
+        }
+        if preference == "default" {
+            NSWorkspace.shared.open(URL(fileURLWithPath: link.absolutePath))
+            return
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["xed", "-l", "\(link.lineStart)", link.absolutePath]
+        process.terminationHandler = { process in
+            guard process.terminationStatus != 0 else { return }
+            DispatchQueue.main.async {
+                NSWorkspace.shared.open(URL(fileURLWithPath: link.absolutePath))
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            NSWorkspace.shared.open(URL(fileURLWithPath: link.absolutePath))
+        }
+    }
+
+    private func reveal() {
+        guard exists else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: link.absolutePath)])
+    }
+
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 }
 

@@ -44,6 +44,7 @@ final class PRCoordinator: ObservableObject {
         let body: String
         let reviewState: String?
         let checksRollup: String?
+        let checks: [PRCheckMirror]
         let lastChecked: Date
         let source: Source
     }
@@ -249,6 +250,7 @@ final class PRCoordinator: ObservableObject {
             body: status.body,
             reviewState: status.reviewDecision,
             checksRollup: status.checksRollup,
+            checks: status.checks ?? [],
             lastChecked: Date(),
             source: .daemon
         )
@@ -266,6 +268,7 @@ final class PRCoordinator: ObservableObject {
             body: state.body,
             reviewState: state.reviewState,
             checksRollup: nil,
+            checks: [],
             lastChecked: state.lastChecked,
             source: .fallbackURL
         )

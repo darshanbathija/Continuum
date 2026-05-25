@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ClawdmeterShared
 
 /// Render an assistant message as rich markdown — Codex-desktop parity G4.
 ///
@@ -16,6 +17,7 @@ import AppKit
 /// inside a chat list.
 struct MarkdownRenderer: View {
     let source: String
+    var syntaxTheme: CodeSyntaxTheme = .tahoe
 
     @Environment(\.colorScheme) private var colorScheme
     /// T6 lazy markdown cache (codex A2' override): parse `split()` +
@@ -141,19 +143,48 @@ struct MarkdownRenderer: View {
             }
             Text(body)
                 .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.primary)
+                .foregroundStyle(codeForeground)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
                 .background(codeBg, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(codeBorder, lineWidth: 0.5)
+                )
         }
     }
 
     private var codeBg: Color {
+        switch syntaxTheme {
+        case .tahoe:
+            return colorScheme == .dark
+                ? Color(.sRGB, red: 0.06, green: 0.10, blue: 0.12, opacity: 0.92)
+                : Color(.sRGB, red: 0.90, green: 0.97, blue: 0.98, opacity: 0.92)
+        case .graphite:
+            return colorScheme == .dark
+                ? Color(.sRGB, red: 0.10, green: 0.10, blue: 0.11, opacity: 0.92)
+                : Color(.sRGB, red: 0.94, green: 0.94, blue: 0.95, opacity: 0.92)
+        case .xcode:
+            return colorScheme == .dark
+                ? Color(.sRGB, red: 0.08, green: 0.09, blue: 0.13, opacity: 0.95)
+                : Color(.sRGB, red: 0.96, green: 0.98, blue: 1.0, opacity: 0.95)
+        }
+    }
+
+    private var codeForeground: Color {
+        switch syntaxTheme {
+        case .tahoe: return colorScheme == .dark ? Color(.sRGB, red: 0.82, green: 0.94, blue: 0.93) : Color(.sRGB, red: 0.06, green: 0.22, blue: 0.24)
+        case .graphite: return colorScheme == .dark ? Color(.sRGB, red: 0.90, green: 0.90, blue: 0.92) : Color(.sRGB, red: 0.16, green: 0.16, blue: 0.18)
+        case .xcode: return colorScheme == .dark ? Color(.sRGB, red: 0.78, green: 0.86, blue: 1.0) : Color(.sRGB, red: 0.05, green: 0.20, blue: 0.45)
+        }
+    }
+
+    private var codeBorder: Color {
         colorScheme == .dark
-            ? Color.white.opacity(0.06)
-            : Color.black.opacity(0.05)
+            ? Color.white.opacity(0.08)
+            : Color.black.opacity(0.08)
     }
 
     // MARK: - Chunking

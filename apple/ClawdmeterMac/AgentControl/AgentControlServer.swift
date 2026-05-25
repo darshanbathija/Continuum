@@ -1287,10 +1287,7 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/chat-providers/refresh") { [weak self] _, conn, _ in
             await self?.handleRefreshChatProviders(connection: conn)
         }
-        // v0.9 — Frontier endpoints. v0.8 shipped them as 501 stubs;
-        // v0.9 lights them up alongside the chat-via-agentapi Gemini
-        // backend so 3-pane Frontier (Claude / Codex / Gemini) is the
-        // first surface with true 3-provider comparison.
+        // Frontier endpoints back the 3-provider comparison surface.
         t.register(method: "POST", pattern: "/chat-sessions/frontier") { [weak self] req, conn, _ in
             await self?.handlePostFrontier(request: req, connection: conn)
         }
@@ -4767,8 +4764,8 @@ public final class AgentControlServer {
 
     /// `POST /chat-sessions`: spawn a new chat-kind AgentSession in an
     /// empty per-session chat-cwd. Forces plan-mode. Branches on
-    /// (agent, codexChatBackend) per RE1. Gemini chat returns 501 in
-    /// v0.8 (deferred to v0.9 alongside Antigravity-via-agy).
+    /// (agent, codexChatBackend) per RE1. Gemini chat dispatches through
+    /// Antigravity 2 agentapi when the paired Mac supports wire v11+.
     private func handlePostChatSession(request: HTTPRequest, connection: NWConnection) async {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -4796,8 +4793,8 @@ public final class AgentControlServer {
         // picks the first available Antigravity project as a scratch
         // workspace. Surfaces 503 with structured CTA bodies when
         // Antigravity isn't installed / signed in / running / has no
-        // projects open. The v0.8 501 stub is gone now that agentapi-
-        // via-chat is live (wire v11 / antigravityChatMinimum=11 gate).
+        // projects open. agentapi-via-chat is live behind the wire v11 /
+        // antigravityChatMinimum=11 gate.
         if req.provider == .gemini {
             await handlePostGeminiChatSession(
                 model: req.model,
@@ -5143,11 +5140,8 @@ public final class AgentControlServer {
         await handleGetChatProviders(connection: connection)
     }
 
-    /// Frontier endpoints stub. Returns 501 in v0.8 — the routes exist
-    /// for forward-compat (clients can probe), but the full implementation
-    /// (real spawn, FrontierWebSocketChannel, per-slot retry, pick-winner
-    /// fork) lands in v0.9 alongside the Antigravity replacement so the
-    /// 3-pane UI can use the full Claude+Codex+Gemini matrix.
+    /// Frontier handlers. These routes create live sibling chat sessions,
+    /// stream per-slot state, and persist winner choices for the comparison UI.
     // MARK: - v0.9 Frontier handlers
 
     /// POST /chat-sessions/frontier — spawn 2-3 sibling chat sessions
