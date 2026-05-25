@@ -16,8 +16,8 @@ final class WireV11Tests: XCTestCase {
     // MARK: - Wire version constants
 
     func test_currentWireVersionIsNineteen() {
-        // v19 (2026-05-25, provider defaults): adds paired Mac provider
-        // default model/effort endpoints.
+        // v19 (2026-05-25): adds lifecycle snapshots/subscription and paired
+        // Mac provider default model/effort endpoints.
         XCTAssertEqual(AgentControlWireVersion.current, 19)
     }
 
@@ -40,6 +40,10 @@ final class WireV11Tests: XCTestCase {
         XCTAssertFalse(AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: nil))
         XCTAssertFalse(AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: 17))
         XCTAssertTrue(AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: 18))
+        XCTAssertEqual(AgentControlWireVersion.lifecycleMinimum, 19)
+        XCTAssertFalse(AgentControlWireVersion.supportsLifecycle(serverWireVersion: nil))
+        XCTAssertFalse(AgentControlWireVersion.supportsLifecycle(serverWireVersion: 18))
+        XCTAssertTrue(AgentControlWireVersion.supportsLifecycle(serverWireVersion: 19))
     }
 
     func test_providerDefaultsMinimumIsNineteen() {

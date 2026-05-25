@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 import ClawdmeterShared
 @testable import Clawdmeter
 
@@ -117,6 +118,29 @@ final class WorkbenchStateTests: XCTestCase {
         XCTAssertEqual(reloaded.snapshot.prCache[sessionId]?.state, "OPEN")
         XCTAssertEqual(reloaded.snapshot.prCache[sessionId]?.checksConclusion, "success")
         XCTAssertEqual(reloaded.snapshot.checkpoints[sessionId]?.first?.turnId, "turn-1")
+    }
+
+    func test_recordCheckpointInvalidatesLifecycleSubscribers() {
+        let sessionId = UUID()
+        let state = WorkbenchState(store: WorkbenchStateStore(storeURL: storeURL))
+        let expectation = expectation(description: "lifecycle checkpoint invalidation emitted")
+        var cancellable: AnyCancellable?
+        cancellable = LifecycleWebSocketChannel.externalInvalidations
+            .sink { invalidatedId in
+                if invalidatedId == sessionId {
+                    expectation.fulfill()
+                }
+            }
+
+        state.recordCheckpoint(CheckpointStateSnapshot(
+            sessionId: sessionId,
+            refName: "refs/clawdmeter/checkpoints/\(sessionId.uuidString)/turn-1",
+            turnId: "turn-1",
+            summary: "Before prompt"
+        ))
+
+        wait(for: [expectation], timeout: 1)
+        cancellable?.cancel()
     }
 
     func test_rightPaneSelectionIsRememberedPerSession() {

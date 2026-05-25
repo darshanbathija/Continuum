@@ -120,9 +120,11 @@ public enum AgentControlWireVersion {
     /// run profile endpoints plus checkpoint create / restore-preview /
     /// restore endpoints so iOS can expose the same Code workbench lifecycle
     /// without pretending it can run local shell commands on-device.
-    /// v19 (2026-05-25, provider defaults): adds `GET /provider-defaults`
-    /// and `PUT /provider-defaults/:vendor` so paired clients share durable
-    /// per-provider default model and effort picks.
+    /// v19 (2026-05-25): adds `SessionLifecycleSnapshot`,
+    /// `GET /sessions/:id/lifecycle`, the `lifecycle-subscribe` WS op,
+    /// and provider default endpoints (`GET /provider-defaults`,
+    /// `PUT /provider-defaults/:vendor`). v18 `AgentSession.status`
+    /// remains the compatibility status for older clients.
     public static let current: Int = 19
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
@@ -238,6 +240,10 @@ public enum AgentControlWireVersion {
     /// endpoints to iOS: run profile start/stop/snapshot and checkpoint
     /// create / restore-preview / restore.
     public static let codeWorkbenchRemoteMinimum: Int = 18
+    /// Minimum wire version that exposes the unified lifecycle snapshot
+    /// spine (`GET /sessions/:id/lifecycle` + `lifecycle-subscribe` WS).
+    public static let lifecycleMinimum: Int = 19
+
     /// Minimum wire version that exposes durable per-provider defaults.
     public static let providerDefaultsMinimum: Int = 19
 
@@ -384,6 +390,12 @@ public enum AgentControlWireVersion {
     public static func supportsCodeWorkbenchRemote(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= codeWorkbenchRemoteMinimum
+    }
+
+    /// Whether the paired Mac exposes unified lifecycle snapshots.
+    public static func supportsLifecycle(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= lifecycleMinimum
     }
 
     /// Whether the paired Mac exposes `GET /provider-defaults` and

@@ -730,6 +730,29 @@ public final class AgentControlServer {
             )
             wsChannels[ObjectIdentifier(connection)] = chatChannel
             chatChannel.start()
+        case "lifecycle-subscribe":
+            // v19 lifecycle spine: full session lifecycle snapshots over WS.
+            // The first frame is immediate; subsequent frames coalesce
+            // registry changes at 50ms so UI surfaces can bind directly to
+            // phase/blocker/next-action changes.
+            guard let sessionIdString = envelope.sessionId,
+                  let sessionId = UUID(uuidString: sessionIdString),
+                  registry.session(id: sessionId) != nil
+            else {
+                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
+                return
+            }
+            let lifecycleChannel = LifecycleWebSocketChannel(
+                connection: connection,
+                sessionId: sessionId,
+                registry: registry,
+                checkpointProvider: { [weak self] id in
+                    guard let self else { return [] }
+                    return self.storedCheckpoints(for: id).map(self.codeCheckpoint)
+                }
+            )
+            wsChannels[ObjectIdentifier(connection)] = lifecycleChannel
+            lifecycleChannel.start()
         case "frontier-subscribe":
             // v0.9.x — typed aggregator for the 3-pane Frontier UI.
             // Acquires every child's chat store, observes them in
@@ -806,9 +829,9 @@ public final class AgentControlServer {
 
     /// Subscription envelope for WS connections.
     private struct WSSubscription: Codable {
-        let op: String           // "terminal" | "events" | "compose-draft" | "chat-subscribe" | "frontier-subscribe" | "codex-stream-subscribe"
+        let op: String           // "terminal" | "events" | "compose-draft" | "chat-subscribe" | "lifecycle-subscribe" | "frontier-subscribe" | "codex-stream-subscribe"
         let token: String
-        let sessionId: String?   // required for "terminal", "chat-subscribe", "codex-stream-subscribe"
+        let sessionId: String?   // required for "terminal", "chat-subscribe", "lifecycle-subscribe", "codex-stream-subscribe"
         let since: UInt64?       // optional for "events"
         /// G12: target a specific pane (multi-terminal tab strip). When nil,
         /// the server falls back to the session's primary pane.
@@ -1052,6 +1075,9 @@ public final class AgentControlServer {
         }
         t.register(method: "GET", pattern: "/sessions/preflight") { [weak self] req, conn, _ in
             await self?.handleGetPreflight(request: req, connection: conn)
+        }
+        t.register(method: "GET", pattern: "/sessions/:id/lifecycle") { [weak self] _, conn, params in
+            self?.handleGetLifecycle(sessionId: params["id"] ?? "", connection: conn)
         }
         t.register(method: "GET", pattern: "/sessions/:id") { [weak self] _, conn, params in
             self?.handleGetOneSession(sessionId: params["id"] ?? "", connection: conn)
@@ -4045,6 +4071,19 @@ public final class AgentControlServer {
         }
     }
 
+    private func handleGetLifecycle(sessionId: String, connection: NWConnection) {
+        guard let uuid = UUID(uuidString: sessionId),
+              let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection)
+            return
+        }
+        let snapshot = SessionLifecycleReducer.snapshot(
+            for: session,
+            checkpoints: storedCheckpoints(for: uuid).map(codeCheckpoint)
+        )
+        sendCodable(SessionLifecycleSnapshotResponse(snapshot: snapshot), on: connection)
+    }
+
     // MARK: - v18 remote Code workbench
 
     private func handleGetRunProfile(sessionId: String, connection: NWConnection) async {
@@ -4282,6 +4321,7 @@ public final class AgentControlServer {
         checkpoints.append(checkpoint)
         snapshot.checkpoints[checkpoint.sessionId] = checkpoints
         store.save(snapshot)
+        LifecycleWebSocketChannel.notifyCheckpointStateChanged(sessionId: checkpoint.sessionId)
     }
 
     private func codeCheckpoint(_ checkpoint: CheckpointStateSnapshot) -> CodeCheckpointSnapshot {

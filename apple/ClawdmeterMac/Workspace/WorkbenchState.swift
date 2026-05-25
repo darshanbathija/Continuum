@@ -415,6 +415,7 @@ final class WorkbenchState: ObservableObject {
 
     func recordCheckpoint(_ checkpoint: CheckpointStateSnapshot) {
         update { $0.checkpoints[checkpoint.sessionId, default: []].append(checkpoint) }
+        LifecycleWebSocketChannel.notifyCheckpointStateChanged(sessionId: checkpoint.sessionId)
     }
 
     func checkpoints(for sessionId: UUID) -> [CheckpointStateSnapshot] {
