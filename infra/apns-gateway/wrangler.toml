@@ -1,15 +1,21 @@
 # clawdmeter-apns-gateway — Apple Push Notification gateway Worker (Group E5)
 #
-# E0 scaffold only. src/index.ts lands in E5. The gateway holds the
-# operator's APNS .p8 (per SECRETS.md), signs the APNS JWT, and forwards
-# encrypted push payloads to Apple's HTTP/2 APNS endpoint. Worker NEVER
-# decrypts the payload body (E2E — only the paired iPhone has the key).
+# Holds operator APNS .p8, signs ES256 JWT (Web Crypto), forwards encrypted
+# push payloads to Apple's HTTP/2 APNS endpoint. The Worker NEVER decrypts
+# the payload body — only the paired iPhone has the key (E2E via ECDH).
+#
+# Design doc: docs/design/secure-relay-apns-2026-05-26.md
+# Plan rows:  E5 + D21 mitigation suite + codex #4 ops + codex #5 device-token
 #
 # IMPORTANT: bindings (kv_namespaces, vars) are NON-INHERITABLE per
 # https://developers.cloudflare.com/workers/wrangler/configuration/#non-inheritable-keys
 # Because we override `vars` per env, we MUST re-declare kv_namespaces
 # inside EACH [env.*] block, otherwise the deployed Worker will have NO
 # KV bindings. Top-level blocks below are for `wrangler dev` (no --env) only.
+#
+# `custom_domain = true` routes match the whole domain; `/*` suffixes are
+# invalid for that mode and were rejected by wrangler 3 — keep patterns as
+# bare hostnames.
 
 name = "clawdmeter-apns-gateway"
 main = "src/index.ts"
@@ -25,10 +31,7 @@ cpu_ms = 50
 enabled = true
 
 # No Durable Objects — gateway is stateless across requests. State lives
-# in KV (audit log + rate limit).
-#
-# Top-level (dev) KV bindings. Operator fills IDs in via
-# `wrangler kv namespace create`.
+# in KV (audit log + rate limit + device-token registry).
 [[kv_namespaces]]
 binding = "APNS_AUDIT_LOG"
 id = "REPLACE_WITH_DEV_NAMESPACE_ID"
@@ -39,30 +42,36 @@ binding = "APNS_RATE_LIMIT"
 id = "REPLACE_WITH_DEV_NAMESPACE_ID"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
-# Vars (non-secret). Secrets via `wrangler secret put` per SECRETS.md.
+# Per codex #5: hashed device-token → pairing-session-id registry. Used for
+# tenant-binding enforcement + opt-out cleanup + 410 ("Unregistered")
+# stale-token purges.
+[[kv_namespaces]]
+binding = "APNS_DEVICE_TOKENS"
+id = "REPLACE_WITH_DEV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+# Vars (non-secret). Secrets via `wrangler secret put` per ROTATION.md.
 [vars]
 ENVIRONMENT = "development"
 LOG_LEVEL = "info"
-# Per-device rate limit per D21 mitigation suite. 100 pushes/hour matches
-# what an active user could plausibly trigger via multiple sessions; can
-# be tuned after staging telemetry lands.
-RATE_LIMIT_PER_HOUR = "100"
-# Endpoint base — overridden per env. Development uses Apple's sandbox
-# endpoint by default so accidentally-deployed local builds don't push to
-# production iPhones.
-APNS_ENDPOINT = "https://api.sandbox.push.apple.com:443"
+RATE_LIMIT_PER_HOUR = "60"
+APNS_ENDPOINT = "https://api.sandbox.push.apple.com"
+TOPIC_ENV = "sandbox"
+APNS_DISABLED = "false"
+DEVICE_TOKEN_TTL_SECONDS = "7776000"
+AUDIT_LOG_TTL_SECONDS = "7776000"
+P8_MAX_AGE_SECONDS = "7776000"
 
-# ---- Per-env overrides ----
-# Per-env routing — staging uses APNS sandbox endpoint; production uses
-# the real APNS endpoint. Endpoint selection happens in src/index.ts via
-# the ENVIRONMENT var. Each env MUST re-declare kv_namespaces
-# (non-inheritable).
+# ---- Per-env routing ----
+# Sandbox endpoint in dev/staging, production endpoint in prod (codex #4
+# sandbox-vs-prod routing). Each env MUST re-declare kv_namespaces +
+# vars (non-inheritable).
 
 # -------- staging --------
 [env.staging]
 name = "clawdmeter-apns-gateway-staging"
 routes = [
-  { pattern = "apns-gateway-staging.clawdmeter.dev/*", custom_domain = true }
+  { pattern = "apns-gateway-staging.clawdmeter.dev", custom_domain = true }
 ]
 
 [[env.staging.kv_namespaces]]
@@ -72,20 +81,30 @@ preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
 [[env.staging.kv_namespaces]]
 binding = "APNS_RATE_LIMIT"
+id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[[env.staging.kv_namespaces]]
+binding = "APNS_DEVICE_TOKENS"
 id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
 LOG_LEVEL = "debug"
-RATE_LIMIT_PER_HOUR = "100"
-APNS_ENDPOINT = "https://api.sandbox.push.apple.com:443"
+RATE_LIMIT_PER_HOUR = "60"
+APNS_ENDPOINT = "https://api.sandbox.push.apple.com"
+TOPIC_ENV = "sandbox"
+APNS_DISABLED = "false"
+DEVICE_TOKEN_TTL_SECONDS = "7776000"
+AUDIT_LOG_TTL_SECONDS = "7776000"
+P8_MAX_AGE_SECONDS = "7776000"
 
 # -------- production --------
 [env.production]
 name = "clawdmeter-apns-gateway"
 routes = [
-  { pattern = "apns-gateway.clawdmeter.dev/*", custom_domain = true }
+  { pattern = "apns-gateway.clawdmeter.dev", custom_domain = true }
 ]
 
 [[env.production.kv_namespaces]]
@@ -98,8 +117,70 @@ binding = "APNS_RATE_LIMIT"
 id = "REPLACE_WITH_PROD_NAMESPACE_ID"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
+[[env.production.kv_namespaces]]
+binding = "APNS_DEVICE_TOKENS"
+id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
 [env.production.vars]
 ENVIRONMENT = "production"
 LOG_LEVEL = "info"
-RATE_LIMIT_PER_HOUR = "100"
-APNS_ENDPOINT = "https://api.push.apple.com:443"
+RATE_LIMIT_PER_HOUR = "60"
+APNS_ENDPOINT = "https://api.push.apple.com"
+TOPIC_ENV = "production"
+APNS_DISABLED = "false"
+DEVICE_TOKEN_TTL_SECONDS = "7776000"
+AUDIT_LOG_TTL_SECONDS = "7776000"
+P8_MAX_AGE_SECONDS = "7776000"
+
+# -------- canary (codex #4) --------
+# Receives ~1% of production traffic via a separate route. Operator
+# configures the load-balancer weighting in the Cloudflare dashboard once
+# the canary is healthy.
+[env.canary]
+name = "clawdmeter-apns-gateway-canary"
+routes = [
+  { pattern = "apns-gateway-canary.clawdmeter.dev", custom_domain = true }
+]
+
+[[env.canary.kv_namespaces]]
+binding = "APNS_AUDIT_LOG"
+id = "REPLACE_WITH_CANARY_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[[env.canary.kv_namespaces]]
+binding = "APNS_RATE_LIMIT"
+id = "REPLACE_WITH_CANARY_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[[env.canary.kv_namespaces]]
+binding = "APNS_DEVICE_TOKENS"
+id = "REPLACE_WITH_CANARY_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[env.canary.vars]
+ENVIRONMENT = "canary"
+LOG_LEVEL = "debug"
+RATE_LIMIT_PER_HOUR = "60"
+APNS_ENDPOINT = "https://api.push.apple.com"
+TOPIC_ENV = "production"
+APNS_DISABLED = "false"
+DEVICE_TOKEN_TTL_SECONDS = "7776000"
+AUDIT_LOG_TTL_SECONDS = "7776000"
+P8_MAX_AGE_SECONDS = "7776000"
+
+# ---- Secrets (set via `wrangler secret put`, NOT here) ----
+#
+# APNS_P8_KEY            — operator's APNS .p8 (PEM string, BEGIN/END
+#                          PRIVATE KEY markers stripped or kept — both
+#                          handled in apns-client.ts)
+# APNS_P8_ISSUED_AT      — Unix-seconds string when the .p8 was issued.
+#                          Compared against P8_MAX_AGE_SECONDS by the
+#                          rotation-drill CI job + GET /health endpoint.
+# APNS_KEY_ID            — 10-char Apple key id (JWT "kid")
+# APNS_TEAM_ID           — 10-char Apple Team ID (JWT "iss")
+# APNS_TOPIC_PRODUCTION  — production bundle id (e.g. com.clawdmeter.iphone)
+# APNS_TOPIC_SANDBOX     — sandbox bundle id
+# RELAY_BEARER_SIGNING_KEY — shared HMAC key used to verify pairing bearer
+#                          tokens (mirrors E2 relay's signing key — see
+#                          design doc §4.1 per-peer tokens).

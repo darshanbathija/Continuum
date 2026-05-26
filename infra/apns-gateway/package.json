@@ -1,17 +1,22 @@
 {
   "name": "clawdmeter-apns-gateway",
   "private": true,
-  "version": "0.0.0",
-  "description": "Clawdmeter APNS gateway (Group E5) — holds operator .p8, signs JWT, forwards encrypted push payloads. E0 scaffold; source in E5.",
+  "version": "0.0.1",
+  "description": "Clawdmeter APNS gateway (Group E5) — holds operator .p8, signs APNS JWT (ES256), forwards encrypted push payloads to Apple. Per design doc docs/design/secure-relay-apns-2026-05-26.md + D21 mitigation suite + codex #4 ops model + codex #5 device-token egress controls.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production",
-    "test": "echo 'E0 scaffold only — vitest harness lands in E5'",
-    "typecheck": "echo 'E0 scaffold only — tsc check lands in E5'"
+    "deploy:canary": "wrangler deploy --env canary",
+    "rollback": "wrangler rollback",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "wrangler": "3.95.0",
-    "@cloudflare/workers-types": "4.20260101.0"
+    "@cloudflare/workers-types": "4.20260101.0",
+    "typescript": "5.6.0",
+    "vitest": "1.6.0",
+    "wrangler": "3.95.0"
   }
 }
