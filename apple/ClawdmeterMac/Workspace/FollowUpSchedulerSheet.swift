@@ -1,0 +1,79 @@
+import SwiftUI
+import ClawdmeterShared
+
+/// G15 follow-up scheduler. Lets the user queue a prompt to be sent
+/// into a session at a future timestamp. Presented as a `.sheet` from
+/// the chat header's overflow menu.
+///
+/// Lifted out of `SessionWorkspaceView.swift` by **A6 (foundation)** —
+/// see .claude/plans/study-this-codebase-crystalline-shore.md. Owns its
+/// own `@State fireAt` + `@State prompt`; everything else is dependency-
+/// injected through the constructor. Independent of the parent
+/// workspace's @State.
+struct FollowUpSchedulerSheet: View {
+    let session: AgentSession
+    let registry: AgentSessionRegistry
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var fireAt: Date = Date().addingTimeInterval(5 * 60)
+    @State private var prompt: String = ""
+
+    var body: some View {
+        // A6 (foundation): body-invalidation tap. No-op in production.
+        BodyInvalidationCounter.bump("FollowUpSchedulerSheet")
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("Schedule follow-up")
+                .font(.system(size: 16, weight: .semibold))
+            Text("Sends the prompt as a fresh message into this session at the chosen time.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            DatePicker("Fire at", selection: $fireAt, in: Date()...)
+                .datePickerStyle(.field)
+            TextField("Prompt", text: $prompt, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...6)
+            if !session.scheduledFollowUps.isEmpty {
+                Divider()
+                Text("Pending")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(session.scheduledFollowUps.filter { $0.firedAt == nil }) { up in
+                    HStack {
+                        Text(up.fireAt, style: .time)
+                            .font(.system(size: 11, design: .monospaced))
+                        Text(up.prompt)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer()
+                        Button(action: {
+                            registry.removeScheduledFollowUp(sessionId: session.id, followUpId: up.id)
+                        }) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Schedule") {
+                    let up = ScheduledFollowUp(fireAt: fireAt, prompt: prompt)
+                    registry.addScheduledFollowUp(sessionId: session.id, followUp: up)
+                    prompt = ""
+                    fireAt = Date().addingTimeInterval(5 * 60)
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0))
+                .disabled(prompt.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 440)
+    }
+}
