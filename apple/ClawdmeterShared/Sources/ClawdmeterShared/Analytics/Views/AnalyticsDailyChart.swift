@@ -27,14 +27,21 @@ public struct AnalyticsDailyChart: View {
     public let window: UsageHistorySnapshot.Window
     public let providerFilter: UsageHistoryStore.ProviderFilter
 
+    // C1 (Phase 2): chart-prep moved off-main via .detached(.utility).
+    // On cache miss, the store surfaces the empty `placeholder` while
+    // the worker computes — the UI shows the existing EmptyView for one
+    // tick, then the chart renders once the compute lands back on the
+    // main actor. For typical small N the tick is invisible; for allTime
+    // + multi-provider the off-main compute keeps the render loop
+    // responsive (matches t3code's @pierre/diffs worker pool pattern).
     @StateObject private var costStore = MemoizedDerivedStore<ChartInput, [CostPoint]>(
         placeholder: [],
-        mode: .sync,
+        mode: .detached(priority: .utility),
         compute: { Self.computeCostPoints($0) }
     )
     @StateObject private var reqsStore = MemoizedDerivedStore<ChartInput, [ReqsPoint]>(
         placeholder: [],
-        mode: .sync,
+        mode: .detached(priority: .utility),
         compute: { Self.computeReqsPoints($0) }
     )
 
