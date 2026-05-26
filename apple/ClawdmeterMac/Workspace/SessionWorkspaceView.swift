@@ -386,6 +386,15 @@ private struct SidebarPane: View {
     @State private var showingColorTagAlert = false
     @State private var comparisonPair: SessionComparisonPair?
 
+    /// A11: single-slot cache for the sidebar projection. Persists across
+    /// body re-evals (reference type held via @State) so SwiftUI ticking
+    /// the body for unrelated reasons (registry mutation that doesn't
+    /// touch any displayed field, presentationStore change, etc.) doesn't
+    /// re-bucket every session. Cache hits short-circuit the heavy
+    /// grouper/canonicalizer call. The key bundles every input the
+    /// projection reads — see `SidebarProjectionKey` for the contract.
+    @State private var projectionCache = SingleSlotProjectionCache<SidebarProjectionKey, SidebarProjection>()
+
     private var grouping: SessionGrouping {
         SessionGrouping(rawValue: groupingRaw) ?? .repo
     }
@@ -709,27 +718,24 @@ private struct SidebarPane: View {
         if model.filteredRepos.isEmpty && model.registry.sessions.isEmpty {
             emptyState
         } else {
+            // A11: read the projection once at the top of the body so a
+            // single cache hit covers content + filteredVisibleSessions
+            // + reviewSessionIds. Local binding keeps the closure-level
+            // re-reads as Swift property accesses (O(1)) rather than
+            // re-running the cache lookup.
+            let projection = currentProjection
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if grouping == .repo {
+                    if grouping == .repo, let canonical = projection.canonicalRepos {
                         // Legacy repo-grouped path — preserves the existing
                         // expand/collapse + "Recent (last 30 days)" + empty-
                         // state CTA chrome that's threaded through SessionsModel.
-                        let canonical = SessionSidebarGrouper.canonicalizeRepos(filteredReposForGrouping)
                         ForEach(canonical.repos, id: \.key) { repo in
                             repoSection(repo, keyAliases: canonical.keyAliases)
                         }
-                    } else {
+                    } else if let groups = projection.groups {
                         // Date / Status / Agent / None — flatten across repos
                         // and let the grouper bucket by the chosen field.
-                        let groups = SessionSidebarGrouper.group(
-                            sessions: filteredVisibleSessions,
-                            repos: filteredReposForGrouping,
-                            grouping: grouping,
-                            sorting: sorting,
-                            statusFilter: statusFilter,
-                            reviewSessionIds: reviewSessionIds
-                        )
                         ForEach(groups) { group in
                             groupSection(group)
                         }
@@ -779,17 +785,70 @@ private struct SidebarPane: View {
         model.filteredRepos
     }
 
-    private var filteredVisibleSessions: [AgentSession] {
-        let all = model.registry.sessions.filter { s in
-            // Match the existing search behaviour: search filters apply
-            // to both sessions AND repos. SessionsModel.filter handles
-            // archive visibility based on `showArchived`.
-            if grouping != .status && statusFilter != .archived && !model.showArchived && s.archivedAt != nil { return false }
-            return true
+    /// A11: cache-backed sidebar projection. Reads upstream state once
+    /// per body pass, builds the cache key, consults the cache. On hit:
+    /// returns the prior projection without re-bucketing. On miss:
+    /// rebuilds via `SidebarProjectionBuilder.build(...)`. The body
+    /// downstream (`content`, `filteredVisibleSessions`, `reviewSessionIds`)
+    /// all read from this one projection so the cache hit applies to
+    /// every consumer.
+    ///
+    /// **Search step runs outside the cache.** `model.filter(sessions:)`
+    /// peeks at transcript bodies via the LRU-bound `chatStores` map,
+    /// which lives in `SessionsModel` and isn't a value type. Running it
+    /// outside the builder keeps the builder a pure function over its
+    /// inputs (testable from XCTest). The post-search session list gets
+    /// its own fingerprint in the cache key, so a chat-store tick that
+    /// shifts which sessions pass the filter properly invalidates the
+    /// cache even though the upstream query string is identical.
+    private var currentProjection: SidebarProjection {
+        let sessions = model.registry.sessions
+        let searchFiltered = model.filter(sessions: sessions)
+        let repos = model.filteredRepos
+        let prSnapshot = workbenchState.snapshot.prCache
+        let workbenchPRStateBySession: [UUID: String?] = prSnapshot.reduce(into: [:]) { acc, kv in
+            acc[kv.key] = kv.value.state
         }
-        return presentationSorted(model.filter(sessions: all))
+        let key = SidebarProjectionKey(
+            registryFingerprint: SidebarProjectionBuilder.registryFingerprint(sessions),
+            reposFingerprint: SidebarProjectionBuilder.reposFingerprint(repos),
+            workbenchPRCacheFingerprint: SidebarProjectionBuilder.workbenchPRCacheFingerprint(prSnapshot),
+            searchFilteredFingerprint: SidebarProjectionBuilder.searchFilteredFingerprint(searchFiltered),
+            query: model.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            archiveFilter: model.showArchived,
+            statusFilter: statusFilter,
+            grouping: grouping,
+            sorting: sorting,
+            pinnedSet: presentationStore.snapshot.pinnedSessionIds
+        )
+        return projectionCache.value(for: key) {
+            SidebarProjectionBuilder.build(
+                searchFilteredSessions: searchFiltered,
+                repos: repos,
+                searchQuery: model.searchQuery,
+                showArchived: model.showArchived,
+                statusFilter: statusFilter,
+                grouping: grouping,
+                sorting: sorting,
+                pinnedSessionIds: presentationStore.snapshot.pinnedSessionIds,
+                workbenchPRStateBySession: workbenchPRStateBySession
+            )
+        }
     }
 
+    private var filteredVisibleSessions: [AgentSession] {
+        currentProjection.visibleSessions
+    }
+
+    private var reviewSessionIds: Set<UUID> {
+        currentProjection.reviewSessionIds
+    }
+
+    /// Pin-aware sort used by the legacy repo-grouped path's per-repo
+    /// `repoSection(...)` lookups. The non-repo path receives this sort
+    /// already applied via `currentProjection.visibleSessions`, but the
+    /// repo path looks up sessions per-repo from the registry and needs
+    /// to re-apply the same ordering locally.
     private func presentationSorted(_ sessions: [AgentSession]) -> [AgentSession] {
         let pins = presentationStore.snapshot.pinnedSessionIds
         return sessions.sorted { lhs, rhs in
@@ -806,21 +865,6 @@ private struct SidebarPane: View {
                 return lhs.lastEventAt > rhs.lastEventAt
             }
         }
-    }
-
-    private var reviewSessionIds: Set<UUID> {
-        Set(model.registry.sessions.compactMap { session in
-            if session.planText != nil { return session.id }
-            if let state = session.prMirrorState?.state,
-               state == .open || state == .draft {
-                return session.id
-            }
-            if let state = workbenchState.snapshot.prCache[session.id]?.state?.lowercased(),
-               state == "open" || state == "draft" || state == "pending" {
-                return session.id
-            }
-            return nil
-        })
     }
 
     /// Generic group renderer for non-Repo groupings. Header is a plain
