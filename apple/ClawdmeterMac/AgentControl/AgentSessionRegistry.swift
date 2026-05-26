@@ -271,6 +271,7 @@ public final class AgentSessionRegistry: ObservableObject {
         model: String?,
         goal: String?,
         worktreePath: String?,
+        provisioning: WorktreeProvisioningMetadata? = nil,
         tmuxWindowId: String?,
         tmuxPaneId: String?,
         planMode: Bool,
@@ -285,9 +286,9 @@ public final class AgentSessionRegistry: ObservableObject {
         // the right SQLite DB.
         geminiBackend: GeminiBackend? = nil,
         antigravityConversationId: UUID? = nil,
-        antigravityProjectId: String? = nil
+        antigravityProjectId: String? = nil,
+        id: UUID = UUID()
     ) async throws -> AgentSession {
-        let id = UUID()
         let now = Date()
         let session = AgentSession(
             id: id,
@@ -297,6 +298,7 @@ public final class AgentSessionRegistry: ObservableObject {
             model: model,
             goal: goal,
             worktreePath: worktreePath,
+            provisioning: provisioning,
             tmuxWindowId: tmuxWindowId,
             tmuxPaneId: tmuxPaneId,
             status: planMode ? .planning : .running,
@@ -597,6 +599,8 @@ public final class AgentSessionRegistry: ObservableObject {
     public func updateRuntime(
         id: UUID,
         worktreePath: String?,
+        provisioning: WorktreeProvisioningMetadata?? = nil,
+        runtimeCwd: String?? = nil,
         tmuxWindowId: String?,
         tmuxPaneId: String?,
         mode: SessionMode
@@ -605,9 +609,11 @@ public final class AgentSessionRegistry: ObservableObject {
         let projected = with(
             s,
             worktreePath: worktreePath,
+            provisioning: provisioning,
             tmuxWindowId: tmuxWindowId,
             tmuxPaneId: tmuxPaneId,
-            mode: mode
+            mode: mode,
+            runtimeCwd: runtimeCwd
         )
         try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
         update(id: id) { _ in projected }
@@ -835,6 +841,7 @@ public final class AgentSessionRegistry: ObservableObject {
         planText: String?? = nil,
         approvedPlanText: String?? = nil,
         worktreePath: String?? = nil,
+        provisioning: WorktreeProvisioningMetadata?? = nil,
         tmuxWindowId: String?? = nil,
         tmuxPaneId: String?? = nil,
         mode: SessionMode? = nil,
@@ -866,6 +873,7 @@ public final class AgentSessionRegistry: ObservableObject {
             model: Self.resolve(model, fallback: s.model),
             goal: s.goal,
             worktreePath: Self.resolve(worktreePath, fallback: s.worktreePath),
+            provisioning: Self.resolve(provisioning, fallback: s.provisioning),
             tmuxWindowId: Self.resolve(tmuxWindowId, fallback: s.tmuxWindowId),
             tmuxPaneId: Self.resolve(tmuxPaneId, fallback: s.tmuxPaneId),
             status: status ?? s.status,

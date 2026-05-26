@@ -9,6 +9,7 @@ import Foundation
 ///
 /// Flag contract (verified against gemini CLI 0.42.0):
 ///   - `-m <model>` — selects the model (`gemini-3.1-pro-high`, etc.).
+///   - `--skip-trust` — trusts the current workspace for this session.
 ///   - `--approval-mode plan|auto_edit|yolo` — exactly one. Precedence:
 ///     plan > yolo (autopilot) > auto_edit > unset.
 ///   - `--resume <session-id>` — continues an existing chat.
@@ -21,11 +22,15 @@ public enum GeminiArgvBuilder {
         autopilot: Bool = false,
         acceptEdits: Bool = false,
         resumeSessionId: String? = nil,
+        trustWorkspace: Bool = false,
         extraArgs: [String] = []
     ) -> [String] {
         var argv = [geminiBinary]
         if let resumeSessionId, !resumeSessionId.isEmpty {
             argv += ["--resume", resumeSessionId]
+        }
+        if trustWorkspace {
+            argv += ["--skip-trust"]
         }
         if let model, !model.isEmpty {
             argv += ["-m", model]

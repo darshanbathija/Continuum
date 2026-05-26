@@ -25,6 +25,7 @@ final class WorkspaceStoreTests: XCTestCase {
 
     private var workspacesURL: URL { tmpDir.appendingPathComponent("workspaces.json") }
     private var sessionsURL: URL { tmpDir.appendingPathComponent("sessions.json") }
+    private var workspaceStorageRoot: URL { tmpDir.appendingPathComponent("ClawdmeterWorkspaces", isDirectory: true) }
 
     // MARK: - Round-trip
 
@@ -45,6 +46,14 @@ final class WorkspaceStoreTests: XCTestCase {
                 defaultRuntimeByProvider: ["codex": .codexSDK],
                 defaultEffort: .high
             ),
+            filesToCopy: WorkspaceFilesToCopySettings(
+                mode: .patterns,
+                patterns: [".env*", "config/local.json"],
+                maxFiles: 12,
+                maxBytesPerFile: 1024,
+                maxTotalBytes: 4096,
+                allowDirectories: false
+            ),
             activeSessionIds: [UUID(), UUID()],
             createdAt: now,
             updatedAt: now
@@ -59,6 +68,11 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(decoded.repoRoot, record.repoRoot)
         XCTAssertEqual(decoded.providerDefaults.defaultAgent, .codex)
         XCTAssertEqual(decoded.providerDefaults.defaultModelByProvider["codex"], "gpt-5-codex")
+        XCTAssertEqual(decoded.filesToCopy.mode, .patterns)
+        XCTAssertEqual(decoded.filesToCopy.patterns, [".env*", "config/local.json"])
+        XCTAssertEqual(decoded.filesToCopy.maxFiles, 12)
+        XCTAssertEqual(decoded.filesToCopy.maxBytesPerFile, 1024)
+        XCTAssertEqual(decoded.filesToCopy.maxTotalBytes, 4096)
         XCTAssertEqual(decoded.activeSessionIds.count, 2)
     }
 
@@ -212,6 +226,318 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(file.workspaces.first?.providerDefaults.defaultAgent, .opencode)
     }
 
+    func test_updateDefaults_mergesProviderAndFilesToCopyIndependently() throws {
+        let store = WorkspaceStore(storeURL: workspacesURL, sessionsURL: sessionsURL)
+        let record = CodeWorkspaceRecord(
+            projectId: UUID(),
+            repoRoot: "/repos/partial",
+            repoDisplayName: "partial",
+            runtimeCwd: "/repos/partial",
+            providerDefaults: WorkspaceProviderDefaults(
+                defaultAgent: .claude,
+                defaultModelByProvider: ["claude": "sonnet"],
+                defaultEffort: .medium
+            ),
+            filesToCopy: WorkspaceFilesToCopySettings(
+                mode: .patterns,
+                patterns: [".env*"],
+                maxFiles: 10,
+                allowDirectories: false
+            )
+        )
+        store.upsert(record)
+
+        let fileOnly = store.updateDefaults(
+            id: record.id,
+            filesToCopy: WorkspaceFilesToCopySettings(
+                mode: .patterns,
+                patterns: [".env.local"],
+                maxFiles: 1,
+                maxBytesPerFile: 128,
+                maxTotalBytes: 128,
+                allowDirectories: false
+            )
+        )
+        XCTAssertEqual(fileOnly?.providerDefaults.defaultAgent, .claude)
+        XCTAssertEqual(fileOnly?.providerDefaults.defaultModelByProvider["claude"], "sonnet")
+        XCTAssertEqual(fileOnly?.filesToCopy.mode, .patterns)
+        XCTAssertEqual(fileOnly?.filesToCopy.patterns, [".env.local"])
+        XCTAssertEqual(fileOnly?.filesToCopy.maxFiles, 1)
+
+        let providerOnly = store.updateDefaults(
+            id: record.id,
+            providerDefaults: WorkspaceProviderDefaults(
+                defaultAgent: .codex,
+                defaultModelByProvider: ["codex": "gpt-5.5"],
+                defaultEffort: .high
+            )
+        )
+        XCTAssertEqual(providerOnly?.providerDefaults.defaultAgent, .codex)
+        XCTAssertEqual(providerOnly?.providerDefaults.defaultModelByProvider["codex"], "gpt-5.5")
+        XCTAssertEqual(providerOnly?.filesToCopy.patterns, [".env.local"])
+        XCTAssertEqual(providerOnly?.filesToCopy.maxFiles, 1)
+    }
+
+    func test_worktreeProvisionCopiesAllIgnoredByDefaultAndWritesManifest() async throws {
+        let repo = try makeGitRepo(name: "copy-default")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try write(".env*\nnode_modules/\ncache/\n*.sqlite*\n", to: repo.appendingPathComponent(".gitignore"))
+        try git(["add", "tracked.txt", ".gitignore"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+        try write("SECRET=1\n", to: repo.appendingPathComponent(".env.local"))
+        try write("module\n", to: repo.appendingPathComponent("node_modules/pkg/index.js"))
+        try write("db\n", to: repo.appendingPathComponent("dev.sqlite"))
+        try write("wal\n", to: repo.appendingPathComponent("dev.sqlite-wal"))
+        try write("shm\n", to: repo.appendingPathComponent("dev.sqlite-shm"))
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent("cache/empty", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        let provisioned = try await manager.provision(
+            repoRoot: repo.path,
+            slug: "copy-default-worktree",
+            branchName: "copy-default-worktree",
+            filesToCopy: WorkspaceFilesToCopySettings()
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("tracked.txt")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent(".env.local")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("node_modules/pkg/index.js")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("dev.sqlite")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("dev.sqlite-wal")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("dev.sqlite-shm")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("cache/empty")))
+        XCTAssertTrue(provisioned.path.hasPrefix(workspaceStorageRoot.path + "/copy-default/"))
+        XCTAssertFalse(provisioned.path.contains("/.claude/worktrees/"))
+        XCTAssertFalse(provisioned.path.hasPrefix(NSHomeDirectory() + "/conductor/workspaces/"))
+        XCTAssertEqual(provisioned.metadata.filesToCopy.source, .defaultPatterns)
+        XCTAssertEqual(provisioned.metadata.filesToCopy.mode, .allIgnored)
+        XCTAssertEqual(provisioned.metadata.filesToCopy.patterns, [])
+        XCTAssertEqual(provisioned.metadata.filesToCopy.copiedFileCount, 5)
+        XCTAssertGreaterThanOrEqual(provisioned.metadata.filesToCopy.copiedDirectoryCount, 3)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: provisioned.metadata.filesToCopy.manifestPath ?? ""))
+        _ = try await manager.cleanupProvisionedWorktree(
+            repoRoot: repo.path,
+            worktreePath: provisioned.path,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
+    }
+
+    func test_worktreeCleanupDoesNotDeleteUserFilesInsideCopiedDirectories() async throws {
+        let repo = try makeGitRepo(name: "cleanup-copied-dir")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try write("cache/\n", to: repo.appendingPathComponent(".gitignore"))
+        try git(["add", "tracked.txt", ".gitignore"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+        try write("owned\n", to: repo.appendingPathComponent("cache/original.txt"))
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        let provisioned = try await manager.provision(
+            repoRoot: repo.path,
+            slug: "cleanup-copied-dir-worktree",
+            branchName: "cleanup-copied-dir-worktree",
+            filesToCopy: WorkspaceFilesToCopySettings()
+        )
+        let userFile = URL(fileURLWithPath: provisioned.path, isDirectory: true)
+            .appendingPathComponent("cache/user-created.txt")
+        try write("user data\n", to: userFile)
+
+        let result = try await manager.cleanupProvisionedWorktree(
+            repoRoot: repo.path,
+            worktreePath: provisioned.path,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
+        switch result {
+        case .deleted:
+            XCTFail("cleanup must not delete a worktree containing user-created files")
+        case .skipped:
+            break
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: userFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: provisioned.path))
+    }
+
+    func test_worktreeCleanupDoesNotDeleteModifiedCopiedFiles() async throws {
+        let repo = try makeGitRepo(name: "cleanup-modified-file")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try write(".env*\n", to: repo.appendingPathComponent(".gitignore"))
+        try git(["add", "tracked.txt", ".gitignore"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+        try write("SECRET=1\n", to: repo.appendingPathComponent(".env.local"))
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        let provisioned = try await manager.provision(
+            repoRoot: repo.path,
+            slug: "cleanup-modified-file-worktree",
+            branchName: "cleanup-modified-file-worktree",
+            filesToCopy: WorkspaceFilesToCopySettings()
+        )
+        let copiedFile = URL(fileURLWithPath: provisioned.path, isDirectory: true)
+            .appendingPathComponent(".env.local")
+        try write("SECRET=changed-and-longer\n", to: copiedFile)
+
+        let result = try await manager.cleanupProvisionedWorktree(
+            repoRoot: repo.path,
+            worktreePath: provisioned.path,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
+        switch result {
+        case .deleted:
+            XCTFail("cleanup must not delete a worktree containing a modified copied file")
+        case .skipped:
+            break
+        }
+        XCTAssertEqual(try String(contentsOf: copiedFile, encoding: .utf8), "SECRET=changed-and-longer\n")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: provisioned.path))
+    }
+
+    func test_worktreeProvisionWorktreeincludeOverridesDefaultEnv() async throws {
+        let repo = try makeGitRepo(name: "worktreeinclude")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try write(".env*\n.secret*\n", to: repo.appendingPathComponent(".gitignore"))
+        try write(".secret*\n", to: repo.appendingPathComponent(".worktreeinclude"))
+        try git(["add", "tracked.txt", ".gitignore", ".worktreeinclude"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+        try write("ENV=1\n", to: repo.appendingPathComponent(".env.local"))
+        try write("SECRET=1\n", to: repo.appendingPathComponent(".secret.local"))
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        let provisioned = try await manager.provision(
+            repoRoot: repo.path,
+            slug: "worktreeinclude-worktree",
+            branchName: "worktreeinclude-worktree",
+            filesToCopy: WorkspaceFilesToCopySettings(mode: .patterns, patterns: [".env*"], allowDirectories: false)
+        )
+
+        XCTAssertEqual(provisioned.metadata.filesToCopy.source, .worktreeinclude)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent(".env.local")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent(".secret.local")))
+        _ = try await manager.cleanupProvisionedWorktree(
+            repoRoot: repo.path,
+            worktreePath: provisioned.path,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
+    }
+
+    func test_worktreeProvisionUsesGitNegationPatterns() async throws {
+        let repo = try makeGitRepo(name: "worktreeinclude-negation")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try write(".env*\n", to: repo.appendingPathComponent(".gitignore"))
+        try write(".env*\n!.env.local\n", to: repo.appendingPathComponent(".worktreeinclude"))
+        try git(["add", "tracked.txt", ".gitignore", ".worktreeinclude"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+        try write("ENV=local\n", to: repo.appendingPathComponent(".env.local"))
+        try write("ENV=copy\n", to: repo.appendingPathComponent(".env.copy"))
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        let provisioned = try await manager.provision(
+            repoRoot: repo.path,
+            slug: "worktreeinclude-negation-worktree",
+            branchName: "worktreeinclude-negation-worktree",
+            filesToCopy: WorkspaceFilesToCopySettings(mode: .patterns, patterns: [".secret*"], allowDirectories: false)
+        )
+
+        XCTAssertEqual(provisioned.metadata.filesToCopy.source, .worktreeinclude)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent(".env.copy")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent(".env.local")))
+        XCTAssertEqual(provisioned.metadata.filesToCopy.copiedFileCount, 1)
+        _ = try await manager.cleanupProvisionedWorktree(
+            repoRoot: repo.path,
+            worktreePath: provisioned.path,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
+    }
+
+    func test_worktreeProvisionFailsClosedAndCleansUpOnCopyCap() async throws {
+        let repo = try makeGitRepo(name: "cap-fail")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try write(".env*\n", to: repo.appendingPathComponent(".gitignore"))
+        try git(["add", "tracked.txt", ".gitignore"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+        try write("TOO_BIG=123\n", to: repo.appendingPathComponent(".env.local"))
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        do {
+            _ = try await manager.provision(
+                repoRoot: repo.path,
+                slug: "cap-fail-worktree",
+                branchName: "cap-fail-worktree",
+                filesToCopy: WorkspaceFilesToCopySettings(maxBytesPerFile: 1, maxTotalBytes: 1)
+            )
+            XCTFail("Expected oversized ignored file to fail closed")
+        } catch {
+            let path = WorktreeManager.worktreePath(
+                repoRoot: repo.path,
+                slug: "cap-fail-worktree",
+                storageRoot: workspaceStorageRoot.path
+            )
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+        }
+    }
+
+    func test_worktreeProvisionUsesGitCommonDirProjectForConductorHostedRepo() async throws {
+        let repo = try makeGitRepo(name: "Clawdmeter")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try write(".env*\n", to: repo.appendingPathComponent(".gitignore"))
+        try git(["add", "tracked.txt", ".gitignore"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+
+        let conductorWorktree = tmpDir
+            .appendingPathComponent("conductor/workspaces/Clawdmeter/tacoma", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: conductorWorktree.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try git(["worktree", "add", "-b", "source-branch", conductorWorktree.path], cwd: repo)
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        let provisioned = try await manager.provision(
+            repoRoot: conductorWorktree.path,
+            slug: "riyadh",
+            branchName: "riyadh",
+            filesToCopy: WorkspaceFilesToCopySettings(enabled: false)
+        )
+
+        XCTAssertEqual(provisioned.metadata.projectSlug, "Clawdmeter")
+        XCTAssertEqual(provisioned.metadata.workspaceSlug, "riyadh")
+        XCTAssertTrue(provisioned.path.hasPrefix(workspaceStorageRoot.appendingPathComponent("Clawdmeter").path + "/"))
+        XCTAssertFalse(provisioned.path.hasPrefix(NSHomeDirectory() + "/conductor/workspaces/"))
+        _ = try await manager.cleanupProvisionedWorktree(
+            repoRoot: conductorWorktree.path,
+            worktreePath: provisioned.path,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
+    }
+
+    func test_worktreeProvisionCreatesBranchAliasWhenBranchDiffersFromCity() async throws {
+        let repo = try makeGitRepo(name: "alias-repo")
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try git(["add", "tracked.txt"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+
+        let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
+        let provisioned = try await manager.provision(
+            repoRoot: repo.path,
+            slug: "oslo",
+            branchName: "feature/test",
+            filesToCopy: WorkspaceFilesToCopySettings(enabled: false)
+        )
+
+        let aliasPath = try XCTUnwrap(provisioned.metadata.branchAliasPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: aliasPath))
+        let target = try FileManager.default.destinationOfSymbolicLink(atPath: aliasPath)
+        XCTAssertEqual(target, provisioned.path)
+        XCTAssertTrue(aliasPath.hasSuffix("/feature-test"))
+        _ = try await manager.cleanupProvisionedWorktree(
+            repoRoot: repo.path,
+            worktreePath: provisioned.path,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: aliasPath))
+    }
+
     // MARK: - syncActiveSessions
 
     func test_syncActiveSessions_synthesizesMissingWorkspace() {
@@ -281,5 +607,44 @@ final class WorkspaceStoreTests: XCTestCase {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(file)
         try data.write(to: sessionsURL)
+    }
+
+    private func makeGitRepo(name: String) throws -> URL {
+        let repo = tmpDir.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try git(["init"], cwd: repo)
+        try git(["config", "user.email", "tests@example.com"], cwd: repo)
+        try git(["config", "user.name", "Clawdmeter Tests"], cwd: repo)
+        return repo
+    }
+
+    private func write(_ text: String, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(text.utf8).write(to: url)
+    }
+
+    private func git(_ args: [String], cwd: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + args
+        process.currentDirectoryURL = cwd
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let out = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let err = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            throw NSError(
+                domain: "WorkspaceStoreTests.git",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: "git \(args.joined(separator: " ")) failed: \(out)\(err)"]
+            )
+        }
     }
 }

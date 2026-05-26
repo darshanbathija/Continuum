@@ -370,6 +370,7 @@ public final class SessionsModel: ObservableObject {
     public let repoIndex: RepoIndex
     public let registry: AgentSessionRegistry
     public let supervisor: TmuxSupervisor
+    public let workspaceStore: WorkspaceStore
     private var refreshTask: Task<Void, Never>?
 
     /// Per-session chat stores, LRU-bound to `maxResidentChatStores`. Each
@@ -415,11 +416,13 @@ public final class SessionsModel: ObservableObject {
     public init(
         repoIndex: RepoIndex,
         registry: AgentSessionRegistry,
-        supervisor: TmuxSupervisor
+        supervisor: TmuxSupervisor,
+        workspaceStore: WorkspaceStore
     ) {
         self.repoIndex = repoIndex
         self.registry = registry
         self.supervisor = supervisor
+        self.workspaceStore = workspaceStore
     }
 
     /// Get or create the chat store for a session. If the session is one of
@@ -762,6 +765,7 @@ public final class SessionsModel: ObservableObject {
         try await tmux.start()
         var cwd = repoPath
         var worktreePath: String? = nil
+        var provisioning: WorktreeProvisioningMetadata? = nil
         var provisionalSessionId: UUID?
         // Skip worktree creation for resumes — the CLI handles cwd from JSONL.
         if mode == .worktree, resumeSessionId == nil {
@@ -772,11 +776,14 @@ public final class SessionsModel: ObservableObject {
             let city = CityNamer.shared.cityName(for: sessionId)
             let slug = WorktreeManager.slug(city: city)
             do {
-                worktreePath = try await WorktreeManager.shared.add(
+                let provisioned = try await WorktreeManager.shared.provision(
                     repoRoot: repoPath,
                     slug: slug,
-                    branchName: slug
+                    branchName: slug,
+                    filesToCopy: filesToCopySettings(forRepoRoot: repoPath)
                 )
+                worktreePath = provisioned.path
+                provisioning = provisioned.metadata
             } catch {
                 CityNamer.shared.release(sessionId)
                 throw error
@@ -804,7 +811,8 @@ public final class SessionsModel: ObservableObject {
                 effort: effort,
                 autopilot: autopilot,
                 acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId
+                resumeSessionId: resumeSessionId,
+                workspacePath: cwd
             ) ?? []
         case .gemini:
             // v0.8.0 dead branch — the .gemini case is short-circuited
@@ -838,6 +846,7 @@ public final class SessionsModel: ObservableObject {
             await cleanupUnregisteredWorktree(
                 repoPath: repoPath,
                 worktreePath: worktreePath,
+                provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId
             )
             throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
@@ -849,6 +858,7 @@ public final class SessionsModel: ObservableObject {
             await cleanupUnregisteredWorktree(
                 repoPath: repoPath,
                 worktreePath: worktreePath,
+                provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId
             )
             throw error
@@ -860,15 +870,18 @@ public final class SessionsModel: ObservableObject {
             model: model,
             goal: goal,
             worktreePath: worktreePath,
+            provisioning: provisioning,
             tmuxWindowId: window.windowId,
             tmuxPaneId: window.paneId,
             planMode: effectivePlanMode,
             mode: mode,
-            effort: effort
+            effort: effort,
+            id: provisionalSessionId ?? UUID()
         )
         if let pinned = pinnedJSONLURL {
             forcedChatStoreURLs[session.id] = pinned
         }
+        recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
         expandedRepoKeys.insert(repoPath)
         openSessionId = session.id
         await self.refresh()
@@ -904,10 +917,24 @@ public final class SessionsModel: ObservableObject {
             projectsDir: home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
         )
 
-        // Preflight via the install enum (T3). The closures hand off to
-        // LanguageServerClient + AntigravityProjectResolver so the test
-        // surface in AntigravityInstallTests stays injectable.
-        let install = await AntigravityInstall.preflight(
+        func cleanupPreparedWorktree(
+            worktreePath: String?,
+            provisioning: WorktreeProvisioningMetadata?,
+            provisionalSessionId: UUID?
+        ) async {
+            await cleanupUnregisteredWorktree(
+                repoPath: repoPath,
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId
+            )
+        }
+
+        // Preflight the provider before creating a worktree. For worktree
+        // sessions we run a second project-resolution preflight against the
+        // prepared cwd after branch creation, so Antigravity never silently
+        // edits the original checkout when the worktree project is unknown.
+        let baseInstall = await AntigravityInstall.preflight(
             forRepoKey: repoPath,
             isLanguageServerLive: {
                 if case .live = lsClient.discoverLive() { return true }
@@ -920,7 +947,7 @@ public final class SessionsModel: ObservableObject {
             applicationsRoot: appBundle.deletingLastPathComponent()
         )
 
-        switch install {
+        switch baseInstall {
         case .absent:
             throw SpawnError.antigravityNotReady(
                 "Install Antigravity 2 from antigravity.google to start a Gemini session."
@@ -936,6 +963,85 @@ public final class SessionsModel: ObservableObject {
         case .noProjectForRepo:
             throw SpawnError.antigravityNotReady(
                 "Open this repo in Antigravity 2 first, then come back."
+            )
+        case .ready:
+            break
+        }
+
+        var cwd = repoPath
+        var worktreePath: String?
+        var provisioning: WorktreeProvisioningMetadata?
+        var provisionalSessionId: UUID?
+        if mode == .worktree {
+            let sessionId = UUID()
+            provisionalSessionId = sessionId
+            let city = CityNamer.shared.cityName(for: sessionId)
+            let slug = WorktreeManager.slug(city: city)
+            do {
+                let provisioned = try await WorktreeManager.shared.provision(
+                    repoRoot: repoPath,
+                    slug: slug,
+                    branchName: slug,
+                    filesToCopy: filesToCopySettings(forRepoRoot: repoPath)
+                )
+                cwd = provisioned.path
+                worktreePath = provisioned.path
+                provisioning = provisioned.metadata
+            } catch {
+                CityNamer.shared.release(sessionId)
+                throw error
+            }
+        }
+
+        let install = await AntigravityInstall.preflight(
+            forRepoKey: cwd,
+            isLanguageServerLive: {
+                if case .live = lsClient.discoverLive() { return true }
+                return false
+            },
+            resolveProject: { repoKey in
+                await projectResolver.resolve(forRepoKey: repoKey)?.id
+            },
+            homeDirectory: home,
+            applicationsRoot: appBundle.deletingLastPathComponent()
+        )
+
+        switch install {
+        case .absent:
+            await cleanupPreparedWorktree(
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId
+            )
+            throw SpawnError.antigravityNotReady(
+                "Install Antigravity 2 from antigravity.google to start a Gemini session."
+            )
+        case .installedNotSignedIn:
+            await cleanupPreparedWorktree(
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId
+            )
+            throw SpawnError.antigravityNotReady(
+                "Sign into Antigravity 2 first, then try again."
+            )
+        case .appOnlyNotRunning:
+            await cleanupPreparedWorktree(
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId
+            )
+            throw SpawnError.antigravityNotReady(
+                "Open Antigravity 2 to start a Gemini session."
+            )
+        case .noProjectForRepo:
+            await cleanupPreparedWorktree(
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId
+            )
+            throw SpawnError.antigravityNotReady(
+                "Open this prepared worktree in Antigravity 2 first, then try again."
             )
         case .ready(_, let projectId):
             // The first turn of the conversation gets locked in here —
@@ -953,15 +1059,30 @@ public final class SessionsModel: ObservableObject {
                    !goalText.isEmpty {
                     return goalText
                 }
-                return "Start a new Gemini session in \(repoPath)."
+                return "Start a new Gemini session in \(cwd)."
             }()
             let modelTier = AgentapiModelTier.from(modelCatalogId: model)
-            let conversationIdString = try await lsClient.newConversation(
-                modelTier: modelTier,
-                prompt: firstPrompt,
-                projectId: projectId
-            )
+            let conversationIdString: String
+            do {
+                conversationIdString = try await lsClient.newConversation(
+                    modelTier: modelTier,
+                    prompt: firstPrompt,
+                    projectId: projectId
+                )
+            } catch {
+                await cleanupPreparedWorktree(
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    provisionalSessionId: provisionalSessionId
+                )
+                throw error
+            }
             guard let conversationId = UUID(uuidString: conversationIdString) else {
+                await cleanupPreparedWorktree(
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    provisionalSessionId: provisionalSessionId
+                )
                 throw SpawnError.antigravityNotReady(
                     "Antigravity returned an unrecognized conversation id (\(conversationIdString)). Try reopening the app."
                 )
@@ -972,15 +1093,19 @@ public final class SessionsModel: ObservableObject {
                 agent: .gemini,
                 model: model,
                 goal: goal,
-                worktreePath: nil,  // no worktree for agentapi sessions in v0.8.0
+                worktreePath: worktreePath,
+                provisioning: provisioning,
                 tmuxWindowId: nil,  // no tmux pane
                 tmuxPaneId: nil,
                 planMode: planMode,
                 mode: mode,
                 effort: effort,
                 geminiBackend: .agentapi,
-                antigravityConversationId: conversationId
+                antigravityConversationId: conversationId,
+                antigravityProjectId: projectId,
+                id: provisionalSessionId ?? UUID()
             )
+            recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
             expandedRepoKeys.insert(repoPath)
             openSessionId = session.id
             await self.refresh()
@@ -1132,6 +1257,7 @@ public final class SessionsModel: ObservableObject {
         // Pick the new cwd.
         var newCwd = sessionRepoKey
         var newWorktree: String? = nil
+        var newProvisioning: WorktreeProvisioningMetadata? = nil
         switch newMode {
         case .worktree:
             // v0.7.9: reuse the session's already-assigned city for
@@ -1140,12 +1266,15 @@ public final class SessionsModel: ObservableObject {
             let city = CityNamer.shared.cityName(for: session.id)
             let slug = WorktreeManager.slug(city: city)
             do {
-                newWorktree = try await WorktreeManager.shared.add(
+                let provisioned = try await WorktreeManager.shared.provision(
                     repoRoot: sessionRepoKey,
                     slug: slug,
-                    branchName: slug
+                    branchName: slug,
+                    filesToCopy: filesToCopySettings(forRepoRoot: sessionRepoKey)
                 )
-                newCwd = newWorktree!
+                newWorktree = provisioned.path
+                newProvisioning = provisioned.metadata
+                newCwd = provisioned.path
             } catch {
                 // Couldn't create worktree — bail without changing state.
                 return
@@ -1167,16 +1296,32 @@ public final class SessionsModel: ObservableObject {
             useWorktree: newMode == .worktree
         ), workspacePath: newCwd)
         do {
-            guard !argv.isEmpty else { return }
+            guard !argv.isEmpty else {
+                await cleanupUnregisteredWorktree(
+                    repoPath: sessionRepoKey,
+                    worktreePath: newWorktree,
+                    provisioning: newProvisioning,
+                    provisionalSessionId: nil
+                )
+                return
+            }
             let newWindow = try await runtime.tmuxClient.newWindow(cwd: newCwd, child: argv)
             try await registry.updateRuntime(
                 id: sessionId,
                 worktreePath: newWorktree,
+                provisioning: .some(newProvisioning),
+                runtimeCwd: .some(newCwd),
                 tmuxWindowId: newWindow.windowId,
                 tmuxPaneId: newWindow.paneId,
                 mode: newMode
             )
         } catch {
+            await cleanupUnregisteredWorktree(
+                repoPath: sessionRepoKey,
+                worktreePath: newWorktree,
+                provisioning: newProvisioning,
+                provisionalSessionId: nil
+            )
             // Spawn failed — surface via lastError once we plumb it; for now,
             // session status stays at degraded by the supervisor.
         }
@@ -1238,14 +1383,13 @@ public final class SessionsModel: ObservableObject {
     }
 
     public func endSession(id: UUID) async {
-        guard let session = registry.session(id: id),
-              let runtime = AppDelegate.runtime,
-              let windowId = session.tmuxWindowId
-        else {
+        guard let session = registry.session(id: id) else {
             try? await registry.delete(id: id)
             return
         }
-        do { try await runtime.tmuxClient.killWindow(windowId) } catch {}
+        if let runtime = AppDelegate.runtime, let windowId = session.tmuxWindowId {
+            do { try await runtime.tmuxClient.killWindow(windowId) } catch {}
+        }
         // v0.8 REV-DELETE: code sessions go through WorktreeManager; chat
         // sessions get ChatCwdCleaner in Phase 4. Guard here so Phase 2
         // doesn't crash on a chat session reaching this path.
@@ -1397,18 +1541,30 @@ public final class SessionsModel: ObservableObject {
     private func cleanupUnregisteredWorktree(
         repoPath: String,
         worktreePath: String?,
+        provisioning: WorktreeProvisioningMetadata? = nil,
         provisionalSessionId: UUID?
     ) async {
         if let worktreePath {
-            _ = try? await WorktreeManager.shared.delete(
+            _ = try? await WorktreeManager.shared.cleanupProvisionedWorktree(
                 repoRoot: repoPath,
                 worktreePath: worktreePath,
-                registryOwned: true
+                expectedMarkerId: provisioning?.ownershipMarkerId
             )
         }
         if let provisionalSessionId {
             CityNamer.shared.release(provisionalSessionId)
         }
+    }
+
+    private func filesToCopySettings(forRepoRoot repoRoot: String) -> WorkspaceFilesToCopySettings {
+        workspaceStore.workspace(forRepoRoot: repoRoot)?.filesToCopy ?? WorkspaceFilesToCopySettings()
+    }
+
+    private func recordWorkspaceSession(repoRoot: String, sessionId: UUID) {
+        let existing = workspaceStore.workspace(forRepoRoot: repoRoot)?.activeSessionIds ?? []
+        var ids = existing.filter { $0 != sessionId }
+        ids.append(sessionId)
+        workspaceStore.syncActiveSessions(repoRoot: repoRoot, sessionIds: ids)
     }
 
     private static func cursorResumeId(for session: AgentSession) -> String? {

@@ -1378,6 +1378,157 @@ public struct WorkspaceProviderDefaults: Codable, Hashable, Sendable {
     }
 }
 
+public enum WorkspaceFilesToCopyMode: String, Codable, Hashable, Sendable, CaseIterable {
+    case patterns
+    case allIgnored = "all_ignored"
+}
+
+public struct WorkspaceFilesToCopySettings: Codable, Hashable, Sendable {
+    public static let defaultPatterns: [String] = [".env*"]
+    public static let defaultMaxFiles: Int = 100_000
+    public static let defaultMaxBytesPerFile: Int64 = 2 * 1024 * 1024 * 1024
+    public static let defaultMaxTotalBytes: Int64 = 10 * 1024 * 1024 * 1024
+
+    public let enabled: Bool
+    public let mode: WorkspaceFilesToCopyMode
+    public let patterns: [String]
+    public let maxFiles: Int
+    public let maxBytesPerFile: Int64
+    public let maxTotalBytes: Int64
+    public let allowDirectories: Bool
+
+    public init(
+        enabled: Bool = true,
+        mode: WorkspaceFilesToCopyMode = .allIgnored,
+        patterns: [String] = WorkspaceFilesToCopySettings.defaultPatterns,
+        maxFiles: Int = WorkspaceFilesToCopySettings.defaultMaxFiles,
+        maxBytesPerFile: Int64 = WorkspaceFilesToCopySettings.defaultMaxBytesPerFile,
+        maxTotalBytes: Int64 = WorkspaceFilesToCopySettings.defaultMaxTotalBytes,
+        allowDirectories: Bool = true
+    ) {
+        self.enabled = enabled
+        self.mode = mode
+        self.patterns = patterns
+        self.maxFiles = maxFiles
+        self.maxBytesPerFile = maxBytesPerFile
+        self.maxTotalBytes = maxTotalBytes
+        self.allowDirectories = allowDirectories
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? true
+        self.mode = (try? c.decodeIfPresent(WorkspaceFilesToCopyMode.self, forKey: .mode)) ?? .allIgnored
+        self.patterns = (try? c.decodeIfPresent([String].self, forKey: .patterns)) ?? Self.defaultPatterns
+        self.maxFiles = (try? c.decodeIfPresent(Int.self, forKey: .maxFiles)) ?? Self.defaultMaxFiles
+        self.maxBytesPerFile = (try? c.decodeIfPresent(Int64.self, forKey: .maxBytesPerFile)) ?? Self.defaultMaxBytesPerFile
+        self.maxTotalBytes = (try? c.decodeIfPresent(Int64.self, forKey: .maxTotalBytes)) ?? Self.defaultMaxTotalBytes
+        self.allowDirectories = (try? c.decodeIfPresent(Bool.self, forKey: .allowDirectories)) ?? true
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, mode, patterns, maxFiles, maxBytesPerFile, maxTotalBytes, allowDirectories
+    }
+}
+
+public enum WorktreeFileCopyPatternSource: String, Codable, Hashable, Sendable, CaseIterable {
+    case worktreeinclude
+    case settings
+    case defaultPatterns = "default"
+    case disabled
+}
+
+public struct WorktreeFileCopySummary: Codable, Hashable, Sendable {
+    public let source: WorktreeFileCopyPatternSource
+    public let mode: WorkspaceFilesToCopyMode
+    public let patterns: [String]
+    public let copiedFileCount: Int
+    public let copiedDirectoryCount: Int
+    public let skippedFileCount: Int
+    public let failedFileCount: Int
+    public let copiedBytes: Int64
+    public let manifestPath: String?
+    public let failureSummary: String?
+
+    public init(
+        source: WorktreeFileCopyPatternSource,
+        mode: WorkspaceFilesToCopyMode = .patterns,
+        patterns: [String],
+        copiedFileCount: Int = 0,
+        copiedDirectoryCount: Int = 0,
+        skippedFileCount: Int = 0,
+        failedFileCount: Int = 0,
+        copiedBytes: Int64 = 0,
+        manifestPath: String? = nil,
+        failureSummary: String? = nil
+    ) {
+        self.source = source
+        self.mode = mode
+        self.patterns = patterns
+        self.copiedFileCount = copiedFileCount
+        self.copiedDirectoryCount = copiedDirectoryCount
+        self.skippedFileCount = skippedFileCount
+        self.failedFileCount = failedFileCount
+        self.copiedBytes = copiedBytes
+        self.manifestPath = manifestPath
+        self.failureSummary = failureSummary
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.source = try c.decode(WorktreeFileCopyPatternSource.self, forKey: .source)
+        self.mode = (try? c.decodeIfPresent(WorkspaceFilesToCopyMode.self, forKey: .mode)) ?? .patterns
+        self.patterns = (try? c.decodeIfPresent([String].self, forKey: .patterns)) ?? []
+        self.copiedFileCount = (try? c.decodeIfPresent(Int.self, forKey: .copiedFileCount)) ?? 0
+        self.copiedDirectoryCount = (try? c.decodeIfPresent(Int.self, forKey: .copiedDirectoryCount)) ?? 0
+        self.skippedFileCount = (try? c.decodeIfPresent(Int.self, forKey: .skippedFileCount)) ?? 0
+        self.failedFileCount = (try? c.decodeIfPresent(Int.self, forKey: .failedFileCount)) ?? 0
+        self.copiedBytes = (try? c.decodeIfPresent(Int64.self, forKey: .copiedBytes)) ?? 0
+        self.manifestPath = try c.decodeIfPresent(String.self, forKey: .manifestPath)
+        self.failureSummary = try c.decodeIfPresent(String.self, forKey: .failureSummary)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source, mode, patterns, copiedFileCount, copiedDirectoryCount,
+             skippedFileCount, failedFileCount, copiedBytes, manifestPath,
+             failureSummary
+    }
+}
+
+public struct WorktreeProvisioningMetadata: Codable, Hashable, Sendable {
+    public let ownershipMarkerId: String
+    public let branchName: String?
+    public let worktreePath: String
+    public let storageRoot: String?
+    public let projectSlug: String?
+    public let workspaceSlug: String?
+    public let branchAliasPath: String?
+    public let filesToCopy: WorktreeFileCopySummary
+    public let createdAt: Date
+
+    public init(
+        ownershipMarkerId: String,
+        branchName: String?,
+        worktreePath: String,
+        storageRoot: String? = nil,
+        projectSlug: String? = nil,
+        workspaceSlug: String? = nil,
+        branchAliasPath: String? = nil,
+        filesToCopy: WorktreeFileCopySummary,
+        createdAt: Date = Date()
+    ) {
+        self.ownershipMarkerId = ownershipMarkerId
+        self.branchName = branchName
+        self.worktreePath = worktreePath
+        self.storageRoot = storageRoot
+        self.projectSlug = projectSlug
+        self.workspaceSlug = workspaceSlug
+        self.branchAliasPath = branchAliasPath
+        self.filesToCopy = filesToCopy
+        self.createdAt = createdAt
+    }
+}
+
 public struct WorkspaceArchiveMetadata: Codable, Hashable, Sendable {
     public let archivedAt: Date?
     public let finalStatus: String?
@@ -1410,6 +1561,7 @@ public struct CodeWorkspaceRecord: Codable, Hashable, Sendable, Identifiable {
     public let runtimeCwd: String
     public let chatCwd: String?
     public let providerDefaults: WorkspaceProviderDefaults
+    public let filesToCopy: WorkspaceFilesToCopySettings
     public let activeSessionIds: [UUID]
     public let branchName: String?
     public let prMirrorState: PRMirrorState?
@@ -1427,6 +1579,7 @@ public struct CodeWorkspaceRecord: Codable, Hashable, Sendable, Identifiable {
         runtimeCwd: String,
         chatCwd: String? = nil,
         providerDefaults: WorkspaceProviderDefaults = WorkspaceProviderDefaults(),
+        filesToCopy: WorkspaceFilesToCopySettings = WorkspaceFilesToCopySettings(),
         activeSessionIds: [UUID] = [],
         branchName: String? = nil,
         prMirrorState: PRMirrorState? = nil,
@@ -1443,12 +1596,39 @@ public struct CodeWorkspaceRecord: Codable, Hashable, Sendable, Identifiable {
         self.runtimeCwd = runtimeCwd
         self.chatCwd = chatCwd
         self.providerDefaults = providerDefaults
+        self.filesToCopy = filesToCopy
         self.activeSessionIds = activeSessionIds
         self.branchName = branchName
         self.prMirrorState = prMirrorState
         self.archiveMetadata = archiveMetadata
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.projectId = try c.decode(UUID.self, forKey: .projectId)
+        self.repoRoot = try c.decode(String.self, forKey: .repoRoot)
+        self.repoDisplayName = try c.decode(String.self, forKey: .repoDisplayName)
+        self.defaultBranch = try c.decodeIfPresent(String.self, forKey: .defaultBranch)
+        self.worktreeRoot = try c.decodeIfPresent(String.self, forKey: .worktreeRoot)
+        self.runtimeCwd = try c.decode(String.self, forKey: .runtimeCwd)
+        self.chatCwd = try c.decodeIfPresent(String.self, forKey: .chatCwd)
+        self.providerDefaults = (try? c.decodeIfPresent(WorkspaceProviderDefaults.self, forKey: .providerDefaults)) ?? WorkspaceProviderDefaults()
+        self.filesToCopy = (try? c.decodeIfPresent(WorkspaceFilesToCopySettings.self, forKey: .filesToCopy)) ?? WorkspaceFilesToCopySettings()
+        self.activeSessionIds = (try? c.decodeIfPresent([UUID].self, forKey: .activeSessionIds)) ?? []
+        self.branchName = try c.decodeIfPresent(String.self, forKey: .branchName)
+        self.prMirrorState = try c.decodeIfPresent(PRMirrorState.self, forKey: .prMirrorState)
+        self.archiveMetadata = try c.decodeIfPresent(WorkspaceArchiveMetadata.self, forKey: .archiveMetadata)
+        self.createdAt = (try? c.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date()
+        self.updatedAt = (try? c.decodeIfPresent(Date.self, forKey: .updatedAt)) ?? self.createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, projectId, repoRoot, repoDisplayName, defaultBranch, worktreeRoot,
+             runtimeCwd, chatCwd, providerDefaults, filesToCopy, activeSessionIds,
+             branchName, prMirrorState, archiveMetadata, createdAt, updatedAt
     }
 }
 
@@ -1646,11 +1826,17 @@ public struct WorkspaceListResponse: Codable, Sendable {
 /// provider defaults. Only the fields provided are overwritten; the
 /// rest of the record (sessions, archive metadata) is untouched.
 public struct UpdateWorkspaceDefaultsRequest: Codable, Sendable {
-    public let providerDefaults: WorkspaceProviderDefaults
+    public let providerDefaults: WorkspaceProviderDefaults?
+    public let filesToCopy: WorkspaceFilesToCopySettings?
     public let idempotencyKey: String?
 
-    public init(providerDefaults: WorkspaceProviderDefaults, idempotencyKey: String? = nil) {
+    public init(
+        providerDefaults: WorkspaceProviderDefaults? = nil,
+        filesToCopy: WorkspaceFilesToCopySettings? = nil,
+        idempotencyKey: String? = nil
+    ) {
         self.providerDefaults = providerDefaults
+        self.filesToCopy = filesToCopy
         self.idempotencyKey = idempotencyKey
     }
 }
@@ -2169,6 +2355,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// When `useWorktree` was on at create, the absolute path of the
     /// `.claude/worktrees/<slug>` directory the agent runs inside.
     public let worktreePath: String?
+    /// Per-worktree creation/copy audit for Clawdmeter-owned isolated
+    /// sessions. Nil for legacy, local, and externally-owned sessions.
+    public let provisioning: WorktreeProvisioningMetadata?
     /// Underlying tmux window id (e.g. "@3"). `nil` while a session is
     /// pending or degraded.
     public let tmuxWindowId: String?
@@ -2365,6 +2554,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         model: String?,
         goal: String?,
         worktreePath: String?,
+        provisioning: WorktreeProvisioningMetadata? = nil,
         tmuxWindowId: String?,
         tmuxPaneId: String?,
         status: AgentSessionStatus,
@@ -2406,6 +2596,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.model = model
         self.goal = goal
         self.worktreePath = worktreePath
+        self.provisioning = provisioning
         self.tmuxWindowId = tmuxWindowId
         self.tmuxPaneId = tmuxPaneId
         self.status = status
@@ -2452,6 +2643,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.model = try c.decodeIfPresent(String.self, forKey: .model)
         self.goal = try c.decodeIfPresent(String.self, forKey: .goal)
         self.worktreePath = try c.decodeIfPresent(String.self, forKey: .worktreePath)
+        self.provisioning = (try? c.decodeIfPresent(WorktreeProvisioningMetadata.self, forKey: .provisioning)) ?? nil
         self.tmuxWindowId = try c.decodeIfPresent(String.self, forKey: .tmuxWindowId)
         self.tmuxPaneId = try c.decodeIfPresent(String.self, forKey: .tmuxPaneId)
         self.status = try c.decode(AgentSessionStatus.self, forKey: .status)
@@ -2550,7 +2742,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, repoKey, repoDisplayName, agent, model, goal,
-             worktreePath, tmuxWindowId, tmuxPaneId,
+             worktreePath, provisioning, tmuxWindowId, tmuxPaneId,
              status, planText, approvedPlanText, createdAt, lastEventAt, lastEventSeq,
              mode, archivedAt,
              terminalPanes, scheduledFollowUps, parentSessionId,

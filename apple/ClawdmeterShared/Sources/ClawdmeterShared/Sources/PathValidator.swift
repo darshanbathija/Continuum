@@ -58,6 +58,47 @@ public enum PathValidator {
         return resolved.hasPrefix(root + "/") || resolved == root
     }
 
+    /// Validate a destination path that may not exist yet. Unlike
+    /// `resolvesUnder`, this walks every existing parent component and
+    /// verifies symlinks before the caller creates missing directories.
+    public static func isSafeNewChildPath(_ path: String, root: String) -> Bool {
+        guard !isEmpty(path), !isEmpty(root) else { return false }
+        guard path.hasPrefix("/"), root.hasPrefix("/") else { return false }
+        guard !containsControlBytes(path), !containsControlBytes(root) else { return false }
+        guard !containsTraversal(path), !containsTraversal(root) else { return false }
+
+        let fm = FileManager.default
+        let standardizedRoot = (root as NSString).standardizingPath
+        let standardizedPath = (path as NSString).standardizingPath
+        guard standardizedPath == standardizedRoot || standardizedPath.hasPrefix(standardizedRoot + "/") else {
+            return false
+        }
+
+        let resolvedRoot = resolveSymlinks(standardizedRoot)
+        guard resolvesUnder(standardizedRoot, root: resolvedRoot) else { return false }
+
+        let relative = String(standardizedPath.dropFirst(standardizedRoot.count))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let components = relative.split(separator: "/").map(String.init)
+        guard !components.isEmpty else { return true }
+
+        var current = URL(fileURLWithPath: standardizedRoot, isDirectory: true)
+        for component in components.dropLast() {
+            current.appendPathComponent(component, isDirectory: true)
+            var isDirectory: ObjCBool = false
+            if fm.fileExists(atPath: current.path, isDirectory: &isDirectory) {
+                let resolved = resolveSymlinks(current.path)
+                guard resolved == resolvedRoot || resolved.hasPrefix(resolvedRoot + "/") else {
+                    return false
+                }
+                guard isDirectory.boolValue else { return false }
+            } else {
+                break
+            }
+        }
+        return true
+    }
+
     /// `true` if `path` (after symlink resolution) lives under any of
     /// the allowlisted roots. Used by `isValidJsonlPath` to gate
     /// session-id extraction to the four known agent project directories.

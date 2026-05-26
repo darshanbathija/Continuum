@@ -113,6 +113,36 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
         XCTAssertEqual(binding?.metadata["chatVendor"], ChatVendor.cursor.rawValue)
     }
 
+    func test_updateRuntimeUpdatesEffectiveCwd() async {
+        let reg = registry()
+        let session = reg.create(
+            repoKey: "/tmp/source-repo",
+            repoDisplayName: "source-repo",
+            agent: .claude,
+            model: "sonnet",
+            goal: nil,
+            worktreePath: nil,
+            tmuxWindowId: "window-old",
+            tmuxPaneId: "pane-old",
+            planMode: false,
+            mode: .local
+        )
+
+        reg.updateRuntime(
+            id: session.id,
+            worktreePath: "/tmp/source-repo-worktree",
+            runtimeCwd: .some("/tmp/source-repo-worktree"),
+            tmuxWindowId: "window-new",
+            tmuxPaneId: "pane-new",
+            mode: .worktree
+        )
+
+        let updated = reg.session(id: session.id)
+        XCTAssertEqual(updated?.runtimeCwd, "/tmp/source-repo-worktree")
+        XCTAssertEqual(updated?.effectiveCwd, "/tmp/source-repo-worktree")
+        XCTAssertEqual(updated?.worktreePath, "/tmp/source-repo-worktree")
+    }
+
     // MARK: - clearFrontierGroupBinding
 
     /// After continue-from-winner, the winner's frontierGroupId and
