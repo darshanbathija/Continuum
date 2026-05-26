@@ -1,0 +1,17 @@
+{
+  "name": "clawdmeter-apns-gateway",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Clawdmeter APNS gateway (Group E5) — holds operator .p8, signs JWT, forwards encrypted push payloads. E0 scaffold; source in E5.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "test": "echo 'E0 scaffold only — vitest harness lands in E5'",
+    "typecheck": "echo 'E0 scaffold only — tsc check lands in E5'"
+  },
+  "devDependencies": {
+    "wrangler": "3.95.0",
+    "@cloudflare/workers-types": "4.20260101.0"
+  }
+}

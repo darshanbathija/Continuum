@@ -1,0 +1,105 @@
+# clawdmeter-apns-gateway — Apple Push Notification gateway Worker (Group E5)
+#
+# E0 scaffold only. src/index.ts lands in E5. The gateway holds the
+# operator's APNS .p8 (per SECRETS.md), signs the APNS JWT, and forwards
+# encrypted push payloads to Apple's HTTP/2 APNS endpoint. Worker NEVER
+# decrypts the payload body (E2E — only the paired iPhone has the key).
+#
+# IMPORTANT: bindings (kv_namespaces, vars) are NON-INHERITABLE per
+# https://developers.cloudflare.com/workers/wrangler/configuration/#non-inheritable-keys
+# Because we override `vars` per env, we MUST re-declare kv_namespaces
+# inside EACH [env.*] block, otherwise the deployed Worker will have NO
+# KV bindings. Top-level blocks below are for `wrangler dev` (no --env) only.
+
+name = "clawdmeter-apns-gateway"
+main = "src/index.ts"
+compatibility_date = "2026-05-26"
+compatibility_flags = ["nodejs_compat"]
+
+# Cost guardrails. APNS JWT generation + HTTP/2 forwarding fits easily
+# inside 50ms CPU.
+[limits]
+cpu_ms = 50
+
+[observability]
+enabled = true
+
+# No Durable Objects — gateway is stateless across requests. State lives
+# in KV (audit log + rate limit).
+#
+# Top-level (dev) KV bindings. Operator fills IDs in via
+# `wrangler kv namespace create`.
+[[kv_namespaces]]
+binding = "APNS_AUDIT_LOG"
+id = "REPLACE_WITH_DEV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[[kv_namespaces]]
+binding = "APNS_RATE_LIMIT"
+id = "REPLACE_WITH_DEV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+# Vars (non-secret). Secrets via `wrangler secret put` per SECRETS.md.
+[vars]
+ENVIRONMENT = "development"
+LOG_LEVEL = "info"
+# Per-device rate limit per D21 mitigation suite. 100 pushes/hour matches
+# what an active user could plausibly trigger via multiple sessions; can
+# be tuned after staging telemetry lands.
+RATE_LIMIT_PER_HOUR = "100"
+# Endpoint base — overridden per env. Development uses Apple's sandbox
+# endpoint by default so accidentally-deployed local builds don't push to
+# production iPhones.
+APNS_ENDPOINT = "https://api.sandbox.push.apple.com:443"
+
+# ---- Per-env overrides ----
+# Per-env routing — staging uses APNS sandbox endpoint; production uses
+# the real APNS endpoint. Endpoint selection happens in src/index.ts via
+# the ENVIRONMENT var. Each env MUST re-declare kv_namespaces
+# (non-inheritable).
+
+# -------- staging --------
+[env.staging]
+name = "clawdmeter-apns-gateway-staging"
+routes = [
+  { pattern = "apns-gateway-staging.clawdmeter.dev/*", custom_domain = true }
+]
+
+[[env.staging.kv_namespaces]]
+binding = "APNS_AUDIT_LOG"
+id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[[env.staging.kv_namespaces]]
+binding = "APNS_RATE_LIMIT"
+id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+LOG_LEVEL = "debug"
+RATE_LIMIT_PER_HOUR = "100"
+APNS_ENDPOINT = "https://api.sandbox.push.apple.com:443"
+
+# -------- production --------
+[env.production]
+name = "clawdmeter-apns-gateway"
+routes = [
+  { pattern = "apns-gateway.clawdmeter.dev/*", custom_domain = true }
+]
+
+[[env.production.kv_namespaces]]
+binding = "APNS_AUDIT_LOG"
+id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[[env.production.kv_namespaces]]
+binding = "APNS_RATE_LIMIT"
+id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+LOG_LEVEL = "info"
+RATE_LIMIT_PER_HOUR = "100"
+APNS_ENDPOINT = "https://api.push.apple.com:443"
