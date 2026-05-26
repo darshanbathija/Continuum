@@ -1998,6 +1998,7 @@ private struct ClaudeCLIProviderRow: View {
     }
 
     private func savePastedClaudeToken() {
+        guard !isAuthenticating else { return }
         let extracted = Self.extractAccessToken(from: pastedTokenDraft)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.looksLikeValidToken(extracted) else {
@@ -2005,16 +2006,26 @@ private struct ClaudeCLIProviderRow: View {
             authMessage = "Couldn't find a Claude OAuth token. Paste the bare `sk-ant-…` value or Claude Code's Keychain JSON."
             return
         }
+        // Snapshot the draft we're saving so a race-against-paste doesn't
+        // wipe a fresh token the user typed while this save was in flight.
+        let draftAtSubmit = pastedTokenDraft
+        isAuthenticating = true
+        authMessage = nil
+        authFailed = false
+
         Task { @MainActor in
             let saved = await Task.detached(priority: .userInitiated) { () -> Bool in
                 PastedAnthropicTokenProvider.shared().setToken(extracted)
             }.value
+            isAuthenticating = false
             guard saved else {
                 authFailed = true
                 authMessage = "Continuum could not save the token to its own Keychain entry."
                 return
             }
-            pastedTokenDraft = ""
+            if pastedTokenDraft == draftAtSubmit {
+                pastedTokenDraft = ""
+            }
             authFailed = false
             authMessage = "Authenticated. Continuum will use its own Keychain copy from now on."
             await refreshProbe()
