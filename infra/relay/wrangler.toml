@@ -1,0 +1,78 @@
+# clawdmeter-relay — WebSocket relay Worker (Group E2)
+#
+# E0 scaffold only. The src/index.ts that consumes this config lands in E2.
+# Run `wrangler deploy --env <env>` from this directory once the source
+# is in place. Per the design doc (docs/design/secure-relay-apns-2026-05-26.md),
+# the Worker is a thin WebSocket fan-out over Durable Objects — one DO per
+# pairing session, 15-min idle eviction.
+
+name = "clawdmeter-relay"
+main = "src/index.ts"
+compatibility_date = "2026-05-26"
+compatibility_flags = ["nodejs_compat"]
+
+# Cost guardrails. Tune after the first week of staging traffic.
+[limits]
+cpu_ms = 50
+
+# Observability — surfaces in Cloudflare's Workers Logs dashboard.
+[observability]
+enabled = true
+
+# Durable Object: RelaySession (one per pairing). Migration tag is bumped
+# whenever the DO class shape changes (Cloudflare requires it for safe
+# in-place schema evolution). E2 will introduce v1.
+[durable_objects]
+bindings = [
+  { name = "RELAY_SESSIONS", class_name = "RelaySession" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["RelaySession"]
+
+# KV namespaces — populated via `wrangler kv namespace create` per env;
+# IDs filled in by the operator at deploy time. Placeholders below.
+[[kv_namespaces]]
+binding = "RELAY_AUDIT_LOG"
+id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[[kv_namespaces]]
+binding = "RELAY_RATE_LIMIT"
+id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+# ---- Per-env overrides ----
+# Defaults above target development. Staging + production override route
+# + KV IDs. Wrangler picks one via --env <name>.
+
+[env.staging]
+name = "clawdmeter-relay-staging"
+routes = [
+  { pattern = "relay-staging.clawdmeter.dev/*", custom_domain = true }
+]
+
+[env.production]
+name = "clawdmeter-relay"
+routes = [
+  { pattern = "relay.clawdmeter.dev/*", custom_domain = true }
+]
+[env.production.limits]
+cpu_ms = 50
+
+# Vars (non-secret config). Secrets go via `wrangler secret put`.
+[vars]
+ENVIRONMENT = "development"
+LOG_LEVEL = "info"
+SESSION_TTL_SECONDS = "900"   # 15-min idle eviction per D22
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+LOG_LEVEL = "debug"
+SESSION_TTL_SECONDS = "900"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+LOG_LEVEL = "info"
+SESSION_TTL_SECONDS = "900"

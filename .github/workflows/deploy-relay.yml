@@ -1,0 +1,111 @@
+name: Deploy clawdmeter-relay
+
+# E0 scaffold (Phase 0). Source code lands in E2.
+#
+# Flow:
+#   PR touching infra/relay/** → dry-run deploy (validates wrangler.toml)
+#   Merge to main → deploy to staging + smoke test
+#   Manual gh-environment "production" approval → deploy to production
+#
+# Plan reference: E0 from .claude/plans/study-this-codebase-crystalline-shore.md
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/relay/**"
+      - ".github/workflows/deploy-relay.yml"
+  pull_request:
+    paths:
+      - "infra/relay/**"
+      - ".github/workflows/deploy-relay.yml"
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Which env to deploy"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate wrangler.toml
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install deps
+        working-directory: infra/relay
+        run: bun install --frozen-lockfile || bun install
+      - name: Dry-run deploy (staging)
+        working-directory: infra/relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN not configured (PR from fork or pre-secrets-provisioning). Skipping dry-run; wrangler.toml syntax check only."
+            bunx wrangler types --env staging || true
+          else
+            bunx wrangler deploy --dry-run --env staging
+          fi
+
+  deploy-staging:
+    name: Deploy to staging
+    needs: validate
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+      url: https://relay-staging.clawdmeter.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install deps
+        working-directory: infra/relay
+        run: bun install --frozen-lockfile || bun install
+      - name: Deploy to staging
+        working-directory: infra/relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler deploy --env staging
+      - name: Smoke test (placeholder — real test lands in E2)
+        run: |
+          echo "::notice::E0 scaffold: smoke test placeholder. E2 will add a real WebSocket roundtrip test against relay-staging.clawdmeter.dev"
+
+  deploy-production:
+    name: Deploy to production
+    needs: deploy-staging
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'production'
+    environment:
+      # Required-reviewer approval gates the production deploy (configure
+      # the operator as the required reviewer in GitHub repo settings →
+      # Environments → production).
+      name: production
+      url: https://relay.clawdmeter.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install deps
+        working-directory: infra/relay
+        run: bun install --frozen-lockfile || bun install
+      - name: Deploy to production
+        working-directory: infra/relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler deploy --env production
