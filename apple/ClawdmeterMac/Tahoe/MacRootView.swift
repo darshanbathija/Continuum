@@ -45,6 +45,8 @@ struct MacRootView: View {
     @State private var showingGlobalPalette: Bool = false
     @State private var showingShortcutSheet: Bool = false
     @State private var showingFilePicker: Bool = false
+    @State private var showingPlanQueue: Bool = false
+    @State private var planQueue: PlanQueue = PlanQueue(rows: [])
     @StateObject private var presentationStore: SessionPresentationStore
     private let shortcutRegistry = ClawdmeterShortcutRegistry()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -178,6 +180,7 @@ struct MacRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenGlobalPalette), perform: handleOpenGlobalPalette)
         .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenShortcutSheet), perform: handleOpenShortcutSheet)
         .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenFilePicker), perform: handleOpenFilePicker)
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterShowPlanQueue), perform: handleOpenPlanQueue)
         .onReceive(NotificationCenter.default.publisher(for: .clawdmeterExportSession), perform: handleExportSession)
         .onReceive(NotificationCenter.default.publisher(for: .clawdmeterShowTransientToast), perform: handleTransientToast)
         .onReceive(NotificationCenter.default.publisher(for: .sessionNextAttention), perform: handleNextAttention)
@@ -204,9 +207,7 @@ struct MacRootView: View {
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: handoffToast)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: transientToast)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: showingGlobalPalette)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: showingShortcutSheet)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: showingFilePicker)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: modalOverlayKey)
         .tahoeTheme(theme)
         .background(theme.appearance == .dark ? Color.black : Color(.sRGB, red: 0.94, green: 0.97, blue: 0.98))
         .background(
@@ -230,6 +231,7 @@ struct MacRootView: View {
                     showingGlobalPalette = false
                     showingShortcutSheet = false
                     showingFilePicker = false
+                    showingPlanQueue = false
                 }
             content()
         }
@@ -290,32 +292,72 @@ struct MacRootView: View {
     @ViewBuilder
     private var modalOverlay: some View {
         if showingGlobalPalette {
-            paletteScrim {
-                GlobalCommandPalette(
-                    registry: buildCommandRegistry(),
-                    shortcuts: shortcutRegistry,
-                    shortcutOverrides: presentationStore.snapshot.shortcutOverrides,
-                    recentCommandIDs: presentationStore.snapshot.commandRecents,
-                    onRun: runGlobalCommand,
-                    onDismiss: { showingGlobalPalette = false }
-                )
-            }
+            globalPaletteOverlay
         } else if showingShortcutSheet {
-            paletteScrim {
-                KeyboardCheatSheet(
-                    registry: shortcutRegistry,
-                    overrides: presentationStore.snapshot.shortcutOverrides,
-                    onDismiss: { showingShortcutSheet = false }
-                )
-            }
+            shortcutSheetOverlay
         } else if showingFilePicker {
-            paletteScrim {
-                RepoFilePickerView(
-                    repoRoot: openSessionRepoRoot,
-                    presentationStore: presentationStore,
-                    onDismiss: { showingFilePicker = false }
-                )
-            }
+            filePickerOverlay
+        } else if showingPlanQueue {
+            planQueueOverlay
+        }
+    }
+
+    /// Single derived key driving `.animation(value:)` for every modal —
+    /// keeps the body's modifier chain short enough for the SwiftUI
+    /// type-checker. Any modal flag flipping invalidates this and
+    /// triggers the shared 0.16s ease-in-out.
+    private var modalOverlayKey: Int {
+        var v = 0
+        if showingGlobalPalette { v |= 1 }
+        if showingShortcutSheet { v |= 2 }
+        if showingFilePicker { v |= 4 }
+        if showingPlanQueue { v |= 8 }
+        return v
+    }
+
+    @ViewBuilder
+    private var globalPaletteOverlay: some View {
+        paletteScrim {
+            GlobalCommandPalette(
+                registry: buildCommandRegistry(),
+                shortcuts: shortcutRegistry,
+                shortcutOverrides: presentationStore.snapshot.shortcutOverrides,
+                recentCommandIDs: presentationStore.snapshot.commandRecents,
+                onRun: runGlobalCommand,
+                onDismiss: { showingGlobalPalette = false }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var shortcutSheetOverlay: some View {
+        paletteScrim {
+            KeyboardCheatSheet(
+                registry: shortcutRegistry,
+                overrides: presentationStore.snapshot.shortcutOverrides,
+                onDismiss: { showingShortcutSheet = false }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var filePickerOverlay: some View {
+        paletteScrim {
+            RepoFilePickerView(
+                repoRoot: openSessionRepoRoot,
+                presentationStore: presentationStore,
+                onDismiss: { showingFilePicker = false }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var planQueueOverlay: some View {
+        paletteScrim {
+            PlanQueueSheet(
+                queue: planQueue,
+                onDismiss: { showingPlanQueue = false }
+            )
         }
     }
 
@@ -354,6 +396,14 @@ struct MacRootView: View {
     private func handleOpenFilePicker(_ note: Notification) {
         tab = .code
         showingFilePicker = true
+    }
+
+    /// Build the spawn queue and present the Continue Plan sheet. We
+    /// rebuild on every open so the JSONL artifact picks up changes
+    /// between sessions without an app restart.
+    private func handleOpenPlanQueue(_ note: Notification) {
+        planQueue = PlanQueueLoader.load(repoRoot: PlanRepoRoot.resolved())
+        showingPlanQueue = true
     }
 
     private func handleExportSession(_ note: Notification) {
@@ -972,6 +1022,7 @@ struct MacTitlebar: View {
                     HStack(spacing: 10) {
                         tabStrip
                         Spacer(minLength: 0)
+                        continuePlanChip
                         // v0.24.0: in-app update chip. Always visible across
                         // every tab when an update is available OR the bundle
                         // is translocated. Self-hides via `chipState()` —
@@ -997,6 +1048,29 @@ struct MacTitlebar: View {
             TahoeDashTab("Code",     active: active == .code)     { onTab(.code) }
             TahoeDashTab("Settings", active: active == .settings) { onTab(.settings) }
         }
+    }
+
+    /// Titlebar chip that opens the Continue Plan spawn sheet. Posts a
+    /// notification rather than holding a closure so MacTitlebar stays
+    /// callback-free and stable across previews.
+    @ViewBuilder
+    private var continuePlanChip: some View {
+        Button(action: {
+            NotificationCenter.default.post(name: .clawdmeterShowPlanQueue, object: nil)
+        }) {
+            HStack(spacing: 5) {
+                Image(systemName: "rectangle.stack.fill.badge.plus")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Continue plan")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+            }
+            .foregroundStyle(t.fg2)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(t.hair2.opacity(0.7), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Open the spawn queue and fan out parallel CC sessions for the remaining plan")
     }
 
     private var codeActions: some View {

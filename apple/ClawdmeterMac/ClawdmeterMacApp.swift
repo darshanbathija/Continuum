@@ -26,6 +26,9 @@ extension Notification.Name {
     static let clawdmeterExportSession = Notification.Name("clawdmeter.exportSession")
     static let clawdmeterShowTransientToast = Notification.Name("clawdmeter.showTransientToast")
     static let clawdmeterInsertComposerText = Notification.Name("clawdmeter.insertComposerText")
+    /// Posted from the titlebar's "Continue Plan" chip to open the
+    /// spawn queue modal in MacRootView.
+    static let clawdmeterShowPlanQueue = Notification.Name("clawdmeter.showPlanQueue")
 }
 
 @main
