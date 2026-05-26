@@ -38,7 +38,9 @@ private struct ChatBody: View {
 
     var body: some View {
         ZStack {
-            TahoeWallpaperView()
+            // A2 (v0.30.x): TahoeWallpaperView already painted by IOSRootView
+            // (the parent). The local instance was a doubled Canvas draw on
+            // every layout pass. Drop it; the root wallpaper bleeds through.
             VStack(spacing: 0) {
                 header
                 if !client.isConfigured {

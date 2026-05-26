@@ -97,7 +97,10 @@ private struct ChatRoot: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(10)
-        .background(TahoeWallpaperView())
+        // A2 (v0.30.x): TahoeWallpaperView is already painted by MacRootView
+        // (the parent). Painting it again here is a doubled SwiftUI Canvas
+        // draw (radial-gradient orbs + base gradients) on every resize / tab
+        // switch. Drop the local instance; the root wallpaper bleeds through.
         .task {
             await client.refreshSessions()
             await client.refreshModelCatalog()
