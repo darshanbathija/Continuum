@@ -48,13 +48,21 @@ struct SidebarProjection {
 /// would scan every element on every body pass — defeating the cache.
 ///
 /// **What goes into each fingerprint:** every field the downstream
-/// projection actually reads. If the projection ever starts reading a new
-/// session field (e.g. a new `colorTag`), add it to the fingerprint or
-/// the cache will serve stale rows for that field. The included fields
-/// today:
+/// projection actually reads PLUS every field the row renderer reads off
+/// the cached `AgentSession` snapshot. The projection's
+/// `visibleSessions` / group `sessions` are value-type snapshots taken at
+/// build-time; if `sessionRow` dereferences a session field that isn't
+/// in the fingerprint AND that field can mutate without bumping
+/// `lastEventSeq`, the cache will serve stale rows for that field. If
+/// the projection or renderer ever starts reading a new session field
+/// (e.g. a new `colorTag` baked into the session record), add it to the
+/// fingerprint. The included fields today:
 ///   - registryFingerprint: id, lastEventSeq, status, archivedAt,
 ///     planText.isEmpty, prMirrorState?.state — every field the grouper
-///     buckets / sorts / filters on, plus the review-bucket inputs.
+///     buckets / sorts / filters on, plus the review-bucket inputs —
+///     and customName, because `sessionRow` reads it via
+///     `sessionTitle` and `registry.rename(...)` mutates it without
+///     bumping `lastEventSeq`.
 ///   - reposFingerprint: per-repo key, displayName, liveSessionCount,
 ///     hasActiveSessions, recents (path + lastModified + alias).
 ///   - workbenchPRCacheFingerprint: per-session prCache.state, since
@@ -240,6 +248,22 @@ enum SidebarProjectionBuilder {
             hasher.combine(s.goal)
             hasher.combine(s.agent)
             hasher.combine(s.lastEventAt)
+            // Sidebar row title falls back to `customName` after
+            // titleOverrides + before goal (see `sessionTitle` in
+            // SessionWorkspaceView). `registry.rename(...)` mutates
+            // customName *without* bumping `lastEventSeq` (it's a
+            // local-state mutation, not a cross-device event), so we
+            // must hash it explicitly — otherwise a daemon-driven
+            // first-prompt rename (chat-tab D1 naming, /rename HTTP
+            // endpoint) updates the registry but leaves the cached
+            // projection's `[AgentSession]` snapshots holding stale
+            // customNames. Non-repo groupings (date/status/agent/none)
+            // render rows out of the cached projection directly, so
+            // this stale snapshot is what `sessionRow` sees until
+            // something else invalidates the cache. Repo grouping
+            // dodges this because `repoSection` re-reads
+            // `model.registry.sessions` live per repo.
+            hasher.combine(s.customName)
         }
         return UInt64(bitPattern: Int64(hasher.finalize()))
     }

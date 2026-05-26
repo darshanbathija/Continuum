@@ -304,6 +304,47 @@ final class SidebarProjectionCacheTests: XCTestCase {
         )
     }
 
+    /// Regression: `registry.rename(...)` mutates `customName` without
+    /// bumping `lastEventSeq`. Pre-fix, the registry fingerprint missed
+    /// this mutation and the cache served stale sidebar rows after a
+    /// daemon-driven first-prompt rename (chat-tab D1 naming). Verify
+    /// the fingerprint catches a customName change so the cache
+    /// invalidates and the new title surfaces in non-repo groupings.
+    func test_a11Gate_customNameMutationInvalidatesRegistryFingerprint() {
+        let sessions = Self.fixtureSessions(count: 50)
+        let baseline = SidebarProjectionBuilder.registryFingerprint(sessions)
+
+        // Same input → same fingerprint.
+        XCTAssertEqual(SidebarProjectionBuilder.registryFingerprint(sessions), baseline)
+
+        // Renaming one session (customName flip) MUST change the
+        // fingerprint, otherwise the cache serves a stale sidebar row.
+        var renamed = sessions
+        let target = renamed[0]
+        renamed[0] = AgentSession(
+            id: target.id,
+            repoKey: target.repoKey,
+            repoDisplayName: target.repoDisplayName,
+            agent: target.agent,
+            model: target.model,
+            goal: target.goal,
+            worktreePath: target.worktreePath,
+            tmuxWindowId: target.tmuxWindowId,
+            tmuxPaneId: target.tmuxPaneId,
+            status: target.status,
+            planText: target.planText,
+            createdAt: target.createdAt,
+            lastEventAt: target.lastEventAt,
+            lastEventSeq: target.lastEventSeq,  // NOT bumped — mirrors registry.rename
+            customName: "Renamed by daemon"
+        )
+        XCTAssertNotEqual(
+            SidebarProjectionBuilder.registryFingerprint(renamed),
+            baseline,
+            "customName mutation must change the registry fingerprint (registry.rename doesn't bump lastEventSeq)"
+        )
+    }
+
     func test_a11Gate_pinnedSetIsPartOfCacheKey() {
         let sessions = Self.fixtureSessions(count: 100)
         let repos = Self.fixtureRepos(from: sessions)
