@@ -4696,7 +4696,11 @@ private struct TahoeDiffPreviewPane: View {
                 diffToolbar(proxy: proxy)
                 TahoeHairline()
                 ScrollView([.vertical, .horizontal]) {
-                    VStack(alignment: .leading, spacing: 0) {
+                    // A12 — virtualized rows. LazyVStack only materializes
+                    // rows in view, so 50k-line diffs no longer force
+                    // SwiftUI to lay out every line up front. Critical
+                    // for the <500ms acceptance budget.
+                    LazyVStack(alignment: .leading, spacing: 0) {
                     if isLoading {
                         HStack(spacing: 7) {
                             ProgressView().controlSize(.small)
@@ -5062,10 +5066,26 @@ private struct TahoeDiffPreviewPane: View {
             process.waitUntilExit()
             let data = output.fileHandleForReading.readDataToEndOfFile()
             let text = String(data: data, encoding: .utf8) ?? ""
-            let rawLines = text
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .map(String.init)
-            return annotate(rawLines)
+            // A12 — annotate is the legacy classify-and-track-hunk-
+            // path pass. It's a single linear walk (O(N)) but for a
+            // 50k-line diff that's still ~50k String allocations +
+            // ~50k DiffLine allocations on the hot path. We cache the
+            // result keyed on the raw text so re-opening the pane
+            // with an unchanged worktree skips the walk entirely.
+            //
+            // The shared `ParsedDiffCache` keeps the structured
+            // representation around for any future workbench renderer
+            // that wants to render directly off `ParsedDiff`; we keep
+            // a parallel in-process `[DiffLine]` cache for the legacy
+            // renderer here so this PR doesn't have to rewrite the
+            // split-view + intra-line + hunk-collapse machinery.
+            _ = ParsedDiffCache.shared.parsed(input: text)
+            return Self.annotatedDiffLineCache.lookupOrCompute(text: text) {
+                let rawLines = text
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .map(String.init)
+                return annotate(rawLines)
+            }
         } catch {
             return [DiffLine("Unable to load diff: \(error.localizedDescription)", index: 0, forcedKind: .meta)]
         }
@@ -5210,7 +5230,12 @@ private struct TahoeDiffPreviewPane: View {
 
     private struct DiffLine: Identifiable {
         enum Kind { case meta, hunk, add, del, context }
-        let id: String
+        /// A12 — `index` is unique within a single load, so we can use
+        /// it directly as `Identifiable.id`. The previous
+        /// `"\(index)-\(text)"` formulation allocated a String per
+        /// row on every layout pass — a 50k-line diff burned ~50k
+        /// allocations + interpolation work just to compare identity.
+        var id: Int { index }
         let text: String
         let index: Int
         let kind: Kind
@@ -5218,7 +5243,6 @@ private struct TahoeDiffPreviewPane: View {
         let path: String?
 
         init(_ text: String, index: Int, hunkId: String? = nil, path: String? = nil, forcedKind: Kind? = nil) {
-            self.id = "\(index)-\(text)"
             self.text = text
             self.index = index
             self.hunkId = hunkId
@@ -5273,6 +5297,60 @@ private struct TahoeDiffPreviewPane: View {
             }
         }
     }
+
+    /// A12 — in-process cache for the legacy `[DiffLine]` shape this
+    /// pane consumes. Mirrors the shared `ParsedDiffCache` but with a
+    /// smaller capacity (each entry is a per-render data structure).
+    ///
+    /// Re-mounts of the diff pane (Cmd-tab back into the workbench,
+    /// presentationStore changes that re-create the view) skip the
+    /// linear annotate walk when the underlying `git diff` text
+    /// hasn't changed.
+    private final class DiffLineCache: @unchecked Sendable {
+        private struct Key: Hashable {
+            let textHash: String
+        }
+        private let lock = NSLock()
+        private var storage: [Key: [DiffLine]] = [:]
+        private var order: [Key] = []
+        private let capacity = 8
+
+        func lookupOrCompute(
+            text: String,
+            compute: () -> [DiffLine]
+        ) -> [DiffLine] {
+            let key = Key(textHash: UnifiedDiffParser.sha256Hex(text))
+            lock.lock()
+            if let cached = storage[key] {
+                if let existing = order.firstIndex(of: key) {
+                    order.remove(at: existing)
+                }
+                order.append(key)
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+
+            // Compute outside the lock — a 50k-line annotate is ~tens
+            // of ms and we don't want concurrent diff-pane mounts to
+            // serialize behind one another.
+            let computed = compute()
+
+            lock.lock()
+            storage[key] = computed
+            order.append(key)
+            while storage.count > capacity, let oldest = order.first {
+                order.removeFirst()
+                storage.removeValue(forKey: oldest)
+            }
+            lock.unlock()
+            return computed
+        }
+    }
+
+    /// Process-lifetime cache. Diff-pane mounts are short-lived; a
+    /// long-lived cache here means a Cmd-tab cycle hits warm data.
+    private static let annotatedDiffLineCache = DiffLineCache()
 }
 
 private struct TahoeSourcesPreviewPane: View {
