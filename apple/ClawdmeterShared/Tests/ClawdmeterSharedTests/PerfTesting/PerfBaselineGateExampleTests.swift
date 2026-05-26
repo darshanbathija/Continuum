@@ -25,13 +25,10 @@ final class PerfBaselineGateExampleTests: XCTestCase {
         // Warm any one-shot allocations before measuring.
         _ = grouped(by: \.repoKey, sessions: sessions)
 
-        let options = XCTMeasureOptions()
-        options.iterationCount = 5
-
         // `measure` records wall-clock + main-thread time. XCTest auto-
         // compares against the prior baseline once recorded; first run
         // sets the baseline.
-        measure(metrics: [XCTClockMetric()], options: options) {
+        measureClock(iterations: 5) {
             let grouped = grouped(by: \.repoKey, sessions: sessions)
             // Force evaluation so the optimizer doesn't strip the work.
             XCTAssertEqual(grouped.count, Set(sessions.map { $0.repoKey }).count)
@@ -51,10 +48,7 @@ final class PerfBaselineGateExampleTests: XCTestCase {
         // "Refactor this to use the existing utility."
         _ = messages.filter { $0.text.localizedCaseInsensitiveContains("refactor") }
 
-        let options = XCTMeasureOptions()
-        options.iterationCount = 5
-
-        measure(metrics: [XCTClockMetric()], options: options) {
+        measureClock(iterations: 5) {
             let hits = messages.filter { $0.text.localizedCaseInsensitiveContains("refactor") }
             XCTAssertGreaterThan(hits.count, 0)
         }
@@ -69,10 +63,7 @@ final class PerfBaselineGateExampleTests: XCTestCase {
     func test_perfGate_splitDiff_50k_under_200ms() {
         let diff = PerfFixtures.diff50kLines
 
-        let options = XCTMeasureOptions()
-        options.iterationCount = 3
-
-        measure(metrics: [XCTClockMetric()], options: options) {
+        measureClock(iterations: 3) {
             let lines = diff.split(separator: "\n")
             XCTAssertGreaterThanOrEqual(lines.count, 50_000)
         }
@@ -86,5 +77,19 @@ final class PerfBaselineGateExampleTests: XCTestCase {
         sessions: [PerfFixtures.MockSession]
     ) -> [T?: [PerfFixtures.MockSession]] {
         Dictionary(grouping: sessions, by: { $0[keyPath: keyPath] })
+    }
+
+    private func measureClock(iterations: Int, _ block: () -> Void) {
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
+        let options = XCTMeasureOptions()
+        options.iterationCount = iterations
+        measure(metrics: [XCTClockMetric()], options: options) {
+            block()
+        }
+#else
+        measure {
+            block()
+        }
+#endif
     }
 }
