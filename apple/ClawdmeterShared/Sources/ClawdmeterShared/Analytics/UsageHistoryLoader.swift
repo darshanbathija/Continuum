@@ -659,13 +659,34 @@ public actor UsageHistoryLoader {
         // v0.6.0 Antigravity 2: per-conversation file (.pb or .db).
         // The file itself is encrypted at rest (see ConversationProtoParser);
         // tokens are estimated from the matching brain dir's metadata.
-        let records = try AntigravityUsageParser.parse(
-            conversationURL: url,
-            antigravityDataDir: antigravityDataDir,
-            brainIndex: brainIndex,
-            modelName: modelName,
-            dedupPrefix: dedupPrefix
-        )
+        //
+        // F1e-wire (strangler-fig per D23): when the feature flag is on,
+        // route through the canonical adapter via
+        // `AntigravityAdapterUsageBridge` → `AntigravityAdapter` → canonical
+        // `ProviderRuntimeEvent` → `UsageRecord`. When off, use the
+        // legacy `AntigravityUsageParser` directly. Both paths MUST
+        // produce identical `[UsageRecord]` arrays — enforced by
+        // F1eParityTests. The bridge mirrors the existing PR #154 OS
+        // guard for the `.db` overload; watchOS / tvOS always falls back
+        // to the byte-estimator path regardless of the flag.
+        let records: [UsageRecord]
+        if FeatureFlags.useAntigravityAdapter {
+            records = try AntigravityAdapterUsageBridge.parse(
+                conversationURL: url,
+                antigravityDataDir: antigravityDataDir,
+                brainIndex: brainIndex,
+                modelName: modelName,
+                dedupPrefix: dedupPrefix
+            )
+        } else {
+            records = try AntigravityUsageParser.parse(
+                conversationURL: url,
+                antigravityDataDir: antigravityDataDir,
+                brainIndex: brainIndex,
+                modelName: modelName,
+                dedupPrefix: dedupPrefix
+            )
+        }
         var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
         var dedupKeys = Set<String>()
         var unpriced: [String: TokenTotals] = [:]
