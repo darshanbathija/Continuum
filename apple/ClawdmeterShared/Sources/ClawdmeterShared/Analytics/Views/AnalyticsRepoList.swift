@@ -16,9 +16,15 @@ public struct AnalyticsRepoList: View {
     public let window: UsageHistorySnapshot.Window
     public let providerFilter: UsageHistoryStore.ProviderFilter
 
+    // C1 (Phase 2): rows compute moved off-main via .detached(.utility).
+    // The rows derivation runs three dict merges + a sort + percentage
+    // math; for users with many repos on allTime window, that's a real
+    // main-thread stall today. .detached keeps the analytics view
+    // responsive; the existing "No usage in this window" empty-state
+    // covers the brief placeholder window before the worker lands.
     @StateObject private var rowsStore = MemoizedDerivedStore<RowsInput, [Row]>(
         placeholder: [],
-        mode: .sync,
+        mode: .detached(priority: .utility),
         compute: { Self.computeRows($0) }
     )
 
