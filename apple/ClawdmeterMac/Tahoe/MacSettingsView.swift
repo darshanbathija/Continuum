@@ -235,7 +235,7 @@ public struct MacSettingsView: View {
         // their visual rhythm matches: glyph + title + one-line status +
         // single trailing control (button or toggle).
         SettingsCard(title: "Providers",
-                     sub: "External agent runtimes Clawdmeter can drive.") {
+                     sub: "External agent runtimes Continuum can drive.") {
             VStack(alignment: .leading, spacing: 14) {
                 ClaudeCLIProviderRow()
                 TahoeHair()
@@ -1248,9 +1248,22 @@ private struct OpencodeProviderRow: View {
         HStack(alignment: .top, spacing: 12) {
             TahoeProviderGlyph(provider: .opencode, size: 32)
             VStack(alignment: .leading, spacing: 4) {
-                Text("OpenCode")
-                    .font(TahoeFont.body(14, weight: .semibold))
-                    .foregroundStyle(t.fg)
+                // v0.29.11: title→pill spacing is 8 to match Claude Code
+                // (line ~1788) + Cursor SDK (line ~1639) rows. v0.29.10
+                // shipped spacing:6 which the design critique flagged as
+                // a 2pt visible-parity bug between adjacent rows.
+                HStack(spacing: 8) {
+                    Text("OpenCode")
+                        .font(TahoeFont.body(14, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    // v0.29.10: status pill mirrors Claude Code + Cursor SDK
+                    // rows. Verifier surfaced that the OpenCode row was the
+                    // only authenticated provider without an at-a-glance
+                    // state indicator — the row's subtitle had the info
+                    // but you had to read 8 words to know whether OpenCode
+                    // was ready or needed sign-in. The pill fixes that.
+                    statePill
+                }
                 Text(detailLine)
                     .font(TahoeFont.body(12))
                     .foregroundStyle(t.fg3)
@@ -1265,26 +1278,53 @@ private struct OpencodeProviderRow: View {
         .task { await refreshState() }
     }
 
+    @ViewBuilder
+    private var statePill: some View {
+        let (label, color): (String, Color) = {
+            if !loaded { return ("Checking…", t.fg4) }
+            if isSignedIn { return ("Ready", Color.green) }
+            if !hasBinary { return ("Not installed", Color.orange) }
+            return ("Sign-in pending", Color.yellow)
+        }()
+        Text(label)
+            .font(TahoeFont.body(10, weight: .bold))
+            .tracking(0.3)
+            .foregroundStyle(color)
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background { Capsule().fill(color.opacity(0.15)) }
+            .overlay { Capsule().stroke(color.opacity(0.35), lineWidth: 0.5) }
+    }
+
     private var providerChips: some View {
         // Wrap chips in an HStack — the provider count is small (≤10)
         // and the Settings column is fixed width, so a single line of
         // chips fits without a flow layout. If new providers push the
         // count higher this should be revisited.
+        // v0.29.11 design fixes:
+        //   - tracking 0.2 → 0.3 to match the adjacent status pill
+        //     (same font size, same row — was a visible typographic
+        //     mismatch).
+        //   - fill/stroke pulled from t.hair2/t.hairline tokens instead
+        //     of t.fg.opacity(…) literals. In light mode `t.fg` is
+        //     near-black so the alpha math was producing an unintended
+        //     fill; the hairline tokens are exactly the values the
+        //     theme designed for this.
+        //   - dropped `.padding(.top, 2)` so the VStack(spacing: 4) parent
+        //     keeps its 4pt vertical rhythm with the detail line above.
         HStack(spacing: 6) {
             ForEach(providers, id: \.id) { provider in
                 Text(provider.displayName)
                     .font(TahoeFont.body(10, weight: .semibold))
-                    .tracking(0.2)
+                    .tracking(0.3)
                     .foregroundStyle(t.fg2)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
-                    .background { Capsule().fill(t.fg.opacity(0.08)) }
-                    .overlay { Capsule().stroke(t.fg.opacity(0.18), lineWidth: 0.5) }
+                    .background { Capsule().fill(t.hair2) }
+                    .overlay { Capsule().stroke(t.hairline, lineWidth: 0.5) }
                     .help("\(provider.displayName) · \(provider.type)")
             }
             Spacer(minLength: 0)
         }
-        .padding(.top, 2)
     }
 
     @ViewBuilder
@@ -1364,7 +1404,7 @@ private struct OpencodeProviderRow: View {
             let alert = NSAlert()
             alert.messageText = "Open Terminal manually"
             alert.informativeText = """
-            Couldn't drive Terminal from Clawdmeter (\(detail)).
+            Couldn't drive Terminal from Continuum (\(detail)).
 
             The opencode auth command has been copied to your clipboard. Open Terminal yourself and paste it (⌘V) to finish authentication.
             """
@@ -1922,7 +1962,7 @@ private struct ClaudeCLIProviderRow: View {
             let alert = NSAlert()
             alert.messageText = "Open Terminal manually"
             alert.informativeText = """
-            Couldn't drive Terminal from Clawdmeter (\(detail)).
+            Couldn't drive Terminal from Continuum (\(detail)).
 
             The install + login command has been copied to your clipboard. Open Terminal yourself and paste it (⌘V) to finish authentication.
             """

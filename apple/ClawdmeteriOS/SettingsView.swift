@@ -73,7 +73,7 @@ struct SettingsView: View {
                 } footer: {
                     Text(agentClient.isConfigured
                         ? "Scan a new QR or paste a new URL to re-pair with a different Mac. Forget pairing erases the stored host + token from this iPhone (Mac is untouched)."
-                        : "Open Clawdmeter on your Mac → Pair with iPhone. Both devices must be on the same Tailnet.")
+                        : "Open Continuum on your Mac → Pair with iPhone. Both devices must be on the same Tailnet.")
                 }
 
                 Section {
