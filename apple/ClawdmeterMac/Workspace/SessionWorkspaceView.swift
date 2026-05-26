@@ -2707,7 +2707,9 @@ private struct CenterThread: View {
                 return (openSessions, sourceEntries, Array(recents.prefix(30)))
             },
             usageStatus: usageStatusInfo,
-            projectSkillsRoot: URL(fileURLWithPath: session.effectiveCwd).appendingPathComponent(".claude/skills", isDirectory: true)
+            projectSkillsRoot: URL(fileURLWithPath: session.effectiveCwd).appendingPathComponent(".claude/skills", isDirectory: true),
+            chatStore: model.chatStore(for: session),
+            onRetryPending: { Task { await performPendingRetry() } }
         )
         // Read-only synthetic sessions have no live tmux pane to respawn,
         // so we skip the swap-on-change handlers. The model/effort chips
@@ -2893,6 +2895,12 @@ private struct CenterThread: View {
               let port = runtime.agentControlServer.boundPort
         else {
             composerStore.endSend(error: .offline)
+            // A13: optimistic pending becomes "queued offline" so the user
+            // can see their message is staged for replay when the daemon
+            // returns. Retry triggers another performBoundSend() pass.
+            model.chatStore(for: session)?.markPendingQueuedOffline(
+                error: "Daemon offline — tap retry when it returns."
+            )
             return
         }
         // Read-only Recent-JSONL rows: implicitly promote the synthetic
@@ -2959,6 +2967,16 @@ private struct CenterThread: View {
         do {
             try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
             composerStore.endSend()
+            // A13: daemon accepted the send. The auto-reconcile in
+            // SessionChatStore clears the pending bubble once the real
+            // user line lands in the JSONL — typically within a few
+            // hundred ms. If the JSONL tail is slow, leaving the bubble
+            // up as "Sending…" is still correct UX (the message IS in
+            // flight). We do NOT clear it here proactively because the
+            // ack-vs-JSONL race could flicker the bubble out and back in.
+            // A13: drain any messages that piled up while the daemon was
+            // offline — now that one send succeeded, the daemon is reachable.
+            await drainOfflineQueueIfAny(target: target, port: Int(port))
         } catch MacComposerSender.Error.http(let status, let retry) {
             finishBoundSendWithError(
                 sendError(forHTTPStatus: status, retryAfter: retry),
@@ -2980,6 +2998,68 @@ private struct CenterThread: View {
                 draftText: draftText,
                 draftAttachments: draftAttachments
             )
+        }
+    }
+
+    /// A13 — Retry handler for the failed/queued pending bubble in the
+    /// composer. Flips the chat store's pending slot back to `.sending`
+    /// (no flicker) and re-runs the regular send path against the
+    /// existing pending body. When the bubble is in `.failed` we don't
+    /// have the composer text anymore (the user already cleared it on
+    /// the first send) — but `performBoundSend` reads from
+    /// `composerStore.text`. We re-seed the composer with the pending
+    /// body so the existing pipeline can replay it, then restore the
+    /// user's in-flight draft if they typed something new during the
+    /// failure window.
+    @MainActor
+    private func performPendingRetry() async {
+        guard let chatStore = model.chatStore(for: session),
+              let pending = chatStore.pendingMessage,
+              pending.canRetry
+        else { return }
+
+        // Preserve any new draft the user typed since the failure.
+        let liveDraft = composerStore.text
+        let liveDraftAttachments = composerStore.attachments
+
+        composerStore.text = pending.body
+        chatStore.markPendingRetrying()
+        await performBoundSend()
+
+        // Restore the user's in-flight draft if they typed something new
+        // during the failure window. `performBoundSend` clears the
+        // composer on success, so we only restore when the slot was
+        // already populated by something other than the pending body.
+        let trimmedLive = liveDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedLive.isEmpty, trimmedLive != pending.body {
+            composerStore.restoreDraft(text: liveDraft, attachments: liveDraftAttachments)
+        }
+    }
+
+    /// A13 — drain queued pending messages onto the daemon. Best-effort:
+    /// each queued body is sent in FIFO order; failures re-queue at the
+    /// tail so we don't lose them. Runs after a successful primary send
+    /// (signal that the daemon is reachable again).
+    @MainActor
+    private func drainOfflineQueueIfAny(target: AgentSession, port: Int) async {
+        guard let chatStore = model.chatStore(for: session) else { return }
+        let queued = chatStore.dequeueOfflineQueue()
+        guard !queued.isEmpty else { return }
+        let sender = MacComposerSender(port: port, token: PairingTokenStore.shared.currentToken())
+        for entry in queued {
+            // Bodies in the offline queue were captured pre-trim, so
+            // re-add the terminal newline tmux paste-buffer requires.
+            let body = entry.body.isEmpty ? "\n" : entry.body + "\n"
+            do {
+                try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
+            } catch {
+                // Failed to drain — re-mark the most recent failure and
+                // bail. Subsequent successful sends will retry the rest.
+                chatStore.markPendingFailed(
+                    error: "Couldn't replay queued message: \(error.localizedDescription)"
+                )
+                break
+            }
         }
     }
 
@@ -3007,6 +3087,20 @@ private struct CenterThread: View {
             )
         }
         composerStore.endSend(error: error)
+        // A13 (D24 rejection handling): the daemon rejected the send. The
+        // optimistic pending bubble stays visible with a chip + retry
+        // affordance — NOT silently dropped. Offline transport gets a
+        // distinct state so the chip can offer "will retry when daemon
+        // returns" copy instead of the explicit-error copy.
+        let chatStore = model.chatStore(for: session)
+        switch error {
+        case .offline:
+            chatStore?.markPendingQueuedOffline(
+                error: "Daemon offline — tap retry when it returns."
+            )
+        default:
+            chatStore?.markPendingFailed(error: error.errorDescription ?? "Send failed.")
+        }
     }
 
     private func performInterrupt() async {

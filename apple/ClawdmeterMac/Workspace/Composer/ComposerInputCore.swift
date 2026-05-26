@@ -76,6 +76,20 @@ struct ComposerInputCore: View {
     var usageStatus: UsageStatusInfo?
     /// Project-local skill root, if any (`<repo>/.claude/skills/`).
     var projectSkillsRoot: URL?
+    /// A13 (perf — optimistic composer UI): the bound session's chat
+    /// store. When non-nil, the composer injects an optimistic
+    /// `PendingMessage` synchronously on the user's send tap so the
+    /// pending bubble renders within 1 frame. Reconciliation, rejection
+    /// chip, retry, and the offline queue all flow through this store's
+    /// `pendingMessage` slot. Nil for empty-state composers (no chat
+    /// store exists yet — the spawn produces one as a side effect of
+    /// `firstSend()`).
+    var chatStore: SessionChatStore?
+    /// A13 — fires when the user taps Retry on a failed pending bubble.
+    /// Parent re-runs the same send path; the store is flipped back to
+    /// `.sending` so the bubble doesn't flicker out and back in. Nil =
+    /// no retry chip rendered.
+    var onRetryPending: (() -> Void)?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
 
@@ -86,6 +100,17 @@ struct ComposerInputCore: View {
         // input row (negative Y offset) as before.
         TahoeGlass(radius: 18, tone: .raised) {
             VStack(spacing: 6) {
+                // A13 — optimistic pending bubble strip. Renders as a row
+                // above the input box so the user sees an immediate echo of
+                // their tap. Hidden when there's no chat store (empty-state
+                // composer) or no pending message in flight.
+                if let chatStore {
+                    PendingMessageStrip(
+                        chatStore: chatStore,
+                        onRetry: { onRetryPending?() },
+                        onDismiss: { chatStore.clearPending() }
+                    )
+                }
                 if !store.attachments.isEmpty {
                     attachmentChipsRow
                 }
@@ -666,6 +691,12 @@ struct ComposerInputCore: View {
     private func sendCurrentDraft() {
         try? presentationStore.recordPrompt(store.text)
         clearPersistedDraft()
+        // A13 — inject the optimistic pending bubble BEFORE the async send
+        // call. This is a synchronous mutation on `chatStore.pendingMessage`
+        // on the main actor, so SwiftUI flushes the resulting body
+        // invalidation on the next runloop tick — within ~16ms of the tap
+        // per A13 acceptance.
+        injectOptimisticPendingIfWanted()
         onSend()
     }
 
@@ -678,6 +709,27 @@ struct ComposerInputCore: View {
         try? presentationStore.recordPrompt(store.text)
         clearPersistedDraft()
         onQueue()
+    }
+
+    /// A13 — synchronous optimistic injection. Mirrors what
+    /// `ComposerStore.renderPromptBody` does for prose extraction so the
+    /// auto-reconcile on the bound chat store finds a matching body
+    /// when the real `user` JSONL line lands. Attachments surface as
+    /// `@<basename>` chips in the pending bubble (the chat row renders
+    /// the same `@<path>` lines once the daemon writes the JSONL turn,
+    /// so the bodies line up).
+    ///
+    /// No-op when `chatStore` is nil (empty-state composer) — there's
+    /// no chat store to render into yet; the empty-state spawn produces
+    /// one as a side effect.
+    private func injectOptimisticPendingIfWanted() {
+        guard let chatStore else { return }
+        let trimmed = store.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attachmentRefs = store.attachments.map { $0.displayName }
+        // Skip when there's literally nothing to render — matches
+        // `ComposerStore.canSend` semantics.
+        guard !trimmed.isEmpty || !attachmentRefs.isEmpty else { return }
+        chatStore.injectPending(text: trimmed, attachmentRefs: attachmentRefs)
     }
 
     private var liveCostLabel: String {
@@ -1024,5 +1076,176 @@ private struct AgentMenuIcon: View {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .stroke(.white.opacity(0.16), lineWidth: 0.5)
             }
+    }
+}
+
+/// A13 — optimistic pending message strip rendered above the composer
+/// input. Surfaces three states:
+///   - `.sending` — translucent "Sending…" bubble with a spinner so the
+///     user gets an immediate echo of their tap (~16ms).
+///   - `.failed` — opaque error bubble with a Retry chip + dismiss. D24
+///     acceptance: the bubble stays visible until the user acts.
+///   - `.queuedOffline` — same opacity as `.sending` but with an "offline"
+///     badge so the user knows the message is staged for replay.
+///
+/// Border + opacity differ from a confirmed user bubble so a glance
+/// distinguishes pending from settled — opacity 0.65 + dashed border for
+/// pending, solid + 1.0 opacity once reconciled.
+private struct PendingMessageStrip: View {
+    @ObservedObject var chatStore: SessionChatStore
+    let onRetry: () -> Void
+    let onDismiss: () -> Void
+    @Environment(\.tahoe) private var t
+
+    var body: some View {
+        Group {
+            if let pending = chatStore.pendingMessage {
+                pendingBubble(pending)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: chatStore.pendingMessage?.id)
+        .animation(.easeInOut(duration: 0.18), value: chatStore.pendingMessage?.state)
+    }
+
+    @ViewBuilder
+    private func pendingBubble(_ pending: SessionChatStore.PendingMessage) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Spacer(minLength: 40)
+            VStack(alignment: .trailing, spacing: 4) {
+                bodyCard(pending)
+                statusRow(pending)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func bodyCard(_ pending: SessionChatStore.PendingMessage) -> some View {
+        let body = pending.body.isEmpty
+            ? (pending.attachmentRefs.isEmpty
+                ? "(empty message)"
+                : pending.attachmentRefs.joined(separator: ", "))
+            : pending.body
+        VStack(alignment: .trailing, spacing: 4) {
+            if !pending.attachmentRefs.isEmpty, !pending.body.isEmpty {
+                Text(pending.attachmentRefs.joined(separator: " · "))
+                    .font(TahoeFont.body(10, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+            }
+            Text(body)
+                .font(TahoeFont.body(13))
+                .foregroundStyle(t.fg)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: 520, alignment: .trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(
+                    bubbleFill(pending),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(
+                            bubbleStroke(pending),
+                            style: StrokeStyle(
+                                lineWidth: pending.state == .failed ? 1.25 : 0.75,
+                                dash: pending.state == .failed ? [] : [4, 3]
+                            )
+                        )
+                )
+                .opacity(pending.state == .failed ? 1.0 : 0.65)
+                .accessibilityLabel(accessibilityLabel(pending))
+        }
+    }
+
+    @ViewBuilder
+    private func statusRow(_ pending: SessionChatStore.PendingMessage) -> some View {
+        HStack(spacing: 8) {
+            switch pending.state {
+            case .sending:
+                HStack(spacing: 5) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Sending…")
+                        .font(TahoeFont.body(10.5, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                }
+            case .queuedOffline:
+                HStack(spacing: 5) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.orange)
+                    Text(pending.errorDescription ?? "Will send when daemon returns")
+                        .font(TahoeFont.body(10.5, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                }
+                Button("Retry now") { onRetry() }
+                    .buttonStyle(.plain)
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(t.fg4)
+                }
+                .buttonStyle(.plain)
+                .help("Discard pending message")
+            case .failed:
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.red)
+                    Text(pending.errorDescription ?? "Failed to send")
+                        .font(TahoeFont.body(10.5, weight: .semibold))
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
+                Button("Retry") { onRetry() }
+                    .buttonStyle(.plain)
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                    .accessibilityIdentifier("composer.pending.retry")
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(t.fg4)
+                }
+                .buttonStyle(.plain)
+                .help("Discard pending message")
+                .accessibilityIdentifier("composer.pending.dismiss")
+            }
+        }
+        .frame(maxWidth: 520, alignment: .trailing)
+    }
+
+    private func bubbleFill(_ pending: SessionChatStore.PendingMessage) -> Color {
+        switch pending.state {
+        case .sending, .queuedOffline:
+            return t.hair2
+        case .failed:
+            return Color.red.opacity(0.12)
+        }
+    }
+
+    private func bubbleStroke(_ pending: SessionChatStore.PendingMessage) -> Color {
+        switch pending.state {
+        case .sending:        return t.accentAlpha(0.35)
+        case .queuedOffline:  return Color.orange.opacity(0.55)
+        case .failed:         return Color.red.opacity(0.55)
+        }
+    }
+
+    private func accessibilityLabel(_ pending: SessionChatStore.PendingMessage) -> String {
+        switch pending.state {
+        case .sending:        return "Sending message: \(pending.body)"
+        case .queuedOffline:  return "Queued offline: \(pending.body)"
+        case .failed:         return "Failed to send: \(pending.body). \(pending.errorDescription ?? "")"
+        }
     }
 }
