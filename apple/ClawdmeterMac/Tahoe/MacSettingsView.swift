@@ -237,7 +237,7 @@ public struct MacSettingsView: View {
         SettingsCard(title: "Providers",
                      sub: "External agent runtimes Continuum can drive.") {
             VStack(alignment: .leading, spacing: 14) {
-                ClaudeCLIProviderRow()
+                ClaudeCLIProviderRow(claudeModel: claudeModel)
                 TahoeHair()
                 OpencodeProviderRow()
                 TahoeHair()
@@ -1776,16 +1776,20 @@ private struct CursorSDKProviderRow: View {
 
 /// Mirrors `OpencodeProviderRow`'s shape — install + auth status for the
 /// Claude Code CLI. Uses the same real-home binary resolver as session
-/// spawning and combines it with the Claude Code Keychain token. This keeps
-/// Release builds from mislabeling ~/.local/bin/claude as missing just
-/// because NSHomeDirectory() points at the app sandbox.
+/// spawning and Continuum's own imported Keychain token. Claude Code's
+/// third-party Keychain item is only read when the user clicks Authenticate.
 private struct ClaudeCLIProviderRow: View {
     @Environment(\.tahoe) private var t
+    @ObservedObject var claudeModel: AppModel
     @State private var probe: ProbeState = .pending
     @State private var version: String?
     @State private var binaryPath: String?
     @State private var hasUsedClaude: Bool = false
-    @State private var hasKeychainToken: Bool = false
+    @State private var hasClawdmeterToken: Bool = false
+    @State private var isAuthenticating: Bool = false
+    @State private var authMessage: String?
+    @State private var authFailed: Bool = false
+    @State private var pastedTokenDraft: String = ""
 
     enum ProbeState: Equatable {
         case pending
@@ -1809,6 +1813,27 @@ private struct ClaudeCLIProviderRow: View {
                     .font(TahoeFont.body(12))
                     .foregroundStyle(t.fg3)
                     .fixedSize(horizontal: false, vertical: true)
+                if let authMessage {
+                    Text(authMessage)
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(authFailed ? Color.red : Color.green)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if showsPasteFallback {
+                    HStack(spacing: 8) {
+                        SecureField("Paste token or Claude Code JSON", text: $pastedTokenDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 360)
+                        Button {
+                            savePastedClaudeToken()
+                        } label: {
+                            Text("Save token")
+                                .font(TahoeFont.body(12, weight: .semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(pastedTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
                 if let binaryPath, probe == .ready || probe == .installedNeedsLogin {
                     Text("Binary: \(binaryPath)\(version.map { "  ·  \($0)" } ?? "")")
                         .font(TahoeFont.mono(11))
@@ -1819,6 +1844,10 @@ private struct ClaudeCLIProviderRow: View {
             actionButton
         }
         .task { await refreshProbe() }
+    }
+
+    private var showsPasteFallback: Bool {
+        probe == .installedNeedsLogin || authFailed || claudeModel.needsReauth
     }
 
     @ViewBuilder
@@ -1844,58 +1873,74 @@ private struct ClaudeCLIProviderRow: View {
     private var detailLine: String {
         switch probe {
         case .pending:
-            return "Probing the `claude` binary, Claude Code Keychain token, and activity history…"
+            return "Probing the `claude` binary, Continuum Keychain token, and activity history…"
         case .notInstalled:
-            return "Claude Code CLI is not installed. Use the button to open Terminal, install the CLI with npm or Homebrew, and run `claude /login`."
+            return "Claude Code CLI is not installed. Install it and run `claude /login`, then authenticate here once."
         case .authenticatedNoCLI:
-            return "Claude Code auth is present, but the `claude` CLI binary is not on the standard paths. Use the button to install or expose the CLI and refresh auth."
+            return "Continuum has Claude auth, but the `claude` CLI binary is not on the standard paths. Install or expose the CLI before starting sessions."
         case .installedNeedsLogin:
-            return "CLI installed, but no Claude Code keychain token was found. Run `claude /login` once to finish OAuth."
+            return hasUsedClaude
+                ? "Claude Code activity exists, but Continuum has not imported auth yet. Click Authenticate to read Claude Code credentials once."
+                : "CLI installed, but Continuum has no Claude auth. Run `claude /login`, then click Authenticate once."
         case .ready:
-            return hasKeychainToken
-                ? "Installed and authenticated via Claude Code Keychain. Clawdmeter spawns sessions with the `claude` CLI."
-                : "Installed with local Claude project activity. Clawdmeter can spawn sessions with the `claude` CLI."
+            if claudeModel.needsReauth {
+                return "Stored Claude auth was rejected. Click Refresh auth to import the latest Claude Code token."
+            }
+            return "Installed and authenticated via Continuum Keychain. Sessions still run with the `claude` CLI."
         }
     }
 
     @ViewBuilder
     private var actionButton: some View {
-        switch probe {
-        case .pending:
-            EmptyView()
-        case .notInstalled, .authenticatedNoCLI:
-            Button {
-                openTerminalForClaudeAuth(installIfMissing: true)
-                scheduleAuthReprobe()
-            } label: {
-                Text("Auth via CLI")
-                    .font(TahoeFont.body(12, weight: .semibold))
-                    .foregroundStyle(t.accent)
+        if isAuthenticating {
+            ProgressView().controlSize(.small)
+        } else {
+            switch probe {
+            case .pending:
+                EmptyView()
+            case .notInstalled:
+                Button {
+                    openTerminalForClaudeAuth(installIfMissing: true)
+                    scheduleAuthReprobe()
+                } label: {
+                    Text("Install / login")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Open Terminal to install Claude Code if needed, then run `claude /login`.")
+            case .authenticatedNoCLI:
+                Button {
+                    openTerminalForClaudeAuth(installIfMissing: true)
+                    scheduleAuthReprobe()
+                } label: {
+                    Text("Install CLI")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Open Terminal to install or expose the Claude Code CLI.")
+            case .installedNeedsLogin:
+                Button {
+                    authenticateFromClaudeCode()
+                } label: {
+                    Text("Authenticate")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Read Claude Code's Keychain token once and store it in Continuum's Keychain.")
+            case .ready:
+                Button {
+                    authenticateFromClaudeCode()
+                } label: {
+                    Text("Refresh auth")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Explicitly import the latest Claude Code token into Continuum's Keychain.")
             }
-            .buttonStyle(.plain)
-            .help("Open Terminal to install Claude Code if needed, then run `claude /login`.")
-        case .installedNeedsLogin:
-            Button {
-                openTerminalForClaudeAuth(installIfMissing: false)
-                scheduleAuthReprobe()
-            } label: {
-                Text("Sign in")
-                    .font(TahoeFont.body(12, weight: .semibold))
-                    .foregroundStyle(t.accent)
-            }
-            .buttonStyle(.plain)
-            .help("Open Terminal and run `claude /login` so the OAuth flow can complete.")
-        case .ready:
-            Button {
-                let url = URL(fileURLWithPath: ClawdmeterRealHome.path())
-                    .appendingPathComponent(".claude", isDirectory: true)
-                NSWorkspace.shared.activateFileViewerSelecting([url])
-            } label: {
-                Text("Open ~/.claude")
-                    .font(TahoeFont.body(12, weight: .semibold))
-                    .foregroundStyle(t.accent)
-            }
-            .buttonStyle(.plain)
         }
     }
 
@@ -1909,16 +1954,106 @@ private struct ClaudeCLIProviderRow: View {
         self.binaryPath = detected.binaryPath
         self.version = detected.version
         self.hasUsedClaude = detected.hasActivity
-        self.hasKeychainToken = detected.hasKeychainToken
-        if detected.binaryPath == nil && detected.hasKeychainToken {
+        self.hasClawdmeterToken = detected.hasClawdmeterToken
+        if detected.binaryPath == nil && detected.hasClawdmeterToken {
             self.probe = .authenticatedNoCLI
         } else if detected.binaryPath == nil {
             self.probe = .notInstalled
-        } else if detected.hasKeychainToken || detected.hasActivity {
+        } else if detected.hasClawdmeterToken {
             self.probe = .ready
         } else {
             self.probe = .installedNeedsLogin
         }
+    }
+
+    private func authenticateFromClaudeCode() {
+        guard !isAuthenticating else { return }
+        isAuthenticating = true
+        authMessage = nil
+        authFailed = false
+
+        Task { @MainActor in
+            let failure = await Task.detached(priority: .userInitiated) { () -> String? in
+                guard let token = KeychainTokenProvider(allowsUserInteraction: true).currentAccessToken else {
+                    return "No Claude Code token was available. Run `claude /login`, then click Authenticate again."
+                }
+                guard PastedAnthropicTokenProvider.shared().setToken(token) else {
+                    return "Claude Code auth was found, but Continuum could not save it to its own Keychain entry."
+                }
+                return nil
+            }.value
+
+            isAuthenticating = false
+            if let failure {
+                authFailed = true
+                authMessage = failure
+                return
+            }
+
+            authFailed = false
+            authMessage = "Authenticated. Continuum will use its own Keychain copy from now on."
+            await refreshProbe()
+            claudeModel.forcePoll()
+        }
+    }
+
+    private func savePastedClaudeToken() {
+        let extracted = Self.extractAccessToken(from: pastedTokenDraft)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.looksLikeValidToken(extracted) else {
+            authFailed = true
+            authMessage = "Couldn't find a Claude OAuth token. Paste the bare `sk-ant-…` value or Claude Code's Keychain JSON."
+            return
+        }
+        guard PastedAnthropicTokenProvider.shared().setToken(extracted) else {
+            authFailed = true
+            authMessage = "Continuum could not save the token to its own Keychain entry."
+            return
+        }
+
+        pastedTokenDraft = ""
+        authFailed = false
+        authMessage = "Authenticated. Continuum will use its own Keychain copy from now on."
+        Task { @MainActor in
+            await refreshProbe()
+            claudeModel.forcePoll()
+        }
+    }
+
+    private static func looksLikeValidToken(_ token: String) -> Bool {
+        token.hasPrefix("sk-ant-") && token.count <= 4096 && !token.contains("\n")
+    }
+
+    private static func extractAccessToken(from raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("sk-ant-") { return trimmed }
+        if let data = trimmed.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data),
+           let token = findAccessToken(in: obj) {
+            return token
+        }
+        return trimmed
+    }
+
+    private static func findAccessToken(in obj: Any) -> String? {
+        if let s = obj as? String, s.hasPrefix("sk-ant-") { return s }
+        if let dict = obj as? [String: Any] {
+            if let s = dict["accessToken"] as? String, s.hasPrefix("sk-ant-") {
+                return s
+            }
+            if let s = dict["access_token"] as? String, s.hasPrefix("sk-ant-") {
+                return s
+            }
+            for value in dict.values {
+                if let nested = findAccessToken(in: value) { return nested }
+            }
+        }
+        if let arr = obj as? [Any] {
+            for value in arr {
+                if let nested = findAccessToken(in: value) { return nested }
+            }
+        }
+        return nil
     }
 
     private func scheduleAuthReprobe() {
@@ -2006,22 +2141,23 @@ private struct ClaudeCLIProviderRow: View {
 /// Static probe helper that walks the standard install locations,
 /// runs `--version`, and counts `~/.claude/projects/` children. Kept
 /// out of the View struct so it can be called off the main actor
-/// without touching SwiftUI state. The "has activity" signal proxies
-/// for sign-in status without needing Keychain access.
+/// without touching SwiftUI state. It only checks Continuum's own
+/// Keychain entry; Claude Code's third-party item is read exclusively
+/// by the explicit Authenticate button above.
 private enum ClaudeCLIProbe {
     struct Result {
         let binaryPath: String?
         let version: String?
         let hasActivity: Bool
-        let hasKeychainToken: Bool
+        let hasClawdmeterToken: Bool
     }
 
     nonisolated static func run() -> Result {
         let path = locateBinary()
         let version: String? = path.flatMap { runVersion(binary: $0) }
         let activity = projectsDirHasEntries()
-        let token = KeychainTokenProvider().hasToken
-        return Result(binaryPath: path, version: version, hasActivity: activity, hasKeychainToken: token)
+        let token = PastedAnthropicTokenProvider.shared().hasToken
+        return Result(binaryPath: path, version: version, hasActivity: activity, hasClawdmeterToken: token)
     }
 
     private nonisolated static func locateBinary() -> String? {

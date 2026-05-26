@@ -29,28 +29,27 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
 
     public let serviceName: String
     public let synchronizable: Bool
+    public let allowsUserInteraction: Bool
 
     private let lock = NSLock()
     private var cached: TokenBundle?
 
     public init(
         serviceName: String = "Claude Code-credentials",
-        synchronizable: Bool = false
+        synchronizable: Bool = false,
+        allowsUserInteraction: Bool = false
     ) {
         self.serviceName = serviceName
         self.synchronizable = synchronizable
+        self.allowsUserInteraction = allowsUserInteraction
     }
 
     public var currentAccessToken: String? {
         lock.lock(); defer { lock.unlock() }
-        // v0.4.11 root-cause fix: always re-read Keychain. Caching the
-        // first read meant that when Claude Code rotated its OAuth
-        // token (it does this every few hours), the Mac app kept its
-        // stale copy and started getting 403s. Anthropic returns 403
-        // (not 401) for rotated tokens, so UsagePoller's 401-only
-        // refresh path never fired — backoff grew, dashboard stuck
-        // on "Connecting…" forever. Keychain reads are sub-ms;
-        // re-reading on every 60s poll is free.
+        // This provider reads Claude Code's third-party Keychain item and
+        // is now used only by explicit import/refresh actions. Do not cache
+        // here: a manual refresh should pick up Claude Code's latest rotated
+        // token before we copy it into Continuum's own Keychain entry.
         do {
             let bundle = try loadFromKeychain()
             cached = bundle
@@ -65,16 +64,14 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
         return keychainItemExists()
     }
 
-    /// Returns true if a refresh was performed; false if no refresh was needed.
-    /// Throws `AISourceError.authExpired` if the refresh token itself is missing
-    /// or expired. V1 keeps the Claude-Code-issued token in sync rather than
-    /// driving the refresh ourselves: re-reading Keychain may pick up a freshly
-    /// rotated token that Claude Code wrote.
+    /// Returns true if the imported token changed since the previous read.
+    /// This exists for `TokenProvider` conformance, but normal app polling
+    /// should use `PastedAnthropicTokenProvider` after the explicit import.
     public func refreshIfNeeded() async throws -> Bool {
         lock.lock(); defer { lock.unlock() }
 
-        // V1 strategy: drop cache and re-read Keychain. Claude Code itself rotates
-        // the token periodically; we just want the freshest copy.
+        // Drop the comparison cache and re-read Claude Code's item so an
+        // explicit refresh can pick up a rotated token.
         let previous = cached?.claudeAiOauth.accessToken
         cached = nil
         let fresh: TokenBundle
@@ -85,10 +82,9 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
         }
         cached = fresh
 
-        // NOTE: Claude Code stores an `expiresAt` field but tokens remain valid
-        // beyond it in practice (Anthropic rotates them server-side). Trust the
-        // network result, not the local field — if the token actually fails,
-        // `AnthropicSource.poll()` will return 401 and we'll re-read Keychain.
+        // NOTE: Claude Code stores an `expiresAt` field, but the importer
+        // trusts the actual network failure path. If the copied token is stale,
+        // the app asks the user to click Refresh auth and import again.
 
         return fresh.claudeAiOauth.accessToken != previous
     }
@@ -105,7 +101,9 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
         if synchronizable {
             query[kSecAttrSynchronizable as String] = kCFBooleanTrue
         }
-        PassiveKeychainAccess.apply(to: &query)
+        if !allowsUserInteraction {
+            PassiveKeychainAccess.apply(to: &query)
+        }
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
@@ -130,7 +128,9 @@ public final class KeychainTokenProvider: TokenProvider, @unchecked Sendable {
         if synchronizable {
             query[kSecAttrSynchronizable as String] = kCFBooleanTrue
         }
-        PassiveKeychainAccess.apply(to: &query)
+        if !allowsUserInteraction {
+            PassiveKeychainAccess.apply(to: &query)
+        }
 
         var item: CFTypeRef?
         return SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess

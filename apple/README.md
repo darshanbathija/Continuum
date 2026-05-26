@@ -59,8 +59,8 @@ apple/
 │   │       ├── AISource.swift                  poll-source protocol
 │   │       ├── AnthropicSource.swift           rate-limit header parser
 │   │       ├── CodexSource.swift               Codex live rate-limit reader
-│   │       ├── KeychainTokenProvider.swift     Mac: reads Claude Code OAuth token
-│   │       ├── PastedAnthropicTokenProvider.swift  iOS/Watch: iCloud-Keychain-synced
+│   │       ├── KeychainTokenProvider.swift     explicit Claude Code token importer
+│   │       ├── PastedAnthropicTokenProvider.swift  Mac/iOS/Watch owned token store
 │   │       ├── CodexTokenProvider.swift
 │   │       ├── UsagePoller.swift
 │   │       ├── UsageStore.swift                App Group cache for widgets
@@ -148,9 +148,9 @@ What we added on top of ccusage (UI-only):
 
 | Surface | Source |
 | --- | --- |
-| Mac (Claude) | `KeychainTokenProvider` reads Claude Code's local OAuth token. |
+| Mac (Claude) | `PastedAnthropicTokenProvider.shared()` reads Clawdmeter's own Keychain token. Settings → Providers → Claude Code → Authenticate imports Claude Code's token once via `KeychainTokenProvider`; sandboxed builds can use the same row's paste-token fallback. |
 | Mac (Codex)  | `CodexSource` reads cached rate-limit state from `~/.codex/sessions/*.jsonl`. |
-| iOS          | `PastedAnthropicTokenProvider.shared()` — iCloud-Keychain shared access group; Mac mirrors the token here on launch. |
+| iOS          | `PastedAnthropicTokenProvider.shared()` — iCloud-Keychain shared access group populated by the Mac Authenticate action or manual paste. |
 | Watch        | First tries `WatchTokenBridge.didReceiveToken` (iPhone pushes via WCSession). Falls back to the shared Keychain. |
 
 ## Cache schema versioning

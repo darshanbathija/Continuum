@@ -4,10 +4,10 @@ import Foundation
 /// platform.
 ///
 /// Implementations:
-/// - `KeychainTokenProvider` (macOS / iOS) — reads Claude Code's OAuth token from
-///   the system Keychain via `Security.framework`.
-/// - `PastedAnthropicTokenProvider` (iOS / watchOS) — iCloud-Keychain-synced
-///   entry; pasting a token in the app's Settings is the fallback.
+/// - `KeychainTokenProvider` (macOS / iOS) — explicit one-shot importer for
+///   Claude Code's OAuth token in the system Keychain.
+/// - `PastedAnthropicTokenProvider` (macOS / iOS / watchOS) — Clawdmeter-owned,
+///   iCloud-Keychain-synced entry used for normal Anthropic polling.
 /// - `CodexTokenProvider` (all Apple platforms) — Codex `auth.json` file reader.
 /// - `LinuxSecretServiceTokenProvider` (Linux) — `libsecret-1` D-Bus
 ///   Secret Service API; falls back to `~/.config/clawdmeter/.token` chmod 0600
