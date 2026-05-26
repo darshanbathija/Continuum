@@ -7,9 +7,9 @@
 #   1. Download the DMG from GitHub Releases
 #   2. Open it
 #   3. Drag Clawdmeter.app into the Applications folder
-#   4. First launch: right-click Clawdmeter.app → Open (because the build is
-#      signed with a personal Apple Developer team, not notarized — Gatekeeper
-#      asks the user to confirm exactly once, then trusts it forever).
+#   4. First launch: right-click Clawdmeter.app → Open (because the GitHub
+#      DMG is not Apple-notarized — Gatekeeper asks the user to confirm
+#      exactly once, then trusts it forever).
 #
 # Self-serve for builders (run this on any Apple Silicon Mac with Xcode):
 #   cd /path/to/Clawdmeter && ./tools/build-mac-dmg.sh
@@ -41,10 +41,16 @@ ARCHIVE_PATH="$BUILD_DIR/${APP_NAME}.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
 STAGING_DIR="$BUILD_DIR/staging"
 
+if ! /usr/bin/xcodebuild -version >/dev/null 2>&1; then
+  echo "✗ xcodebuild requires full Xcode. Install Xcode or run:" >&2
+  echo "  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+  exit 1
+fi
+
 # Pull the marketing version from the Mac target's Info.plist via xcodebuild.
 VERSION="$(/usr/bin/xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
     -configuration Release -showBuildSettings 2>/dev/null \
-    | awk -F' = ' '/MARKETING_VERSION/ {print $2; exit}' \
+    | awk -F' = ' '/MARKETING_VERSION/ && !seen {print $2; seen=1}' \
     | tr -d '[:space:]')"
 
 # Fall back to the value in Info.plist if marketing version isn't set.
@@ -108,9 +114,11 @@ echo "✓ Archive: $ARCHIVE_PATH"
 # ────────────────────────────────────────────────────────────────────────
 
 # Personal-team signing → use developer-id-distribution where possible, but
-# fall back to copying the .app straight out of the archive (which uses the
-# embedded "Apple Development" signature — works for local use, but Gatekeeper
-# will require a right-click → Open on first launch). Notarization needs a
+# fall back to copying the .app straight out of the archive. Personal-team
+# Apple Development exports are re-signed ad-hoc below after stripping the
+# embedded provisioning profile, because that profile can fail launchd
+# entitlement validation on downloaded GitHub release builds. Gatekeeper still
+# requires a right-click → Open on first launch because notarization needs a
 # paid Apple Developer Program account, which this repo doesn't have.
 
 EXPORT_PLIST="$BUILD_DIR/ExportOptions.plist"
@@ -212,7 +220,96 @@ if [[ -z "$SIGNING_IDENTITY" ]]; then
 fi
 rm -rf "$CERT_DIR"
 
-if [[ -n "$SIGNING_IDENTITY" && -f "$HELPER_ENT" ]]; then
+if printf '%s\n' "$CODESIGN_INFO" | grep -qE '^Authority=Apple Development'; then
+  echo "▸ Apple Development export detected — stripping all provisioning profiles and re-signing inside-out"
+  # Personal-team Apple Development exports can embed a provisioning
+  # profile whose allowed entitlements do not match the final Mac app
+  # entitlements after the helper/outer re-sign pass. That launches as:
+  #   RBSRequestErrorDomain Code=5 / NSPOSIXErrorDomain Code=163
+  # Gatekeeper is a separate notarization issue; this fixes the actual
+  # launchd entitlement/provisioning mismatch for GitHub DMG users.
+  #
+  # IMPORTANT: strip embedded.provisionprofile from every nested bundle —
+  # widget appex, XPC services, helpers — not just the top-level .app.
+  # A single forgotten profile on the widget extension recreates the
+  # same launchd failure on first widget load.
+  find "$APP_PATH" -name "embedded.provisionprofile" -delete
+
+  # Expand $(AppIdentifierPrefix) in entitlements files using the
+  # TeamIdentifier on the binary. codesign does NOT expand this macro
+  # itself; without expansion, keychain-access-group is the literal
+  # string "$(AppIdentifierPrefix)com.clawdmeter" which launchd
+  # rejects (error 163).
+  TEAM_ID="$(printf '%s\n' "$CODESIGN_INFO" \
+      | grep -E '^TeamIdentifier=' \
+      | head -n1 \
+      | sed 's/^TeamIdentifier=//' || true)"
+  if [[ -z "$TEAM_ID" ]]; then
+    echo "    ⚠ Could not determine team id — falling back to deep ad-hoc sign without entitlements"
+    codesign --force --deep --sign - "$APP_PATH" 2>&1 | sed 's/^/    /'
+  else
+    # Sign inside-out: helpers → widget appex → outer app. Each bundle
+    # gets its own entitlements (with macro expanded) so launchd sees
+    # the right keychain-access-groups, application-groups, file-system
+    # exceptions, and apple-events declarations after re-sign.
+
+    # 1. Vendor helpers (opencode, uv). v0.29.4: signing these with the
+    #    Apple Development cert + hardened runtime + helper entitlements
+    #    keeps macOS Tahoe XProtect from popping the "could not verify
+    #    is free of malware" dialog on Bun's native-dylib dlopens.
+    if [[ -f "$HELPER_ENT" && -n "$SIGNING_IDENTITY" ]]; then
+      for HELPER in "${HELPER_BINARIES[@]}"; do
+        if [[ -f "$HELPER" ]]; then
+          codesign --force \
+            --sign "$SIGNING_IDENTITY" \
+            --options runtime \
+            --entitlements "$HELPER_ENT" \
+            --timestamp=none \
+            "$HELPER" 2>&1 | sed 's/^/    /' || echo "    ⚠ codesign failed for $HELPER"
+        fi
+      done
+    fi
+
+    # 2. Widget extension — must be re-signed with its own entitlements
+    #    so it gets the widget-specific app-group / keychain-access-group
+    #    instead of inheriting the outer app's (which it can't use).
+    WIDGET_APPEX="$APP_PATH/Contents/PlugIns/ClawdmeterMacWidgets.appex"
+    WIDGET_ENT="$REPO_ROOT/apple/ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements"
+    if [[ -d "$WIDGET_APPEX" ]]; then
+      if [[ -f "$WIDGET_ENT" ]]; then
+        WIDGET_ENT_EXPANDED="$(mktemp -t widget-ent.XXXXXX.plist)"
+        sed "s|\$(AppIdentifierPrefix)|${TEAM_ID}.|g" "$WIDGET_ENT" \
+            > "$WIDGET_ENT_EXPANDED"
+        codesign --force \
+          --sign - \
+          --entitlements "$WIDGET_ENT_EXPANDED" \
+          --timestamp=none \
+          "$WIDGET_APPEX" 2>&1 | sed 's/^/    /' || echo "    ⚠ widget codesign failed"
+        rm -f "$WIDGET_ENT_EXPANDED"
+      else
+        echo "    ⚠ Widget entitlements file not found — signing widget ad-hoc without entitlements"
+        codesign --force --sign - "$WIDGET_APPEX" 2>&1 | sed 's/^/    /'
+      fi
+    fi
+
+    # 3. Outer app — ad-hoc with full Release entitlements + hardened
+    #    runtime. NOT --deep: nested code was signed individually above
+    #    with its own entitlements; --deep would re-sign helpers/widget
+    #    with the outer's entitlements, which the widget can't actually
+    #    use.
+    OUTER_ENT="$(mktemp -t outer-ent.XXXXXX.plist)"
+    sed "s|\$(AppIdentifierPrefix)|${TEAM_ID}.|g" \
+        "$REPO_ROOT/apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements" \
+        > "$OUTER_ENT"
+    codesign --force \
+      --sign - \
+      --entitlements "$OUTER_ENT" \
+      --options runtime \
+      --timestamp=none \
+      "$APP_PATH" 2>&1 | sed 's/^/    /' || echo "    ⚠ outer codesign failed"
+    rm -f "$OUTER_ENT"
+  fi
+elif [[ -n "$SIGNING_IDENTITY" && -f "$HELPER_ENT" ]]; then
   echo "▸ Re-signing bundled helpers with: $SIGNING_IDENTITY"
   for HELPER in "${HELPER_BINARIES[@]}"; do
     if [[ -f "$HELPER" ]]; then
@@ -296,9 +393,9 @@ Continuum for Mac
    same app. Your data, sessions, and pairing carry over to Continuum.app
    automatically (the bundle identifier didn't change).
 3. First launch: right-click Continuum.app in Applications → Open →
-   "Open" in the dialog. macOS asks once because Continuum is signed
-   with a personal Apple Developer team, not notarized. After the first
-   Open, Gatekeeper remembers and never asks again.
+   "Open" in the dialog. macOS asks once because the GitHub DMG is not
+   Apple-notarized. After the first Open, Gatekeeper remembers and never
+   asks again.
 4. The Continuum icon appears in the menu bar. Click it to view your
    Claude / Codex usage; click "Open dashboard" for the full window.
 
