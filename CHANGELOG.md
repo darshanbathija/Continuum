@@ -59,6 +59,29 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 
 Bumps `MARKETING_VERSION` 0.29.11 -> 0.29.12, `CURRENT_PROJECT_VERSION` 150 -> 151.
 
+## [0.29.13 build 152] - 2026-05-27 - Clawdmeter-owned Conductor-style workspaces (`darshanbathija/branch-issues`)
+
+New existing-repo sessions now provision Clawdmeter-owned worktrees under `~/Clawdmeter/workspaces/<project>/<city>` instead of the legacy `.claude/worktrees` layout. The provisioning path creates the branch/worktree first, writes ownership metadata in the Git dir, copies ignored local files in full-local-clone mode by default, and launches each provider from the prepared cwd without surfacing Clawdmeter-owned trust popups.
+
+### Added
+
+- `WorkspaceFilesToCopyConfig` now supports pattern mode and all-ignored mode, with `.worktreeinclude` taking precedence over repo settings and the all-ignored default copying directories, dependencies, build artifacts, and local database groups subject to caps.
+- `WorktreeManager` now resolves Conductor-style project/city storage, creates branch-alias symlinks, writes copy manifests in the worktree Git dir, enforces destination parent-chain validation, and cleans up only manifest-owned unchanged files on failure or delete.
+- Session provisioning metadata now records storage root, project slug, city slug, branch alias, copy mode, copied/skipped counts, byte totals, manifest path, and failure summaries for UI/audit use.
+
+### Fixed
+
+- Mode switches, OpenCode chat/frontier sessions, and session deletion now preserve the prepared runtime cwd and clean owned worktrees even for providers that do not have a tmux pane.
+- SQLite-like ignored DB groups (`.db`, `.sqlite`, `.sqlite3` plus `-wal`/`-shm`) copy atomically and fail closed when companion files are missing or mutate during provisioning.
+- Copy/spawn failures clean up manifest-owned files and remove the provisional worktree without creating a durable registry session row.
+
+### Tests
+
+- Added coverage for copy-all ignored defaults, `.worktreeinclude` overrides and negation, branch alias creation, Conductor-hosted project slug resolution, cap failure cleanup, manifest-safe deletion, parent-chain validation, runtime cwd updates, and provider trust argv.
+- Verification: `swift test` in `apple/ClawdmeterShared`; targeted Mac XCTest for `WorkspaceStoreTests` + `AgentSessionRegistryFrontierTests`; full `xcodebuild -project apple/Clawdmeter.xcodeproj -scheme "Clawdmeter (Mac)" CODE_SIGNING_ALLOWED=NO build`.
+
+Bumps `MARKETING_VERSION` 0.29.12 -> 0.29.13, `CURRENT_PROJECT_VERSION` 151 -> 152.
+
 ## [0.29.11 build 150] - 2026-05-26 - Rebrand sweep + OpenCode status pill + design polish (`fix/v0.29.11-rebrand-bleed-and-opencode-badge`)
 
 Verifier loop on v0.29.9 surfaced two classes of leftover work from the Continuum rebrand and the new OpenCode CLI auth row. Folded both into a single follow-up.
