@@ -48,7 +48,15 @@ struct FollowUpSchedulerSheet: View {
                             .truncationMode(.tail)
                         Spacer()
                         Button(action: {
-                            registry.removeScheduledFollowUp(sessionId: session.id, followUpId: up.id)
+                            // F2-wire: SwiftUI Button action closures are
+                            // sync — wrap the now-async registry call in
+                            // a Task. Errors are non-fatal here (failing
+                            // to remove a follow-up just means it'll fire
+                            // once and self-mark fired; the user can re-
+                            // remove it).
+                            Task { @MainActor in
+                                try? await registry.removeScheduledFollowUp(sessionId: session.id, followUpId: up.id)
+                            }
                         }) {
                             Image(systemName: "trash")
                                 .font(.system(size: 10))
@@ -63,7 +71,12 @@ struct FollowUpSchedulerSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Schedule") {
                     let up = ScheduledFollowUp(fireAt: fireAt, prompt: prompt)
-                    registry.addScheduledFollowUp(sessionId: session.id, followUp: up)
+                    // F2-wire: SwiftUI Button action closure is sync —
+                    // wrap the now-async registry call. Best-effort:
+                    // if the receipt write fails, the user re-clicks.
+                    Task { @MainActor in
+                        try? await registry.addScheduledFollowUp(sessionId: session.id, followUp: up)
+                    }
                     prompt = ""
                     fireAt = Date().addingTimeInterval(5 * 60)
                 }

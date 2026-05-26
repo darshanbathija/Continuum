@@ -279,6 +279,7 @@
 		FEF07E0FF80B70FC2991917A /* EmptyStateCenteredComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D4812A52CB0D61B33336F82 /* EmptyStateCenteredComposer.swift */; };
 		FF05656CCA81F293D8ACC45D /* ClawdmeterWatchWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = C18B42DBBC10D2B9E6B9C5BE /* ClawdmeterWatchWidgets.swift */; };
 		FF51BD37342BEEF6FBDBA443 /* AgentSessionRegistryFrontierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05DEE8E4C784CCD7B7749646 /* AgentSessionRegistryFrontierTests.swift */; };
+		1B28AD6A04A74E3894D8A834 /* AgentSessionRegistryEventStoreWireTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81E65071B53C4EE9801BA437 /* AgentSessionRegistryEventStoreWireTests.swift */; };
 		FF59C31C32BC003A469696AE /* JSONLTail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1627364A3A4398D5A45B4A /* JSONLTail.swift */; };
 		FFD59D04A8D35DC460F5CFC2 /* SessionLifecycleReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 044B37D86860F63D469721AA /* SessionLifecycleReducerTests.swift */; };
 /* End PBXBuildFile section */
@@ -355,6 +356,7 @@
 		044B37D86860F63D469721AA /* SessionLifecycleReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLifecycleReducerTests.swift; sourceTree = "<group>"; };
 		052C6AEF07A486E8A35669C5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		05DEE8E4C784CCD7B7749646 /* AgentSessionRegistryFrontierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionRegistryFrontierTests.swift; sourceTree = "<group>"; };
+		81E65071B53C4EE9801BA437 /* AgentSessionRegistryEventStoreWireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionRegistryEventStoreWireTests.swift; sourceTree = "<group>"; };
 		063A99FE19DBEB6CBE38A400 /* ClawdmeterMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClawdmeterMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0654B9694B446225AC792A03 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		0672BC594F855CA5AF14EFA1 /* SessionChatStoreSlicePublishingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStoreSlicePublishingTests.swift; sourceTree = "<group>"; };
@@ -945,6 +947,7 @@
 				614324F44782E06C1986B651 /* AgentControlServerChatRouteTests.swift */,
 				05DEE8E4C784CCD7B7749646 /* AgentSessionRegistryFrontierTests.swift */,
 				552C22F8E32AB6F8370B23A7 /* AgentSessionRegistryPlanProgressTests.swift */,
+				81E65071B53C4EE9801BA437 /* AgentSessionRegistryEventStoreWireTests.swift */,
 				DE1F1B18737CE3024BDD5620 /* AgentSpawnerChatArgvTests.swift */,
 				A1E4A21BAAD10FDDAA381ED9 /* ChatItemRowInvalidationTests.swift */,
 				A5D45DC56F208EECABE85A42 /* DaemonChatStoreRegistryRoutingTests.swift */,
@@ -1537,6 +1540,7 @@
 				01B028A41B041C03E1587068 /* AgentControlServerChatRouteTests.swift in Sources */,
 				FF51BD37342BEEF6FBDBA443 /* AgentSessionRegistryFrontierTests.swift in Sources */,
 				1BFC9D566B6B84F74ABB455B /* AgentSessionRegistryPlanProgressTests.swift in Sources */,
+				1B28AD6A04A74E3894D8A834 /* AgentSessionRegistryEventStoreWireTests.swift in Sources */,
 				B6476D12C0F54133B30C941B /* AgentSpawnerChatArgvTests.swift in Sources */,
 				A1388DEC178AA53C0C034517 /* ChatItemRowInvalidationTests.swift in Sources */,
 				9A791C53B086D17E99DAA910 /* ChatV2StoreTests.swift in Sources */,

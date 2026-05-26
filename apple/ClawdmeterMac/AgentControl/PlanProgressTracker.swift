@@ -71,7 +71,7 @@ actor PlanProgressTracker {
         sessionId: UUID,
         messages: [ChatMessage],
         registry: AgentSessionRegistry
-    ) {
+    ) async {
         guard let session = registry.session(id: sessionId) else { return }
         guard let approvedText = session.approvedPlanText?.trimmingCharacters(in: .whitespacesAndNewlines),
               !approvedText.isEmpty
@@ -79,7 +79,11 @@ actor PlanProgressTracker {
             // Approval was rolled back (or the session never had an
             // approved plan). Make sure the wire field reflects that.
             if session.planProgress != nil {
-                registry.setPlanProgress(id: sessionId, progress: nil)
+                do {
+                    try await registry.setPlanProgress(id: sessionId, progress: nil)
+                } catch {
+                    trackerLogger.error("setPlanProgress(nil) write-ahead failed for \(sessionId.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
             }
             return
         }
@@ -96,6 +100,10 @@ actor PlanProgressTracker {
         trackerLogger.debug(
             "recompute session=\(sessionId.uuidString, privacy: .public) completed=\(progress?.completed ?? 0)/\(progress?.total ?? 0)"
         )
-        registry.setPlanProgress(id: sessionId, progress: progress)
+        do {
+            try await registry.setPlanProgress(id: sessionId, progress: progress)
+        } catch {
+            trackerLogger.error("setPlanProgress write-ahead failed for \(sessionId.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
     }
 }

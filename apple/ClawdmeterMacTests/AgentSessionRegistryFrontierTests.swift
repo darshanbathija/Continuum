@@ -35,20 +35,20 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
     /// Default behavior (includeArchived=false) returns only live children.
     /// This is what Frontier send fan-out and snapshot subscribers rely on
     /// so archived losers can never receive new prompts.
-    func test_frontierGroupChildren_defaultExcludesArchived() async {
+    func test_frontierGroupChildren_defaultExcludesArchived() async throws {
         let reg = registry()
         let groupId = UUID()
-        let claude = reg.createChat(
+        let claude = try await reg.createChat(
             provider: .claude, model: "opus", chatCwd: "/tmp",
             frontierGroupId: groupId, frontierChildIndex: 0
         )
-        let codex = reg.createChat(
+        let codex = try await reg.createChat(
             provider: .codex, model: "gpt-5.5", chatCwd: "/tmp",
             frontierGroupId: groupId, frontierChildIndex: 1
         )
 
         // Archive one child (simulates a pick-winner archiving the loser).
-        reg.archive(id: codex.id)
+        try await reg.archive(id: codex.id)
 
         let liveOnly = reg.frontierGroupChildren(groupId: groupId)
         XCTAssertEqual(liveOnly.count, 1, "default must filter archived")
@@ -57,18 +57,18 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
 
     /// Callers that need the full set (pick-winner enumerating losers to
     /// archive) pass includeArchived: true.
-    func test_frontierGroupChildren_includeArchivedReturnsAll() async {
+    func test_frontierGroupChildren_includeArchivedReturnsAll() async throws {
         let reg = registry()
         let groupId = UUID()
-        _ = reg.createChat(
+        _ = try await reg.createChat(
             provider: .claude, model: "opus", chatCwd: "/tmp",
             frontierGroupId: groupId, frontierChildIndex: 0
         )
-        let codex = reg.createChat(
+        let codex = try await reg.createChat(
             provider: .codex, model: "gpt-5.5", chatCwd: "/tmp",
             frontierGroupId: groupId, frontierChildIndex: 1
         )
-        reg.archive(id: codex.id)
+        try await reg.archive(id: codex.id)
 
         let all = reg.frontierGroupChildren(groupId: groupId, includeArchived: true)
         XCTAssertEqual(all.count, 2, "includeArchived must return live + archived")
@@ -81,9 +81,9 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
         XCTAssertTrue(group.isEmpty)
     }
 
-    func test_createChat_recordsVisibleVendorAndBillingProviderMetadata() async {
+    func test_createChat_recordsVisibleVendorAndBillingProviderMetadata() async throws {
         let reg = registry()
-        let session = reg.createChat(
+        let session = try await reg.createChat(
             provider: .opencode,
             model: "openai/gpt-5.5",
             chatCwd: "/tmp",
@@ -98,9 +98,9 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
         XCTAssertEqual(binding?.metadata["chatVendor"], ChatVendor.openrouter.rawValue)
     }
 
-    func test_createChat_recordsCursorChatVendorMetadata() async {
+    func test_createChat_recordsCursorChatVendorMetadata() async throws {
         let reg = registry()
-        let session = reg.createChat(
+        let session = try await reg.createChat(
             provider: .cursor,
             model: CursorModelCatalog.autoModelId,
             chatCwd: "/tmp",
@@ -118,17 +118,17 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
     /// After continue-from-winner, the winner's frontierGroupId and
     /// frontierChildIndex are cleared so the sidebar / history / Frontier
     /// snapshot all treat it as a regular Solo chat from that moment on.
-    func test_clearFrontierGroupBinding_winnerBecomesSolo() async {
+    func test_clearFrontierGroupBinding_winnerBecomesSolo() async throws {
         let reg = registry()
         let groupId = UUID()
-        let winner = reg.createChat(
+        let winner = try await reg.createChat(
             provider: .claude, model: "opus", chatCwd: "/tmp",
             frontierGroupId: groupId, frontierChildIndex: 0
         )
         XCTAssertEqual(reg.session(id: winner.id)?.frontierGroupId, groupId)
         XCTAssertEqual(reg.session(id: winner.id)?.frontierChildIndex, 0)
 
-        reg.clearFrontierGroupBinding(id: winner.id)
+        try await reg.clearFrontierGroupBinding(id: winner.id)
 
         let promoted = reg.session(id: winner.id)
         XCTAssertNotNil(promoted)
@@ -139,34 +139,34 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
     /// After clearing the winner, frontierGroupChildren no longer surfaces
     /// it — so any further Frontier-send fan-out routes to nobody and the
     /// UI's "≥ 2 live children" guard correctly fails.
-    func test_clearFrontierGroupBinding_dropsFromGroupChildren() async {
+    func test_clearFrontierGroupBinding_dropsFromGroupChildren() async throws {
         let reg = registry()
         let groupId = UUID()
-        let winner = reg.createChat(
+        let winner = try await reg.createChat(
             provider: .claude, model: "opus", chatCwd: "/tmp",
             frontierGroupId: groupId, frontierChildIndex: 0
         )
-        let loser = reg.createChat(
+        let loser = try await reg.createChat(
             provider: .codex, model: "gpt-5.5", chatCwd: "/tmp",
             frontierGroupId: groupId, frontierChildIndex: 1
         )
-        reg.archive(id: loser.id)
-        reg.clearFrontierGroupBinding(id: winner.id)
+        try await reg.archive(id: loser.id)
+        try await reg.clearFrontierGroupBinding(id: winner.id)
 
         let live = reg.frontierGroupChildren(groupId: groupId)
         XCTAssertTrue(live.isEmpty, "after pick-winner the group has no live children")
     }
 
     /// Idempotent: clearing again is a no-op.
-    func test_clearFrontierGroupBinding_idempotent() async {
+    func test_clearFrontierGroupBinding_idempotent() async throws {
         let reg = registry()
         let groupId = UUID()
-        let s = reg.createChat(
+        let s = try await reg.createChat(
             provider: .claude, model: "opus", chatCwd: "/tmp",
             frontierGroupId: groupId, frontierChildIndex: 0
         )
-        reg.clearFrontierGroupBinding(id: s.id)
-        reg.clearFrontierGroupBinding(id: s.id)
+        try await reg.clearFrontierGroupBinding(id: s.id)
+        try await reg.clearFrontierGroupBinding(id: s.id)
         let promoted = reg.session(id: s.id)
         XCTAssertNil(promoted?.frontierGroupId)
     }
