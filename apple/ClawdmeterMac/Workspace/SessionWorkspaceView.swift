@@ -3115,7 +3115,16 @@ private struct ChatThreadScroll: View {
     @FocusState private var findFocused: Bool
 
     var body: some View {
-        ScrollViewReader { proxy in
+        // A9: tap the body-invalidation counter so the per-burst
+        // measurement test can assert "ChatThreadScroll re-renders
+        // ONCE per token tick" (the price of binding to
+        // `messagesSlice.items`) but the historical row views — now
+        // extracted to `ChatItemRowView` with Equatable conformance —
+        // stay flat across the burst. No-op when
+        // `BodyInvalidationCounter.enabled` is false (production).
+        let _ = BodyInvalidationCounter.bump("ChatThreadScroll")
+        let streamingTailId = streamingTailItemId
+        return ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -3129,7 +3138,7 @@ private struct ChatThreadScroll: View {
                                 .frame(maxWidth: .infinity)
                         } else {
                             ForEach(messagesSlice.items) { item in
-                                itemRow(item)
+                                rowView(for: item, streamingTailId: streamingTailId)
                                     .id(item.id)
                                     .padding(rowInsets)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3252,6 +3261,13 @@ private struct ChatThreadScroll: View {
                 // a footer row inside the transcript flow above.
             }
         }
+        // A9: bridge `presentationStore` into the SwiftUI environment so
+        // the extracted `ChatItemRowView` can resolve path-link clicks
+        // without holding an `@ObservedObject` reference to the store.
+        // The row needs the store only on user action (tap), not on
+        // every body — pulling it through the environment lets the row
+        // stay Equatable on its value payload.
+        .environment(\.sessionPresentationStore, presentationStore)
     }
 
     /// Stable sentinel id used by ScrollViewReader to scroll to the tail.
@@ -3280,21 +3296,10 @@ private struct ChatThreadScroll: View {
         }
     }
 
-    private var bodyFontSize: CGFloat {
-        switch density {
-        case .compact: return 12
-        case .balanced: return 13
-        case .detailed: return 14
-        }
-    }
-
-    private var toolOutputLineLimit: Int? {
-        switch density {
-        case .compact: return 16
-        case .balanced: return 40
-        case .detailed: return nil
-        }
-    }
+    // A9: per-row `bodyFontSize` + `toolOutputLineLimit` now live in
+    // `ChatItemRowContent` (in `ChatItemRowView.swift`) — derived from
+    // the passed-in density. Kept out of ChatThreadScroll so the row
+    // doesn't need a reference back to the parent.
 
     private var findMatches: [SessionChatStore.ChatMessage] {
         let q = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3492,362 +3497,181 @@ private struct ChatThreadScroll: View {
         .padding(.vertical, 36)
     }
 
+    // MARK: - A9 row construction
+    //
+    // Rendering of a single `ChatItem` row was lifted into
+    // `ChatItemRowView` (and its streaming-tail twin
+    // `StreamingMessageView`) in `ChatItemRowView.swift`. The helpers
+    // below build the value-typed payload + closure surface those
+    // views need, projecting the parent's `@State` / `@ObservedObject`
+    // dependencies into a flat snapshot the row can compare via `==`.
+    //
+    // The streaming tail is the LAST item in `messagesSlice.items`
+    // when `liveStatusSlice.currentTurnState == .streaming`. We
+    // surface its id once per body pass (see `streamingTailItemId`
+    // below) and route the matching row through `StreamingMessageView`
+    // so its body invalidations land under a distinct counter label.
+
+    /// The id of the actively-streaming row, if any. `nil` when the
+    /// turn is idle or completed — i.e., when no row should be
+    /// treated specially.
+    ///
+    /// Computed once per parent body pass so we don't re-walk
+    /// `items` per row. Cheap: `items.last?.id` is O(1), and
+    /// `currentTurnState` is a plain enum read off the slice.
+    private var streamingTailItemId: String? {
+        guard liveStatusSlice.currentTurnState == .streaming else { return nil }
+        return messagesSlice.items.last?.id
+    }
+
+    /// Build the SwiftUI view for one row. Returns either a
+    /// `StreamingMessageView` (the tail row during an active turn)
+    /// or a `ChatItemRowView` (everything else). Both delegate to
+    /// the same `ChatItemRowContent` so visual presentation is
+    /// identical.
     @ViewBuilder
-    private func itemRow(_ item: ChatItem) -> some View {
+    private func rowView(for item: ChatItem, streamingTailId: String?) -> some View {
+        let payload = makeRowPayload(item: item, isStreamingTail: item.id == streamingTailId)
+        let actions = rowActions
+        if item.id == streamingTailId {
+            StreamingMessageView(payload: payload, actions: actions)
+        } else {
+            ChatItemRowView(payload: payload, actions: actions)
+        }
+    }
+
+    /// Project the parent's observed state into a value-typed
+    /// payload the row view can compare via `==`. Building this once
+    /// per row per body pass is cheap — every field is either a
+    /// direct property read or a small dict subscript.
+    private func makeRowPayload(item: ChatItem, isStreamingTail: Bool) -> ChatItemRowPayload {
+        let isBookmarked: Bool
+        let highlight: ChatItemRowPayload.HighlightState
         switch item {
         case .message(let m):
-            messageRow(m)
-        case .toolRun(let runId, let pairs):
-            // v0.5.5/v0.5.6: partition by tool kind:
-            //   • Edit/MultiEdit/Write → inline EditDiffRow chips
-            //   • AskUserQuestion       → interactive AskUserQuestionTray
-            //   • everything else       → "Ran N commands" disclosure
-            //
-            // v0.29.4: the "everything else" bucket previously rendered
-            // each tool pair as its own row, which meant a long agent
-            // burst (50 sed/rg/cat probes) flooded the transcript with
-            // 50 individual exec_command rows. Wrap that bucket in
-            // `toolRunGroup` so it shows as one collapsed "Ran N
-            // commands" pill that expands on click — matches the
-            // existing MacChatV2View behavior and what users expect
-            // from Claude Code's CLI rendering.
-            let editPairs = pairs.filter { $0.call.editStats != nil }
-            let askPairs  = pairs.filter { $0.call.askUserQuestion != nil }
-            let otherPairs = pairs.filter {
-                $0.call.editStats == nil && $0.call.askUserQuestion == nil
+            isBookmarked = presentationStore.snapshot.messageBookmarks[session.id]?.contains(m.id) == true
+            highlight = highlightState(for: m)
+        case .toolRun:
+            isBookmarked = false
+            highlight = .none
+        }
+
+        // Project per-row tool-run / pair expansion state. Restricting
+        // to keys we care about keeps the row's `==` cheap and means
+        // toggling an unrelated row's disclosure doesn't bump this
+        // row's equality fingerprint.
+        let isToolRunOpen: Bool
+        let pairsOpen: [String: Bool]
+        if case .toolRun(let runId, let pairs) = item {
+            isToolRunOpen = expanded.contains("run:\(runId)")
+            var open: [String: Bool] = [:]
+            for pair in pairs {
+                open[pair.id] = expanded.contains("pair:\(pair.id)")
             }
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(editPairs) { pair in
-                    if let stats = pair.call.editStats {
-                        EditDiffRow(
-                            stats: stats,
-                            editDiff: pair.call.editDiff,
-                            resultBody: pair.result?.body,
-                            density: density
-                        )
-                    }
-                }
-                ForEach(askPairs) { pair in
-                    if let q = pair.call.askUserQuestion {
-                        AskUserQuestionTray(
-                            question: q,
-                            answered: pair.result != nil,
-                            selections: Binding(
-                                get: { askUserQuestionSelections[pair.id] ?? [:] },
-                                set: { askUserQuestionSelections[pair.id] = $0 }
-                            )
-                        ) { _, options in
-                            // Paste the chosen labels into the session's
-                            // tmux pane via the daemon's existing send
-                            // endpoint. Trailing newline is added by the
-                            // server-side paste-buffer handler so Claude
-                            // Code's picker treats it as Enter.
-                            let answer = options.map(\.label).joined(separator: ", ")
-                            sendAnswerToSession(answer)
-                        }
-                    }
-                }
-                if !otherPairs.isEmpty {
-                    toolRunGroup(id: runId, pairs: otherPairs)
+            pairsOpen = open
+        } else {
+            isToolRunOpen = false
+            pairsOpen = [:]
+        }
+
+        // AskUserQuestion selections — only the entries that belong
+        // to this row's tool pairs. Same per-row narrowing as above.
+        var askForRow: [String: [String: Set<String>]] = [:]
+        if case .toolRun(_, let pairs) = item {
+            for pair in pairs where pair.call.askUserQuestion != nil {
+                if let sel = askUserQuestionSelections[pair.id] {
+                    askForRow[pair.id] = sel
                 }
             }
         }
+
+        return ChatItemRowPayload(
+            item: item,
+            density: density,
+            isBookmarked: isBookmarked,
+            highlight: highlight,
+            providerGlyph: session.agent.tahoeProvider,
+            repoRoot: transcriptPathRoot,
+            syntaxTheme: presentationStore.snapshot.syntaxTheme,
+            isToolRunOpen: isToolRunOpen,
+            toolPairsOpen: pairsOpen,
+            askSelections: askForRow,
+            isStreamingTail: isStreamingTail
+        )
     }
 
-    /// v0.5.6 — fire-and-forget answer send. Mirrors the existing
-    /// MacComposerSender path used by the main composer; loopback HTTP
-    /// to the local daemon's `/sessions/:id/send`, which routes through
-    /// the same rate-limit + audit-log path as a typed prompt.
-    private func sendAnswerToSession(_ answer: String) {
-        guard !answer.isEmpty,
-              let runtime = AppDelegate.runtime,
-              let port = runtime.agentControlServer.boundPort else { return }
-        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+    /// Closures the row fires for user interactions. We bind to the
+    /// `@State` projections (`$expanded`, `$askUserQuestionSelections`)
+    /// via local Bindings captured by the closures — Bindings are
+    /// reference-stable wrappers around the @State storage, so the
+    /// closure can mutate the state without itself being a mutating
+    /// function. Same pattern SwiftUI uses everywhere for "set my
+    /// state from a child view's action."
+    ///
+    /// The closures themselves are reference-stable across body re-
+    /// evals (no @State observed inside them), so they're SAFE to
+    /// exclude from `ChatItemRowView`'s `==` — and we MUST exclude
+    /// them, otherwise the row would never short-circuit body
+    /// re-evaluation.
+    private var rowActions: ChatItemRowActions {
+        let expandedBinding = $expanded
+        let askBinding = $askUserQuestionSelections
+        let presentationStore = self.presentationStore
         let sessionId = session.id
-        Task {
-            try? await sender.send(sessionId: sessionId, body: answer, asFollowUp: true)
-        }
-    }
-
-    @ViewBuilder
-    private func messageRow(_ msg: SessionChatStore.ChatMessage) -> some View {
-        Group {
-            switch msg.kind {
-            case .userText:      userBubble(msg)
-            case .assistantText: assistantBubble(msg)
-            case .toolCall, .toolResult:
-                // Should never hit: tool messages are folded into ChatItem.toolRun.
-                EmptyView()
-            case .meta:          metaRow(msg)
+        return ChatItemRowActions(
+            onToggleToolRun: { runId, shouldOpen in
+                let key = "run:\(runId)"
+                if shouldOpen {
+                    expandedBinding.wrappedValue.insert(key)
+                } else {
+                    expandedBinding.wrappedValue.remove(key)
+                }
+            },
+            onToggleToolPair: { pairId, shouldOpen in
+                let key = "pair:\(pairId)"
+                if shouldOpen {
+                    expandedBinding.wrappedValue.insert(key)
+                } else {
+                    expandedBinding.wrappedValue.remove(key)
+                }
+            },
+            onUpdateAskSelections: { pairId, sel in
+                askBinding.wrappedValue[pairId] = sel
+            },
+            onAnswerAsk: { answer in
+                Self.sendAnswerToSession(answer, sessionId: sessionId)
+            },
+            onCopy: { text in
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            },
+            onQuoteReply: { body in
+                let quoted = body
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .map { "> \($0)" }
+                    .joined(separator: "\n")
+                ComposerInsertionInbox.shared.enqueue(text: "\(quoted)\n\n", autoSend: false)
+            },
+            onToggleBookmark: { messageId in
+                try? presentationStore.toggleMessageBookmark(sessionId: sessionId, messageId: messageId)
             }
-        }
-        .id(msg.id)
-        .background(messageHighlight(msg), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(alignment: .topLeading) {
-            if isBookmarked(msg.id) {
-                Image(systemName: "bookmark.fill")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(t.accent)
-                    .padding(.leading, 2)
-                    .padding(.top, 1)
-                    .help("Bookmarked")
-            }
-        }
-        .contextMenu {
-            messageActions(msg)
-        }
+        )
     }
 
-    @ViewBuilder
-    private func messageActions(_ msg: SessionChatStore.ChatMessage) -> some View {
-        Button("Copy Message", systemImage: "doc.on.doc") {
-            copyToPasteboard(msg.body)
-        }
-        Button("Quote Reply", systemImage: "quote.bubble") {
-            let quoted = msg.body
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .map { "> \($0)" }
-                .joined(separator: "\n")
-            ComposerInsertionInbox.shared.enqueue(text: "\(quoted)\n\n", autoSend: false)
-        }
-        Button(isBookmarked(msg.id) ? "Remove Bookmark" : "Bookmark", systemImage: isBookmarked(msg.id) ? "bookmark.slash" : "bookmark") {
-            try? presentationStore.toggleMessageBookmark(sessionId: session.id, messageId: msg.id)
-        }
-        Button("Copy Message ID", systemImage: "number") {
-            copyToPasteboard(msg.id)
-        }
-    }
-
-    private func isBookmarked(_ messageId: String) -> Bool {
-        presentationStore.snapshot.messageBookmarks[session.id]?.contains(messageId) == true
-    }
-
-    private func messageHighlight(_ msg: SessionChatStore.ChatMessage) -> Color {
+    /// Project the find-bar highlight state for a message to one of
+    /// three discrete cases. Pre-computed once per body pass so the
+    /// row's `==` doesn't have to walk the full match array.
+    private func highlightState(for msg: SessionChatStore.ChatMessage) -> ChatItemRowPayload.HighlightState {
         let matches = findMatches
         guard !matches.isEmpty,
               matches.contains(where: { $0.id == msg.id })
-        else { return .clear }
+        else { return .none }
         if let selectedMatchIndex,
            matches.indices.contains(selectedMatchIndex),
            matches[selectedMatchIndex].id == msg.id {
-            return t.accentAlpha(0.18)
+            return .selectedMatch
         }
-        return Color.yellow.opacity(t.dark ? 0.16 : 0.22)
-    }
-
-    private func copyToPasteboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-    }
-
-    // MARK: - Tool run rendering
-
-    private func toolRunGroup(id: String, pairs: [ToolPair]) -> some View {
-        let runKey = "run:\(id)"
-        let isOpen = Binding<Bool>(
-            get: { expanded.contains(runKey) },
-            set: { if $0 { expanded.insert(runKey) } else { expanded.remove(runKey) } }
-        )
-        return DisclosureGroup(isExpanded: isOpen) {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(pairs) { pair in
-                    toolPairRow(pair)
-                }
-            }
-            .padding(.leading, 16)
-            .padding(.top, 4)
-        } label: {
-            HStack(spacing: 6) {
-                TahoeIcon("terminal", size: 10)
-                    .foregroundStyle(t.fg3)
-                Text("Ran \(pairs.count) command\(pairs.count == 1 ? "" : "s")")
-                    .font(TahoeFont.body(11.5, weight: .semibold))
-                    .foregroundStyle(t.fg2)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(t.hair2, in: Capsule(style: .continuous))
-            .contentShape(Rectangle())
-        }
-        .disclosureGroupStyle(QuietDisclosure())
-    }
-
-    private func toolPairRow(_ pair: ToolPair) -> some View {
-        let key = "pair:\(pair.id)"
-        let isOpen = Binding<Bool>(
-            get: { expanded.contains(key) },
-            set: { if $0 { expanded.insert(key) } else { expanded.remove(key) } }
-        )
-        let isError = pair.result?.isError ?? false
-        let bashResult = pair.result?.bashResult ?? pair.call.bashResult
-        return DisclosureGroup(isExpanded: isOpen) {
-            VStack(alignment: .leading, spacing: 6) {
-                if let bashResult {
-                    bashResultView(bashResult, isError: isError)
-                } else if let detail = pair.call.detail, !detail.isEmpty {
-                    Text(detail)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.primary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(Color.secondary.opacity(0.08),
-                                    in: RoundedRectangle(cornerRadius: 6))
-                }
-                if let result = pair.result,
-                   !result.body.isEmpty,
-                   bashResult == nil || (bashResult?.stdout == nil && bashResult?.stderr == nil) {
-                    Text(result.body)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(isError ? .red : .secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(toolOutputLineLimit)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(Color.secondary.opacity(0.05),
-                                    in: RoundedRectangle(cornerRadius: 6))
-                } else if pair.result == nil {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.mini)
-                        Text("Waiting for result…")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-            .padding(.leading, 16)
-            .padding(.top, 4)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: toolIcon(pair.call.title))
-                    .font(.system(size: 10))
-                    .foregroundStyle(toolTint(pair.call.title))
-                Text(pair.call.title)
-                    .font(TahoeFont.mono(11, weight: .semibold))
-                    .foregroundStyle(toolTint(pair.call.title))
-                Text(pair.call.body)
-                    .font(TahoeFont.body(11))
-                    .foregroundStyle(t.fg2)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if isError {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
-                    .foregroundStyle(.red)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(t.hair2, in: Capsule(style: .continuous))
-            .contentShape(Rectangle())
-        }
-        .disclosureGroupStyle(QuietDisclosure())
-    }
-
-    @ViewBuilder
-    private func bashResultView(_ bash: BashResult, isError: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                if let command = bash.command, !command.isEmpty {
-                    Label(command, systemImage: "terminal")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-                Spacer(minLength: 8)
-                if let exitCode = bash.exitCode {
-                    Text("exit \(exitCode)")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(exitCode == 0 ? .green : .red)
-                }
-                if let durationMS = bash.durationMS {
-                    Text("\(durationMS) ms")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if let cwd = bash.cwd, !cwd.isEmpty {
-                Text(cwd)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-            }
-            if let stdout = bash.stdout, !stdout.isEmpty {
-                monoBlock(title: "stdout", text: stdout, tint: .secondary)
-            }
-            if let stderr = bash.stderr, !stderr.isEmpty {
-                monoBlock(title: "stderr", text: stderr, tint: .red)
-            }
-            if bash.isTruncated {
-                Text("Output truncated")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            }
-            if bash.stdout == nil, bash.stderr == nil, bash.exitCode == nil {
-                Text("Waiting for result...")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(10)
-        .background((isError ? Color.red : t.hair2).opacity(isError ? 0.08 : 0.85),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func monoBlock(title: String, text: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(tint)
-            Text(text)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(tint)
-                .textSelection(.enabled)
-                .lineLimit(toolOutputLineLimit)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(8)
-        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 5))
-    }
-
-    private func userBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
-        HStack {
-            Spacer(minLength: 64)
-            VStack(alignment: .trailing, spacing: 4) {
-                TahoeGlass(radius: 20, tone: .raised) {
-                    Text(msg.body)
-                        .font(TahoeFont.body(bodyFontSize))
-                        .foregroundStyle(t.fg)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: 640, alignment: .trailing)
-            }
-        }
-    }
-
-    private func assistantBubble(_ msg: SessionChatStore.ChatMessage) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 26)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 4) {
-                MarkdownRenderer(source: msg.body, syntaxTheme: presentationStore.snapshot.syntaxTheme)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                TranscriptPathLinkStrip(links: pathLinks(in: msg.body), presentationStore: presentationStore)
-            }
-            Spacer(minLength: 64)
-        }
-    }
-
-    private func pathLinks(in body: String) -> [ResolvablePathLink] {
-        guard let root = transcriptPathRoot else { return [] }
-        return Array(ResolvablePathLinkParser.links(in: body, repoRoot: root).prefix(8))
+        return .match
     }
 
     private var transcriptPathRoot: URL? {
@@ -3860,39 +3684,23 @@ private struct ChatThreadScroll: View {
         return nil
     }
 
-    // toolCallCard / toolResultCard removed — replaced by toolRunGroup +
-    // toolPairRow above, which fold consecutive tool messages into a two-
-    // level DisclosureGroup ("Ran N commands" → per-tool → command/result).
-
-    private func metaRow(_ msg: SessionChatStore.ChatMessage) -> some View {
-        HStack {
-            Spacer()
-            Text(msg.body)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
+    /// v0.5.6 — fire-and-forget answer send for AskUserQuestion. Mirrors
+    /// the existing MacComposerSender path used by the main composer;
+    /// loopback HTTP to the local daemon's `/sessions/:id/send`, which
+    /// routes through the same rate-limit + audit-log path as a typed
+    /// prompt.
+    ///
+    /// Static so the row's action closure can call it without holding
+    /// a reference back to `ChatThreadScroll` — the closure captures
+    /// only `sessionId: UUID`, a value type.
+    private static func sendAnswerToSession(_ answer: String, sessionId: UUID) {
+        guard !answer.isEmpty,
+              let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort else { return }
+        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        Task {
+            try? await sender.send(sessionId: sessionId, body: answer, asFollowUp: true)
         }
-        .padding(.vertical, 4)
-    }
-
-    private func toolIcon(_ name: String) -> String {
-        ToolPresentationCatalog.presentation(for: name).systemImageName
-    }
-
-    private func toolTint(_ name: String) -> Color {
-        switch ToolPresentationCatalog.presentation(for: name).tone {
-        case .read: return .blue
-        case .write: return terraCotta
-        case .shell: return .green
-        case .web: return .purple
-        case .agent: return .orange
-        case .warning: return .red
-        case .neutral: return .secondary
-        }
-    }
-
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
     }
 }
 
