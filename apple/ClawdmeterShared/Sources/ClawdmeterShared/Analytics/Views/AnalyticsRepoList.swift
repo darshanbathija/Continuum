@@ -175,7 +175,15 @@ public struct AnalyticsRepoList: View {
             window: window,
             providerFilter: providerFilter
         )
-        let data = rowsStore.output ?? []
+        // Inline-compute fallback for the first body call (and any cache
+        // miss frame): the store's `.task(id:)` driver fires AFTER body
+        // returns, so the placeholder `[]` would otherwise surface for one
+        // runloop tick — causing the misleading "No usage in this window"
+        // empty-state to flash even when there IS usage. Falling back to
+        // the static compute when `output == nil` keeps the first-render
+        // semantics identical to pre-A4 (one compute on first body), while
+        // subsequent body invocations cache-hit through the store.
+        let data = rowsStore.output ?? Self.computeRows(input)
         return bodyWithData(data: data)
             .task(id: input) {
                 rowsStore.update(input: input)

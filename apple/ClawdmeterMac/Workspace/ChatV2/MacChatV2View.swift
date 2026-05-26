@@ -235,10 +235,15 @@ private struct Sidebar: View {
     }
 
     private var groupRows: [SidebarRow] {
-        // A4: read from the memoized derived store; placeholder is `[]`
-        // until the first compute lands (one runloop tick after
-        // Sidebar's first body call).
-        groupRowsStore.output ?? []
+        // A4: read from the memoized derived store. Inline-compute
+        // fallback when `output == nil`: the store's `.task(id:)` driver
+        // fires AFTER body returns, so reading the placeholder `[]` would
+        // otherwise render an empty sidebar for one runloop tick on first
+        // open even when sessions exist. Falling back to the static
+        // compute keeps first-render semantics identical to pre-A4 (one
+        // compute on first body); subsequent body invocations cache-hit
+        // through the store.
+        groupRowsStore.output ?? Sidebar.computeGroupRows(sessions)
     }
 
     /// Pure projection. Sortable + group-aware. Exposed `fileprivate

@@ -166,8 +166,16 @@ public struct AnalyticsDailyChart: View {
             window: window,
             providerFilter: providerFilter
         )
-        let cost = costStore.output ?? []
-        let reqs = reqsStore.output ?? []
+        // Inline-compute fallback for the first body call (and any cache
+        // miss frame): the store's `.task(id:)` driver fires AFTER body
+        // returns, so the placeholder `[]` would otherwise be surfaced for
+        // one runloop tick — causing a brief EmptyView flash + layout jump
+        // when the parent first mounts AnalyticsDailyChart. Falling back to
+        // the static compute when `output == nil` keeps the first-render
+        // semantics identical to pre-A4 (one compute on first body), while
+        // subsequent body invocations cache-hit through the store.
+        let cost = costStore.output ?? Self.computeCostPoints(input)
+        let reqs = reqsStore.output ?? Self.computeReqsPoints(input)
         Group {
             if cost.isEmpty && reqs.isEmpty {
                 EmptyView()
