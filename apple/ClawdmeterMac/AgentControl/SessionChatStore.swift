@@ -1102,6 +1102,22 @@ struct ParsedLine: Sendable {
                 sawCompleted = true
             }
         }
+        // Observability for the fallback path. When the adapter fails
+        // to emit `.assistantMessageCompleted` but legacy did pull a
+        // non-zero token total off `message.usage`, parity has silently
+        // broken — the wired path is using legacy values while reporting
+        // success. Log so the divergence shows up in Console.app rather
+        // than passing unnoticed. Debug-level so production sessions
+        // (which should never hit this branch) don't generate noise.
+        if !sawCompleted {
+            let legacyHasTokens = legacy.deltaInputTokens != 0
+                || legacy.deltaOutputTokens != 0
+                || legacy.deltaCacheCreationTokens != 0
+                || legacy.deltaCacheReadTokens != 0
+            if legacyHasTokens {
+                chatLogger.debug("F1a-wire: ClaudeAdapter did not emit .assistantMessageCompleted for a usage-bearing line; falling back to legacy token values. legacy in=\(legacy.deltaInputTokens, privacy: .public) out=\(legacy.deltaOutputTokens, privacy: .public) cacheCreate=\(legacy.deltaCacheCreationTokens, privacy: .public) cacheRead=\(legacy.deltaCacheReadTokens, privacy: .public)")
+            }
+        }
         return ParsedLine(
             timestamp: legacy.timestamp,
             messages: legacy.messages,
