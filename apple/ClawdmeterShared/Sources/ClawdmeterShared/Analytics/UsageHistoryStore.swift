@@ -147,11 +147,26 @@ public final class UsageHistoryStore: ObservableObject {
     /// to bypass the probe — used by `forceRefresh()` / `invalidate()`
     /// / app-foreground notifications, which want to skip the probe so
     /// the UI updates immediately.
+    ///
+    /// Mtime capture rule: we probe BEFORE `loadAll()` and save that
+    /// pre-load mtime as `lastSeenMaxMtime`. Capturing a post-load
+    /// mtime would silently mark files written *during* the load as
+    /// "already seen" without their content being reflected in the
+    /// published snapshot — the next probe would short-circuit and the
+    /// data would not surface until something else forced a refresh
+    /// (PR #137 review P1 #2). Pre-load capture means concurrent writes
+    /// bump the mtime above what we saved, triggering a re-load on the
+    /// next tick.
     public func refresh(force: Bool = false) async {
+        // Probe mtime up front regardless of `force` so we have a
+        // pre-load baseline to save. On non-force paths the probe also
+        // gates short-circuiting; on force paths it just primes
+        // `lastSeenMaxMtime` and resets idle backoff.
+        let probedMtime = await loader.mostRecentSourceMtime()
+
         if !force {
             // mtime probe — single stat per source dir (no parsing).
             // Skip the full loadAll() if nothing changed.
-            let probedMtime = await loader.mostRecentSourceMtime()
             if let last = lastSeenMaxMtime, let probed = probedMtime, probed <= last {
                 // No change → bump idle counter + maybe slide timer.
                 consecutiveIdleTicks += 1
@@ -160,22 +175,27 @@ public final class UsageHistoryStore: ObservableObject {
                 }
                 return
             }
-            // Activity detected (or first refresh) → reset backoff.
-            if consecutiveIdleTicks > 0 {
-                consecutiveIdleTicks = 0
-                rescheduleTimer(interval: Self.baseInterval)
-            }
-            if let probed = probedMtime { lastSeenMaxMtime = probed }
         }
+
+        // Reaching here means we're going to call loadAll(). Reset the
+        // idle-backoff state so the timer goes back to the active
+        // interval — covers both "unforced refresh detected activity"
+        // and "foreground / forceRefresh / invalidate kicked us out of
+        // backoff". Previously the force path skipped this branch and
+        // left the timer stuck at idleInterval (PR #137 review P1 #1).
+        if consecutiveIdleTicks > 0 {
+            consecutiveIdleTicks = 0
+            rescheduleTimer(interval: Self.baseInterval)
+        }
+        // Save the PRE-load probe so writes that race with loadAll()
+        // get re-detected on the next tick instead of being marked
+        // already-seen (see method-level doc).
+        if let probed = probedMtime { lastSeenMaxMtime = probed }
+
         loading = true
         let result = await loader.loadAll()
         snapshot = result
         loading = false
-        // Forced refresh still updates lastSeenMaxMtime so the next
-        // unforced refresh's probe has a baseline.
-        if force, let probedMtime = await loader.mostRecentSourceMtime() {
-            lastSeenMaxMtime = probedMtime
-        }
     }
 
     public func forceRefresh() {
@@ -217,10 +237,10 @@ public final class UsageHistoryStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            // App foreground: bypass the mtime probe so the UI reflects
-            // any changes that landed while the app was backgrounded
-            // (the probe would catch them, but force:true is clearer
-            // and resets the idle-backoff counter as a side effect).
+            // App foreground: force-refresh so the UI reflects any
+            // changes that landed while the app was backgrounded and so
+            // we exit idle-backoff (`refresh(force:)` resets the
+            // idle-tick counter + slides the timer back to baseInterval).
             Task { @MainActor in await self?.refresh(force: true) }
         })
 #elseif canImport(AppKit)

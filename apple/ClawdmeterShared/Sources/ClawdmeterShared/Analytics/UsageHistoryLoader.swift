@@ -131,7 +131,12 @@ public actor UsageHistoryLoader {
     ///   `~/.codex/sessions/` (recursive); take the newest mtime found.
     /// - Gemini Antigravity (`.pb` + `.db`) and `agy` CLI: same recursive
     ///   walk over their respective dirs.
-    /// - OpenCode: `stat` the single SQLite db file.
+    /// - OpenCode: `stat` the SQLite db file PLUS its WAL/SHM sidecars.
+    ///   OpenCode runs in WAL mode (see `OpencodeUsageParser`), so commits
+    ///   land in `opencode.db-wal` before the next checkpoint touches
+    ///   `opencode.db` itself — stat'ing only the main file would let the
+    ///   probe short-circuit a refresh that the SSE adapter just kicked
+    ///   off via `.opencodeUsageRecorded` (see PR #137 review P0 #1).
     ///
     /// Plan: B2 (Phase 2) — see
     /// `.claude/plans/study-this-codebase-crystalline-shore.md`. Codex
@@ -152,7 +157,19 @@ public actor UsageHistoryLoader {
             observe(Self.mostRecentMtime(inDirectory: dir))
         }
         if let agyDir { observe(Self.mostRecentMtime(inDirectory: agyDir)) }
-        if let opencodeDBURL { observe(Self.fileMtime(opencodeDBURL)) }
+        if let opencodeDBURL {
+            // OpenCode writes in SQLite WAL mode. The committed-but-not-
+            // checkpointed page-deltas live in `<db>-wal`; the shared-
+            // memory index lives in `<db>-shm`. Take the max across all
+            // three so a hot stream of SSE `usage` events doesn't get
+            // throttled by a probe that only sees the rarely-touched
+            // main file.
+            observe(Self.fileMtime(opencodeDBURL))
+            let walURL = URL(fileURLWithPath: opencodeDBURL.path + "-wal")
+            observe(Self.fileMtime(walURL))
+            let shmURL = URL(fileURLWithPath: opencodeDBURL.path + "-shm")
+            observe(Self.fileMtime(shmURL))
+        }
         return maxMtime
     }
 
