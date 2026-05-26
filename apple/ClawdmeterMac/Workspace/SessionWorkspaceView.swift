@@ -430,21 +430,13 @@ private struct SidebarPane: View {
             TextField("Name", text: $renameInput)
                 .textFieldStyle(.roundedBorder)
             Button("Save") {
-                try? presentationStore.setTitleOverride(target.id, title: renameInput)
-                showingRenameAlert = false
-                renameTarget = nil
-                renameInput = ""
+                commitSessionRename(target, name: renameInput)
             }
             Button("Clear name", role: .destructive) {
-                try? presentationStore.setTitleOverride(target.id, title: nil)
-                showingRenameAlert = false
-                renameTarget = nil
-                renameInput = ""
+                commitSessionRename(target, name: nil)
             }
             Button("Cancel", role: .cancel) {
-                showingRenameAlert = false
-                renameTarget = nil
-                renameInput = ""
+                resetSessionRenameState()
             }
         } message: { target in
             Text("Currently: \(sessionTitle(target))")
@@ -1563,7 +1555,7 @@ private struct SidebarPane: View {
         Divider()
         Button("Rename…", systemImage: "pencil") {
             renameTarget = session
-            renameInput = presentationStore.snapshot.titleOverrides[session.id] ?? session.customName ?? ""
+            renameInput = session.customName ?? presentationStore.snapshot.titleOverrides[session.id] ?? ""
             showingRenameAlert = true
         }
         if session.archivedAt == nil {
@@ -1617,18 +1609,35 @@ private struct SidebarPane: View {
     }
 
     private func sessionTitle(_ session: AgentSession) -> String {
-        if let title = presentationStore.snapshot.titleOverrides[session.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !title.isEmpty {
-            return title
-        }
         if let custom = session.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !custom.isEmpty {
             return custom
+        }
+        if let title = presentationStore.snapshot.titleOverrides[session.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return title
         }
         if let goal = Self.cleanSidebarTitle(session.goal) { return goal }
         if let branch = branchLikeTitle(for: session) { return branch }
         if let summary = latestAssistantSummary(for: session) { return summary }
         return "\(session.agent.rawValue.capitalized) · \(session.status.rawValue)"
+    }
+
+    private func commitSessionRename(_ session: AgentSession, name: String?) {
+        _ = model.renameSession(id: session.id, name: name)
+        // Older builds wrote Rename into the client-local presentation store.
+        // Clear that shadow value so the registry-backed customName drives all
+        // surfaces after this edit.
+        if presentationStore.snapshot.titleOverrides[session.id] != nil {
+            try? presentationStore.setTitleOverride(session.id, title: nil)
+        }
+        resetSessionRenameState()
+    }
+
+    private func resetSessionRenameState() {
+        showingRenameAlert = false
+        renameTarget = nil
+        renameInput = ""
     }
 
     private func latestAssistantSummary(for session: AgentSession) -> String? {

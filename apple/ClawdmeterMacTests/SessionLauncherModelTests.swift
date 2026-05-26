@@ -176,4 +176,41 @@ final class SessionLauncherModelTests: XCTestCase {
         XCTAssertEqual(recovery?.error, error)
         XCTAssertNil(model.takeFirstSendRecovery(sessionId: promotedSessionId))
     }
+
+    func test_renameSessionPersistsThroughRegistryCustomName() {
+        let registryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SessionLauncherModelRenameTests-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: registryURL) }
+        let registry = AgentSessionRegistry(storeURL: registryURL)
+        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
+        let model = SessionsModel(
+            repoIndex: RepoIndex(),
+            registry: registry,
+            supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
+        )
+        let session = registry.create(
+            repoKey: "/repo/clawdmeter",
+            repoDisplayName: "Clawdmeter",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "Fix rename",
+            worktreePath: nil,
+            tmuxWindowId: "@1",
+            tmuxPaneId: "%1",
+            planMode: false,
+            mode: .local
+        )
+
+        XCTAssertTrue(model.renameSession(id: session.id, name: "  Rename works  "))
+        let renamed = registry.session(id: session.id)
+        XCTAssertEqual(renamed?.customName, "Rename works")
+        XCTAssertEqual(renamed?.displayLabel, "Rename works")
+
+        let reloaded = AgentSessionRegistry(storeURL: registryURL)
+        XCTAssertEqual(reloaded.session(id: session.id)?.customName, "Rename works")
+
+        XCTAssertTrue(model.renameSession(id: session.id, name: "   \n  "))
+        XCTAssertNil(registry.session(id: session.id)?.customName)
+        XCTAssertFalse(model.renameSession(id: UUID(), name: "Missing"))
+    }
 }
