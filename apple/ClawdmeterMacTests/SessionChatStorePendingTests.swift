@@ -1,6 +1,6 @@
 import XCTest
 import ClawdmeterShared
-@testable import Continuum
+@testable import Clawdmeter
 
 /// A13 — exercises the Mac-side `SessionChatStore` pending slot
 /// integration:
@@ -12,13 +12,6 @@ import ClawdmeterShared
 /// The pure value-type state machine is covered separately in
 /// `OptimisticPendingMessageTests` in the Shared SwiftPM target. These
 /// tests focus on the store wiring (snapshot reconcile, queue cap).
-///
-/// NOTE: this file uses `@testable import Continuum` because the Mac
-/// target's Swift module is `Continuum` since the v0.29.8 rebrand (per
-/// `apple/project.yml`'s `PRODUCT_NAME: Continuum` on the ClawdmeterMac
-/// target). The existing test files in this directory still import
-/// `Clawdmeter` and fail to build for that reason — pre-existing rebrand
-/// drift, separate from A13.
 @MainActor
 final class SessionChatStorePendingTests: XCTestCase {
 
