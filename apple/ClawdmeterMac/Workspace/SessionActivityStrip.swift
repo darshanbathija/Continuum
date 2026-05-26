@@ -18,7 +18,20 @@ import ClawdmeterShared
 /// `event_msg.token_count` events.
 struct SessionActivityStrip: View {
     let session: AgentSession
-    @ObservedObject var chatStore: SessionChatStore
+    // A5 — split the chat-store dep into the two slices this strip
+    // actually reads. liveStatusSlice drives the pulsing indicator
+    // (lastEventAt → isActive); composerSlice drives the token + cost
+    // labels (totals, modelHint). Transcript-only appends that carry
+    // no token delta now only invalidate liveStatusSlice (for the
+    // lastEventAt pulse), and the cost label's body stays put.
+    @ObservedObject var liveStatusSlice: ChatLiveStatusSlice
+    @ObservedObject var composerSlice: ChatComposerSlice
+
+    init(session: AgentSession, chatStore: SessionChatStore) {
+        self.session = session
+        _liveStatusSlice = ObservedObject(wrappedValue: chatStore.liveStatusSlice)
+        _composerSlice = ObservedObject(wrappedValue: chatStore.composerSlice)
+    }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -154,7 +167,7 @@ struct SessionActivityStrip: View {
 
     @ViewBuilder
     private var tokenLabel: some View {
-        let total = chatStore.snapshot.totalTokens
+        let total = composerSlice.totalTokens
         if total > 0 {
             Text("·")
                 .font(.system(size: 11))
@@ -189,7 +202,7 @@ struct SessionActivityStrip: View {
     // MARK: - Helpers
 
     private var isActive: Bool {
-        guard let stamp = chatStore.snapshot.lastEventAt else { return false }
+        guard let stamp = liveStatusSlice.lastEventAt else { return false }
         return now.timeIntervalSince(stamp) < Self.activityWindow
     }
 
@@ -235,16 +248,15 @@ struct SessionActivityStrip: View {
     /// when no assistant message has been ingested yet.
     private func estimateCost() -> Decimal? {
         guard session.agent == .claude else { return nil }
-        let snap = chatStore.snapshot
         let totals = TokenTotals(
-            inputTokens: snap.totalInputTokens,
-            outputTokens: snap.totalOutputTokens,
-            cacheCreationTokens: snap.totalCacheCreationTokens,
-            cacheReadTokens: snap.totalCacheReadTokens,
+            inputTokens: composerSlice.totalInputTokens,
+            outputTokens: composerSlice.totalOutputTokens,
+            cacheCreationTokens: composerSlice.totalCacheCreationTokens,
+            cacheReadTokens: composerSlice.totalCacheReadTokens,
             reasoningTokens: 0,
             costUSD: 0
         )
-        let model = snap.modelHint ?? "claude-sonnet-4-5"
+        let model = composerSlice.modelHint ?? "claude-sonnet-4-5"
         return Pricing.shared.cost(for: model, tokens: totals)
     }
 

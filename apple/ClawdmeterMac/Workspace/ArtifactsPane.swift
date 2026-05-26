@@ -13,16 +13,25 @@ import ClawdmeterShared
 /// deserve their own surface.
 struct ArtifactsPane: View {
     let session: AgentSession
-    @ObservedObject var chatStore: SessionChatStore
+    // A5 — bind to the per-transcript slice. ArtifactsPane only ever
+    // read `snapshot.updateCounter` + `snapshot.artifactEntries`, both
+    // of which live on the messages slice. Composer token deltas and
+    // permission-prompt flips no longer invalidate this pane.
+    @ObservedObject var messagesSlice: ChatMessagesSlice
     @State private var previewURL: URL?
     /// Verified-on-disk artifact set. The existence check used to run
     /// synchronously inside `collect()` on every render; with many
     /// artifacts and a slow FS (network mount, heavy disk load) this
     /// hitched. The check now runs off-main via Task.detached and the
     /// result lands here. The view re-runs the check when
-    /// `snapshot.artifactEntries` changes.
+    /// `messagesSlice.artifactEntries` changes.
     @State private var verifiedArtifacts: [Artifact] = []
     @State private var lastVerifiedCounter: UInt64 = 0
+
+    init(session: AgentSession, chatStore: SessionChatStore) {
+        self.session = session
+        _messagesSlice = ObservedObject(wrappedValue: chatStore.messagesSlice)
+    }
 
     var body: some View {
         let artifacts = verifiedArtifacts
@@ -47,7 +56,7 @@ struct ArtifactsPane: View {
             }
         }
         .onAppear { refreshVerified() }
-        .onChange(of: chatStore.snapshot.updateCounter) { _, _ in
+        .onChange(of: messagesSlice.updateCounter) { _, _ in
             refreshVerified()
         }
     }
@@ -56,10 +65,10 @@ struct ArtifactsPane: View {
     /// verified list back. Skips re-running for the same updateCounter
     /// so tab switches don't trigger redundant stat() calls.
     private func refreshVerified() {
-        let counter = chatStore.snapshot.updateCounter
+        let counter = messagesSlice.updateCounter
         guard counter != lastVerifiedCounter else { return }
         lastVerifiedCounter = counter
-        let entries = chatStore.snapshot.artifactEntries
+        let entries = messagesSlice.artifactEntries
         let repoCwd = session.effectiveCwd
         Task.detached(priority: .userInitiated) {
             var out: [Artifact] = []

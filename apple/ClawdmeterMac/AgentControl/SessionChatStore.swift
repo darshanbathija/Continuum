@@ -224,9 +224,58 @@ public final class SessionChatStore: ObservableObject {
     /// silently — extra sends fail-loud with a chip so the user knows.
     public static let offlineQueueLimit: Int = 8
 
+    // MARK: - Per-concern publishing slices (A5)
+    //
+    // The fat `@Published snapshot: ChatSnapshot` above invalidates every
+    // observer on every transcript append — even views that only care
+    // about, say, the activity strip's tokens or the permission prompt.
+    // SwiftUI re-evaluates each observer's body, and the cost is visible
+    // in Instruments during high-rate streaming bursts.
+    //
+    // These three slices split the snapshot into per-concern
+    // `ObservableObject`s. Each slice publishes only when ITS fields
+    // change, so an observer that binds to `composerSlice` does NOT
+    // invalidate on a transcript-only ingest (no token delta), and a
+    // view bound to `messagesSlice` does NOT invalidate when only the
+    // permission prompt toggles. The fat `snapshot` is kept for
+    // back-compat (PRMirror's Combine subscription, the daemon's WS
+    // channels, NotificationDispatcher, AgentControlServer) — those are
+    // non-view consumers and don't care about granular fan-out.
+    //
+    // The A13 `pendingMessage` / `queuedPendingMessages` properties above
+    // are intentionally NOT sliced. They're additive state with a single
+    // consumer (the composer surface) and the slice fan-out wouldn't pay
+    // off — the composer is the only view that observes them.
+    //
+    // Slices are `let`-instantiated at SessionChatStore init time so a
+    // view can bind to a stable identity for the store's lifetime. The
+    // commit task on main writes through to each slice with equality
+    // guards via the slice's own setters, so a no-op write (same value)
+    // does not bump that slice's `objectWillChange`.
+
+    /// Per-transcript-append slice — items, planSteps, sources,
+    /// artifacts, codexTodos, updateCounter. Observers bound to this
+    /// slice invalidate on every staging commit that produces new
+    /// derived state.
+    public let messagesSlice = ChatMessagesSlice()
+
+    /// Per-turn live-status slice — lastEventAt, currentTurnState,
+    /// turn start, isLoading, hasOlderHistory, pendingPermissionPrompt.
+    /// Observers bound to this slice invalidate on activity changes but
+    /// NOT on every token tick.
+    public let liveStatusSlice = ChatLiveStatusSlice()
+
+    /// Per-token-delta composer slice — model hint + the four token
+    /// categories (cumulative + most-recent turn). Observers bound to
+    /// this slice (e.g. activity-strip cost label, composer context
+    /// window meter) invalidate only when assistant turns land usage
+    /// deltas, NOT on tool-result or user-text appends.
+    public let composerSlice = ChatComposerSlice()
+
     public func setPendingPermissionPrompt(_ prompt: PendingPermissionPrompt?) {
         guard pendingPermissionPrompt != prompt else { return }
         pendingPermissionPrompt = prompt
+        liveStatusSlice.setPendingPermissionPrompt(prompt)
         Task { [staging] in await staging.touch() }
     }
     /// External plan text (from AgentSession.planText). When set, the
@@ -437,10 +486,12 @@ public final class SessionChatStore: ObservableObject {
         }.value
         guard page.cursorFound else {
             hasOlderHistory = false
+            liveStatusSlice.setHasOlderHistory(false)
             return
         }
         guard !page.messages.isEmpty else {
             hasOlderHistory = false
+            liveStatusSlice.setHasOlderHistory(false)
             return
         }
         let window = page.messages
@@ -457,6 +508,7 @@ public final class SessionChatStore: ObservableObject {
             )
         })
         hasOlderHistory = page.truncated
+        liveStatusSlice.setHasOlderHistory(page.truncated)
     }
 
     public let sessionId: UUID
@@ -579,6 +631,13 @@ public final class SessionChatStore: ObservableObject {
         snapshot = .empty
         isLoading = true
         hasOlderHistory = false
+        // A5 — keep the per-concern slices in lockstep with the fat
+        // snapshot reset. New session = blank slices; views observing
+        // slices should see them clear immediately, not at the next
+        // staging commit (which can be 16 ms+ away).
+        messagesSlice.reset()
+        liveStatusSlice.reset(isLoading: true)
+        composerSlice.reset()
 
         // A fresh actor is cheaper and safer than an async reset. It makes
         // session open deterministic: no stale actor task can clear the
@@ -700,6 +759,14 @@ public final class SessionChatStore: ObservableObject {
                     guard let self else { return }
                     guard self.parseGeneration == generation else { return }
                     self.snapshot = next
+                    // A5 — fan the snapshot out to the per-concern slices.
+                    // Each slice's setter is equality-guarded, so a tick
+                    // that touches only items doesn't bump composerSlice
+                    // (and vice versa). Views observing slices invalidate
+                    // only when their own concern actually changed.
+                    self.messagesSlice.update(from: next)
+                    self.liveStatusSlice.update(from: next)
+                    self.composerSlice.update(from: next)
                     // No `messages` rebuild here — it's a computed
                     // property derived from `snapshot.items` on demand,
                     // so we get a single objectWillChange per commit
@@ -721,6 +788,7 @@ public final class SessionChatStore: ObservableObject {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard self.parseGeneration == generation else { return }
             self.isLoading = false
+            self.liveStatusSlice.setIsLoading(false)
             if let id = self.startSignpostID {
                 os_signpost(.end, log: chatPerfLog, name: "session-open",
                             signpostID: id,
@@ -850,6 +918,9 @@ public final class SessionChatStore: ObservableObject {
             await MainActor.run {
                 guard store.parseGeneration == generation else { return }
                 store.hasOlderHistory = hasOlder
+                // A5: keep liveStatusSlice in sync so observers bound
+                // only to slices learn about pagination state too.
+                store.liveStatusSlice.setHasOlderHistory(hasOlder)
             }
         }
         var suffix: [ParsedLine] = []
@@ -1062,6 +1133,218 @@ public final class SessionChatStore: ObservableObject {
             let bd = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return ad < bd
         }
+    }
+}
+
+// MARK: - Publishing slices (A5)
+//
+// Each slice is a `@MainActor` `ObservableObject` with `@Published`
+// fields scoped to one concern. Setters guard on equality so a no-op
+// write (same value as last commit) does NOT bump
+// `objectWillChange` — which is the whole point of slicing: views
+// that bind to one slice should invalidate only on changes to that
+// slice's concern, not on every staging snapshot commit.
+//
+// All three slices' `update(from:)` are called from the SessionChatStore
+// commit task on main, in one main-actor hop per 16 ms tick. Equality
+// guards in the per-field setters do the deduping — if a transcript
+// append carries no token delta, `composerSlice.update(from:)` is a
+// no-op and `objectWillChange` does not fire.
+
+/// Messages slice — items, planSteps, sources, artifacts, codexTodos.
+/// Invalidates on every staging commit that mutates the transcript.
+@MainActor
+public final class ChatMessagesSlice: ObservableObject {
+    @Published public private(set) var items: [ChatItem] = []
+    @Published public private(set) var messages: [ChatMessage] = []
+    @Published public private(set) var planSteps: [PlanStep] = []
+    @Published public private(set) var sourceEntries: [SourceEntry] = []
+    @Published public private(set) var artifactEntries: [ArtifactEntry] = []
+    @Published public private(set) var codexTodos: [CodexTodoItem] = []
+    /// Monotonic counter from the staging snapshot. Mirrors
+    /// `ChatSnapshot.updateCounter` so views with `.onChange(of: ...)`
+    /// can still react to "any commit landed" without binding to the
+    /// fat snapshot. Equality-guarded like every other field.
+    @Published public private(set) var updateCounter: UInt64 = 0
+
+    public init() {}
+
+    /// Pull all relevant fields out of the latest committed
+    /// `ChatSnapshot`. Each `@Published` write is guarded by an
+    /// equality check, so no-op fields don't fire
+    /// `objectWillChange`. Cheap to call on every commit tick.
+    func update(from snapshot: SessionChatStore.ChatSnapshot) {
+        if items != snapshot.items {
+            items = snapshot.items
+        }
+        if messages != snapshot.messages {
+            messages = snapshot.messages
+        }
+        if planSteps != snapshot.planSteps {
+            planSteps = snapshot.planSteps
+        }
+        if sourceEntries != snapshot.sourceEntries {
+            sourceEntries = snapshot.sourceEntries
+        }
+        if artifactEntries != snapshot.artifactEntries {
+            artifactEntries = snapshot.artifactEntries
+        }
+        if codexTodos != snapshot.codexTodos {
+            codexTodos = snapshot.codexTodos
+        }
+        if updateCounter != snapshot.updateCounter {
+            updateCounter = snapshot.updateCounter
+        }
+    }
+
+    /// Reset to empty. Called on `SessionChatStore.start()` so a
+    /// fresh session paints empty immediately rather than at the next
+    /// staging commit.
+    func reset() {
+        if !items.isEmpty { items = [] }
+        if !messages.isEmpty { messages = [] }
+        if !planSteps.isEmpty { planSteps = [] }
+        if !sourceEntries.isEmpty { sourceEntries = [] }
+        if !artifactEntries.isEmpty { artifactEntries = [] }
+        if !codexTodos.isEmpty { codexTodos = [] }
+        if updateCounter != 0 { updateCounter = 0 }
+    }
+}
+
+/// Live-status slice — lastEventAt, currentTurnState, isLoading,
+/// hasOlderHistory, pendingPermissionPrompt. The "is the agent active
+/// right now and what's it waiting on" surface. Invalidates on turn
+/// transitions and pagination-state flips, NOT on every message.
+@MainActor
+public final class ChatLiveStatusSlice: ObservableObject {
+    @Published public private(set) var lastEventAt: Date?
+    @Published public private(set) var currentTurnStartedAt: Date?
+    @Published public private(set) var currentTurnState: TurnState = .idle
+    @Published public private(set) var isLoading: Bool = true
+    @Published public private(set) var hasOlderHistory: Bool = false
+    @Published public private(set) var pendingPermissionPrompt: PendingPermissionPrompt?
+
+    public init() {}
+
+    func update(from snapshot: SessionChatStore.ChatSnapshot) {
+        if lastEventAt != snapshot.lastEventAt {
+            lastEventAt = snapshot.lastEventAt
+        }
+        let started = snapshot.currentTurnStartedAt
+        if currentTurnStartedAt != started {
+            currentTurnStartedAt = started
+        }
+        if currentTurnState != snapshot.currentTurnState {
+            currentTurnState = snapshot.currentTurnState
+        }
+        // `isLoading` + `hasOlderHistory` + `pendingPermissionPrompt`
+        // are written through their dedicated setters from
+        // SessionChatStore — they live outside the staging snapshot,
+        // so we don't touch them here.
+    }
+
+    func setIsLoading(_ value: Bool) {
+        guard isLoading != value else { return }
+        isLoading = value
+    }
+
+    func setHasOlderHistory(_ value: Bool) {
+        guard hasOlderHistory != value else { return }
+        hasOlderHistory = value
+    }
+
+    func setPendingPermissionPrompt(_ value: PendingPermissionPrompt?) {
+        guard pendingPermissionPrompt != value else { return }
+        pendingPermissionPrompt = value
+    }
+
+    /// Reset on `SessionChatStore.start()` (fresh session = blank
+    /// status). `isLoading` flips back to true; the start-settle
+    /// task clears it after the seed window.
+    func reset(isLoading initialLoading: Bool) {
+        if lastEventAt != nil { lastEventAt = nil }
+        if currentTurnStartedAt != nil { currentTurnStartedAt = nil }
+        if currentTurnState != .idle { currentTurnState = .idle }
+        if isLoading != initialLoading { isLoading = initialLoading }
+        if hasOlderHistory { hasOlderHistory = false }
+        if pendingPermissionPrompt != nil { pendingPermissionPrompt = nil }
+    }
+}
+
+/// Composer slice — model hint + the four token categories
+/// (cumulative + most-recent turn). Views like the activity strip's
+/// cost label and the composer's context-window meter bind here.
+/// Invalidates ONLY when an assistant turn lands new usage deltas;
+/// tool results and user-text appends do not bump this slice.
+@MainActor
+public final class ChatComposerSlice: ObservableObject {
+    @Published public private(set) var modelHint: String?
+    @Published public private(set) var totalInputTokens: Int = 0
+    @Published public private(set) var totalOutputTokens: Int = 0
+    @Published public private(set) var totalCacheCreationTokens: Int = 0
+    @Published public private(set) var totalCacheReadTokens: Int = 0
+    @Published public private(set) var lastInputTokens: Int = 0
+    @Published public private(set) var lastOutputTokens: Int = 0
+    @Published public private(set) var lastCacheCreationTokens: Int = 0
+    @Published public private(set) var lastCacheReadTokens: Int = 0
+
+    public init() {}
+
+    /// Mirrors `ChatSnapshot.totalTokens` — sum of all four cumulative
+    /// categories, matching the analytics layer's
+    /// `TokenTotals.totalTokens`.
+    public var totalTokens: Int {
+        totalInputTokens + totalOutputTokens
+            + totalCacheCreationTokens + totalCacheReadTokens
+    }
+
+    /// Single-turn working-memory size — what the model actually sees
+    /// in its prompt for the next turn. Mirrors
+    /// `ChatSnapshot.contextWindowUsedTokens`.
+    public var contextWindowUsedTokens: Int {
+        lastInputTokens + lastCacheCreationTokens + lastCacheReadTokens
+    }
+
+    func update(from snapshot: SessionChatStore.ChatSnapshot) {
+        if modelHint != snapshot.modelHint {
+            modelHint = snapshot.modelHint
+        }
+        if totalInputTokens != snapshot.totalInputTokens {
+            totalInputTokens = snapshot.totalInputTokens
+        }
+        if totalOutputTokens != snapshot.totalOutputTokens {
+            totalOutputTokens = snapshot.totalOutputTokens
+        }
+        if totalCacheCreationTokens != snapshot.totalCacheCreationTokens {
+            totalCacheCreationTokens = snapshot.totalCacheCreationTokens
+        }
+        if totalCacheReadTokens != snapshot.totalCacheReadTokens {
+            totalCacheReadTokens = snapshot.totalCacheReadTokens
+        }
+        if lastInputTokens != snapshot.lastInputTokens {
+            lastInputTokens = snapshot.lastInputTokens
+        }
+        if lastOutputTokens != snapshot.lastOutputTokens {
+            lastOutputTokens = snapshot.lastOutputTokens
+        }
+        if lastCacheCreationTokens != snapshot.lastCacheCreationTokens {
+            lastCacheCreationTokens = snapshot.lastCacheCreationTokens
+        }
+        if lastCacheReadTokens != snapshot.lastCacheReadTokens {
+            lastCacheReadTokens = snapshot.lastCacheReadTokens
+        }
+    }
+
+    func reset() {
+        if modelHint != nil { modelHint = nil }
+        if totalInputTokens != 0 { totalInputTokens = 0 }
+        if totalOutputTokens != 0 { totalOutputTokens = 0 }
+        if totalCacheCreationTokens != 0 { totalCacheCreationTokens = 0 }
+        if totalCacheReadTokens != 0 { totalCacheReadTokens = 0 }
+        if lastInputTokens != 0 { lastInputTokens = 0 }
+        if lastOutputTokens != 0 { lastOutputTokens = 0 }
+        if lastCacheCreationTokens != 0 { lastCacheCreationTokens = 0 }
+        if lastCacheReadTokens != 0 { lastCacheReadTokens = 0 }
     }
 }
 

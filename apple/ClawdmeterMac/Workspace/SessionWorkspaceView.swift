@@ -3535,7 +3535,15 @@ private struct InlinePlanHalo: View {
 // MARK: - Chat thread scroll
 
 private struct ChatThreadScroll: View {
-    @ObservedObject var store: SessionChatStore
+    // A5 — `store` is held as a plain `let` (no observation). Body
+    // invalidations come from the per-concern slices below, which
+    // publish only on changes to their own concern. The transcript
+    // ForEach binds to `messagesSlice`; the activity indicator + the
+    // load-earlier button bind to `liveStatusSlice`. Token deltas land
+    // on `composerSlice` and do NOT invalidate this view's body.
+    let store: SessionChatStore
+    @ObservedObject var messagesSlice: ChatMessagesSlice
+    @ObservedObject var liveStatusSlice: ChatLiveStatusSlice
     let session: AgentSession
     let model: SessionsModel
     @ObservedObject var presentationStore: SessionPresentationStore
@@ -3547,11 +3555,35 @@ private struct ChatThreadScroll: View {
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    init(
+        store: SessionChatStore,
+        session: AgentSession,
+        model: SessionsModel,
+        presentationStore: SessionPresentationStore,
+        density: TranscriptDensity,
+        showPlanHalo: Bool,
+        canApprovePlan: Bool,
+        onPlanRefine: @escaping () -> Void,
+        onPlanApprove: @escaping () -> Void
+    ) {
+        self.store = store
+        _messagesSlice = ObservedObject(wrappedValue: store.messagesSlice)
+        _liveStatusSlice = ObservedObject(wrappedValue: store.liveStatusSlice)
+        self.session = session
+        self.model = model
+        self.presentationStore = presentationStore
+        self.density = density
+        self.showPlanHalo = showPlanHalo
+        self.canApprovePlan = canApprovePlan
+        self.onPlanRefine = onPlanRefine
+        self.onPlanApprove = onPlanApprove
+    }
+
     /// IDs of expanded disclosure groups. Per-row `@State` would be ideal
     /// (A5 codex finding) but with LazyVStack recycling that loses state
     /// across scroll; this set is the simplest path that survives recycling.
     /// Tests confirm tapping one row only invalidates that row when reads
-    /// flow through `snapshot.items` (T5).
+    /// flow through `messagesSlice.items` (T5).
     @State private var expanded: Set<String> = []
     /// v0.5.6: per-tool_use_id selection state for AskUserQuestion trays.
     /// `[toolUseId: [questionHeader: Set<optionLabel>]]`. Lives at the
@@ -3568,16 +3600,16 @@ private struct ChatThreadScroll: View {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        if store.hasOlderHistory {
+                        if liveStatusSlice.hasOlderHistory {
                             loadEarlierButton
                                 .padding(.top, 10)
                                 .padding(.bottom, 4)
                         }
-                        if store.snapshot.items.isEmpty && !store.isLoading {
+                        if messagesSlice.items.isEmpty && !liveStatusSlice.isLoading {
                             emptyState
                                 .frame(maxWidth: .infinity)
                         } else {
-                            ForEach(store.snapshot.items) { item in
+                            ForEach(messagesSlice.items) { item in
                                 itemRow(item)
                                     .id(item.id)
                                     .padding(rowInsets)
@@ -3597,13 +3629,13 @@ private struct ChatThreadScroll: View {
                         HStack {
                             LiveSessionActivityIndicator(
                                 agent: session.agent,
-                                lastEventAt: store.snapshot.lastEventAt,
+                                lastEventAt: liveStatusSlice.lastEventAt,
                                 // v0.29.4: anchor the elapsed counter to
                                 // the most recent user prompt so the
                                 // pill shows "how long has the model been
                                 // working on this task", not "how long
                                 // since I clicked into the session".
-                                activityStartedAt: store.snapshot.currentTurnStartedAt
+                                activityStartedAt: liveStatusSlice.currentTurnStartedAt
                             )
                             Spacer()
                         }
@@ -3624,12 +3656,12 @@ private struct ChatThreadScroll: View {
                         userPinnedToBottom = false
                     }
                 }
-                .onChange(of: store.snapshot.updateCounter) { _, counter in
+                .onChange(of: messagesSlice.updateCounter) { _, counter in
                     stickToBottomIfPinned(proxy, updateCounter: counter)
                 }
                 .onAppear {
                     userPinnedToBottom = true
-                    lastScrollItemCount = store.snapshot.items.count
+                    lastScrollItemCount = messagesSlice.items.count
                     autoScrollTask?.cancel()
                     autoScrollTask = Task { @MainActor in
                         await jumpToBottom(proxy, animated: false)
@@ -3673,7 +3705,7 @@ private struct ChatThreadScroll: View {
                 // Jump-to-latest CTA. Visible whenever the user has
                 // scrolled away from the bottom (a new turn lands while
                 // they're reading history). Click → scroll-to-last-item.
-                if !userPinnedToBottom, !store.snapshot.items.isEmpty {
+                if !userPinnedToBottom, !messagesSlice.items.isEmpty {
                     Button(action: {
                         autoScrollTask?.cancel()
                         autoScrollTask = Task { @MainActor in
@@ -3748,7 +3780,7 @@ private struct ChatThreadScroll: View {
     private var findMatches: [SessionChatStore.ChatMessage] {
         let q = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return [] }
-        return store.snapshot.messages.filter {
+        return messagesSlice.messages.filter {
             $0.body.localizedCaseInsensitiveContains(q)
                 || $0.title.localizedCaseInsensitiveContains(q)
                 || ($0.detail?.localizedCaseInsensitiveContains(q) == true)
@@ -3829,7 +3861,7 @@ private struct ChatThreadScroll: View {
     }
 
     private func jumpToLastUserMessage(_ proxy: ScrollViewProxy) {
-        guard let message = store.snapshot.messages.last(where: { $0.kind == .userText }) else { return }
+        guard let message = messagesSlice.messages.last(where: { $0.kind == .userText }) else { return }
         userPinnedToBottom = false
         scrollTranscript(proxy, to: message.id, anchor: .center)
     }
@@ -3887,7 +3919,7 @@ private struct ChatThreadScroll: View {
     }
 
     private func stickToBottomIfPinned(_ proxy: ScrollViewProxy, updateCounter: UInt64) {
-        let items = store.snapshot.items.count
+        let items = messagesSlice.items.count
         let previousItems = lastScrollItemCount
         lastScrollItemCount = items
         guard !isLoadingEarlierHistory else { return }
