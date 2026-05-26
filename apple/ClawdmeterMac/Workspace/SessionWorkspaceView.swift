@@ -3037,24 +3037,33 @@ private struct CenterThread: View {
     }
 
     /// A13 — drain queued pending messages onto the daemon. Best-effort:
-    /// each queued body is sent in FIFO order; failures re-queue at the
-    /// tail so we don't lose them. Runs after a successful primary send
-    /// (signal that the daemon is reachable again).
+    /// each queued body is sent in FIFO order; on the first failure the
+    /// failing entry + every un-drained entry behind it are re-queued
+    /// at the head so the next successful send picks up where this one
+    /// left off. Runs after a successful primary send (signal that the
+    /// daemon is reachable again).
     @MainActor
     private func drainOfflineQueueIfAny(target: AgentSession, port: Int) async {
         guard let chatStore = model.chatStore(for: session) else { return }
         let queued = chatStore.dequeueOfflineQueue()
         guard !queued.isEmpty else { return }
         let sender = MacComposerSender(port: port, token: PairingTokenStore.shared.currentToken())
-        for entry in queued {
+        for (index, entry) in queued.enumerated() {
             // Bodies in the offline queue were captured pre-trim, so
             // re-add the terminal newline tmux paste-buffer requires.
             let body = entry.body.isEmpty ? "\n" : entry.body + "\n"
             do {
                 try await sender.send(sessionId: target.id, body: body, asFollowUp: true)
             } catch {
-                // Failed to drain — re-mark the most recent failure and
-                // bail. Subsequent successful sends will retry the rest.
+                // Failed to drain — re-queue the failing entry + every
+                // remaining entry behind it so we don't lose them on the
+                // next successful primary send. The pending slot
+                // mutation here describes the failure on the *current*
+                // pending bubble (which is the user-visible context for
+                // the drain), but the actual un-drained bodies are
+                // preserved in `queuedPendingMessages`.
+                let remaining = Array(queued[index..<queued.count])
+                chatStore.requeueOfflinePending(remaining)
                 chatStore.markPendingFailed(
                     error: "Couldn't replay queued message: \(error.localizedDescription)"
                 )

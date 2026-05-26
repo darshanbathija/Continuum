@@ -146,6 +146,76 @@ final class SessionChatStorePendingTests: XCTestCase {
                      "auto-reconcile should clear the pending slot on body match")
     }
 
+    /// /review P1: a retry that re-hits the offline path must NOT
+    /// double-enqueue the same pending — otherwise drain replays the
+    /// message twice. Dedupe is by `PendingMessage.id`.
+    func test_offlineQueue_retryReHittingOfflineDoesNotDoubleEnqueue() {
+        let store = SessionChatStore(sessionId: UUID(), sdkOnly: true)
+        store.injectPending(text: "flap test")
+        store.markPendingQueuedOffline(error: "first")
+        XCTAssertEqual(store.queuedPendingMessages.count, 1)
+        let originalId = store.queuedPendingMessages.first?.id
+
+        // Simulate retry: pending flips back to .sending, send fails
+        // offline again, the composer re-marks queued.
+        store.markPendingRetrying()
+        store.markPendingQueuedOffline(error: "second")
+
+        XCTAssertEqual(store.queuedPendingMessages.count, 1,
+                       "retry re-hitting offline must dedupe by id, not append")
+        XCTAssertEqual(store.queuedPendingMessages.first?.id, originalId)
+        XCTAssertEqual(store.queuedPendingMessages.first?.errorDescription, "second",
+                       "the queued entry should reflect the latest error copy")
+    }
+
+    /// /review P1: when the drain helper hits a failure mid-replay,
+    /// the un-drained entries must be re-enqueued at the head so the
+    /// next successful send picks them up. Exercises
+    /// `requeueOfflinePending(_:)` directly — the composer's drain
+    /// helper calls this with the failing entry + tail.
+    func test_requeueOfflinePending_preservesUndrainedEntriesAtHead() {
+        let store = SessionChatStore(sessionId: UUID(), sdkOnly: true)
+        let first = OptimisticPendingMessage(body: "first", state: .queuedOffline)
+        let second = OptimisticPendingMessage(body: "second", state: .queuedOffline)
+        store.requeueOfflinePending([first, second])
+        XCTAssertEqual(store.queuedPendingMessages.map(\.body), ["first", "second"])
+
+        // Now re-queue a third at the head — emulates a partial drain
+        // that succeeded once and failed on the next item.
+        let third = OptimisticPendingMessage(body: "third", state: .queuedOffline)
+        store.requeueOfflinePending([third])
+
+        XCTAssertEqual(store.queuedPendingMessages.map(\.body), ["third", "first", "second"],
+                       "requeue must prepend, preserving FIFO order of remaining items")
+    }
+
+    /// /review P1: requeue must respect the offline queue cap by
+    /// trimming the OLDEST entries first (suffix-keep), so repeated
+    /// daemon flaps don't grow the queue unbounded.
+    func test_requeueOfflinePending_respectsCap_byTrimmingOldest() {
+        let store = SessionChatStore(sessionId: UUID(), sdkOnly: true)
+        // Fill the queue to the cap.
+        let existing = (0..<SessionChatStore.offlineQueueLimit).map {
+            OptimisticPendingMessage(body: "existing \($0)", state: .queuedOffline)
+        }
+        store.requeueOfflinePending(existing)
+        XCTAssertEqual(store.queuedPendingMessages.count, SessionChatStore.offlineQueueLimit)
+
+        // Add two more at the head — total = cap+2, expect the oldest
+        // two (back of the queue) to be trimmed.
+        let extras = [
+            OptimisticPendingMessage(body: "new 0", state: .queuedOffline),
+            OptimisticPendingMessage(body: "new 1", state: .queuedOffline),
+        ]
+        store.requeueOfflinePending(extras)
+
+        XCTAssertEqual(store.queuedPendingMessages.count, SessionChatStore.offlineQueueLimit)
+        // The two newest re-queued entries must survive — they were
+        // prepended and the cap trims the oldest tail.
+        XCTAssertEqual(store.queuedPendingMessages.first?.body, "new 0")
+        XCTAssertEqual(store.queuedPendingMessages[1].body, "new 1")
+    }
+
     /// D24 reinforcement: reconcile must NOT clear a `.failed` pending.
     /// If the daemon rejected the send, the user needs to see the chip
     /// regardless of whatever else is on screen.

@@ -318,16 +318,42 @@ public final class SessionChatStore: ObservableObject {
     /// sees their message is staged but not yet sent. Used when the
     /// daemon is briefly unreachable; the composer drains the queue
     /// via `dequeueOfflinePending()` on the next successful send.
+    ///
+    /// Dedupe by id: a retry that re-hits the offline path must not
+    /// double-add the same pending into the queue (would cause the
+    /// message to be replayed twice on drain). If an entry with this
+    /// id is already queued we replace it in place rather than append.
     public func markPendingQueuedOffline(error: String? = nil) {
         guard let current = pendingMessage else { return }
         let queued = current.queuedOffline(error: error)
         pendingMessage = queued
+        if let existing = queuedPendingMessages.firstIndex(where: { $0.id == queued.id }) {
+            queuedPendingMessages[existing] = queued
+            return
+        }
         if queuedPendingMessages.count < Self.offlineQueueLimit {
             queuedPendingMessages.append(queued)
         } else {
             // Cap exceeded — surface as failed so the user knows the
             // offline buffer is full instead of silently dropping.
             markPendingFailed(error: "Offline queue full — retry manually.")
+        }
+    }
+
+    /// A13 — re-enqueue pendings at the head of the queue (used by the
+    /// composer's drain helper when a replay attempt fails part-way
+    /// through). Preserves FIFO ordering of remaining items relative to
+    /// any in-flight queue entries, and honours the offline-queue cap
+    /// by dropping the oldest re-enqueued entries first (the cap is a
+    /// hard memory bound, so trimming here is preferable to silent
+    /// unbounded growth on repeated daemon flaps).
+    public func requeueOfflinePending(_ entries: [PendingMessage]) {
+        guard !entries.isEmpty else { return }
+        let combined = entries + queuedPendingMessages
+        if combined.count <= Self.offlineQueueLimit {
+            queuedPendingMessages = combined
+        } else {
+            queuedPendingMessages = Array(combined.suffix(Self.offlineQueueLimit))
         }
     }
 
