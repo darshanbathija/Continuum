@@ -4,6 +4,16 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [Unreleased] - Track 1 perf — A13 optimistic composer UI
+
+### Added
+
+- **Optimistic UI for the composer (A13).** Tap Send and your message renders as a pending bubble above the input strip within one frame — no more "did it go?" beat while the JSONL tail catches up. The bubble dissolves into the confirmed user message once the daemon's `user` line lands (auto-reconcile by body), so there's no flicker on settle. When the daemon rejects the send (HTTP 4xx, transport failure), the bubble stays visible with an inline error chip and a Retry button (D24 eng-review acceptance: no silent drop). Brief daemon outages are handled with an offline queue: messages stage locally as "queued offline" and drain in FIFO order on the next successful send. Capped at 8 entries so a long outage doesn't grow unbounded — the overflow surfaces as `.failed` so the user can manually retry.
+
+### Internal
+
+- New `OptimisticPendingMessage` value type in `ClawdmeterShared/Composer/` owns the `.sending → .failed | .queuedOffline | cleared` state machine. Aliased as `SessionChatStore.PendingMessage` so the slot stays addressable from existing Mac call sites. The Shared SwiftPM test target covers the value-type behaviour (7 tests); a Mac-side test file (`SessionChatStorePendingTests.swift`) covers the store wiring (inject/reconcile/offline queue) and lands ready to run once the broader `Continuum` module-rename drift in the test target is sorted out (pre-existing, not introduced by A13).
+
 ## [0.29.11 build 150] - 2026-05-26 - Rebrand sweep + OpenCode status pill + design polish (`fix/v0.29.11-rebrand-bleed-and-opencode-badge`)
 
 Verifier loop on v0.29.9 surfaced two classes of leftover work from the Continuum rebrand and the new OpenCode CLI auth row. Folded both into a single follow-up.

@@ -172,6 +172,13 @@ public final class SessionChatStore: ObservableObject {
         }
     }
 
+    /// A13 — alias to the Shared value type that owns the state machine.
+    /// Lives in `ClawdmeterShared` so its behaviour is unit-testable from
+    /// the SwiftPM test target; this alias keeps `SessionChatStore.PendingMessage`
+    /// addressable from existing Mac call sites without a wide-scale import
+    /// rewrite.
+    public typealias PendingMessage = OptimisticPendingMessage
+
     @Published public private(set) var snapshot: ChatSnapshot = .empty
     /// Back-compat: views that still call `store.messages` keep working.
     /// Derived lazily from `snapshot.items` — was previously a parallel
@@ -194,6 +201,28 @@ public final class SessionChatStore: ObservableObject {
     /// where no permission is pending, and Codex SDK chat (the SDK
     /// doesn't surface permission prompts through tmux).
     @Published public private(set) var pendingPermissionPrompt: PendingPermissionPrompt?
+
+    /// A13 (perf — optimistic composer UI): slot for an in-flight user
+    /// turn that has been injected optimistically but not yet confirmed
+    /// by the daemon. Published so the composer surface can render the
+    /// "Sending…" / "Failed to send" chip without waiting for the JSONL
+    /// round-trip. Reconciliation: when the real user-text message lands
+    /// in `snapshot.messages` with matching body, `reconcilePending()`
+    /// clears this slot. Rejection (D24): on a 4xx or transport error
+    /// the parent flips this to `.failed` and the bubble stays visible
+    /// with a retry chip until the user resends or dismisses.
+    @Published public private(set) var pendingMessage: PendingMessage?
+
+    /// A13 — offline queue. When the daemon is briefly unreachable the
+    /// composer enqueues the pending body here; on the next successful
+    /// send-completion we drain the queue. Capped at 8 entries so a
+    /// long offline window doesn't grow unbounded — anything beyond is
+    /// surfaced as `.failed` so the user can manually retry.
+    @Published public private(set) var queuedPendingMessages: [PendingMessage] = []
+
+    /// A13 hard cap on the offline queue. Beyond this we stop enqueueing
+    /// silently — extra sends fail-loud with a chip so the user knows.
+    public static let offlineQueueLimit: Int = 8
 
     public func setPendingPermissionPrompt(_ prompt: PendingPermissionPrompt?) {
         guard pendingPermissionPrompt != prompt else { return }
@@ -233,6 +262,129 @@ public final class SessionChatStore: ObservableObject {
     /// no-op and does NOT bump the snapshot counter.
     public func setCurrentTurnState(_ state: TurnState) {
         Task { [staging] in await staging.setCurrentTurnState(state) }
+    }
+
+    // MARK: - A13 optimistic pending message API
+
+    /// A13 — inject an optimistic pending message slot so the composer
+    /// surface can render a "Sending…" bubble within 1 frame of the user
+    /// tapping Send. The body is trimmed to match
+    /// `ComposerStore.renderPromptBody`'s prose extraction so
+    /// reconcile-by-body lines up with the JSONL `user` line that lands
+    /// later. Returns the freshly-injected `PendingMessage` so the caller
+    /// can mark failure / retry against this specific id.
+    @discardableResult
+    public func injectPending(text: String, attachmentRefs: [String] = []) -> PendingMessage {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pending = PendingMessage(
+            body: trimmed,
+            attachmentRefs: attachmentRefs,
+            state: .sending
+        )
+        pendingMessage = pending
+        return pending
+    }
+
+    /// A13 — explicit clear. The composer calls this after the JSONL
+    /// confirmation lands (`reconcilePending(matching:)` failed to find a
+    /// match within the watch window — the daemon ack is the authoritative
+    /// signal that the turn is in flight even before the user line shows
+    /// up on disk).
+    public func clearPending() {
+        guard pendingMessage != nil else { return }
+        pendingMessage = nil
+    }
+
+    /// A13 — flip the pending bubble to `.failed` (D24 rejection
+    /// handling). The bubble stays visible with an error chip so the
+    /// user can retry or dismiss; it's NOT silently dropped. `error`
+    /// is surfaced verbatim in the chip text.
+    public func markPendingFailed(error: String) {
+        guard let current = pendingMessage else { return }
+        pendingMessage = current.failing(error: error)
+    }
+
+    /// A13 — flip the pending bubble back into `.sending` state. Used
+    /// when the user taps Retry on a previously-failed pending; the
+    /// composer issues another network call and re-uses the same slot
+    /// instead of injecting a new pending (so the bubble doesn't flicker
+    /// out and back in).
+    public func markPendingRetrying() {
+        guard let current = pendingMessage else { return }
+        pendingMessage = current.retrying()
+    }
+
+    /// A13 — flip the pending bubble to `.queuedOffline` so the user
+    /// sees their message is staged but not yet sent. Used when the
+    /// daemon is briefly unreachable; the composer drains the queue
+    /// via `dequeueOfflinePending()` on the next successful send.
+    ///
+    /// Dedupe by id: a retry that re-hits the offline path must not
+    /// double-add the same pending into the queue (would cause the
+    /// message to be replayed twice on drain). If an entry with this
+    /// id is already queued we replace it in place rather than append.
+    public func markPendingQueuedOffline(error: String? = nil) {
+        guard let current = pendingMessage else { return }
+        let queued = current.queuedOffline(error: error)
+        pendingMessage = queued
+        if let existing = queuedPendingMessages.firstIndex(where: { $0.id == queued.id }) {
+            queuedPendingMessages[existing] = queued
+            return
+        }
+        if queuedPendingMessages.count < Self.offlineQueueLimit {
+            queuedPendingMessages.append(queued)
+        } else {
+            // Cap exceeded — surface as failed so the user knows the
+            // offline buffer is full instead of silently dropping.
+            markPendingFailed(error: "Offline queue full — retry manually.")
+        }
+    }
+
+    /// A13 — re-enqueue pendings at the head of the queue (used by the
+    /// composer's drain helper when a replay attempt fails part-way
+    /// through). Preserves FIFO ordering of remaining items relative to
+    /// any in-flight queue entries, and honours the offline-queue cap
+    /// by dropping the oldest re-enqueued entries first (the cap is a
+    /// hard memory bound, so trimming here is preferable to silent
+    /// unbounded growth on repeated daemon flaps).
+    public func requeueOfflinePending(_ entries: [PendingMessage]) {
+        guard !entries.isEmpty else { return }
+        let combined = entries + queuedPendingMessages
+        if combined.count <= Self.offlineQueueLimit {
+            queuedPendingMessages = combined
+        } else {
+            queuedPendingMessages = Array(combined.suffix(Self.offlineQueueLimit))
+        }
+    }
+
+    /// A13 — drain the offline queue. Returns the queued pendings in
+    /// FIFO order so the caller can replay each in sequence. The store
+    /// drops them from the published queue immediately; if the replay
+    /// fails the caller re-enqueues via `markPendingQueuedOffline`.
+    public func dequeueOfflineQueue() -> [PendingMessage] {
+        let drained = queuedPendingMessages
+        queuedPendingMessages.removeAll()
+        return drained
+    }
+
+    /// A13 — auto-reconcile. Called whenever the snapshot updates, this
+    /// walks the recent user-text messages and clears the pending slot
+    /// when a matching body appears (the JSONL `user` line landed). The
+    /// match window is narrow: only the most-recent 4 user-text messages
+    /// are scanned to keep this O(1) regardless of transcript length.
+    /// No-op when there's no pending or when pending is in `.failed`
+    /// state (D24: failed pendings stay visible until the user acts).
+    public func reconcilePendingIfMatched() {
+        guard let pending = pendingMessage, pending.state == .sending else { return }
+        let recentUserBodies: [String] = snapshot.messages
+            .reversed()
+            .lazy
+            .filter { $0.kind == .userText }
+            .prefix(4)
+            .map { $0.body.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if recentUserBodies.contains(pending.body) {
+            pendingMessage = nil
+        }
     }
 
     /// v0.7.4: ingest Codex SDK stream events into the same staging pipeline
@@ -552,6 +704,12 @@ public final class SessionChatStore: ObservableObject {
                     // property derived from `snapshot.items` on demand,
                     // so we get a single objectWillChange per commit
                     // rather than two parallel @Published mutations.
+                    // A13: now that a new snapshot has landed, see whether
+                    // the freshly-ingested JSONL lines include the optimistic
+                    // pending message body. If so, clear the pending slot so
+                    // the composer's "Sending…" bubble dissolves into the
+                    // real bubble without a flicker.
+                    self.reconcilePendingIfMatched()
                 }
                 os_signpost(.end, log: chatPerfLog, name: "staging-parse-batch",
                             signpostID: signpostID)
