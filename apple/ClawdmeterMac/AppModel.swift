@@ -31,6 +31,27 @@ public final class AppModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var isStarted = false
 
+    // F1d-wire (strangler-fig per D23): per-period sequence cursor for
+    // the Cursor adapter. The polling loop calls
+    // `CursorAdapterUsageBridge.project(usage:sessionId:sequenceNumber:)`
+    // each time it consumes a polled `UsageData`; the sequence number
+    // advances by one per poll so the canonical event id
+    // (`cursor-{sessionId}-{seq}`) is unique per poll. Downstream
+    // consumers that dedup by id (orchestration store F2, push gateway
+    // E6) see one event per poll — no double-counting.
+    //
+    // Reset to 0 whenever the period epoch changes (Cursor extends
+    // billing periods automatically; a different epoch means a new
+    // period started). Tracked here rather than on the poller because
+    // the bridge is invoked at the AppModel consume boundary — that's
+    // where the strangler-fig flag check lives.
+    //
+    // Only used when `config.id == "cursor"` AND
+    // `FeatureFlags.useCursorAdapter` is on. Other providers (and
+    // Cursor with the flag off) never read this state.
+    private var cursorAdapterSequence: UInt64 = 0
+    private var cursorAdapterLastSessionId: String?
+
     public init(
         config: ProviderConfig,
         source: any AISource,
@@ -113,14 +134,59 @@ public final class AppModel: ObservableObject {
         logger.info("consume \(self.config.id) ENTER: \(String(describing: event))")
         switch event {
         case .usage(let u):
-            usage = u
+            // F1d-wire (strangler-fig per D23): when the feature flag is
+            // on AND this is the Cursor consumer, route the polled
+            // UsageData through CursorAdapter → canonical
+            // .sessionStarted event → projected back into UsageData via
+            // CursorAdapterUsageBridge. With the flag off, use the
+            // polled UsageData directly — the pre-F1 path. Both paths
+            // must produce identical UsageData for the same input —
+            // enforced by F1dParityTests.
+            //
+            // Dedup contract: the canonical event id is
+            // `cursor-{sessionId}-{seq}` where sessionId is derived
+            // from the period epoch (stable across polls of the same
+            // billing period) and seq increments per poll. Downstream
+            // consumers (orchestration store F2, push gateway E6) that
+            // subscribe to the canonical event stream see one unique
+            // event per poll — no double-counting.
+            let routed: UsageData = {
+                guard config.id == "cursor", FeatureFlags.useCursorAdapter else {
+                    return u
+                }
+                let sid = CursorAdapterUsageBridge.sessionId(forPeriodEpoch: u.sessionEpoch)
+                if sid != cursorAdapterLastSessionId {
+                    // New billing period — reset the sequence cursor so
+                    // the canonical event id space restarts at 0 for the
+                    // new period. Cursor extends periods automatically,
+                    // but a fresh epoch means a fresh period.
+                    cursorAdapterSequence = 0
+                    cursorAdapterLastSessionId = sid
+                }
+                let seq = cursorAdapterSequence
+                cursorAdapterSequence &+= 1
+                guard let projected = CursorAdapterUsageBridge.project(
+                    usage: u,
+                    sessionId: sid,
+                    sequenceNumber: seq
+                ) else {
+                    // Defensive: bridge returned nil (adapter contract
+                    // breakage). Fall through to the polled value so
+                    // the wire is fail-safe.
+                    logger.warning("CursorAdapterUsageBridge returned nil; falling back to polled UsageData")
+                    return u
+                }
+                return projected
+            }()
+
+            usage = routed
             lastError = nil
             needsReauth = false
             logger.info("consume \(self.config.id) AFTER SET: usage.session=\(self.usage?.sessionPct ?? -999)")
 
             // Mirror to the shared App Group cache so widgets (Mac/iOS/watch)
             // pick up the new snapshot on their next refresh.
-            let didWrite = UsageStore.write(u, providerID: config.id, displayName: config.displayName)
+            let didWrite = UsageStore.write(routed, providerID: config.id, displayName: config.displayName)
             logger.info("UsageStore.write returned \(didWrite) for \(self.config.id)")
             UsageStore.reloadWidgets(providerID: config.id)
 

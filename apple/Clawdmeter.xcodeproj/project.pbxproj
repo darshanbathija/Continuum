@@ -253,6 +253,7 @@
 		E5B4EE10D2C5230BED6F00E4 /* WorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56ED29DD95726C8115310FE0 /* WorkspaceStore.swift */; };
 		E835774AF3CCE85077A32357 /* PlanTrackerPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CFEA1EAB3B6FFE95E352655 /* PlanTrackerPane.swift */; };
 		E8E88A643114653B96748F29 /* F1aWireChatParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B2F92F537B1AC9C7C24DFCF /* F1aWireChatParityTests.swift */; };
+		E8E88A643114653B96748F30 /* F1dWireChatParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B2F92F537B1AC9C7C24DFD0 /* F1dWireChatParityTests.swift */; };
 		E948CA597F3EDF2454033FAA /* IOSPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5386A54412C7E7039ECF84C0 /* IOSPairingView.swift */; };
 		E9B5559B25F1D7BB248F1CB9 /* OpencodeProcessManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17C54FE27B24845DCA2BFBA /* OpencodeProcessManagerTests.swift */; };
 		EB6B0F15814A65989784DA73 /* TailscaleHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 882E7B0B1D24591A17536772 /* TailscaleHost.swift */; };
@@ -438,6 +439,7 @@
 		5A554444E38701D9E88A6B6C /* SessionWorkspacePreferenceKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionWorkspacePreferenceKeys.swift; sourceTree = "<group>"; };
 		5B1DE3BECFAB2F957716D01F /* ModePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModePicker.swift; sourceTree = "<group>"; };
 		5B2F92F537B1AC9C7C24DFCF /* F1aWireChatParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = F1aWireChatParityTests.swift; sourceTree = "<group>"; };
+		5B2F92F537B1AC9C7C24DFD0 /* F1dWireChatParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = F1dWireChatParityTests.swift; sourceTree = "<group>"; };
 		5CC65FE99FD75CA3B6A74A83 /* AppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntime.swift; sourceTree = "<group>"; };
 		5E503A54446667EB3A1CEE00 /* MacCodeShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCodeShell.swift; sourceTree = "<group>"; };
 		5F6A3D3787BAC8DC4404A911 /* SessionsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsListView.swift; sourceTree = "<group>"; };
@@ -950,6 +952,7 @@
 				5B2F92F537B1AC9C7C24DFCF /* F1aWireChatParityTests.swift */,
 				294F5D2431C605A4E23DF6F8 /* F1bWireChatParityTests.swift */,
 				483357794C2704F3A1892570 /* F1cWireChatParityTests.swift */,
+				5B2F92F537B1AC9C7C24DFD0 /* F1dWireChatParityTests.swift */,
 				C7E5B17BFEC181317FE13905 /* GitDiffStoreTests.swift */,
 				3A4E9C143026DEB7E82C1EDC /* LanguageServerClientRewriteTests.swift */,
 				92BB57903BBD3AECA55B20BF /* OpencodeAuthFileTests.swift */,
@@ -1543,6 +1546,7 @@
 				E8E88A643114653B96748F29 /* F1aWireChatParityTests.swift in Sources */,
 				4FC21031ECC2F0973F4D9FBC /* F1bWireChatParityTests.swift in Sources */,
 				36C488FE08B36947E3A98EF9 /* F1cWireChatParityTests.swift in Sources */,
+				E8E88A643114653B96748F30 /* F1dWireChatParityTests.swift in Sources */,
 				8EADCCDA5DD5DDD4F91F3334 /* GitDiffStoreTests.swift in Sources */,
 				B794445CF6C561F8E1DEC66C /* LanguageServerClientRewriteTests.swift in Sources */,
 				06549263E9A2B2052090E02C /* OpencodeAuthFileTests.swift in Sources */,
