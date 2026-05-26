@@ -57,6 +57,33 @@ public enum FeatureFlags {
                        default: false)
     }
 
+    /// When ON, the OpenCode branch in `OpencodeSSEAdapter` (chat) and
+    /// `OpencodeUsageParser` (analytics) routes raw OpenCode JSON blobs
+    /// through `OpenCodeAdapter.translate(...)` → canonical
+    /// `ProviderRuntimeEvent`s, then materializes downstream values
+    /// (`ChatMessage`, `UsageRecord`) from those events. When OFF, both
+    /// call sites use their original in-line parsers — the pre-F1c path.
+    ///
+    /// Parity is the gating contract: with the flag in either state, the
+    /// downstream `ChatMessage` / `[UsageRecord]` arrays produced by a
+    /// fixed OpenCode JSON dict must be identical. The
+    /// `F1cWireParityTests` + `F1cWireChatParityTests` suites enforce
+    /// this for every fixture shape we ship.
+    ///
+    /// **Default: OFF.** Flip to ON in F1-finalize after all 5 provider
+    /// wires (F1a-wire through F1e-wire) have shipped and parity has
+    /// held on real session data.
+    ///
+    /// **Override (env):** `CLAWDMETER_USE_OPENCODE_ADAPTER=1`
+    /// **Override (test):** set `useOpenCodeAdapterOverride` (auto-cleared
+    /// in tests' `tearDown`).
+    public static var useOpenCodeAdapter: Bool {
+        if let override = useOpenCodeAdapterOverride { return override }
+        return resolve(envName: "CLAWDMETER_USE_OPENCODE_ADAPTER",
+                       userDefaultsKey: "com.clawdmeter.featureFlags.useOpenCodeAdapter",
+                       default: false)
+    }
+
     // MARK: - Orchestration event store (F2)
 
     /// F2 — Orchestration event store with append-only events + WAL +
@@ -81,6 +108,11 @@ public enum FeatureFlags {
     /// to force the wired path regardless of the host environment. Reset
     /// to `nil` after each test (use `defer`).
     nonisolated(unsafe) public static var useClaudeAdapterOverride: Bool?
+
+    /// Per-call override seen by `useOpenCodeAdapter`. Test cases set this
+    /// to force the wired path regardless of the host environment. Reset
+    /// to `nil` after each test (use `defer`).
+    nonisolated(unsafe) public static var useOpenCodeAdapterOverride: Bool?
 
     // MARK: - Resolution
 
