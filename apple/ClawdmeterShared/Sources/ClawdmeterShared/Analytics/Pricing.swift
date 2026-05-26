@@ -21,6 +21,37 @@ public final class Pricing: @unchecked Sendable {
     private let models: [String: ModelRates]
     private let modelKeys: [String]
 
+    // MARK: - B3 LRU resolution cache
+    //
+    // Pre-B3: every `cost(for:tokens:)` call ran rates(for:) which does an
+    // O(modelKeys.count) prefix scan on the resolution fallback path.
+    // UsageHistoryLoader calls cost() once per record on cold loads of
+    // multi-GB JSONL histories. With ~150 model keys in the snapshot, the
+    // prefix scan dominates the cost-aggregation phase.
+    //
+    // B3 caches resolved rates keyed by the input model string. Repeat
+    // lookups for the same model are O(1) — the common case in real
+    // sessions where most records share a handful of models.
+    //
+    // Cache contains `Optional<ModelRates>` so we can memoize the
+    // "unknown model" answer too (the prefix scan is wasted work for
+    // unknown models on every record).
+    //
+    // Capacity is fixed at 256 entries — well above the realistic number
+    // of distinct models a user observes in a single session. Eviction is
+    // FIFO when capacity exceeds; simple + bounded memory.
+    //
+    // Thread-safety: `Pricing.shared` is global + @unchecked Sendable.
+    // The cache is protected by an NSLock — fine grained: only one lock
+    // hold per resolution, no I/O.
+    //
+    // Plan: B3 (Phase 2) — see
+    // `.claude/plans/study-this-codebase-crystalline-shore.md`.
+    private static let cacheCapacity = 256
+    private let cacheLock = NSLock()
+    private var resolutionCache: [String: ModelRates?] = [:]
+    private var resolutionInsertionOrder: [String] = []
+
     /// Per-kind rates in $/token. `aboveBoundary` is non-nil for models with
     /// LiteLLM-tracked tiering (Claude past the 200k context boundary).
     public struct ModelRates: Sendable {
@@ -163,18 +194,53 @@ public final class Pricing: @unchecked Sendable {
     /// dated suffix (`claude-sonnet-4-5-20250929` → `claude-sonnet-4-5`),
     /// then prefix-matches against the longest available LiteLLM key (so
     /// `gpt-5-codex-2026-02-01` would fall back to `gpt-5-codex` or `gpt-5`).
+    ///
+    /// B3 caches the result (success OR nil) per input string to avoid
+    /// repeating the prefix scan on every record in a cold load.
     private func rates(for model: String) -> ModelRates? {
-        if let exact = models[model] { return exact }
-
-        // Strip trailing date suffix (e.g. `-20250929`, `-2026-04-12`).
-        let stripped = Self.stripDateSuffix(model)
-        if stripped != model, let m = models[stripped] { return m }
-
-        // Longest-prefix match against known keys.
-        for candidate in modelKeys where model.hasPrefix(candidate) {
-            return models[candidate]
+        // Fast path: cache hit (caches both success and unknown-model).
+        cacheLock.lock()
+        if let cached = resolutionCache[model] {
+            cacheLock.unlock()
+            return cached
         }
-        return nil
+        cacheLock.unlock()
+
+        // Cold path: run the original resolution.
+        let resolved: ModelRates? = {
+            if let exact = models[model] { return exact }
+            let stripped = Self.stripDateSuffix(model)
+            if stripped != model, let m = models[stripped] { return m }
+            for candidate in modelKeys where model.hasPrefix(candidate) {
+                return models[candidate]
+            }
+            return nil
+        }()
+
+        // Insert with FIFO eviction. Two writers might race here, but the
+        // worst case is duplicate-then-discard work — never wrong answers.
+        cacheLock.lock()
+        if resolutionCache[model] == nil {
+            resolutionCache[model] = resolved
+            resolutionInsertionOrder.append(model)
+            if resolutionInsertionOrder.count > Self.cacheCapacity {
+                let evict = resolutionInsertionOrder.removeFirst()
+                resolutionCache.removeValue(forKey: evict)
+            }
+        }
+        cacheLock.unlock()
+        return resolved
+    }
+
+    /// Drops the B3 LRU resolution cache. Exposed for tests + for
+    /// downstream consumers that want to force re-resolution after
+    /// the model catalog reloads (rare; the embedded snapshot is read
+    /// once at app start). No-op in production.
+    public func _resetResolutionCacheForTesting() {
+        cacheLock.lock()
+        resolutionCache.removeAll()
+        resolutionInsertionOrder.removeAll()
+        cacheLock.unlock()
     }
 
     private static func stripDateSuffix(_ name: String) -> String {

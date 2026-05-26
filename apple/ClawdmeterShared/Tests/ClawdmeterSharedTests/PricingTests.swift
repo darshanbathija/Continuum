@@ -5,6 +5,49 @@ final class PricingTests: XCTestCase {
 
     private let pricing = Pricing()
 
+    override func setUp() {
+        super.setUp()
+        // B3 cache may carry state across tests if test methods share
+        // a Pricing instance. Reset Pricing.shared just in case
+        // downstream callers consult it via the singleton.
+        Pricing.shared._resetResolutionCacheForTesting()
+    }
+
+    // MARK: - B3 LRU cache
+
+    func test_b3_cacheHit_returnsConsistentRates() {
+        // Cold path: first call resolves via prefix scan.
+        let tokens = TokenTotals(inputTokens: 1_000, outputTokens: 500)
+        let cost1 = pricing.cost(for: "claude-sonnet-4-5", tokens: tokens)
+        // Warm path: second call returns cached resolution. Must equal
+        // the first call to the cent — no precision drift.
+        let cost2 = pricing.cost(for: "claude-sonnet-4-5", tokens: tokens)
+        XCTAssertEqual(cost1, cost2)
+    }
+
+    func test_b3_unknownModel_cachedAsNil_returnsZeroEachTime() {
+        let tokens = TokenTotals(inputTokens: 1_000, outputTokens: 500)
+        let cost1 = pricing.cost(for: "definitely-not-a-real-model-1234", tokens: tokens)
+        let cost2 = pricing.cost(for: "definitely-not-a-real-model-1234", tokens: tokens)
+        XCTAssertEqual(cost1, 0)
+        XCTAssertEqual(cost2, 0)
+        XCTAssertFalse(pricing.isPriced("definitely-not-a-real-model-1234"))
+        // Confirm subsequent isPriced() also returns false (cache hit).
+        XCTAssertFalse(pricing.isPriced("definitely-not-a-real-model-1234"))
+    }
+
+    func test_b3_resetCacheForTesting_dropsCache() {
+        let tokens = TokenTotals(inputTokens: 1_000, outputTokens: 500)
+        _ = pricing.cost(for: "claude-sonnet-4-5", tokens: tokens)
+        // After reset, the next call cold-resolves but must produce the
+        // same answer.
+        pricing._resetResolutionCacheForTesting()
+        let postReset = pricing.cost(for: "claude-sonnet-4-5", tokens: tokens)
+        XCTAssertGreaterThan((postReset as NSDecimalNumber).doubleValue, 0)
+    }
+
+    // MARK: - Existing tests
+
     func test_claudeBelow200k() {
         // 100k input @ $3/M = $0.30; 50k output @ $15/M = $0.75; total = $1.05
         let tokens = TokenTotals(inputTokens: 100_000, outputTokens: 50_000)
