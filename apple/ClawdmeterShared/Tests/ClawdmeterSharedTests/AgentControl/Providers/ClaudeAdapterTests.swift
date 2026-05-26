@@ -378,6 +378,48 @@ final class ClaudeAdapterTests: XCTestCase {
         XCTAssertEqual(events[0].providerInstanceId, "claude_personal")
     }
 
+    // MARK: - Malformed line / forward-compat envelope (review P1)
+
+    func test_lineWithoutMessageEnvelope_emitsUnknown_neverSilentDrops() {
+        // A meta/header line that has neither a `message` envelope nor a
+        // known `type` should surface as `.unknown` — replay must never
+        // silently drop unrecognized envelope shapes (the prompt's "JSONL
+        // shape exhaustiveness" contract).
+        let line = parse("""
+        {
+          "timestamp": "\(baseTimestamp)",
+          "type": "future_envelope_kind",
+          "payload": { "anything": 1 }
+        }
+        """)
+        let raw = try! JSONSerialization.data(withJSONObject: line, options: [])
+        let events = ClaudeAdapter.translate(
+            line: line, sessionId: sessionId, sequenceStart: 99, rawBytes: raw
+        )
+        XCTAssertEqual(events.count, 1, "malformed/unknown envelopes must surface, not drop")
+        guard case .unknown(let name) = events[0].payload else {
+            return XCTFail("Expected .unknown, got \(events[0].payload)")
+        }
+        XCTAssertEqual(name, "claude.line.future_envelope_kind")
+        // Raw payload must survive so the data isn't lost.
+        XCTAssertEqual(events[0].rawProviderPayload, raw)
+        XCTAssertEqual(events[0].sequenceNumber, 99)
+    }
+
+    func test_lineWithNoMessageAndNoType_emitsUnknownMissing() {
+        // Garbage line with no `message` and no `type`. Adapter must
+        // emit a typed event rather than crash or drop.
+        let line: [String: Any] = ["timestamp": baseTimestamp]
+        let events = ClaudeAdapter.translate(
+            line: line, sessionId: sessionId, sequenceStart: 0
+        )
+        XCTAssertEqual(events.count, 1)
+        guard case .unknown(let name) = events[0].payload else {
+            return XCTFail("Expected .unknown for malformed line")
+        }
+        XCTAssertEqual(name, "claude.line.missing")
+    }
+
     // MARK: - Sequence number contract
 
     func test_multiEventLine_sequenceNumbersStartAtSequenceStart() {

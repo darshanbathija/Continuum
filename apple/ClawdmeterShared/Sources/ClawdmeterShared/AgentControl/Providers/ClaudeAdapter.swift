@@ -92,10 +92,9 @@ public enum ClaudeAdapter {
         // Branch on the high-level shape. Claude's JSONL is consistently
         // wrapped with `message.role` — that's the discriminator we use.
         guard let messageRaw else {
-            // Lines without a `message` envelope are header / meta lines
-            // (e.g. session_meta). For now we emit nothing — these aren't
-            // user-visible events. A future iteration may emit them as
-            // .sessionStarted with parsed settings.
+            // Lines without a `message` envelope: known meta lines map to
+            // canonical events; unknown shapes surface as `.unknown` so
+            // downstream replay never silently drops data (review P1).
             if let kind = line["type"] as? String, kind == "system" {
                 return [makeEvent(
                     sessionId: sessionId,
@@ -110,7 +109,18 @@ public enum ClaudeAdapter {
                     extensions: nil
                 )]
             }
-            return []
+            // Forward-compat: unrecognized envelope shape. Emit `.unknown`
+            // so observers can log/replay; raw bytes carry the full data.
+            let kindName = (line["type"] as? String) ?? "missing"
+            return [makeEvent(
+                sessionId: sessionId,
+                seq: sequenceStart,
+                timestamp: timestamp,
+                providerInstanceId: providerInstanceId,
+                payload: .unknown(name: "claude.line.\(kindName)"),
+                rawBytes: rawBytes,
+                extensions: nil
+            )]
         }
 
         let role = (messageRaw["role"] as? String) ?? ""
