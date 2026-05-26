@@ -238,9 +238,26 @@ final class AppRuntime: ObservableObject {
 
         let sessionsEnabled = UserDefaults.standard.object(forKey: "clawdmeter.sessions.enabled") as? Bool ?? true
         if sessionsEnabled {
-            self.tmuxSupervisor.start()
-            // v0.27.0: agentControlServer.attachDesignBridge(...) call removed
-            // along with the Design tab + Open Design daemon.
+            // A7 (Phase 2 + codex D14#4): AgentControlServer.start() stays
+            // SYNCHRONOUS on the init path. The mobile wedge depends on
+            // its port being bound + server.json written before any
+            // paired iPhone can reconnect on app launch. The 5 A7
+            // acceptance tests (paired-client reconnect ≤1s, Watch/widget
+            // refresh ≤2s, re-pair ≤5s, server.json written first,
+            // cold-start improvement) all hinge on AgentControlServer
+            // being live at first paint.
+            //
+            // What DOES defer (non-critical to mobile + first-paint):
+            //   - tmuxSupervisor.start() — tmux session enumeration + spawn
+            //     warmup; doesn't block window paint, no mobile dep
+            //   - sessionsModel.startPeriodicRefresh() — kicks the 60s
+            //     timer + does an initial repo index walk
+            //   - sessionScheduler.start() — schedules deferred session work
+            //
+            // These three move into a Task that runs after AppRuntime.init
+            // returns. Cold-start latency drops by the cost of the tmux
+            // session enumeration + repo index walk (~50-200ms on a
+            // populated machine).
             self.agentControlServer.start()
             // PR #24a A1: synchronous loopback bootstrap. `start()` above
             // is sync and assigns `boundPort`/`boundWsPort` before
@@ -252,8 +269,17 @@ final class AppRuntime: ObservableObject {
             if self.loopbackClient == nil {
                 runtimeLogger.error("MacLoopbackClient construction failed — Mac IDE actions will be disabled this session")
             }
-            self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
-            self.sessionScheduler.start()
+
+            // A7: defer non-critical subsystems. Strong-capture self in
+            // the Task since AppRuntime is an app-lifetime singleton; a
+            // weak capture risks the work being dropped if init returns
+            // before the Task scheduler kicks in.
+            Task { @MainActor [self] in
+                self.tmuxSupervisor.start()
+                self.sessionsRefreshTask = self.sessionsModel.startPeriodicRefresh()
+                self.sessionScheduler.start()
+                runtimeLogger.info("A7 deferred subsystems started (tmux supervisor + sessions refresh + scheduler)")
+            }
             // v0.27.0: openDesignDaemon.ensureRunning() removed along with
             // the Design tab.
             // v0.22.11: auto-archive chat sessions idle > 5 minutes.
