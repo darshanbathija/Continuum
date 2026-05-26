@@ -26,6 +26,14 @@ public final class AgentSessionRegistry: ObservableObject {
     /// Monotonic per-session event sequence. Backs E8 cursor contract.
     private var nextEventSeqBySession: [UUID: UInt64] = [:]
 
+    /// In-memory record of when each session was last `markPlanApproved`'d.
+    /// Drives the `PlanProgressComputer`'s post-approval timestamp filter
+    /// (the filter is what prevents the plan-emission assistant message
+    /// from self-completing every step). Not persisted: on daemon restart
+    /// we lose the exact wall-clock and the first recompute treats every
+    /// retained message as post-approval — a forgivable degradation.
+    private var approvedAtBySession: [UUID: Date] = [:]
+
     /// Path to the sessions.json on-disk snapshot.
     private let storeURL: URL
 
@@ -433,8 +441,54 @@ public final class AgentSessionRegistry: ObservableObject {
         let approved = Self.reviewableApprovedPlanText(from: current)
         guard current.planText != nil || current.approvedPlanText != approved else { return }
         bumpEventSeq(id: id)
+        // Stamp approvedAt so subsequent `PlanProgressTracker` recomputes
+        // can filter out the plan-emission assistant message — the message
+        // whose `at` is at-or-before this stamp is the one that contains
+        // the entire plan verbatim, and matching against it would
+        // self-complete every step.
+        let approvedAt = Date()
+        approvedAtBySession[id] = approvedAt
+        // Compute the initial 0/N snapshot so the sidebar bar appears
+        // immediately on approval instead of waiting for the first
+        // post-approval JSONL event. Tracker fills in real completion
+        // values as the agent works.
+        let initialProgress: PlanProgress? = approved.flatMap { text in
+            PlanProgressComputer.compute(
+                approvedPlanText: text,
+                messagesSinceApproval: [],
+                approvedAt: approvedAt
+            )
+        }
         update(id: id) { s in
-            with(s, planText: .some(nil), approvedPlanText: approved, lastEventSeq: s.lastEventSeq + 1)
+            with(
+                s,
+                planText: .some(nil),
+                approvedPlanText: approved,
+                lastEventSeq: s.lastEventSeq + 1,
+                planProgress: .some(initialProgress)
+            )
+        }
+    }
+
+    /// Wall-clock of the most recent `markPlanApproved(id:)` for this
+    /// session. `nil` after daemon restart (in-memory only). Callers
+    /// (the `PlanProgressTracker`) fall back to `session.lastEventAt`
+    /// when this returns nil — older retained messages still get the
+    /// post-approval treatment, which is fine for the bar's purpose.
+    public func approvedAt(for id: UUID) -> Date? {
+        approvedAtBySession[id]
+    }
+
+    /// Daemon-driven setter for `AgentSession.planProgress`. Idempotent
+    /// when the new value equals the existing one — matches the shape
+    /// of `setPlanText` so callers can fire freely without thrashing
+    /// `lastEventSeq`.
+    public func setPlanProgress(id: UUID, progress: PlanProgress?) {
+        guard let current = session(id: id) else { return }
+        guard current.planProgress != progress else { return }
+        bumpEventSeq(id: id)
+        update(id: id) { s in
+            with(s, lastEventSeq: s.lastEventSeq + 1, planProgress: .some(progress))
         }
     }
 
@@ -671,7 +725,8 @@ public final class AgentSessionRegistry: ObservableObject {
         prMirrorState: PRMirrorState?? = nil,
         lastEventSeq: UInt64? = nil,
         frontierGroupId: UUID?? = nil,
-        frontierChildIndex: Int?? = nil
+        frontierChildIndex: Int?? = nil,
+        planProgress: PlanProgress?? = nil
     ) -> AgentSession {
         AgentSession(
             id: s.id,
@@ -727,7 +782,8 @@ public final class AgentSessionRegistry: ObservableObject {
             geminiBackend: Self.resolve(geminiBackend, fallback: s.geminiBackend),
             antigravityConversationId: Self.resolve(antigravityConversationId, fallback: s.antigravityConversationId),
             antigravityProjectId: Self.resolve(antigravityProjectId, fallback: s.antigravityProjectId),
-            deepResearch: s.deepResearch
+            deepResearch: s.deepResearch,
+            planProgress: Self.resolve(planProgress, fallback: s.planProgress)
         )
     }
 

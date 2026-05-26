@@ -83,6 +83,7 @@ public struct TahoeQuotaBar: View {
 /// Single horizontal pill bar — matches the weekly bar geometry.
 public struct TahoePillBar: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public var percent: Double
     public var provider: TahoeProvider
     public var height: CGFloat
@@ -116,7 +117,11 @@ public struct TahoePillBar: View {
                                       percent > 0 ? max(height, 4) : 0))
                     .shadow(color: provider.halo.color(opacity: 0.45), radius: 5, x: 0, y: 0)
                     // Motion polish: smooth fill-in when percent changes.
-                    .animation(.easeInOut(duration: 0.45), value: percent)
+                    // Respects `accessibilityReduceMotion` so users who
+                    // have asked the system to dampen animation get an
+                    // instant jump-cut instead of the 0.45s easeInOut.
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.45),
+                               value: percent)
             }
         }
         .frame(height: height)

@@ -2103,6 +2103,12 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// with write access. Kept separate from `planText` so approval can clear
     /// pending CTA state without losing the reviewable plan file.
     public let approvedPlanText: String?
+    /// Daemon-computed progress against `approvedPlanText`. `nil` until the
+    /// daemon's first recompute after approval, or whenever the plan has
+    /// no extractable step markers. Optional + decoder-tolerant so older
+    /// persisted sessions decode cleanly (same pattern as the schema v5/v6
+    /// additions below).
+    public let planProgress: PlanProgress?
     /// Wall-clock when the session was created (server's local time, UTC).
     public let createdAt: Date
     /// Most recent event the server observed (heartbeat / message / tool call).
@@ -2293,7 +2299,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         geminiBackend: GeminiBackend? = nil,
         antigravityConversationId: UUID? = nil,
         antigravityProjectId: String? = nil,
-        deepResearch: Bool = false
+        deepResearch: Bool = false,
+        planProgress: PlanProgress? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -2333,6 +2340,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.antigravityConversationId = antigravityConversationId
         self.antigravityProjectId = antigravityProjectId
         self.deepResearch = deepResearch
+        self.planProgress = planProgress
     }
 
     public init(from decoder: Decoder) throws {
@@ -2404,6 +2412,11 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         // restore/retry preserves the flag. Older sessions.json files
         // decode this as false.
         self.deepResearch = (try? c.decodeIfPresent(Bool.self, forKey: .deepResearch)) ?? false
+        // Plan-progress schema addition: optional + decoder-tolerant so
+        // every pre-existing sessions.json decodes cleanly with this nil.
+        // The daemon populates it on the first SessionChatStore snapshot
+        // after `approvedPlanText` is set.
+        self.planProgress = (try? c.decodeIfPresent(PlanProgress.self, forKey: .planProgress)) ?? nil
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -2450,7 +2463,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              // v0.9 schema addition (chat-via-agentapi).
              antigravityProjectId,
              // v0.23 schema v7 (Chat V2 Deep Research).
-             deepResearch
+             deepResearch,
+             // Plan-progress schema addition (daemon-side).
+             planProgress
     }
 }
 
