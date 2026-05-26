@@ -63,9 +63,14 @@ public struct ProviderRuntimeEvent: Sendable, Equatable, Codable {
 
     // MARK: - Payload
 
-    /// The discriminated payload. New cases are added as providers grow;
-    /// the legacy decoder MUST handle `unknown(name:)` so wire-vN clients
-    /// that predate a new payload type degrade gracefully.
+    /// The discriminated payload. New cases are added as providers grow.
+    /// `.unknown(name:)` is for **adapter-emit-side** use: when an
+    /// adapter receives a provider event it has no canonical case for, it
+    /// emits `.unknown(name:)` with `rawProviderPayload` set so
+    /// downstream consumers can still observe + replay. Wire decode of an
+    /// unknown payload kind (a new canonical case a vN-1 client doesn't
+    /// know about) throws — clients that need forward-compat at the wire
+    /// layer must update their decoder.
     public let payload: Payload
 
     // MARK: - Raw retention (codex #8)
@@ -147,11 +152,14 @@ public struct ProviderRuntimeEvent: Sendable, Equatable, Codable {
         /// can recover the original error envelope.
         case providerError(code: String, message: String)
 
-        /// Forward-compat catch-all. Adapters emit this when the provider
-        /// surfaces a kind we haven't added a canonical case for. The
-        /// `name` is the raw kind string; full data lives in
-        /// `rawProviderPayload`. Lets wire-vN clients that predate a new
-        /// canonical case keep working.
+        /// Adapter-emit-side catch-all. Adapters emit this when the
+        /// provider surfaces a kind we haven't added a canonical case
+        /// for. The `name` is the raw kind string; full data lives in
+        /// `rawProviderPayload`. Downstream consumers can still observe
+        /// + replay the event. NOTE: this case does **not** make the
+        /// wire decoder forward-compat — a wire payload tagged with a
+        /// canonical case the local decoder doesn't know throws a
+        /// `DecodingError` (see `ProviderRuntimeEventTests`).
         case unknown(name: String)
     }
 
@@ -161,6 +169,13 @@ public struct ProviderRuntimeEvent: Sendable, Equatable, Codable {
     /// We keep this small + explicit (string + int + double + bool +
     /// optional nesting) rather than dragging in `AnyCodable` — the
     /// adapters know exactly what they need to plumb here.
+    ///
+    /// **Wire encoding** uses an explicit `{"_type": <tag>, "value": <v>}`
+    /// envelope so every variant round-trips losslessly. A scalar-heuristic
+    /// decoder (try-String-then-Int-then-…) loses information: `Data`
+    /// encoded as Base64 string would decode back as `.string`, and a
+    /// whole-number `Double` like `2.0` would decode back as `.int`. The
+    /// tagged form pins each variant unambiguously.
     public enum ExtensionField: Sendable, Equatable, Codable {
         case string(String)
         case int(Int64)
@@ -169,31 +184,49 @@ public struct ProviderRuntimeEvent: Sendable, Equatable, Codable {
         case data(Data)
         case nested([String: ExtensionField])
 
+        private enum CodingKeys: String, CodingKey {
+            case _type
+            case value
+        }
+
+        private enum Tag: String, Codable {
+            case string, int, double, bool, data, nested
+        }
+
         public init(from decoder: Decoder) throws {
-            let container = try decoder.singleValueContainer()
-            if let v = try? container.decode(String.self) { self = .string(v); return }
-            if let v = try? container.decode(Int64.self) { self = .int(v); return }
-            if let v = try? container.decode(Double.self) { self = .double(v); return }
-            if let v = try? container.decode(Bool.self) { self = .bool(v); return }
-            if let v = try? container.decode(Data.self) { self = .data(v); return }
-            if let v = try? container.decode([String: ExtensionField].self) {
-                self = .nested(v); return
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let tag = try container.decode(Tag.self, forKey: ._type)
+            switch tag {
+            case .string: self = .string(try container.decode(String.self, forKey: .value))
+            case .int:    self = .int(try container.decode(Int64.self, forKey: .value))
+            case .double: self = .double(try container.decode(Double.self, forKey: .value))
+            case .bool:   self = .bool(try container.decode(Bool.self, forKey: .value))
+            case .data:   self = .data(try container.decode(Data.self, forKey: .value))
+            case .nested: self = .nested(try container.decode([String: ExtensionField].self, forKey: .value))
             }
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "ProviderRuntimeEvent.ExtensionField: unrecognized scalar type"
-            )
         }
 
         public func encode(to encoder: Encoder) throws {
-            var container = encoder.singleValueContainer()
+            var container = encoder.container(keyedBy: CodingKeys.self)
             switch self {
-            case .string(let v): try container.encode(v)
-            case .int(let v): try container.encode(v)
-            case .double(let v): try container.encode(v)
-            case .bool(let v): try container.encode(v)
-            case .data(let v): try container.encode(v)
-            case .nested(let v): try container.encode(v)
+            case .string(let v):
+                try container.encode(Tag.string, forKey: ._type)
+                try container.encode(v, forKey: .value)
+            case .int(let v):
+                try container.encode(Tag.int, forKey: ._type)
+                try container.encode(v, forKey: .value)
+            case .double(let v):
+                try container.encode(Tag.double, forKey: ._type)
+                try container.encode(v, forKey: .value)
+            case .bool(let v):
+                try container.encode(Tag.bool, forKey: ._type)
+                try container.encode(v, forKey: .value)
+            case .data(let v):
+                try container.encode(Tag.data, forKey: ._type)
+                try container.encode(v, forKey: .value)
+            case .nested(let v):
+                try container.encode(Tag.nested, forKey: ._type)
+                try container.encode(v, forKey: .value)
             }
         }
     }

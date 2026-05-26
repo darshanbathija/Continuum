@@ -140,6 +140,79 @@ final class ProviderRuntimeEventTests: XCTestCase {
         XCTAssertEqual(decoded.providerExtensions, extensions)
     }
 
+    func test_providerExtensions_dataVariant_roundTrips() throws {
+        // Regression: prior heuristic decoder tried String before Data and
+        // collapsed `.data(...)` into `.string(<base64>)`. The tagged
+        // encoding keeps the variant intact.
+        let payload = "binary-payload".data(using: .utf8)!
+        let extensions: [String: ProviderRuntimeEvent.ExtensionField] = [
+            "antigravity": .nested([
+                "step_payload": .data(payload)
+            ])
+        ]
+        let event = ProviderRuntimeEvent(
+            id: "evt-data",
+            providerKind: .claude,
+            sessionId: "session-1",
+            sequenceNumber: 1,
+            emittedAt: Date(timeIntervalSince1970: 1_715_000_000),
+            payload: .userMessage(text: "t", attachmentRefs: []),
+            rawProviderPayload: nil,
+            providerExtensions: extensions
+        )
+        let encoded = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(ProviderRuntimeEvent.self, from: encoded)
+        XCTAssertEqual(decoded.providerExtensions, extensions)
+    }
+
+    func test_providerExtensions_wholeDouble_keepsDoubleVariant() throws {
+        // Regression: prior heuristic decoder tried Int64 before Double
+        // and silently coerced `.double(2.0)` into `.int(2)`. The tagged
+        // encoding preserves the variant.
+        let extensions: [String: ProviderRuntimeEvent.ExtensionField] = [
+            "codex": .nested([
+                "temperature": .double(2.0),
+                "top_p": .double(1.0)
+            ])
+        ]
+        let event = ProviderRuntimeEvent(
+            id: "evt-double",
+            providerKind: .codex,
+            sessionId: "session-1",
+            sequenceNumber: 1,
+            emittedAt: Date(timeIntervalSince1970: 1_715_000_000),
+            payload: .sessionStarted(model: "o3", settings: [:]),
+            rawProviderPayload: nil,
+            providerExtensions: extensions
+        )
+        let encoded = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(ProviderRuntimeEvent.self, from: encoded)
+        XCTAssertEqual(decoded.providerExtensions, extensions)
+    }
+
+    func test_rawProviderPayload_doubleRoundTrip_isLossless() throws {
+        // Codex eng-review #8: encode → decode → encode must be byte-
+        // stable so debugging info never silently drifts on rewrites.
+        let originalRaw = Data((0...255).map { UInt8($0) })
+        let event = ProviderRuntimeEvent(
+            id: "evt-raw",
+            providerKind: .claude,
+            sessionId: "session-1",
+            sequenceNumber: 1,
+            emittedAt: Date(timeIntervalSince1970: 1_715_000_000),
+            payload: .userMessage(text: "t", attachmentRefs: []),
+            rawProviderPayload: originalRaw,
+            providerExtensions: nil
+        )
+        let first = try JSONEncoder().encode(event)
+        let decoded1 = try JSONDecoder().decode(ProviderRuntimeEvent.self, from: first)
+        let second = try JSONEncoder().encode(decoded1)
+        let decoded2 = try JSONDecoder().decode(ProviderRuntimeEvent.self, from: second)
+        XCTAssertEqual(decoded1.rawProviderPayload, originalRaw)
+        XCTAssertEqual(decoded2.rawProviderPayload, originalRaw)
+        XCTAssertEqual(decoded1, decoded2)
+    }
+
     // MARK: - Forward-compat unknown decoder
 
     func test_unknownPayloadKind_inWireData_decodesToUnknown() throws {
