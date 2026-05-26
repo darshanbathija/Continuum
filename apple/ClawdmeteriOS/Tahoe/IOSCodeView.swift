@@ -544,6 +544,22 @@ private struct IOSRepoCard: View {
                                         .lineLimit(1)
                                         .truncationMode(.tail)
                                 }
+                                if let progress = s.planProgress {
+                                    HStack(spacing: 6) {
+                                        ProgressView(value: progress.fraction)
+                                            .progressViewStyle(.linear)
+                                            .tint(t.accent)
+                                            .frame(maxWidth: .infinity)
+                                        Text("\(progress.completed)/\(progress.total)")
+                                            .font(TahoeFont.body(10.5, weight: .semibold))
+                                            .monospacedDigit()
+                                            .foregroundStyle(t.fg3)
+                                    }
+                                    .padding(.top, 3)
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityLabel("Plan progress")
+                                    .accessibilityValue("\(progress.completed) of \(progress.total) steps complete")
+                                }
                                 statusBadges(for: s)
                             }
                             .layoutPriority(1)

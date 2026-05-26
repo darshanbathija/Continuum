@@ -1355,6 +1355,27 @@ private struct SidebarPane: View {
                                 .background(colorTagTint(tag).opacity(0.14), in: Capsule())
                         }
                     }
+                    // Daemon-computed "progress vs approved plan" bar.
+                    // Appears only when the session has an approved plan
+                    // AND the daemon has produced its first compute (see
+                    // `PlanProgressTracker`). The fraction comes straight
+                    // from the wire field, so iOS and Mac sidebars agree.
+                    if let progress = session.planProgress {
+                        HStack(spacing: 6) {
+                            ProgressView(value: progress.fraction)
+                                .progressViewStyle(.linear)
+                                .tint(t.accent)
+                                .frame(maxWidth: .infinity)
+                            Text("\(progress.completed)/\(progress.total)")
+                                .font(TahoeFont.body(9.5, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(t.fg3)
+                        }
+                        .padding(.top, 2)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Plan progress")
+                        .accessibilityValue("\(progress.completed) of \(progress.total) steps complete")
+                    }
                 }
                 Spacer()
                 if isHovered {
