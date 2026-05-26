@@ -317,7 +317,12 @@ final class AppRuntime: ObservableObject {
         }
         Task(priority: .utility) { @MainActor in
             if CodexSDKManager.shared.sdkModeActive {
-                runtimeLogger.info("Codex SDK mode is enabled; deferring sidecar probe until first SDK session")
+                // Sidecar probe is deferred to first SDK session start
+                // (see CodexSubscriptionRelay.start lazy-probe block).
+                // Launch-time probe was removed in PR #136 because it
+                // wakes Codex.app and triggers macOS's protected app-data
+                // prompt even when the user only opened Clawdmeter.
+                runtimeLogger.info("Codex SDK mode is enabled; sidecar probe deferred to first SDK session start")
             }
             if AntigravitySidecarManager.shared.sdkModeActive {
                 _ = await AntigravitySidecarManager.shared.enableSDKMode()

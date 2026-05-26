@@ -214,6 +214,21 @@ public final class CodexSubscriptionRelay {
             )
         }
 
+        // #136 lazy probe (self-heal): PR #136 dropped the launch-time
+        // `enableSDKMode()` call so Clawdmeter no longer wakes Codex.app
+        // at startup for a protected-app-data prompt. If the user has
+        // SDK mode on in Settings but `isProvisioned` has gone stale
+        // (AppSupport wiped, fresh install with persisted toggle, etc.),
+        // kick off a re-probe in the background here. This session still
+        // throws `sdkNotProvisioned` (we can't await without making
+        // `start` async, which cascades through every caller), but the
+        // NEXT session attempt finds isProvisioned=true. Callers already
+        // surface a retry-able error to the UI.
+        if CodexSDKManager.shared.sdkModeActive && !CodexSDKManager.shared.isProvisioned {
+            Task { @MainActor in
+                _ = await CodexSDKManager.shared.enableSDKMode()
+            }
+        }
         guard CodexSDKManager.shared.isProvisioned else {
             throw RelayError.sdkNotProvisioned
         }
