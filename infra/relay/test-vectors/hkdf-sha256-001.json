@@ -1,0 +1,13 @@
+{
+  "name": "hkdf-sha256-001",
+  "kind": "hkdf-sha256",
+  "description": "HKDF-SHA256: extract(salt=session-id-ascii, ikm=X25519 shared secret) then expand(info='clawdmeter.relay.v1', L=32). Output = symmetric key for XChaCha20-Poly1305.",
+  "shared_secret_hex": "2ed76ab549b1e73c031eb49c9448f0798aea81b698279a0c3dc3e49fbfc4b953",
+  "salt_ascii": "0123456789abcdef0123456789abcdef",
+  "salt_hex": "3031323334353637383961626364656630313233343536373839616263646566",
+  "info_ascii": "clawdmeter.relay.v1",
+  "info_hex": "636c6177646d657465722e72656c61792e7631",
+  "prk_hex": "72364f908dd177c388203f782bc7afc4f5007b0ec41711cc4e86e54c16c35e1e",
+  "output_len": 32,
+  "expected_key_hex": "148e0a09ad732f51169aa362cf68db94e4226ab10b3c5039d5f8ad588e804fe8"
+}
