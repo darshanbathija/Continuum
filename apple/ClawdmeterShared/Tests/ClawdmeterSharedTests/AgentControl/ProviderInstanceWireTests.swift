@@ -214,6 +214,7 @@ final class ProviderInstanceWireTests: XCTestCase {
     ///   - The factory's identity contract holds: each non-primary
     ///     call produces a fresh provider; the primary uses the
     ///     shared singleton.
+#if os(iOS) || os(watchOS) || os(macOS)
     func test_forInstance_partitionsByAccessGroup() {
         let instanceA = ProviderInstanceId(
             kind: .claude,
@@ -245,6 +246,7 @@ final class ProviderInstanceWireTests: XCTestCase {
         XCTAssertTrue(p1 === p2, "primary instance must reuse the shared singleton")
         XCTAssertTrue(p1 === PastedAnthropicTokenProvider.shared())
     }
+#endif
 
     // MARK: - Wire-version 20 back-compat (Codex #10 acceptance 4)
 
