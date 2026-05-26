@@ -47,6 +47,12 @@ final class AppRuntime: ObservableObject {
     // CTA. Sparkle one-click install is parked in TODOS.md as phase 2.
     let updateCoordinator: UpdateCoordinator
 
+    // E7: relay-session-token pairing UX. Owns the X25519 keypair +
+    // bundle the Mac shows in a QR; iPhone scans it to derive the
+    // shared symmetric key. NOT a real WS client yet — E3 brings the
+    // actual relay socket. See RelayPairingService for state machine.
+    let relayPairingService: RelayPairingService
+
     // v0.27.0: openFolderInDesign(baseDir:) removed along with the Design tab.
 
     private var cancellables = Set<AnyCancellable>()
@@ -70,6 +76,10 @@ final class AppRuntime: ObservableObject {
         // schedules its first check 8s out so logs don't interleave
         // with the rest of AppRuntime's init.
         self.updateCoordinator = UpdateCoordinator()
+
+        // E7: relay-pairing service. Phase starts `.unpaired`; the user
+        // taps "Pair iPhone" in Settings to mint a fresh bundle.
+        self.relayPairingService = RelayPairingService()
 
         // Claude polling uses Continuum's own Keychain entry. Importing from
         // Claude Code's third-party Keychain item is now an explicit Settings

@@ -3,32 +3,43 @@ import AppKit
 import CoreImage.CIFilterBuiltins
 import ClawdmeterShared
 
-/// Mac Settings pane for the Sessions feature. Shows the pairing QR
-/// (host + ports + token), supervisor health, scan-roots editor, and
-/// explicit regenerate/revoke buttons for the bearer token.
+/// Mac Settings pane for the Sessions feature.
 ///
-/// Per Codex Round 1 reviewer concern #6 (lost-phone story): regenerate
-/// invalidates the iPhone's stored token. Revoke removes the token
-/// entirely; the daemon refuses every connection until next launch
-/// auto-generates a fresh one.
+/// **E7 rewrite (Gate 3 GTM launch blocker).** The primary pairing flow
+/// is now relay-based: Mac mints a session ID + bearer tokens + ECDH
+/// public key, encodes them into a `clawdmeter-pair://v1/<base64url>`
+/// URL, and renders a QR. The iPhone scans, derives the shared key
+/// locally via HKDF-SHA256 (see `RelayPairingCrypto`), and persists.
 ///
-/// Layout note: this view uses `Form { Section { } header: { } }` like
-/// the General preferences tab so the rendering matches macOS Settings
-/// chrome. The previous implementation used raw `VStack`s inside a
-/// `ScrollView` which gave inconsistent rendering — section headers,
-/// labels, and descriptions were technically present but rendered in
-/// system-default styling that blended into the Settings background.
+/// E7 stops at "bundle generated + iPhone-side key derived". E3/E4 will
+/// actually open the WebSocket against the relay Worker.
+///
+/// The old Tailscale-config-as-pairing-mechanism (host + ports + token
+/// URL) is preserved behind a collapsed "Advanced: legacy Tailscale
+/// pairing" disclosure so users who already paired on a Tailnet aren't
+/// broken. The relay path is the default.
+///
+/// Layout note: this view uses `Form { Section { } header: { } }` so
+/// it renders with native macOS Settings chrome.
 struct PairingSettingsView: View {
 
     @ObservedObject var runtime: AppRuntime
+    @ObservedObject var pairingService: RelayPairingService
     @AppStorage(RepoIndex.scanRootsKey) private var scanRoots: String = ""
     @State private var qrImage: NSImage?
     @State private var tokenForDisplay: String = ""
-    @State private var didCopy: Bool = false
+    @State private var didCopyRelay: Bool = false
+    @State private var didCopyLegacy: Bool = false
     @State private var resolvedHost: TailscaleHost.Resolved = TailscaleHost.Resolved(host: "127.0.0.1", kind: .loopback)
+    @State private var showLegacyTailscaleAdvanced: Bool = false
+    /// Live ticker so the "expires in N:NN" label re-renders without a
+    /// state change from the pairing service.
+    @State private var now: Date = Date()
+    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
+        self.pairingService = runtime.relayPairingService
     }
 
     @AppStorage("clawdmeter.pairing.preferMagicDNS") private var preferMagicDNS: Bool = true
@@ -36,94 +47,274 @@ struct PairingSettingsView: View {
 
     var body: some View {
         Form {
-            pairSection
-            connectivitySection
+            relayPairSection
             scanRootsSection
             supervisorSection
-            securitySection
+            relaySecuritySection
+            legacyTailscaleSection
             pluginsSection
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 720)
-        .onAppear { refreshQR() }
+        .frame(width: 520, height: 760)
+        .onAppear {
+            tokenForDisplay = PairingTokenStore.shared.currentToken()
+            resolvedHost = TailscaleHost.resolve()
+            refreshRelayQR()
+        }
+        .onReceive(ticker) { now = $0 }
+        .onChange(of: pairingService.bundleURL) { _, _ in refreshRelayQR() }
     }
 
     private func isMagicDNSHost(_ kind: TailscaleHost.Resolved.Kind) -> Bool {
-        // TailscaleHost.Resolved.Kind has an associated value on
-        // `.tailscaleDNSBackendDown(state:)` — Equatable isn't
-        // synthesized. Pattern-match directly.
         if case .tailscaleDNS = kind { return true }
         return false
     }
 
-    private var connectivitySection: some View {
+    // MARK: - Relay pair section (E7 primary)
+
+    private var relayPairSection: some View {
         Section {
-            Toggle("Prefer MagicDNS host in pairing QR", isOn: $preferMagicDNS)
-                .onChange(of: preferMagicDNS) { _, _ in refreshQR() }
-            Toggle("Use TLS for pairing (advanced)", isOn: $preferTLS)
-                .onChange(of: preferTLS) { _, _ in refreshQR() }
-                .disabled(!preferMagicDNS || !isMagicDNSHost(resolvedHost.kind))
+            switch pairingService.phase {
+            case .unpaired:
+                relayUnpairedRow
+            case .generatingBundle:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Generating pairing bundle…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            case .scanning, .keyExchanged, .readyButNotConnected:
+                relayBundleRow
+            }
         } header: {
-            Text("Connectivity")
+            Text("Pair with iPhone")
         } footer: {
-            Text("MagicDNS uses the Tailscale-issued `*.ts.net` hostname so pairing survives IP changes (sleep/wake, switching Wi-Fi). TLS pairing wraps the pairing URL in `clawdmeters://` for future server-side TLS — requires `tailscale cert` and a Running MagicDNS backend. The daemon itself still listens on plain HTTP today; this toggle ships the URL plumbing so iOS is ready when server TLS lands.")
+            Text("Open Clawdmeter on your iPhone and scan the QR. The pairing bundle includes a relay session ID + per-peer bearer tokens + an X25519 public key — no Tailscale or LAN required. The bundle expires after 15 minutes.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: - Sections
+    private var relayUnpairedRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Not yet paired")
+                    .font(.headline)
+                Text("Generate a one-time bundle the iPhone scans. Bundle includes a relay session ID, per-peer bearer tokens, and the Mac's X25519 public key.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Pair iPhone") {
+                pairingService.beginPairing()
+            }
+            .keyboardShortcut(.defaultAction)
+        }
+    }
 
-    private var pairSection: some View {
+    @ViewBuilder
+    private var relayBundleRow: some View {
+        if let bundle = pairingService.bundle, let urlString = pairingService.bundleURL {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    LabeledContent("Relay") {
+                        Text(bundle.relayUrl)
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    LabeledContent("Session ID") {
+                        Text(String(bundle.sid.prefix(12)) + "…")
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                    LabeledContent("Mac key") {
+                        Text(String(bundle.ecdhPub.prefix(12)) + "…")
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                    LabeledContent("Expires in") {
+                        Text(formatTTLCountdown(ttl: bundle.ttl))
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(ttlColor(ttl: bundle.ttl))
+                    }
+                    HStack(spacing: 8) {
+                        Button("Copy pairing URL", action: copyRelayURL)
+                        if didCopyRelay {
+                            Text("Copied ✓")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                        Spacer()
+                        Button("Regenerate", action: { pairingService.beginPairing() })
+                    }
+                    .padding(.top, 4)
+                    if pairingService.phase == .readyButNotConnected {
+                        Label("Waiting for iPhone scan", systemImage: "iphone.gen3")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                    }
+                    // Hidden in production builds — only shows when a dev
+                    // wants to copy the raw URL into the iOS simulator
+                    // (clipboard sharing doesn't auto-flow QRs).
+                    if ProcessInfo.processInfo.environment["CLAWDMETER_DEBUG_PAIRING"] != nil {
+                        Text(urlString)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .textSelection(.enabled)
+                            .padding(.top, 4)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                relayQRTile
+            }
+        } else {
+            EmptyView()
+        }
+    }
+
+    private var relayQRTile: some View {
+        Group {
+            if let qr = qrImage {
+                Image(nsImage: qr)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 160, height: 160)
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quaternary)
+                    .frame(width: 160, height: 160)
+                    .overlay(ProgressView().controlSize(.small))
+            }
+        }
+        .padding(8)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(.quaternary, lineWidth: 1)
+        )
+    }
+
+    // MARK: - Relay security section
+
+    private var relaySecuritySection: some View {
         Section {
+            HStack(spacing: 12) {
+                Button("Forget pairing", role: .destructive) {
+                    pairingService.reset()
+                }
+                .disabled(pairingService.phase == .unpaired)
+                Spacer()
+            }
+        } header: {
+            Text("Pairing security")
+        } footer: {
+            Text("Forget pairing wipes the in-memory keypair and bundle on this Mac. The iPhone keeps its derived key until it scans a fresh QR or the bundle TTL expires. Relaunching Clawdmeter also invalidates the bundle by design — keys are ephemeral per pairing.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Legacy Tailscale section (collapsed by default)
+
+    private var legacyTailscaleSection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $showLegacyTailscaleAdvanced) {
+                VStack(alignment: .leading, spacing: 10) {
+                    legacyTailscaleConnectivityToggles
+                    Divider()
+                    legacyTailscalePairRow
+                    Divider()
+                    HStack(spacing: 12) {
+                        Button("Regenerate token") {
+                            _ = PairingTokenStore.shared.regenerate()
+                            tokenForDisplay = PairingTokenStore.shared.currentToken()
+                        }
+                        Button("Revoke token", role: .destructive) {
+                            PairingTokenStore.shared.revoke()
+                            tokenForDisplay = PairingTokenStore.shared.currentToken()
+                        }
+                        Spacer()
+                    }
+                }
+                .padding(.top, 6)
+            } label: {
+                HStack {
+                    Image(systemName: "network")
+                        .foregroundStyle(.secondary)
+                    Text("Advanced: legacy Tailscale pairing")
+                        .font(.callout)
+                    Spacer()
+                    Text("Fallback")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.quaternary, in: Capsule())
+                }
+            }
+        } header: {
+            Text("Legacy transport")
+        } footer: {
+            Text("Pre-E7 Tailscale-based pairing — bundles host + ports + bearer token into a `clawdmeter://` URL. Kept for users who explicitly want LAN-only / no-relay operation. The relay flow above is the recommended default and survives IP changes, NAT, and not having Tailscale installed at all.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var legacyTailscaleConnectivityToggles: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Prefer MagicDNS host in legacy QR", isOn: $preferMagicDNS)
+            Toggle("Use TLS for legacy pairing (advanced)", isOn: $preferTLS)
+                .disabled(!preferMagicDNS || !isMagicDNSHost(resolvedHost.kind))
+            Text("MagicDNS uses the Tailscale `*.ts.net` hostname so legacy pairing survives IP changes. TLS toggle wraps the URL in `clawdmeters://` for future server-side TLS.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var legacyTailscalePairRow: some View {
+        Group {
             if let httpPort = runtime.agentControlServer.boundPort,
                let wsPort = runtime.agentControlServer.boundWsPort {
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        LabeledContent("Host") {
-                            Text(resolvedHost.host)
-                                .font(.system(size: 12, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                        LabeledContent("HTTP port") {
-                            Text("\(httpPort)")
-                                .font(.system(size: 12, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                        LabeledContent("WS port") {
-                            Text("\(wsPort)")
-                                .font(.system(size: 12, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                        LabeledContent("Token") {
-                            Text(String(tokenForDisplay.prefix(8)) + "…")
-                                .font(.system(size: 12, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                        HStack(spacing: 8) {
-                            Button("Copy pairing URL", action: copyPairingURL)
-                            if didCopy {
-                                Text("Copied ✓")
-                                    .font(.caption)
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                        .padding(.top, 4)
-                        hostReachabilityNote
+                VStack(alignment: .leading, spacing: 6) {
+                    LabeledContent("Host") {
+                        Text(resolvedHost.host)
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    qrTile
+                    LabeledContent("HTTP port") {
+                        Text("\(httpPort)")
+                            .font(.system(size: 12, design: .monospaced))
+                    }
+                    LabeledContent("WS port") {
+                        Text("\(wsPort)")
+                            .font(.system(size: 12, design: .monospaced))
+                    }
+                    LabeledContent("Token") {
+                        Text(String(tokenForDisplay.prefix(8)) + "…")
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                    HStack(spacing: 8) {
+                        Button("Copy legacy URL", action: copyLegacyURL)
+                        if didCopyLegacy {
+                            Text("Copied ✓")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    .padding(.top, 4)
+                    hostReachabilityNote
                 }
             } else {
                 Label("Daemon not running", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
             }
-        } header: {
-            Text("Pair with iPhone")
-        } footer: {
-            Text("Scan the QR with Clawdmeter on your iPhone, or paste the URL after tapping **Copy pairing URL**.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -131,9 +322,9 @@ struct PairingSettingsView: View {
     private var hostReachabilityNote: some View {
         switch resolvedHost.kind {
         case .loopback:
-            warningRow("No Tailscale address detected. Pairing only works for the iOS simulator on this Mac. Install Tailscale and sign in to pair a real iPhone.")
+            warningRow("No Tailscale address detected. Legacy pairing only works for the iOS simulator on this Mac. The relay flow above does not require Tailscale.")
         case .tailscaleDNSBackendDown(let state):
-            warningRow("Tailscale is installed but not running (\(state)). Open the Tailscale menu bar and turn the tunnel on — the iPhone can't reach this Mac until it's up.")
+            warningRow("Tailscale is installed but not running (\(state)). Use the relay flow above, or open the Tailscale menu bar and turn the tunnel on.")
         case .tailscaleIPv4, .tailscaleIPv6, .tailscaleDNS:
             EmptyView()
         }
@@ -151,30 +342,7 @@ struct PairingSettingsView: View {
         .padding(.top, 4)
     }
 
-    private var qrTile: some View {
-        Group {
-            if let qr = qrImage {
-                Image(nsImage: qr)
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: 140, height: 140)
-            } else {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(.quaternary)
-                    .frame(width: 140, height: 140)
-                    .overlay(
-                        ProgressView().controlSize(.small)
-                    )
-            }
-        }
-        .padding(8)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(.quaternary, lineWidth: 1)
-        )
-    }
+    // MARK: - Scan roots section (unchanged from pre-E7)
 
     private var scanRootsSection: some View {
         Section {
@@ -226,28 +394,6 @@ struct PairingSettingsView: View {
             }
         } header: {
             Text("Supervisor")
-        }
-    }
-
-    private var securitySection: some View {
-        Section {
-            HStack(spacing: 12) {
-                Button("Regenerate token") {
-                    _ = PairingTokenStore.shared.regenerate()
-                    refreshQR()
-                }
-                Button("Revoke token", role: .destructive) {
-                    PairingTokenStore.shared.revoke()
-                    refreshQR()
-                }
-                Spacer()
-            }
-        } header: {
-            Text("Security")
-        } footer: {
-            Text("Regenerating the token invalidates every paired device — you'll need to scan the QR again on each iPhone. Revoking removes the token entirely; the daemon refuses every connection until you relaunch Clawdmeter.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -307,33 +453,31 @@ struct PairingSettingsView: View {
 
     // MARK: - Actions
 
-    private func copyPairingURL() {
+    private func copyRelayURL() {
+        guard let urlString = pairingService.bundleURL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(urlString, forType: .string)
+        didCopyRelay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { didCopyRelay = false }
+    }
+
+    private func copyLegacyURL() {
         guard let httpPort = runtime.agentControlServer.boundPort,
               let wsPort = runtime.agentControlServer.boundWsPort else { return }
-        // v0.27.0: Design routing fields (`&dp=` and `&dt=`) dropped from
-        // the pairing URL along with the Design tab + DesignPortForwarder.
         let url = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(url, forType: .string)
-        didCopy = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            didCopy = false
-        }
+        didCopyLegacy = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { didCopyLegacy = false }
     }
 
-    // MARK: - Helpers
+    // MARK: - QR rendering
 
-    private func refreshQR() {
-        tokenForDisplay = PairingTokenStore.shared.currentToken()
-        resolvedHost = TailscaleHost.resolve()
-        guard let httpPort = runtime.agentControlServer.boundPort,
-              let wsPort = runtime.agentControlServer.boundWsPort
-        else {
+    private func refreshRelayQR() {
+        guard let urlString = pairingService.bundleURL else {
             qrImage = nil
             return
         }
-        // v0.27.0: Design routing fields dropped from the pairing URL.
-        let urlString = "clawdmeter://\(resolvedHost.host):\(httpPort)?token=\(tokenForDisplay)&ws=\(wsPort)"
         qrImage = generateQR(from: urlString)
     }
 
@@ -341,12 +485,31 @@ struct PairingSettingsView: View {
         let context = CIContext()
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(string.utf8)
+        // Relay bundle URLs are ~280 chars — error correction "M" gives
+        // ~15% recovery which is enough at the printed/screen sizes
+        // the iPhone scanner sees from camera distance.
         filter.correctionLevel = "M"
         guard let outputImage = filter.outputImage else { return nil }
-        // Scale up so the QR is crisp at the rendered size.
         let scaleFactor: CGFloat = 8
         let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: scaleFactor, y: scaleFactor))
         guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: 140, height: 140))
+        return NSImage(cgImage: cg, size: NSSize(width: 160, height: 160))
+    }
+
+    // MARK: - TTL helpers
+
+    private func formatTTLCountdown(ttl: UInt64) -> String {
+        let remaining = Int(Int64(ttl) - Int64(now.timeIntervalSince1970))
+        if remaining <= 0 { return "expired" }
+        let minutes = remaining / 60
+        let seconds = remaining % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private func ttlColor(ttl: UInt64) -> Color {
+        let remaining = Int(Int64(ttl) - Int64(now.timeIntervalSince1970))
+        if remaining <= 0 { return .red }
+        if remaining < 60 { return .orange }
+        return .secondary
     }
 }
