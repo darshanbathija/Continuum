@@ -1,8 +1,6 @@
 # clawdmeter-relay — WebSocket relay Worker (Group E2)
 #
-# E0 scaffold only. The src/index.ts that consumes this config lands in E2.
-# Run `wrangler deploy --env <env>` from this directory once the source
-# is in place. Per the design doc (docs/design/secure-relay-apns-2026-05-26.md),
+# Per the design doc (docs/design/secure-relay-apns-2026-05-26.md),
 # the Worker is a thin WebSocket fan-out over Durable Objects — one DO per
 # pairing session, 15-min idle eviction.
 #
@@ -13,6 +11,10 @@
 # durable_objects.bindings inside EACH [env.*] block, otherwise the
 # deployed Worker will have NO bindings. Top-level blocks below are for
 # `wrangler dev` (no --env) only.
+#
+# `custom_domain = true` routes match the whole domain; the previous `/*`
+# suffix was invalid for that mode and was rejected by wrangler 3 — keep
+# patterns as bare hostnames.
 
 name = "clawdmeter-relay"
 main = "src/index.ts"
@@ -29,7 +31,7 @@ enabled = true
 
 # Durable Object: RelaySession (one per pairing). Migration tag is bumped
 # whenever the DO class shape changes (Cloudflare requires it for safe
-# in-place schema evolution). E2 will introduce v1.
+# in-place schema evolution). v1 is the initial E2 shape.
 [durable_objects]
 bindings = [
   { name = "RELAY_SESSIONS", class_name = "RelaySession" }
@@ -67,13 +69,19 @@ SESSION_TTL_SECONDS = "900"   # 15-min idle eviction per D22
 # -------- staging --------
 [env.staging]
 name = "clawdmeter-relay-staging"
-routes = [
-  { pattern = "relay-staging.clawdmeter.dev/*", custom_domain = true }
+
+[[env.staging.routes]]
+pattern = "relay-staging.clawdmeter.dev"
+custom_domain = true
+
+[env.staging.durable_objects]
+bindings = [
+  { name = "RELAY_SESSIONS", class_name = "RelaySession" }
 ]
 
-[[env.staging.durable_objects.bindings]]
-name = "RELAY_SESSIONS"
-class_name = "RelaySession"
+[[env.staging.migrations]]
+tag = "v1"
+new_classes = ["RelaySession"]
 
 [[env.staging.kv_namespaces]]
 binding = "RELAY_AUDIT_LOG"
@@ -93,16 +101,19 @@ SESSION_TTL_SECONDS = "900"
 # -------- production --------
 [env.production]
 name = "clawdmeter-relay"
-routes = [
-  { pattern = "relay.clawdmeter.dev/*", custom_domain = true }
+
+[[env.production.routes]]
+pattern = "relay.clawdmeter.dev"
+custom_domain = true
+
+[env.production.durable_objects]
+bindings = [
+  { name = "RELAY_SESSIONS", class_name = "RelaySession" }
 ]
 
-[env.production.limits]
-cpu_ms = 50
-
-[[env.production.durable_objects.bindings]]
-name = "RELAY_SESSIONS"
-class_name = "RelaySession"
+[[env.production.migrations]]
+tag = "v1"
+new_classes = ["RelaySession"]
 
 [[env.production.kv_namespaces]]
 binding = "RELAY_AUDIT_LOG"
@@ -113,6 +124,9 @@ preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 binding = "RELAY_RATE_LIMIT"
 id = "REPLACE_WITH_PROD_NAMESPACE_ID"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[env.production.limits]
+cpu_ms = 50
 
 [env.production.vars]
 ENVIRONMENT = "production"

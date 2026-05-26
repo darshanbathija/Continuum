@@ -1,0 +1,13 @@
+{
+  "name": "tampered-ciphertext-001",
+  "kind": "xchacha20-poly1305-tamper",
+  "description": "Negative test: flipping byte 5 of ciphertext (XOR 0x80) MUST cause AEAD verification to fail (Poly1305 integrity).",
+  "key_hex": "148e0a09ad732f51169aa362cf68db94e4226ab10b3c5039d5f8ad588e804fe8",
+  "nonce_hex": "0102030405060708090a0b0c0d0e0f101112131415161718",
+  "aad_ascii": "clawdmeter.relay.frame.v1",
+  "original_ciphertext_hex": "5af94a2905ec02b81620ec604f72df46493b79820ec28ecd492823e08007a636eb66bf4263b12a8325d1b574c0e5f536de38f68ef0e36632e3dc72eee13e86e0",
+  "tampered_ciphertext_hex": "5af94a29056c02b81620ec604f72df46493b79820ec28ecd492823e08007a636eb66bf4263b12a8325d1b574c0e5f536de38f68ef0e36632e3dc72eee13e86e0",
+  "tamper_byte_index": 5,
+  "tamper_xor_mask": "0x80",
+  "expected_decrypt_throws": true
+}

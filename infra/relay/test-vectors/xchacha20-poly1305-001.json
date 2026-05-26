@@ -1,0 +1,14 @@
+{
+  "name": "xchacha20-poly1305-001",
+  "kind": "xchacha20-poly1305-encrypt",
+  "description": "XChaCha20-Poly1305 AEAD encryption: deterministic key + nonce + plaintext, AAD = 'clawdmeter.relay.frame.v1'. Swift CryptoKit ChaChaPoly.seal MUST produce the same ciphertext + tag.",
+  "key_hex": "148e0a09ad732f51169aa362cf68db94e4226ab10b3c5039d5f8ad588e804fe8",
+  "nonce_hex": "0102030405060708090a0b0c0d0e0f101112131415161718",
+  "aad_ascii": "clawdmeter.relay.frame.v1",
+  "aad_hex": "636c6177646d657465722e72656c61792e6672616d652e7631",
+  "plaintext_ascii": "{\"seq\":1,\"op\":\"approve_plan\",\"data\":{\"ok\":true}}",
+  "plaintext_hex": "7b22736571223a312c226f70223a22617070726f76655f706c616e222c2264617461223a7b226f6b223a747275657d7d",
+  "expected_ciphertext_hex": "5af94a2905ec02b81620ec604f72df46493b79820ec28ecd492823e08007a636eb66bf4263b12a8325d1b574c0e5f536de38f68ef0e36632e3dc72eee13e86e0",
+  "expected_ciphertext_len": 64,
+  "expected_tag_hex": "de38f68ef0e36632e3dc72eee13e86e0"
+}

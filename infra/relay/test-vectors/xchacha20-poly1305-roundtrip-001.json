@@ -1,0 +1,10 @@
+{
+  "name": "xchacha20-poly1305-roundtrip-001",
+  "kind": "xchacha20-poly1305-decrypt",
+  "description": "XChaCha20-Poly1305 AEAD decryption: ciphertext from xchacha20-poly1305-001 MUST decrypt to the original plaintext.",
+  "key_hex": "148e0a09ad732f51169aa362cf68db94e4226ab10b3c5039d5f8ad588e804fe8",
+  "nonce_hex": "0102030405060708090a0b0c0d0e0f101112131415161718",
+  "aad_ascii": "clawdmeter.relay.frame.v1",
+  "ciphertext_hex": "5af94a2905ec02b81620ec604f72df46493b79820ec28ecd492823e08007a636eb66bf4263b12a8325d1b574c0e5f536de38f68ef0e36632e3dc72eee13e86e0",
+  "expected_plaintext_hex": "7b22736571223a312c226f70223a22617070726f76655f706c616e222c2264617461223a7b226f6b223a747275657d7d"
+}

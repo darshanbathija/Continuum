@@ -1,0 +1,10 @@
+{
+  "name": "x25519-ecdh-001",
+  "kind": "x25519-ecdh",
+  "description": "X25519 ECDH: Mac priv = 0x01*32, iOS priv = 0x02*32. Shared secret must match in both directions.",
+  "mac_priv_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+  "mac_pub_hex": "a4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a209",
+  "ios_priv_hex": "0202020202020202020202020202020202020202020202020202020202020202",
+  "ios_pub_hex": "ce8d3ad1ccb633ec7b70c17814a5c76ecd029685050d344745ba05870e587d59",
+  "expected_shared_secret_hex": "2ed76ab549b1e73c031eb49c9448f0798aea81b698279a0c3dc3e49fbfc4b953"
+}
