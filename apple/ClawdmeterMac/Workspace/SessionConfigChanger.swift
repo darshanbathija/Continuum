@@ -82,7 +82,16 @@ public final class SessionConfigChanger {
         if newArgv.isEmpty {
             return .spawnError(message: "Could not locate agent binary on PATH")
         }
-        registry.updateStatus(id: sessionId, status: .paused)
+        // F2-wire: write-ahead failures during config swap can fail the
+        // swap outright — the user invoked this synchronously through
+        // the UI overlay, so a clean "swap failed, original preserved"
+        // path is preferable to a half-mutated session in memory.
+        do {
+            try await registry.updateStatus(id: sessionId, status: .paused)
+        } catch {
+            swapLogger.error("updateStatus(.paused) write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            return .spawnError(message: "Failed to record paused state: \(error.localizedDescription)")
+        }
         AgentEventStream.recordEvent(
             sessionId: sessionId,
             kind: .statusChanged,
@@ -101,17 +110,17 @@ public final class SessionConfigChanger {
             case .cloud:    cwd = session.repoKey ?? session.effectiveCwd  // not supported v1; fall through
             }
             let newWindow = try await tmux.newWindow(cwd: cwd, child: newArgv)
-            registry.updateRuntime(
+            try await registry.updateRuntime(
                 id: sessionId,
                 worktreePath: session.worktreePath,
                 tmuxWindowId: newWindow.windowId,
                 tmuxPaneId: newWindow.paneId,
                 mode: newMode ?? session.mode
             )
-            if let newModel { registry.setModel(id: sessionId, model: newModel, effort: newEffort ?? session.effort) }
-            if let actualEffort = newEffort.flatMap({ $0 }) { registry.setEffort(id: sessionId, effort: actualEffort) }
-            if let newPlanMode { registry.setPlanMode(id: sessionId, planMode: newPlanMode) }
-            registry.updateStatus(id: sessionId, status: .running)
+            if let newModel { try await registry.setModel(id: sessionId, model: newModel, effort: newEffort ?? session.effort) }
+            if let actualEffort = newEffort.flatMap({ $0 }) { try await registry.setEffort(id: sessionId, effort: actualEffort) }
+            if let newPlanMode { try await registry.setPlanMode(id: sessionId, planMode: newPlanMode) }
+            try await registry.updateStatus(id: sessionId, status: .running)
             AgentEventStream.recordEvent(
                 sessionId: sessionId,
                 kind: .statusChanged,
@@ -123,17 +132,24 @@ public final class SessionConfigChanger {
             // D12 resume-fail rescue: try to restore original config in the same window.
             do {
                 let restoreWindow = try await tmux.newWindow(cwd: session.effectiveCwd, child: originalArgv)
-                registry.updateRuntime(
+                try await registry.updateRuntime(
                     id: sessionId,
                     worktreePath: session.worktreePath,
                     tmuxWindowId: restoreWindow.windowId,
                     tmuxPaneId: restoreWindow.paneId,
                     mode: session.mode
                 )
-                registry.updateStatus(id: sessionId, status: .running)
+                try await registry.updateStatus(id: sessionId, status: .running)
                 return .resumeFailed(restoredOriginal: true)
             } catch {
-                registry.updateStatus(id: sessionId, status: .degraded)
+                // Last-ditch: mark degraded. Don't propagate further —
+                // surface a structured result so the caller can render
+                // an error overlay.
+                do {
+                    try await registry.updateStatus(id: sessionId, status: .degraded)
+                } catch {
+                    swapLogger.error("updateStatus(.degraded) write-ahead failed during rescue: \(error.localizedDescription, privacy: .public)")
+                }
                 return .resumeFailed(restoredOriginal: false)
             }
         }

@@ -849,7 +849,7 @@ public final class SessionsModel: ObservableObject {
             )
             throw error
         }
-        let session = registry.create(
+        let session = try await registry.create(
             repoKey: repoPath,
             repoDisplayName: (repoPath as NSString).lastPathComponent,
             agent: agent,
@@ -962,7 +962,7 @@ public final class SessionsModel: ObservableObject {
                     "Antigravity returned an unrecognized conversation id (\(conversationIdString)). Try reopening the app."
                 )
             }
-            let session = registry.create(
+            let session = try await registry.create(
                 repoKey: repoPath,
                 repoDisplayName: (repoPath as NSString).lastPathComponent,
                 agent: .gemini,
@@ -1165,7 +1165,7 @@ public final class SessionsModel: ObservableObject {
         do {
             guard !argv.isEmpty else { return }
             let newWindow = try await runtime.tmuxClient.newWindow(cwd: newCwd, child: argv)
-            registry.updateRuntime(
+            try await registry.updateRuntime(
                 id: sessionId,
                 worktreePath: newWorktree,
                 tmuxWindowId: newWindow.windowId,
@@ -1238,7 +1238,7 @@ public final class SessionsModel: ObservableObject {
               let runtime = AppDelegate.runtime,
               let windowId = session.tmuxWindowId
         else {
-            registry.delete(id: id)
+            try? await registry.delete(id: id)
             return
         }
         do { try await runtime.tmuxClient.killWindow(windowId) } catch {}
@@ -1255,7 +1255,7 @@ public final class SessionsModel: ObservableObject {
         }
         if openSessionId == id { openSessionId = nil }
         closeChatStore(for: id)
-        registry.delete(id: id)
+        try? await registry.delete(id: id)
     }
 
     // MARK: - G17 threaded sub-chats
@@ -1285,7 +1285,7 @@ public final class SessionsModel: ObservableObject {
         do {
             guard !argv.isEmpty else { return nil }
             let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
-            let child = registry.create(
+            let child = try await registry.create(
                 repoKey: parentRepoKey,
                 repoDisplayName: parent.repoDisplayName,
                 agent: parent.agent,
@@ -1326,7 +1326,7 @@ public final class SessionsModel: ObservableObject {
                 title: "Pane \(session.terminalPanes.count + 2)",
                 isPrimary: false
             )
-            registry.addTerminalPane(sessionId: sessionId, pane: ref)
+            try await registry.addTerminalPane(sessionId: sessionId, pane: ref)
             return paneId
         } catch {
             return nil
@@ -1340,7 +1340,7 @@ public final class SessionsModel: ObservableObject {
               let runtime = AppDelegate.runtime
         else { return }
         try? await runtime.tmuxClient.killPane(paneRef.paneId)
-        registry.removeTerminalPane(sessionId: sessionId, paneRefId: paneRef.id)
+        try? await registry.removeTerminalPane(sessionId: sessionId, paneRefId: paneRef.id)
     }
 
     public func approvePlan(id: UUID) async {
@@ -1354,11 +1354,11 @@ public final class SessionsModel: ObservableObject {
             let providerResumeId: String
             if session.agent == .cursor {
                 guard let cursorResumeId = Self.cursorResumeId(for: session) else {
-                    registry.setPlanText(
+                    try? await registry.setPlanText(
                         id: id,
                         planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
                     )
-                    registry.updateStatus(id: id, status: .degraded)
+                    try? await registry.updateStatus(id: id, status: .degraded)
                     return
                 }
                 providerResumeId = cursorResumeId
@@ -1378,15 +1378,15 @@ public final class SessionsModel: ObservableObject {
             try await runtime.tmuxClient.killWindow(windowId)
             let cwd = session.effectiveCwd
             let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
-            registry.updateRuntime(
+            try await registry.updateRuntime(
                 id: id,
                 worktreePath: session.worktreePath,
                 tmuxWindowId: window.windowId,
                 tmuxPaneId: window.paneId,
                 mode: session.mode
             )
-            registry.markPlanApproved(id: id)
-            registry.updateStatus(id: id, status: .running)
+            try await registry.markPlanApproved(id: id)
+            try await registry.updateStatus(id: id, status: .running)
         } catch {}
     }
 

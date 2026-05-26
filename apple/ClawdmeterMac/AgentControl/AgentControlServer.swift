@@ -1143,13 +1143,13 @@ public final class AgentControlServer {
             await self?.handleApprovePlan(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
         t.register(method: "POST", pattern: "/sessions/:id/archive") { [weak self] _, conn, params in
-            self?.handleArchive(sessionId: params["id"] ?? "", archived: true, connection: conn)
+            await self?.handleArchive(sessionId: params["id"] ?? "", archived: true, connection: conn)
         }
         t.register(method: "POST", pattern: "/sessions/:id/unarchive") { [weak self] _, conn, params in
-            self?.handleArchive(sessionId: params["id"] ?? "", archived: false, connection: conn)
+            await self?.handleArchive(sessionId: params["id"] ?? "", archived: false, connection: conn)
         }
         t.register(method: "POST", pattern: "/sessions/:id/rename") { [weak self] req, conn, params in
-            self?.handleRename(sessionId: params["id"] ?? "", request: req, connection: conn)
+            await self?.handleRename(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
         t.register(method: "POST", pattern: "/jsonl-aliases/rename") { [weak self] req, conn, _ in
             self?.handleRenameJSONLAlias(request: req, connection: conn)
@@ -1256,7 +1256,7 @@ public final class AgentControlServer {
 
         // --- PATCHes ---
         t.register(method: "PATCH", pattern: "/sessions/:id/terminals/:paneId") { [weak self] req, conn, params in
-            self?.handleRenameTerminal(
+            await self?.handleRenameTerminal(
                 sessionId: params["id"] ?? "",
                 paneId: params["paneId"] ?? "",
                 request: req,
@@ -1607,7 +1607,7 @@ public final class AgentControlServer {
                     let truncated = trimmed.count <= cap
                         ? trimmed
                         : String(trimmed[..<trimmed.index(trimmed.startIndex, offsetBy: cap - 1)]) + "…"
-                    registry.rename(id: session.id, name: truncated)
+                    try? await registry.rename(id: session.id, name: truncated)
                 }
             }
         }
@@ -1850,25 +1850,31 @@ public final class AgentControlServer {
         // Deep Research needs the heaviest reasoning, not whatever
         // model the user had selected for fast iteration.
         let effectiveModel = deepResearch ? "gemini-3-pro" : model
-        let session = registry.createChat(
-            provider: .gemini,
-            model: effectiveModel,
-            chatCwd: "",
-            effort: effort,
-            deepResearch: deepResearch,
-            chatVendor: chatVendor,
-            billingProvider: billingProvider
-        )
+        let session: AgentSession
+        do {
+            session = try await registry.createChat(
+                provider: .gemini,
+                model: effectiveModel,
+                chatCwd: "",
+                effort: effort,
+                deepResearch: deepResearch,
+                chatVendor: chatVendor,
+                billingProvider: billingProvider
+            )
+        } catch {
+            serverLogger.error("createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection); return
+        }
         let chatCwd: String
         do {
             let url = try ChatCwdManager.ensure(for: session.id)
             chatCwd = url.path
         } catch {
             serverLogger.error("agentapi chat-cwd create failed: \(error.localizedDescription, privacy: .public)")
-            registry.delete(id: session.id)
+            try? await registry.delete(id: session.id)
             sendResponse(.internalError, on: connection); return
         }
-        registry.updateRuntime(
+        try? await registry.updateRuntime(
             id: session.id, worktreePath: chatCwd,
             tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
         )
@@ -1895,11 +1901,11 @@ public final class AgentControlServer {
             )
             guard let conversationId = UUID(uuidString: conversationIdString) else {
                 serverLogger.error("agentapi returned non-UUID conversation id: \(conversationIdString, privacy: .public)")
-                registry.delete(id: session.id)
+                try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
                 sendResponse(.internalError, on: connection); return
             }
-            registry.setAntigravityChatBinding(
+            try? await registry.setAntigravityChatBinding(
                 id: session.id,
                 conversationId: conversationId,
                 projectId: projectId
@@ -1923,7 +1929,7 @@ public final class AgentControlServer {
                 sendResponse(.internalError, on: connection)
             }
         } catch let LanguageServerClientError.notRunning {
-            registry.delete(id: session.id)
+            try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable", contentType: "application/json",
@@ -1939,7 +1945,7 @@ public final class AgentControlServer {
             // Render via `String(describing:)` so the associated payload
             // (stdout preview, stderr, exit code) shows up in /tmp/clawd.log.
             serverLogger.error("agentapi new-conversation failed: \(String(describing: error), privacy: .public)")
-            registry.delete(id: session.id)
+            try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
             sendResponse(.internalError, on: connection)
         }
@@ -2070,7 +2076,7 @@ public final class AgentControlServer {
         do {
             try await tmux.start()
             let window = try await tmux.newWindow(cwd: req.repoKey, child: argv)
-            let session = registry.create(
+            let session = try await registry.create(
                 repoKey: req.repoKey,
                 repoDisplayName: (req.repoKey as NSString).lastPathComponent,
                 agent: req.agent,
@@ -2440,7 +2446,13 @@ public final class AgentControlServer {
         }
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        guard let result = registry.pickPairWinner(sessionId: uuid, winner: req.winnerSessionId) else {
+        let result: AgentSessionRegistry.PickPairResult?
+        do {
+            result = try await registry.pickPairWinner(sessionId: uuid, winner: req.winnerSessionId)
+        } catch {
+            sendResponse(.internalError, on: connection); return
+        }
+        guard let result else {
             sendResponse(.notFound, on: connection); return
         }
         let encoder = JSONEncoder()
@@ -3331,7 +3343,7 @@ public final class AgentControlServer {
                 horizontal: false
             )
             let pane = TerminalPaneRef(paneId: paneId, title: req.title ?? "", isPrimary: false)
-            registry.addTerminalPane(sessionId: uuid, pane: pane)
+            try await registry.addTerminalPane(sessionId: uuid, pane: pane)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             if let body = try? encoder.encode(pane) {
@@ -3354,14 +3366,14 @@ public final class AgentControlServer {
         }
         do {
             try await tmux.killPane(pane.paneId)
-            registry.removeTerminalPane(sessionId: uuid, paneRefId: pane.id)
+            try await registry.removeTerminalPane(sessionId: uuid, paneRefId: pane.id)
             sendJSON(["ok": true], on: connection)
         } catch {
             sendResponse(.internalError, on: connection)
         }
     }
 
-    private func handleRenameTerminal(sessionId: String, paneId: String, request: HTTPRequest, connection: NWConnection) {
+    private func handleRenameTerminal(sessionId: String, paneId: String, request: HTTPRequest, connection: NWConnection) async {
         guard let uuid = UUID(uuidString: sessionId),
               let paneUUID = UUID(uuidString: paneId),
               registry.session(id: uuid) != nil else {
@@ -3372,14 +3384,18 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection); return
         }
         let title = (req.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let pane = registry.renameTerminalPane(sessionId: uuid, paneRefId: paneUUID, title: title) else {
-            sendResponse(.notFound, on: connection); return
-        }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        if let body = try? encoder.encode(pane) {
-            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
-        } else {
+        do {
+            guard let pane = try await registry.renameTerminalPane(sessionId: uuid, paneRefId: paneUUID, title: title) else {
+                sendResponse(.notFound, on: connection); return
+            }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(pane) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch {
             sendResponse(.internalError, on: connection)
         }
     }
@@ -3656,17 +3672,23 @@ public final class AgentControlServer {
         // the bidirectional id mapping. opencode sessions don't carry
         // a tmux pane or a worktree (the underlying provider drives
         // its own cwd via opencode's tool calls).
-        let session = registry.create(
-            repoKey: req.repoKey,
-            repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-            agent: .opencode,
-            model: req.model,
-            goal: req.goal,
-            worktreePath: nil,
-            tmuxWindowId: nil,
-            tmuxPaneId: nil,
-            planMode: false  // opencode handles plan/approval internally
-        )
+        let session: AgentSession
+        do {
+            session = try await registry.create(
+                repoKey: req.repoKey,
+                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                agent: .opencode,
+                model: req.model,
+                goal: req.goal,
+                worktreePath: nil,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: false  // opencode handles plan/approval internally
+            )
+        } catch {
+            serverLogger.error("registry.create write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection); return
+        }
         // PR #32: stash repo too so opencode `usage` events tag
         // analytics records with the right cwd instead of "(unknown)".
         OpencodeSSEAdapter.shared.register(
@@ -4535,7 +4557,7 @@ public final class AgentControlServer {
             // Phase 2 simplification: pane id = first pane of the new window.
             // tmux's `list-windows -F '#{pane_id}'` would tell us, but we
             // derive it lazily for now.
-            let session = registry.create(
+            let session = try await registry.create(
                 repoKey: req.repoKey,
                 repoDisplayName: (req.repoKey as NSString).lastPathComponent,
                 agent: req.agent,
@@ -4562,7 +4584,7 @@ public final class AgentControlServer {
             // proposal in the regular chat stream, then taps approve
             // to flip the sandbox to workspace-write.
             if req.agent == .codex && effectivePlanMode {
-                registry.setPlanText(
+                try await registry.setPlanText(
                     id: session.id,
                     planText: """
                     Codex is running in read-only plan mode. Review its messages in \
@@ -4824,30 +4846,36 @@ public final class AgentControlServer {
         // name the chat-cwd). v0.23 (Chat V2): persist deepResearch on
         // the session so respawn/restore preserves it (Codex outside-
         // voice review P1 #6).
-        let session = registry.createChat(
-            provider: req.provider,
-            model: req.model,
-            chatCwd: "",  // placeholder; we'll patch it post-cwd-creation
-            codexChatBackend: codexBackend,
-            effort: req.effort,
-            deepResearch: req.deepResearch,
-            chatVendor: metadata.vendor,
-            billingProvider: metadata.billingProvider
-        )
+        let session: AgentSession
+        do {
+            session = try await registry.createChat(
+                provider: req.provider,
+                model: req.model,
+                chatCwd: "",  // placeholder; we'll patch it post-cwd-creation
+                codexChatBackend: codexBackend,
+                effort: req.effort,
+                deepResearch: req.deepResearch,
+                chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
+            )
+        } catch {
+            serverLogger.error("createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection); return
+        }
         let chatCwd: String
         do {
             let url = try ChatCwdManager.ensure(for: session.id)
             chatCwd = url.path
         } catch {
             serverLogger.error("chat-cwd create failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            registry.delete(id: session.id)
+            try? await registry.delete(id: session.id)
             sendResponse(.internalError, on: connection)
             return
         }
         // Patch the worktreePath on the created session so effectiveCwd
         // resolves to the chat-cwd. The createChat helper stored it as
         // empty-string; rewrite via the existing update pattern.
-        registry.updateRuntime(
+        try? await registry.updateRuntime(
             id: session.id,
             worktreePath: chatCwd,
             tmuxWindowId: nil,
@@ -4870,7 +4898,7 @@ public final class AgentControlServer {
             _ = chatStoreRegistry.snapshotStore(for: updatedSession)
         } else if argv.isEmpty {
             // No binary on PATH for this provider — clean up + surface 503.
-            registry.delete(id: session.id)
+            try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
@@ -4909,7 +4937,7 @@ public final class AgentControlServer {
             }
             guard let spawn = spawnResult else {
                 serverLogger.error("chat spawn failed or timed out for \(session.id.uuidString, privacy: .public) — tmux unresponsive after 10s")
-                registry.delete(id: session.id)
+                try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
                 sendResponse(HTTPResponse(
                     status: 504, reason: "Gateway Timeout",
@@ -4918,7 +4946,7 @@ public final class AgentControlServer {
                 ), on: connection)
                 return
             }
-            registry.updateRuntime(
+            try? await registry.updateRuntime(
                 id: session.id,
                 worktreePath: chatCwd,
                 tmuxWindowId: spawn.windowId,
@@ -5023,25 +5051,31 @@ public final class AgentControlServer {
             return
         }
 
-        let session = registry.createChat(
-            provider: .opencode,
-            model: req.model,
-            chatCwd: "",
-            effort: req.effort,
-            deepResearch: req.deepResearch,
-            chatVendor: vendor,
-            billingProvider: metadata.billingProvider
-        )
+        let session: AgentSession
+        do {
+            session = try await registry.createChat(
+                provider: .opencode,
+                model: req.model,
+                chatCwd: "",
+                effort: req.effort,
+                deepResearch: req.deepResearch,
+                chatVendor: vendor,
+                billingProvider: metadata.billingProvider
+            )
+        } catch {
+            serverLogger.error("createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection); return
+        }
         let chatCwd: String
         do {
             let url = try ChatCwdManager.ensure(for: session.id)
             chatCwd = url.path
         } catch {
-            registry.delete(id: session.id)
+            try? await registry.delete(id: session.id)
             sendResponse(.internalError, on: connection)
             return
         }
-        registry.updateRuntime(
+        try? await registry.updateRuntime(
             id: session.id,
             worktreePath: chatCwd,
             tmuxWindowId: nil,
@@ -5422,7 +5456,7 @@ public final class AgentControlServer {
         if existing.kind == .chat {
             try? ChatCwdManager.remove(for: existing.id)
         }
-        registry.delete(id: existing.id)
+        try? await registry.delete(id: existing.id)
         // Re-spawn with the same childIndex.
         do {
             let fresh = try await spawnFrontierChild(
@@ -5491,13 +5525,13 @@ public final class AgentControlServer {
         // Archive the losers. Existing archive path persists archivedAt
         // and the sidebar's Show-Archived toggle keeps them reachable.
         for child in allChildren where child.id != winner.id && child.archivedAt == nil {
-            registry.archive(id: child.id)
+            try? await registry.archive(id: child.id)
         }
         // Promote the winner out of the Frontier group. From this point
         // on, every history/search row, every Frontier send, and every
         // FrontierWebSocket snapshot treats this session as a regular
         // Solo chat.
-        registry.clearFrontierGroupBinding(id: winner.id)
+        try? await registry.clearFrontierGroupBinding(id: winner.id)
         let promoted = registry.session(id: winner.id) ?? winner
         if let counter = frontierUpdateCounters[uuid] {
             frontierUpdateCounters[uuid] = counter + 1
@@ -5582,7 +5616,7 @@ public final class AgentControlServer {
             // Reuse the same plumbing as Solo chat: createChat → chat-cwd →
             // spawn tmux (or SDK relay) → warm chat store. We don't need
             // the full HTTP wrapper since we already have all the data.
-            let session = registry.createChat(
+            let session = try await registry.createChat(
                 provider: slot.provider,
                 model: slot.model,
                 chatCwd: "",
@@ -5599,10 +5633,10 @@ public final class AgentControlServer {
                 let url = try ChatCwdManager.ensure(for: session.id)
                 chatCwd = url.path
             } catch {
-                registry.delete(id: session.id)
+                try? await registry.delete(id: session.id)
                 throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
             }
-            registry.updateRuntime(
+            try? await registry.updateRuntime(
                 id: session.id, worktreePath: chatCwd,
                 tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
             )
@@ -5614,7 +5648,7 @@ public final class AgentControlServer {
                 return updated
             }
             if argv.isEmpty {
-                registry.delete(id: session.id)
+                try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
                 throw SpawnFailure.message("agent_cli_not_found")
             }
@@ -5623,14 +5657,14 @@ public final class AgentControlServer {
             do {
                 try await tmux.start()
                 let window = try await tmux.newWindow(cwd: chatCwd, child: argv)
-                registry.updateRuntime(
+                try? await registry.updateRuntime(
                     id: session.id, worktreePath: chatCwd,
                     tmuxWindowId: window.windowId, tmuxPaneId: window.paneId, mode: .local
                 )
                 _ = chatStoreRegistry.snapshotStore(for: registry.session(id: session.id) ?? updated)
                 return registry.session(id: session.id) ?? updated
             } catch {
-                registry.delete(id: session.id)
+                try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
                 throw SpawnFailure.message("tmux_spawn_failed: \(error.localizedDescription)")
             }
@@ -5647,7 +5681,7 @@ public final class AgentControlServer {
             guard let projectId = projects.first?.id else {
                 throw SpawnFailure.message("antigravity_no_projects")
             }
-            let session = registry.createChat(
+            let session = try await registry.createChat(
                 provider: .gemini,
                 model: slot.model,
                 chatCwd: "",
@@ -5662,10 +5696,10 @@ public final class AgentControlServer {
                 let url = try ChatCwdManager.ensure(for: session.id)
                 chatCwd = url.path
             } catch {
-                registry.delete(id: session.id)
+                try? await registry.delete(id: session.id)
                 throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
             }
-            registry.updateRuntime(
+            try? await registry.updateRuntime(
                 id: session.id, worktreePath: chatCwd,
                 tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
             )
@@ -5677,22 +5711,22 @@ public final class AgentControlServer {
                     projectId: projectId
                 )
                 guard let conversationId = UUID(uuidString: conversationIdString) else {
-                    registry.delete(id: session.id)
+                    try? await registry.delete(id: session.id)
                     try? ChatCwdManager.remove(for: session.id)
                     throw SpawnFailure.message("agentapi_bad_conversation_id")
                 }
-                registry.setAntigravityChatBinding(
+                try? await registry.setAntigravityChatBinding(
                     id: session.id, conversationId: conversationId, projectId: projectId
                 )
                 let updated = registry.session(id: session.id) ?? session
                 _ = chatStoreRegistry.snapshotStore(for: updated)
                 return updated
             } catch let LanguageServerClientError.notRunning {
-                registry.delete(id: session.id)
+                try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
                 throw SpawnFailure.message("antigravity_not_running")
             } catch {
-                registry.delete(id: session.id)
+                try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
                 throw SpawnFailure.message("agentapi_new_conversation_failed: \(error.localizedDescription)")
             }
@@ -5741,7 +5775,7 @@ public final class AgentControlServer {
             } catch {
                 throw SpawnFailure.message("opencode_session_create_failed: \(error.localizedDescription)")
             }
-            let session = registry.createChat(
+            let session = try await registry.createChat(
                 provider: .opencode,
                 model: slot.model,
                 chatCwd: "",
@@ -5757,10 +5791,10 @@ public final class AgentControlServer {
                 let url = try ChatCwdManager.ensure(for: session.id)
                 chatCwd = url.path
             } catch {
-                registry.delete(id: session.id)
+                try? await registry.delete(id: session.id)
                 throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
             }
-            registry.updateRuntime(
+            try? await registry.updateRuntime(
                 id: session.id, worktreePath: chatCwd,
                 tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
             )
@@ -5831,7 +5865,7 @@ public final class AgentControlServer {
                 let truncated = trimmed.count <= cap
                     ? trimmed
                     : String(trimmed[..<trimmed.index(trimmed.startIndex, offsetBy: cap - 1)]) + "…"
-                registry.rename(id: session.id, name: truncated)
+                try? await registry.rename(id: session.id, name: truncated)
             }
         }
         // Echo the user prompt into the chat store so the UI clears
@@ -5998,7 +6032,7 @@ public final class AgentControlServer {
                     let idx = trimmed.index(trimmed.startIndex, offsetBy: cap - 1)
                     return String(trimmed[..<idx]) + "…"
                 }()
-                registry.rename(id: session.id, name: truncated)
+                try? await registry.rename(id: session.id, name: truncated)
             }
         }
         let chatCwd = session.effectiveCwd
@@ -6044,7 +6078,11 @@ public final class AgentControlServer {
                         store: store,
                         onThreadStarted: { [weak registryRef] threadId in
                             Task { @MainActor in
-                                registryRef?.setCodexChatThreadId(id: session.id, threadId: threadId)
+                                // F2-wire: best-effort; thread-id binding
+                                // failure here doesn't break the chat,
+                                // it just means resume-after-evict will
+                                // miss this thread.
+                                try? await registryRef?.setCodexChatThreadId(id: session.id, threadId: threadId)
                             }
                         }
                     )
@@ -6489,11 +6527,11 @@ public final class AgentControlServer {
             argv = nil
         case .cursor:
             guard let cursorResumeId = Self.cursorResumeId(for: session) else {
-                registry.setPlanText(
+                try? await registry.setPlanText(
                     id: uuid,
                     planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
                 )
-                registry.updateStatus(id: uuid, status: .degraded)
+                try? await registry.updateStatus(id: uuid, status: .degraded)
                 sendResponse(HTTPResponse(
                     status: 409,
                     reason: "Conflict",
@@ -6524,7 +6562,7 @@ public final class AgentControlServer {
             try await tmux.killWindow(windowId)
             let cwd = session.effectiveCwd
             let newWindow = try await tmux.newWindow(cwd: cwd, child: replacementArgv)
-            registry.updateRuntime(
+            try await registry.updateRuntime(
                 id: uuid,
                 worktreePath: session.worktreePath,
                 tmuxWindowId: newWindow.windowId,
@@ -6533,8 +6571,8 @@ public final class AgentControlServer {
             )
             // Clear the plan card and flip status to running so the
             // approve button disappears from the chat UI.
-            registry.updateStatus(id: uuid, status: .running)
-            registry.markPlanApproved(id: uuid)
+            try await registry.updateStatus(id: uuid, status: .running)
+            try await registry.markPlanApproved(id: uuid)
             AgentEventStream.recordEvent(
                 sessionId: uuid,
                 kind: .statusChanged,
@@ -6586,19 +6624,23 @@ public final class AgentControlServer {
         sessionId: String,
         archived: Bool,
         connection: NWConnection
-    ) {
+    ) async {
         guard let uuid = UUID(uuidString: sessionId),
               registry.session(id: uuid) != nil
         else {
             sendResponse(.notFound, on: connection)
             return
         }
-        if archived {
-            registry.archive(id: uuid)
-        } else {
-            registry.unarchive(id: uuid)
+        do {
+            if archived {
+                try await registry.archive(id: uuid)
+            } else {
+                try await registry.unarchive(id: uuid)
+            }
+            sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
         }
-        sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
     }
 
     /// v0.5.4 — `POST /sessions/:id/rename` with body `{name: String?}`.
@@ -6608,7 +6650,7 @@ public final class AgentControlServer {
         sessionId: String,
         request: HTTPRequest,
         connection: NWConnection
-    ) {
+    ) async {
         guard let uuid = UUID(uuidString: sessionId),
               registry.session(id: uuid) != nil
         else {
@@ -6628,8 +6670,12 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection)
             return
         }
-        registry.rename(id: uuid, name: body.name)
-        sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+        do {
+            try await registry.rename(id: uuid, name: body.name)
+            sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
+        } catch {
+            sendResponse(.internalError, on: connection)
+        }
     }
 
     /// v0.5.10 — `POST /jsonl-aliases/rename` with body `{path, name}`.
@@ -6736,7 +6782,12 @@ public final class AgentControlServer {
         // store can shadow a freshly-created session if uuids ever
         // collide across a daemon restart. Idempotent.
         chatStoreRegistry.evict(sessionId: uuid)
-        registry.delete(id: uuid)
+        do {
+            try await registry.delete(id: uuid)
+        } catch {
+            serverLogger.error("registry.delete write-ahead failed for \(uuid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection); return
+        }
         AgentEventStream.recordEvent(sessionId: uuid, kind: .sessionDeleted, payload: [:])
         sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
     }

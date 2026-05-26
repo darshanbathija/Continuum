@@ -302,14 +302,14 @@ final class SessionLifecycleReducerTests: XCTestCase {
         )
     }
 
-    func test_registryPlanMutationsAdvanceLifecycleSequence() throws {
+    func test_registryPlanMutationsAdvanceLifecycleSequence() async throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("clawdmeter-lifecycle-registry-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let registry = AgentSessionRegistry(storeURL: dir.appendingPathComponent("sessions.json"))
-        let session = registry.create(
+        let session = try await registry.create(
             repoKey: "/tmp/clawdmeter",
             repoDisplayName: "Clawdmeter",
             agent: .claude,
@@ -322,11 +322,11 @@ final class SessionLifecycleReducerTests: XCTestCase {
             mode: .worktree
         )
 
-        registry.setPlanText(id: session.id, planText: "1. Inspect route")
+        try await registry.setPlanText(id: session.id, planText: "1. Inspect route")
         let afterPlan = try XCTUnwrap(registry.session(id: session.id))
         XCTAssertEqual(afterPlan.lastEventSeq, session.lastEventSeq + 1)
 
-        registry.markPlanApproved(id: session.id)
+        try await registry.markPlanApproved(id: session.id)
         let afterApproval = try XCTUnwrap(registry.session(id: session.id))
         XCTAssertNil(afterApproval.planText)
         XCTAssertEqual(afterApproval.approvedPlanText, "1. Inspect route")

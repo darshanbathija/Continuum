@@ -37,16 +37,20 @@ public final class AgentSessionRegistry: ObservableObject {
     /// Path to the sessions.json on-disk snapshot.
     private let storeURL: URL
 
-    /// F2 — orchestration event store. Opt-in via
-    /// `FeatureFlags.orchestrationEventStore`. When set, the registry can
-    /// (a) seed itself from event replay on init and (b) write a receipt
-    /// before every mutation. This PR ships the store + the replay-on-init
-    /// path; per-mutation write-ahead is wired in the follow-up F2-wire PR
-    /// (strangler-fig per D23) so we can A/B rollback by flipping the flag
-    /// default back to `false`.
+    /// F2 — orchestration event store. Gated by
+    /// `FeatureFlags.orchestrationEventStore` (default `true` since
+    /// F2-wire). When set, the registry (a) seeds itself from event
+    /// replay on init and (b) writes a receipt to the SQLite log
+    /// BEFORE every in-memory mutation. The receipt write is awaited;
+    /// if it throws, the mutation does NOT proceed and the error
+    /// bubbles to the caller (so the daemon can decide: retry, surface
+    /// to the user, fail loud).
     ///
-    /// `nil` when the flag is off — legacy `sessions.json` snapshot path
-    /// stays unchanged.
+    /// `nil` when the flag is off — legacy `sessions.json` snapshot
+    /// path stays unchanged, mutation methods become "save the JSON
+    /// snapshot only, no receipt." The flag stays in place so a
+    /// rollback PR can flip it back to `false` if the wired path
+    /// regresses in production.
     private let eventStore: OrchestrationEventStore?
 
     public init(
@@ -57,10 +61,25 @@ public final class AgentSessionRegistry: ObservableObject {
         // Respect injected store (tests), else honor the feature flag.
         // Wrapping in `try?` so a corrupt-recovery on init never crashes
         // the daemon: store falls back to nil → legacy path.
+        //
+        // F2-wire: when the caller passed a custom `storeURL` (the test
+        // pattern is `AgentSessionRegistry(storeURL: tempDir/sessions.json)`),
+        // co-locate the orchestration event store in the same directory
+        // so per-test isolation extends to the SQLite log. Without this,
+        // every test that didn't explicitly inject `eventStore` would
+        // share the user's real `~/Library/.../orchestration-events.sqlite`
+        // and leak state across runs.
         if let injected = eventStore {
             self.eventStore = injected
         } else if FeatureFlags.orchestrationEventStore {
-            self.eventStore = try? OrchestrationEventStore()
+            let eventStoreURL: URL = {
+                if storeURL == AgentSessionRegistry.defaultStoreURL() {
+                    return OrchestrationEventStore.defaultStoreURL()
+                }
+                return storeURL.deletingLastPathComponent()
+                    .appendingPathComponent("orchestration-events.sqlite")
+            }()
+            self.eventStore = try? OrchestrationEventStore(storeURL: eventStoreURL)
         } else {
             self.eventStore = nil
         }
@@ -87,23 +106,70 @@ public final class AgentSessionRegistry: ObservableObject {
         return appSupport.appendingPathComponent("sessions.json")
     }
 
-    // MARK: - F2 event store hooks (strangler-fig)
+    // MARK: - F2-wire event store hooks (write-ahead-receipt invariant)
 
-    /// Public write-ahead hook for the F2-wire PR. Today no built-in
-    /// mutation methods call this — wire-up lands in the follow-up so the
-    /// foundation PR stays focused on the store + replay path. External
-    /// callers (the daemon's request handlers) MAY call it directly if
-    /// they want the write-ahead receipt without waiting for wire-up.
+    /// Public write-ahead API. Writes `command` to the SQLite event log
+    /// and surfaces failure to the caller — the contract is "the receipt
+    /// has been durably appended when this method returns; if it throws,
+    /// it has NOT been written and the caller MUST NOT mutate in-memory
+    /// state on the assumption that it has."
     ///
-    /// No-op when the feature flag is off (eventStore == nil).
-    public func recordCommand(_ command: OrchestrationCommand) {
+    /// F2-wire changed this from the F2-foundation fire-and-forget shape
+    /// (`Task { try? await store.append(...) }`) which violated the
+    /// documented write-ahead invariant: discarding the error meant a
+    /// SQLite failure left the in-memory state ahead of the log, and
+    /// replay on restart would silently lose mutations.
+    ///
+    /// No-op (returns immediately) when the feature flag is off — the
+    /// flag's `false` rollback path takes over and the registry runs in
+    /// legacy `sessions.json`-snapshot mode unchanged.
+    public func recordCommand(_ command: OrchestrationCommand) async throws {
         guard let store = eventStore else { return }
-        Task {
-            do {
-                _ = try await store.append(command)
-            } catch {
-                registryLogger.error("OrchestrationEventStore.append failed: \(error.localizedDescription, privacy: .public)")
-            }
+        _ = try await store.append(command)
+    }
+
+    /// Internal write-ahead helper. Encodes the session as the receipt
+    /// payload and appends via `recordCommand`. The kind discriminator
+    /// drives replay branching (created / deleted / approved / completed
+    /// / failed / interrupted / metadataUpdated). When `eventStore` is
+    /// nil (flag off) this is a cheap no-op.
+    private func writeReceipt(
+        kind: OrchestrationCommand.Kind,
+        sessionId: UUID,
+        session: AgentSession?,
+        source: String = "registry"
+    ) async throws {
+        guard eventStore != nil else { return }
+        let payload: Data
+        if let session {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            payload = (try? encoder.encode(session)) ?? Data()
+        } else {
+            payload = Data()
+        }
+        let command = OrchestrationCommand(
+            source: source,
+            kind: kind,
+            sessionId: sessionId.uuidString,
+            timestamp: Date(),
+            runtimeEvent: nil,
+            payload: payload
+        )
+        try await recordCommand(command)
+    }
+
+    /// Public hook for opportunistic WAL checkpointing. The daemon calls
+    /// this on application termination + at sensible idle intervals so
+    /// the WAL sidecar stays bounded (a privacy-relevant guarantee — see
+    /// `OrchestrationEventStore.deleteSession(_:)` for the deeper note).
+    /// No-op when the flag is off.
+    public func checkpointEventStore() async {
+        guard let store = eventStore else { return }
+        do {
+            try await store.checkpoint()
+        } catch {
+            registryLogger.error("OrchestrationEventStore.checkpoint failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -191,6 +257,12 @@ public final class AgentSessionRegistry: ObservableObject {
 
     /// Create a new session record. Caller (handle POST /sessions) has
     /// already spawned the tmux window; we just record the metadata.
+    ///
+    /// F2-wire: `async throws` so the `sessionCreated` receipt lands in
+    /// the SQLite log BEFORE the in-memory mutation. If the receipt
+    /// write fails, this throws and the session does NOT enter the
+    /// projection — caller decides whether to retry, skip the spawn, or
+    /// fail the HTTP request.
     @discardableResult
     public func create(
         repoKey: String,
@@ -214,10 +286,9 @@ public final class AgentSessionRegistry: ObservableObject {
         geminiBackend: GeminiBackend? = nil,
         antigravityConversationId: UUID? = nil,
         antigravityProjectId: String? = nil
-    ) -> AgentSession {
+    ) async throws -> AgentSession {
         let id = UUID()
         let now = Date()
-        nextEventSeqBySession[id] = 1
         let session = AgentSession(
             id: id,
             repoKey: repoKey,
@@ -250,6 +321,12 @@ public final class AgentSessionRegistry: ObservableObject {
             antigravityConversationId: antigravityConversationId,
             antigravityProjectId: antigravityProjectId
         )
+        // Write-ahead: receipt lands BEFORE in-memory mutation. If the
+        // event store rejects the write, we propagate and the caller
+        // (HTTP handler) returns 503 / 500 to the client without ever
+        // exposing the half-created session.
+        try await writeReceipt(kind: .sessionCreated, sessionId: id, session: session)
+        nextEventSeqBySession[id] = 1
         sessions.append(session)
         save()
         return session
@@ -275,10 +352,9 @@ public final class AgentSessionRegistry: ObservableObject {
         deepResearch: Bool = false,
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil
-    ) -> AgentSession {
+    ) async throws -> AgentSession {
         let id = UUID()
         let now = Date()
-        nextEventSeqBySession[id] = 1
         // v0.9: chat-mode Frontier children carry a slightly different
         // display label so the sidebar can group them visually under the
         // group's row. Defaults to the v0.8 "Chat — {Provider}" string.
@@ -326,6 +402,11 @@ public final class AgentSessionRegistry: ObservableObject {
             antigravityProjectId: antigravityProjectId,
             deepResearch: deepResearch
         )
+        // Write-ahead: see comment on `create(...)`. Chat sessions take
+        // the same receipt path so replay reconstructs both `code` and
+        // `chat` projections on cold start.
+        try await writeReceipt(kind: .sessionCreated, sessionId: id, session: session)
+        nextEventSeqBySession[id] = 1
         sessions.append(session)
         save()
         return session
@@ -350,14 +431,15 @@ public final class AgentSessionRegistry: ObservableObject {
     /// the sidebar + history. The winner's JSONL transcript is
     /// preserved; only the `frontierGroupId` / `frontierChildIndex`
     /// fields are dropped.
-    public func clearFrontierGroupBinding(id: UUID) {
-        update(id: id) { s in
-            with(
-                s,
-                frontierGroupId: .some(nil),
-                frontierChildIndex: .some(nil)
-            )
-        }
+    public func clearFrontierGroupBinding(id: UUID) async throws {
+        guard let s = session(id: id) else { return }
+        let projected = with(
+            s,
+            frontierGroupId: .some(nil),
+            frontierChildIndex: .some(nil)
+        )
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     /// v0.9 — patch the agentapi binding fields on an existing chat
@@ -370,44 +452,46 @@ public final class AgentSessionRegistry: ObservableObject {
         id: UUID,
         conversationId: UUID,
         projectId: String
-    ) {
-        update(id: id) { s in
-            let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
-                agent: s.agent,
-                model: s.model,
-                codexBackend: s.codexChatBackend,
-                geminiBackend: .agentapi,
-                antigravityConversationId: conversationId,
-                antigravityProjectId: projectId
-            )).updating(
-                externalSessionId: .some(conversationId.uuidString),
-                projectId: .some(projectId)
-            )
-            return with(
-                s,
-                geminiBackend: .agentapi,
-                antigravityConversationId: conversationId,
-                antigravityProjectId: projectId,
-                runtimeBinding: binding
-            )
-        }
+    ) async throws {
+        guard let s = session(id: id) else { return }
+        let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
+            agent: s.agent,
+            model: s.model,
+            codexBackend: s.codexChatBackend,
+            geminiBackend: .agentapi,
+            antigravityConversationId: conversationId,
+            antigravityProjectId: projectId
+        )).updating(
+            externalSessionId: .some(conversationId.uuidString),
+            projectId: .some(projectId)
+        )
+        let projected = with(
+            s,
+            geminiBackend: .agentapi,
+            antigravityConversationId: conversationId,
+            antigravityProjectId: projectId,
+            runtimeBinding: binding
+        )
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     /// Update the persisted codex thread id for an SDK chat session after
     /// the first turn returns its `thread.started` event. Lets resume-
     /// after-evict in Phase 4.5 find the same server-side thread.
-    public func setCodexChatThreadId(id: UUID, threadId: String) {
-        update(id: id) { s in
-            let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
-                agent: s.agent,
-                model: s.model,
-                codexBackend: s.codexChatBackend,
-                geminiBackend: s.geminiBackend,
-                antigravityConversationId: s.antigravityConversationId,
-                antigravityProjectId: s.antigravityProjectId
-            )).updating(externalThreadId: .some(threadId))
-            return with(s, codexChatThreadId: threadId, runtimeBinding: binding)
-        }
+    public func setCodexChatThreadId(id: UUID, threadId: String) async throws {
+        guard let s = session(id: id) else { return }
+        let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
+            agent: s.agent,
+            model: s.model,
+            codexBackend: s.codexChatBackend,
+            geminiBackend: s.geminiBackend,
+            antigravityConversationId: s.antigravityConversationId,
+            antigravityProjectId: s.antigravityProjectId
+        )).updating(externalThreadId: .some(threadId))
+        let projected = with(s, codexChatThreadId: threadId, runtimeBinding: binding)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     public func session(id: UUID) -> AgentSession? {
@@ -421,33 +505,43 @@ public final class AgentSessionRegistry: ObservableObject {
         return next
     }
 
-    public func updateStatus(id: UUID, status: AgentSessionStatus) {
-        bumpEventSeq(id: id)
-        update(id: id) { s in
-            with(s, status: status, lastEventSeq: s.lastEventSeq + 1)
+    /// Status transition — the headline lifecycle event. Maps each
+    /// status to a typed `OrchestrationCommand.Kind` so replay branches
+    /// on intent (completed vs interrupted vs degraded), not just a
+    /// generic "metadata updated" stream.
+    public func updateStatus(id: UUID, status: AgentSessionStatus) async throws {
+        guard let current = session(id: id) else { return }
+        let projected = with(current, status: status, lastEventSeq: current.lastEventSeq + 1)
+        let kind: OrchestrationCommand.Kind
+        switch status {
+        case .done:      kind = .sessionCompleted
+        case .degraded:  kind = .sessionFailed
+        case .paused:    kind = .sessionInterrupted
+        case .planning, .running: kind = .sessionMetadataUpdated
         }
+        try await writeReceipt(kind: kind, sessionId: id, session: projected)
+        bumpEventSeq(id: id)
+        update(id: id) { _ in projected }
     }
 
-    public func setPlanText(id: UUID, planText: String) {
+    public func setPlanText(id: UUID, planText: String) async throws {
         guard let current = session(id: id), current.planText != planText else { return }
+        let projected = with(current, planText: planText, lastEventSeq: current.lastEventSeq + 1)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
         bumpEventSeq(id: id)
-        update(id: id) { s in
-            with(s, planText: planText, lastEventSeq: s.lastEventSeq + 1)
-        }
+        update(id: id) { _ in projected }
     }
 
-    public func markPlanApproved(id: UUID) {
+    public func markPlanApproved(id: UUID) async throws {
         guard let current = session(id: id) else { return }
         let approved = Self.reviewableApprovedPlanText(from: current)
         guard current.planText != nil || current.approvedPlanText != approved else { return }
-        bumpEventSeq(id: id)
         // Stamp approvedAt so subsequent `PlanProgressTracker` recomputes
         // can filter out the plan-emission assistant message — the message
         // whose `at` is at-or-before this stamp is the one that contains
         // the entire plan verbatim, and matching against it would
         // self-complete every step.
         let approvedAt = Date()
-        approvedAtBySession[id] = approvedAt
         // Compute the initial 0/N snapshot so the sidebar bar appears
         // immediately on approval instead of waiting for the first
         // post-approval JSONL event. Tracker fills in real completion
@@ -459,15 +553,20 @@ public final class AgentSessionRegistry: ObservableObject {
                 approvedAt: approvedAt
             )
         }
-        update(id: id) { s in
-            with(
-                s,
-                planText: .some(nil),
-                approvedPlanText: approved,
-                lastEventSeq: s.lastEventSeq + 1,
-                planProgress: .some(initialProgress)
-            )
-        }
+        let projected = with(
+            current,
+            planText: .some(nil),
+            approvedPlanText: approved,
+            lastEventSeq: current.lastEventSeq + 1,
+            planProgress: .some(initialProgress)
+        )
+        // Receipt kind is `.sessionApproved` so replay can distinguish
+        // approval from generic metadata updates (the F2 plan calls out
+        // "plan-approve" as one of the 7 first-class command kinds).
+        try await writeReceipt(kind: .sessionApproved, sessionId: id, session: projected)
+        bumpEventSeq(id: id)
+        approvedAtBySession[id] = approvedAt
+        update(id: id) { _ in projected }
     }
 
     /// Wall-clock of the most recent `markPlanApproved(id:)` for this
@@ -483,13 +582,13 @@ public final class AgentSessionRegistry: ObservableObject {
     /// when the new value equals the existing one — matches the shape
     /// of `setPlanText` so callers can fire freely without thrashing
     /// `lastEventSeq`.
-    public func setPlanProgress(id: UUID, progress: PlanProgress?) {
+    public func setPlanProgress(id: UUID, progress: PlanProgress?) async throws {
         guard let current = session(id: id) else { return }
         guard current.planProgress != progress else { return }
+        let projected = with(current, lastEventSeq: current.lastEventSeq + 1, planProgress: .some(progress))
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
         bumpEventSeq(id: id)
-        update(id: id) { s in
-            with(s, lastEventSeq: s.lastEventSeq + 1, planProgress: .some(progress))
-        }
+        update(id: id) { _ in projected }
     }
 
     /// Update the in-place cwd/worktree metadata (used when the user switches
@@ -501,77 +600,96 @@ public final class AgentSessionRegistry: ObservableObject {
         tmuxWindowId: String?,
         tmuxPaneId: String?,
         mode: SessionMode
-    ) {
-        update(id: id) { s in
-            with(
-                s,
-                worktreePath: worktreePath,
-                tmuxWindowId: tmuxWindowId,
-                tmuxPaneId: tmuxPaneId,
-                mode: mode
-            )
-        }
+    ) async throws {
+        guard let s = session(id: id) else { return }
+        let projected = with(
+            s,
+            worktreePath: worktreePath,
+            tmuxWindowId: tmuxWindowId,
+            tmuxPaneId: tmuxPaneId,
+            mode: mode
+        )
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     /// Sessions v2: swap model on a live session (Phase 0). `effort: nil`
     /// means "leave effort unchanged" — pass the existing value through so
     /// `with()`'s double-optional override semantics don't null it out.
-    public func setModel(id: UUID, model: String, effort: ReasoningEffort?) {
-        update(id: id) { s in
-            let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
-                agent: s.agent,
-                model: model,
-                codexBackend: s.codexChatBackend,
-                geminiBackend: s.geminiBackend,
-                antigravityConversationId: s.antigravityConversationId,
-                antigravityProjectId: s.antigravityProjectId
-            )).updating(providerModelId: .some(model))
-            return with(
-                s,
-                model: model,
-                effort: .some(effort ?? s.effort),
-                runtimeBinding: binding
-            )
-        }
+    public func setModel(id: UUID, model: String, effort: ReasoningEffort?) async throws {
+        guard let s = session(id: id) else { return }
+        let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
+            agent: s.agent,
+            model: model,
+            codexBackend: s.codexChatBackend,
+            geminiBackend: s.geminiBackend,
+            antigravityConversationId: s.antigravityConversationId,
+            antigravityProjectId: s.antigravityProjectId
+        )).updating(providerModelId: .some(model))
+        let projected = with(
+            s,
+            model: model,
+            effort: .some(effort ?? s.effort),
+            runtimeBinding: binding
+        )
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     /// Sessions v2: swap effort on a live session (Phase 0).
-    public func setEffort(id: UUID, effort: ReasoningEffort) {
-        update(id: id) { s in with(s, effort: effort) }
+    public func setEffort(id: UUID, effort: ReasoningEffort) async throws {
+        guard let s = session(id: id) else { return }
+        let projected = with(s, effort: effort)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     /// Sessions v2: change plan mode mid-session (status flips to planning).
-    public func setPlanMode(id: UUID, planMode: Bool) {
-        update(id: id) { s in
-            with(s, status: planMode ? .planning : .running)
-        }
+    public func setPlanMode(id: UUID, planMode: Bool) async throws {
+        guard let s = session(id: id) else { return }
+        let projected = with(s, status: planMode ? .planning : .running)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     /// Archive (hide from default sidebar). Reversible via `unarchive(id:)`.
     /// If the session is one half of an A/B pair, the sibling's
     /// `abPairSessionId` is cleared automatically per D16.
-    public func archive(id: UUID, at date: Date = Date()) {
+    public func archive(id: UUID, at date: Date = Date()) async throws {
         guard let s = session(id: id) else { return }
-        update(id: id) { s in with(s, archivedAt: date) }
+        let projected = with(s, archivedAt: date)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
         // D16: promote sibling to standalone with banner.
-        if let siblingId = s.abPairSessionId {
-            update(id: siblingId) { sib in
-                with(sib, abPairSessionId: .some(nil))
-            }
+        if let siblingId = s.abPairSessionId, let sibling = session(id: siblingId) {
+            let siblingProjected = with(sibling, abPairSessionId: .some(nil))
+            try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: siblingId, session: siblingProjected)
+            update(id: siblingId) { _ in siblingProjected }
         }
     }
 
-    public func unarchive(id: UUID) {
-        update(id: id) { s in with(s, archivedAt: .some(nil)) }
+    public func unarchive(id: UUID) async throws {
+        guard let s = session(id: id) else { return }
+        let projected = with(s, archivedAt: .some(nil))
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     // MARK: - A/B pair operations (Phase 7 + E3 atomic CAS)
 
     /// Link two existing sessions as an A/B pair. Idempotent: re-linking
     /// the same pair is a no-op.
-    public func linkABPair(_ a: UUID, _ b: UUID) {
-        update(id: a) { s in with(s, abPairSessionId: .some(b)) }
-        update(id: b) { s in with(s, abPairSessionId: .some(a)) }
+    public func linkABPair(_ a: UUID, _ b: UUID) async throws {
+        if let sa = session(id: a) {
+            let pa = with(sa, abPairSessionId: .some(b))
+            try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: a, session: pa)
+            update(id: a) { _ in pa }
+        }
+        if let sb = session(id: b) {
+            let pb = with(sb, abPairSessionId: .some(a))
+            try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: b, session: pb)
+            update(id: b) { _ in pb }
+        }
     }
 
     /// Atomic compare-and-set on A/B pair winner-pick. Returns the resolved
@@ -580,7 +698,7 @@ public final class AgentSessionRegistry: ObservableObject {
     ///
     /// E3: first request locks `abPairDecidedAt`; subsequent requests see
     /// the existing decision and the caller responds 409.
-    public func pickPairWinner(sessionId: UUID, winner: UUID, at when: Date = Date()) -> PickPairResult? {
+    public func pickPairWinner(sessionId: UUID, winner: UUID, at when: Date = Date()) async throws -> PickPairResult? {
         guard let s = session(id: sessionId) else { return nil }
         guard let siblingId = s.abPairSessionId else {
             return .notPaired
@@ -598,8 +716,14 @@ public final class AgentSessionRegistry: ObservableObject {
             return .alreadyDecided(winner: sibling.abPairSessionId == winner ? sessionId : siblingId, decidedAt: decidedAt)
         }
         // First write wins: stamp both with the timestamp.
-        update(id: sessionId) { s in with(s, abPairDecidedAt: .some(when)) }
-        update(id: siblingId) { s in with(s, abPairDecidedAt: .some(when)) }
+        let projectedA = with(s, abPairDecidedAt: .some(when))
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projectedA)
+        update(id: sessionId) { _ in projectedA }
+        if let sib = session(id: siblingId) {
+            let projectedB = with(sib, abPairDecidedAt: .some(when))
+            try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: siblingId, session: projectedB)
+            update(id: siblingId) { _ in projectedB }
+        }
         return .decided(winner: winner, decidedAt: when)
     }
 
@@ -612,18 +736,20 @@ public final class AgentSessionRegistry: ObservableObject {
 
     // MARK: - G12 multi-terminal
 
-    public func addTerminalPane(sessionId: UUID, pane: TerminalPaneRef) {
-        update(id: sessionId) { s in
-            var panes = s.terminalPanes
-            panes.append(pane)
-            return with(s, terminalPanes: panes)
-        }
+    public func addTerminalPane(sessionId: UUID, pane: TerminalPaneRef) async throws {
+        guard let s = session(id: sessionId) else { return }
+        var panes = s.terminalPanes
+        panes.append(pane)
+        let projected = with(s, terminalPanes: panes)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
+        update(id: sessionId) { _ in projected }
     }
 
-    public func removeTerminalPane(sessionId: UUID, paneRefId: UUID) {
-        update(id: sessionId) { s in
-            with(s, terminalPanes: s.terminalPanes.filter { $0.id != paneRefId })
-        }
+    public func removeTerminalPane(sessionId: UUID, paneRefId: UUID) async throws {
+        guard let s = session(id: sessionId) else { return }
+        let projected = with(s, terminalPanes: s.terminalPanes.filter { $0.id != paneRefId })
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
+        update(id: sessionId) { _ in projected }
     }
 
     /// v0.22.20: rename a terminal pane by id. Returns the updated
@@ -633,47 +759,51 @@ public final class AgentSessionRegistry: ObservableObject {
     /// parallel agent introduced — the registry side of that wire
     /// landed in this PR.
     @discardableResult
-    public func renameTerminalPane(sessionId: UUID, paneRefId: UUID, title: String) -> TerminalPaneRef? {
-        update(id: sessionId) { s in
-            let panes = s.terminalPanes.map { p -> TerminalPaneRef in
-                guard p.id == paneRefId else { return p }
-                return TerminalPaneRef(
-                    id: p.id,
-                    paneId: p.paneId,
-                    title: title,
-                    isPrimary: p.isPrimary,
-                    createdAt: p.createdAt
-                )
-            }
-            return with(s, terminalPanes: panes)
+    public func renameTerminalPane(sessionId: UUID, paneRefId: UUID, title: String) async throws -> TerminalPaneRef? {
+        guard let s = session(id: sessionId) else { return nil }
+        let panes = s.terminalPanes.map { p -> TerminalPaneRef in
+            guard p.id == paneRefId else { return p }
+            return TerminalPaneRef(
+                id: p.id,
+                paneId: p.paneId,
+                title: title,
+                isPrimary: p.isPrimary,
+                createdAt: p.createdAt
+            )
         }
+        let projected = with(s, terminalPanes: panes)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
+        update(id: sessionId) { _ in projected }
         return session(id: sessionId)?.terminalPanes.first { $0.id == paneRefId }
     }
 
     // MARK: - G15 scheduled follow-ups
 
-    public func addScheduledFollowUp(sessionId: UUID, followUp: ScheduledFollowUp) {
-        update(id: sessionId) { s in
-            with(s, scheduledFollowUps: s.scheduledFollowUps + [followUp])
-        }
+    public func addScheduledFollowUp(sessionId: UUID, followUp: ScheduledFollowUp) async throws {
+        guard let s = session(id: sessionId) else { return }
+        let projected = with(s, scheduledFollowUps: s.scheduledFollowUps + [followUp])
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
+        update(id: sessionId) { _ in projected }
     }
 
-    public func removeScheduledFollowUp(sessionId: UUID, followUpId: UUID) {
-        update(id: sessionId) { s in
-            with(s, scheduledFollowUps: s.scheduledFollowUps.filter { $0.id != followUpId })
-        }
+    public func removeScheduledFollowUp(sessionId: UUID, followUpId: UUID) async throws {
+        guard let s = session(id: sessionId) else { return }
+        let projected = with(s, scheduledFollowUps: s.scheduledFollowUps.filter { $0.id != followUpId })
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
+        update(id: sessionId) { _ in projected }
     }
 
-    public func markFollowUpFired(sessionId: UUID, followUpId: UUID, at firedAt: Date = Date()) {
-        update(id: sessionId) { s in
-            let ups = s.scheduledFollowUps.map { f -> ScheduledFollowUp in
-                if f.id == followUpId {
-                    return ScheduledFollowUp(id: f.id, fireAt: f.fireAt, prompt: f.prompt, firedAt: firedAt)
-                }
-                return f
+    public func markFollowUpFired(sessionId: UUID, followUpId: UUID, at firedAt: Date = Date()) async throws {
+        guard let s = session(id: sessionId) else { return }
+        let ups = s.scheduledFollowUps.map { f -> ScheduledFollowUp in
+            if f.id == followUpId {
+                return ScheduledFollowUp(id: f.id, fireAt: f.fireAt, prompt: f.prompt, firedAt: firedAt)
             }
-            return with(s, scheduledFollowUps: ups)
+            return f
         }
+        let projected = with(s, scheduledFollowUps: ups)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
+        update(id: sessionId) { _ in projected }
     }
 
     /// Mutate one session by id via a transform closure. Saves on every
@@ -846,13 +976,16 @@ public final class AgentSessionRegistry: ObservableObject {
     /// v0.5.4: set or clear the user-supplied display name. Empty /
     /// whitespace-only strings normalize to nil so the sidebar row +
     /// chat header fall back to `repoDisplayName`.
-    public func rename(id: UUID, name: String?) {
+    public func rename(id: UUID, name: String?) async throws {
+        guard let s = session(id: id) else { return }
         let normalized: String?? = {
             guard let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !trimmed.isEmpty else { return .some(nil) }
             return .some(trimmed)
         }()
-        update(id: id) { s in with(s, customName: normalized) }
+        let projected = with(s, customName: normalized)
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
+        update(id: id) { _ in projected }
     }
 
     private static func resolve<T>(_ override: T??, fallback: T?) -> T? {
@@ -860,9 +993,34 @@ public final class AgentSessionRegistry: ObservableObject {
         return override
     }
 
-    public func delete(id: UUID) {
+    /// Delete a session record. Writes a `sessionDeleted` receipt with
+    /// empty payload before purging the in-memory state; replay then
+    /// removes the projection. If the F2 event store is on, also calls
+    /// `OrchestrationEventStore.deleteSession(_:)` so the historical
+    /// events + snapshot for this session are purged from the log (true
+    /// GDPR / CCPA delete, not a tombstone — see codex #9).
+    ///
+    /// Order matters: the `.sessionDeleted` receipt MUST be appended
+    /// before `deleteSession(...)` purges the log, otherwise the receipt
+    /// itself would be wiped along with the history. Replay never sees
+    /// the receipt for purged sessions on a future restart, which is
+    /// fine — the projection ends up identical (no row for the session).
+    public func delete(id: UUID) async throws {
+        try await writeReceipt(kind: .sessionDeleted, sessionId: id, session: nil)
+        if let store = eventStore {
+            do {
+                try await store.deleteSession(id.uuidString)
+            } catch {
+                // Privacy-delete failure on the historical events is
+                // non-fatal — the receipt above marks the session as
+                // deleted, so replay's projection is correct even if
+                // the historical rows linger. Surface for telemetry.
+                registryLogger.error("OrchestrationEventStore.deleteSession failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         sessions.removeAll { $0.id == id }
         nextEventSeqBySession.removeValue(forKey: id)
+        approvedAtBySession.removeValue(forKey: id)
         save()
     }
 
