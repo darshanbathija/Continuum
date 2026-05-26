@@ -79,7 +79,7 @@ struct PlanQueueSheet: View {
     @ViewBuilder
     private var header: some View {
         HStack(spacing: 10) {
-            TahoeIcon("git", size: 15)
+            TahoeIcon("stack", size: 15)
                 .foregroundStyle(t.fg3)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Continue Plan")
@@ -94,7 +94,7 @@ struct PlanQueueSheet: View {
                 TahoeIcon("x", size: 11)
                     .foregroundStyle(t.fg3)
                     .frame(width: 24, height: 24)
-                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(.plain)
             .help("Close")
@@ -294,9 +294,9 @@ private struct PlanQueueRowView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(rowBackground, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .background(rowBackground, in: RoundedRectangle(cornerRadius: TahoeRadius.s, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                RoundedRectangle(cornerRadius: TahoeRadius.s, style: .continuous)
                     .stroke(isChecked ? t.accent.opacity(0.55) : t.hairline.opacity(0.6),
                             lineWidth: isChecked ? 1.0 : 0.5)
             )
