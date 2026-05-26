@@ -135,6 +135,17 @@ private struct Sidebar: View {
     @State private var results: [ChatSessionSearchMatch] = []
     @State private var searchTask: Task<Void, Never>?
 
+    // A4 memoization (Phase 2). groupRows used to re-sort + re-group the
+    // full session list on every Sidebar body invalidation. Now held in
+    // a MemoizedDerivedStore keyed on `[AgentSession]` (Hashable struct
+    // array; cheap Equatable). Cache hit when SidebarRow projection is
+    // unchanged ⇒ no re-sort + no re-group.
+    @StateObject private var groupRowsStore = MemoizedDerivedStore<[AgentSession], [SidebarRow]>(
+        placeholder: [],
+        mode: .sync,
+        compute: { Sidebar.computeGroupRows($0) }
+    )
+
     var body: some View {
         TahoeGlass(radius: 18, tone: .panel) {
             VStack(spacing: 0) {
@@ -215,9 +226,25 @@ private struct Sidebar: View {
                 }
             }
         }
+        // A4: drive the groupRows memoized store from sessions changes.
+        // task(id:) compares the [AgentSession] Equatable; identical
+        // session lists ⇒ no compute. Identity changes ⇒ recompute.
+        .task(id: sessions) {
+            groupRowsStore.update(input: sessions)
+        }
     }
 
     private var groupRows: [SidebarRow] {
+        // A4: read from the memoized derived store; placeholder is `[]`
+        // until the first compute lands (one runloop tick after
+        // Sidebar's first body call).
+        groupRowsStore.output ?? []
+    }
+
+    /// Pure projection. Sortable + group-aware. Exposed `fileprivate
+    /// static` so the MemoizedDerivedStore's compute closure can call it
+    /// without capturing `self.sessions` (closure capture would stale).
+    fileprivate static func computeGroupRows(_ sessions: [AgentSession]) -> [SidebarRow] {
         var seenGroups = Set<UUID>()
         var rows: [SidebarRow] = []
         for session in sessions.sorted(by: { $0.lastEventAt > $1.lastEventAt }) {

@@ -13,12 +13,30 @@ import Charts
 /// we don't include it in the $-stacked chart. The Requests panel (rendered
 /// below the cost chart) shows Gemini's per-day request count separately —
 /// see plan §Analytics schema split.
+///
+/// **A4 memoization (Phase 2):** `costPoints` and `reqsPoints` used to be
+/// computed properties that re-ran the calendar loop on every body
+/// invalidation. Now they're held in `MemoizedDerivedStore<ChartInput, [Point]>`
+/// (from A4-pre). Cache key includes `snapshot.computedAt`, `window`, and
+/// `providerFilter` — same shape codex eng-review #4 prescribed. Cache hit
+/// when the parent re-renders without an analytics change ⇒ no work.
 @available(macOS 13, iOS 16, *)
 public struct AnalyticsDailyChart: View {
 
     public let snapshot: UsageHistorySnapshot
     public let window: UsageHistorySnapshot.Window
     public let providerFilter: UsageHistoryStore.ProviderFilter
+
+    @StateObject private var costStore = MemoizedDerivedStore<ChartInput, [CostPoint]>(
+        placeholder: [],
+        mode: .sync,
+        compute: { Self.computeCostPoints($0) }
+    )
+    @StateObject private var reqsStore = MemoizedDerivedStore<ChartInput, [ReqsPoint]>(
+        placeholder: [],
+        mode: .sync,
+        compute: { Self.computeReqsPoints($0) }
+    )
 
     public init(
         snapshot: UsageHistorySnapshot,
@@ -30,29 +48,52 @@ public struct AnalyticsDailyChart: View {
         self.providerFilter = providerFilter
     }
 
-    // MARK: - Chart data (cost — Claude + Codex)
+    // MARK: - Cache key + chart data types
 
-    private struct CostPoint: Identifiable {
+    /// A4 cache key. Equatable comparison compares snapshot via
+    /// `computedAt` only — same identity ⇒ same byProvider content
+    /// (`UsageHistorySnapshot.computedAt` is monotonically updated by
+    /// the loader on every fresh aggregation). Cheap to compare; cache
+    /// hits dominate.
+    fileprivate struct ChartInput: Equatable {
+        let snapshot: UsageHistorySnapshot
+        let window: UsageHistorySnapshot.Window
+        let providerFilter: UsageHistoryStore.ProviderFilter
+
+        static func == (lhs: ChartInput, rhs: ChartInput) -> Bool {
+            lhs.snapshot.computedAt == rhs.snapshot.computedAt
+                && lhs.window == rhs.window
+                && lhs.providerFilter == rhs.providerFilter
+        }
+    }
+
+    fileprivate struct CostPoint: Identifiable, Equatable {
         let id: String
         let day: Date
         let cost: Decimal
         let provider: String
     }
 
-    private struct ReqsPoint: Identifiable {
+    fileprivate struct ReqsPoint: Identifiable, Equatable {
         let id: String
         let day: Date
         let reqs: Int
     }
 
-    private var costProviders: [UsageRecord.Provider] {
+    // MARK: - A4 compute closures (pure, static)
+
+    fileprivate static func costProviders(in snapshot: UsageHistorySnapshot, filter: UsageHistoryStore.ProviderFilter) -> [UsageRecord.Provider] {
         // Cost-bearing providers only. Gemini's $0 doesn't go in the
         // stacked dollar chart — it gets a separate request-count panel.
         let order: [UsageRecord.Provider] = [.claude, .codex, .opencode, .cursor]
-        return order.filter { snapshot.byProvider[$0] != nil && providerFilter.includes($0) }
+        return order.filter { snapshot.byProvider[$0] != nil && filter.includes($0) }
     }
 
-    private var costPoints: [CostPoint] {
+    fileprivate static func computeCostPoints(_ input: ChartInput) -> [CostPoint] {
+        let snapshot = input.snapshot
+        let window = input.window
+        let providerFilter = input.providerFilter
+        let providers = costProviders(in: snapshot, filter: providerFilter)
         let cal = Calendar.current
         var out: [CostPoint] = []
         switch window {
@@ -61,21 +102,21 @@ public struct AnalyticsDailyChart: View {
             let length: Int = (window == .today) ? 1 : (window == .past7d) ? 7 : 30
             for offset in 0..<length {
                 guard let day = cal.date(byAdding: .day, value: -(length - 1 - offset), to: today) else { continue }
-                for p in costProviders {
+                for p in providers {
                     let c = snapshot.totals(for: p).byDay[day]?.costUSD ?? 0
-                    out.append(CostPoint(id: "\(p.rawValue)-\(day.timeIntervalSince1970)", day: day, cost: c, provider: Self.displayName(p)))
+                    out.append(CostPoint(id: "\(p.rawValue)-\(day.timeIntervalSince1970)", day: day, cost: c, provider: displayName(p)))
                 }
             }
         case .allTime:
             var keys = Set<Date>()
-            for p in costProviders { keys.formUnion(snapshot.totals(for: p).byDay.keys) }
+            for p in providers { keys.formUnion(snapshot.totals(for: p).byDay.keys) }
             guard let earliest = keys.min(), let latest = keys.max() else { return [] }
             var day = cal.startOfDay(for: earliest)
             let end = cal.startOfDay(for: latest)
             while day <= end {
-                for p in costProviders {
+                for p in providers {
                     let c = snapshot.totals(for: p).byDay[day]?.costUSD ?? 0
-                    out.append(CostPoint(id: "\(p.rawValue)-\(day.timeIntervalSince1970)", day: day, cost: c, provider: Self.displayName(p)))
+                    out.append(CostPoint(id: "\(p.rawValue)-\(day.timeIntervalSince1970)", day: day, cost: c, provider: displayName(p)))
                 }
                 guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
                 day = next
@@ -84,7 +125,10 @@ public struct AnalyticsDailyChart: View {
         return out
     }
 
-    private var reqsPoints: [ReqsPoint] {
+    fileprivate static func computeReqsPoints(_ input: ChartInput) -> [ReqsPoint] {
+        let snapshot = input.snapshot
+        let window = input.window
+        let providerFilter = input.providerFilter
         // Gemini-only for now. If other providers expose `requestCount > 0`
         // in the future, extend by adding them here.
         guard providerFilter.includes(.gemini),
@@ -117,15 +161,32 @@ public struct AnalyticsDailyChart: View {
     // MARK: - Body
 
     public var body: some View {
-        let cost = costPoints
-        let reqs = reqsPoints
-        if cost.isEmpty && reqs.isEmpty {
-            EmptyView()
-        } else {
-            VStack(alignment: .leading, spacing: 14) {
-                if !cost.isEmpty { costChart(cost) }
-                if !reqs.isEmpty { reqsChart(reqs) }
+        let input = ChartInput(
+            snapshot: snapshot,
+            window: window,
+            providerFilter: providerFilter
+        )
+        let cost = costStore.output ?? []
+        let reqs = reqsStore.output ?? []
+        Group {
+            if cost.isEmpty && reqs.isEmpty {
+                EmptyView()
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    if !cost.isEmpty { costChart(cost) }
+                    if !reqs.isEmpty { reqsChart(reqs) }
+                }
             }
+        }
+        // A4: drive the memoized derived stores from the input key. Both
+        // stores share the same key shape so they invalidate together when
+        // snapshot.computedAt / window / providerFilter changes; on
+        // identical input (parent re-render with no analytics change),
+        // both stores cache-hit and the body returns the previous Point
+        // arrays unchanged.
+        .task(id: input) {
+            costStore.update(input: input)
+            reqsStore.update(input: input)
         }
     }
 
