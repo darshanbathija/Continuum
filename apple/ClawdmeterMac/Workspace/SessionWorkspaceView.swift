@@ -385,6 +385,7 @@ private struct SidebarPane: View {
     @State private var colorTagInput: String = ""
     @State private var showingColorTagAlert = false
     @State private var comparisonPair: SessionComparisonPair?
+    @State private var repoIdentityProbeKeys: Set<String> = []
 
     private var grouping: SessionGrouping {
         SessionGrouping(rawValue: groupingRaw) ?? .repo
@@ -1398,7 +1399,7 @@ private struct SidebarPane: View {
             sessionContextMenu(session)
         }
         .onAppear {
-            cacheRepoIdentityIfNeeded(repoBadge)
+            cacheRepoIdentityIfNeeded(for: session, fallbackBadge: repoBadge)
         }
     }
 
@@ -1407,12 +1408,11 @@ private struct SidebarPane: View {
         if let cached = presentationStore.snapshot.repoIdentityBadges[key] {
             return cached
         }
-        let remoteURL = remoteOriginURL(for: session)
-        return RepoIdentityResolver.badge(repoKey: key, displayName: session.repoDisplayName, remoteURL: remoteURL)
+        return RepoIdentityResolver.badge(repoKey: key, displayName: session.repoDisplayName)
     }
 
-    private func remoteOriginURL(for session: AgentSession) -> String? {
-        for raw in [session.effectiveCwd, session.worktreePath, session.runtimeCwd, session.repoKey] {
+    private static func remoteOriginURL(candidates: [String?]) -> String? {
+        for raw in candidates {
             guard let root = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !root.isEmpty else { continue }
             let expanded = NSString(string: root).expandingTildeInPath
             var isDirectory: ObjCBool = false
@@ -1426,7 +1426,7 @@ private struct SidebarPane: View {
         return nil
     }
 
-    private static func gitRemoteOriginURL(repoRoot: String) -> String? {
+    nonisolated private static func gitRemoteOriginURL(repoRoot: String) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = ["-C", NSString(string: repoRoot).expandingTildeInPath, "config", "--get", "remote.origin.url"]
@@ -1445,9 +1445,21 @@ private struct SidebarPane: View {
         }
     }
 
-    private func cacheRepoIdentityIfNeeded(_ badge: RepoIdentityBadge) {
-        guard presentationStore.snapshot.repoIdentityBadges[badge.repoKey] == nil else { return }
-        try? presentationStore.cacheRepoIdentity(badge)
+    private func cacheRepoIdentityIfNeeded(for session: AgentSession, fallbackBadge: RepoIdentityBadge) {
+        guard presentationStore.snapshot.repoIdentityBadges[fallbackBadge.repoKey] == nil else { return }
+        guard repoIdentityProbeKeys.insert(fallbackBadge.repoKey).inserted else { return }
+
+        let key = fallbackBadge.repoKey
+        let displayName = session.repoDisplayName
+        let candidates = [session.effectiveCwd, session.worktreePath, session.runtimeCwd, session.repoKey]
+        Task {
+            let remoteURL = await Task.detached(priority: .utility) {
+                Self.remoteOriginURL(candidates: candidates)
+            }.value
+            let resolved = RepoIdentityResolver.badge(repoKey: key, displayName: displayName, remoteURL: remoteURL)
+            try? presentationStore.cacheRepoIdentity(resolved)
+            repoIdentityProbeKeys.remove(key)
+        }
     }
 
     @ViewBuilder
