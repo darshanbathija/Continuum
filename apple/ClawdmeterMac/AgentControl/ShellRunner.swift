@@ -248,8 +248,9 @@ public actor ShellRunner {
     /// Resolution order (first match wins):
     /// 1. UserDefaults override at `clawdmeter.binaries.<name>` (Settings → Diagnostics)
     /// 2. Environment override at `CLAWDMETER_BIN_<NAME_UPPERCASED>`
-    /// 3. Known candidate paths (Homebrew, system, user local)
-    /// 4. `which <name>` via PATH
+    /// 3. App-bundled vendor binary under Contents/Resources/Vendor/<name>/
+    /// 4. Known candidate paths (Homebrew, system, user local)
+    /// 5. `which <name>` via PATH
     ///
     /// Replaces the previous hardcoded `/Users/darshanbathija_1/.local/bin/claude`
     /// pattern that broke for other users (T2 in Sessions v2 plan).
@@ -268,7 +269,30 @@ public actor ShellRunner {
            FileManager.default.isExecutableFile(atPath: envOverride) {
             return envOverride
         }
-        // 3. Known candidate paths.
+        // 3. App-bundled vendor binary. This is the production path for
+        // app-owned infrastructure such as tmux; users should not need
+        // Homebrew just to start a session.
+        if let resourceURL = Bundle.main.resourceURL {
+            let bundledCandidates = [
+                resourceURL
+                    .appendingPathComponent("Vendor", isDirectory: true)
+                    .appendingPathComponent(name, isDirectory: true)
+                    .appendingPathComponent("bin", isDirectory: true)
+                    .appendingPathComponent(name, isDirectory: false)
+                    .path,
+                resourceURL
+                    .appendingPathComponent("Vendor", isDirectory: true)
+                    .appendingPathComponent(name, isDirectory: true)
+                    .appendingPathComponent(name, isDirectory: false)
+                    .path,
+            ]
+            for path in bundledCandidates {
+                if FileManager.default.isExecutableFile(atPath: path) {
+                    return path
+                }
+            }
+        }
+        // 4. Known candidate paths.
         // v0.28.0: ClawdmeterRealHome (getpwuid) rather than
         // FileManager.default.homeDirectoryForCurrentUser so the sandboxed
         // Release build searches the user's actual `~/.local/bin/` (where

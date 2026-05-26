@@ -14,7 +14,8 @@
 # Self-serve for builders (run this on any Apple Silicon Mac with Xcode):
 #   cd /path/to/Clawdmeter && ./tools/build-mac-dmg.sh
 #
-# Requires: macOS, Xcode CLT (xcodebuild + hdiutil + codesign — all built-in).
+# Requires: macOS, full Xcode, Homebrew on the build machine for staging the
+# bundled tmux bottles. End users do not need Homebrew.
 
 set -euo pipefail
 
@@ -78,6 +79,12 @@ if command -v xcodegen >/dev/null 2>&1; then
   echo "✓ Xcode project regenerated via xcodegen"
 else
   echo "⚠ xcodegen not installed — using whatever's already in $PROJECT"
+fi
+
+if [[ "${CLAWDMETER_SKIP_BUNDLED_TMUX:-0}" != "1" ]]; then
+  ./tools/download-bundled-tmux.sh
+else
+  echo "⚠ Skipping bundled tmux download (CLAWDMETER_SKIP_BUNDLED_TMUX=1)"
 fi
 
 # ────────────────────────────────────────────────────────────────────────
@@ -163,6 +170,7 @@ HELPER_ENT="$REPO_ROOT/apple/ClawdmeterMac/OpenCodeHelper.entitlements"
 HELPER_BINARIES=(
   "$APP_PATH/Contents/Resources/Vendor/opencode/opencode"
   "$APP_PATH/Contents/Resources/Vendor/uv/uv"
+  "$APP_PATH/Contents/Resources/Vendor/tmux/bin/tmux"
 )
 
 # Pick the Apple Development identity used to sign the outer app, so the

@@ -59,7 +59,12 @@ public actor TmuxControlClient {
 
     /// In-flight commands awaiting their `%end`/`%error` response.
     /// Indexed by tmux's command sequence number (parsed from %begin).
-    private var pendingCommands: [Int: CheckedContinuation<CommandResult, Error>] = [:]
+    private struct PendingCommand {
+        let id: UUID
+        let summary: String
+        let continuation: CheckedContinuation<CommandResult, Error>
+    }
+    private var pendingCommands: [Int: PendingCommand] = [:]
     private var currentCommandNumber: Int?
     private var currentCommandBody: [String] = []
 
@@ -94,7 +99,18 @@ public actor TmuxControlClient {
     /// Start the tmux server over a PTY and begin the read loop.
     /// Idempotent: returns immediately if already started.
     public func start() async throws {
-        guard pty == nil else { return }
+        if pty != nil {
+            if isAlive && Self.isProcessAlive(childPid) {
+                return
+            }
+            clearPTYState(reason: "stale PTY before start")
+        }
+
+        guard FileManager.default.isExecutableFile(atPath: configuration.tmuxBinary) else {
+            throw TmuxError.commandFailed(
+                "tmux not found at \(configuration.tmuxBinary). Reinstall Clawdmeter or configure a tmux path in Settings -> Diagnostics."
+            )
+        }
 
         // v0.8 QA ISSUE-002 fix: the original `tmux -C ... new-session ... -d`
         // single-command pattern exits the control-mode client as soon as the
@@ -220,7 +236,12 @@ public actor TmuxControlClient {
     }
 
     private func markExited(reason: String?) {
-        guard isAlive else { return }
+        guard isAlive || pty != nil || !pendingCommands.isEmpty else { return }
+        clearPTYState(reason: reason)
+    }
+
+    private func clearPTYState(reason: String?) {
+        let wasAlive = isAlive
         isAlive = false
         // P1-Mac-3: clear PTY + read-task state on exit so the supervisor's
         // restart path (which calls `start()`) can actually spawn a fresh
@@ -235,8 +256,8 @@ public actor TmuxControlClient {
         readTask = nil
         childPid = 0
         // Fail any in-flight commands.
-        for (_, continuation) in pendingCommands {
-            continuation.resume(throwing: TmuxError.serverExited)
+        for (_, pending) in pendingCommands {
+            pending.continuation.resume(throwing: TmuxError.serverExited)
         }
         pendingCommands.removeAll()
         // Drop output sinks — paneIds will be reassigned by the new server.
@@ -248,8 +269,10 @@ public actor TmuxControlClient {
         outputSinks.removeAll()
         currentCommandNumber = nil
         currentCommandBody = []
-        lifecycleContinuation?.yield(.serverExited(reason: reason))
-        lifecycleContinuation?.finish()
+        if wasAlive {
+            lifecycleContinuation?.yield(.serverExited(reason: reason))
+            lifecycleContinuation?.finish()
+        }
         lifecycleStream = nil
         lifecycleContinuation = nil
         tmuxLogger.warning("tmux server exited: \(reason ?? "unknown")")
@@ -260,8 +283,9 @@ public actor TmuxControlClient {
     /// Run a tmux command and wait for its `%begin/%end` or `%error` reply.
     /// Returns the response body (lines between begin and end).
     @discardableResult
-    public func command(_ args: [String]) async throws -> CommandResult {
+    public func command(_ args: [String], timeout: TimeInterval = 10) async throws -> CommandResult {
         guard pty != nil else { throw TmuxError.notStarted }
+        guard isAlive else { throw TmuxError.serverExited }
         // P1-Mac-6: reject CR/LF and ASCII control bytes via the static
         // helper so the regression test can exercise the same code path
         // without a live PTY. The wire format here is plaintext joined
@@ -271,6 +295,8 @@ public actor TmuxControlClient {
         // escapes single quotes; it cannot prevent this class of injection.
         try Self.validateArgs(args)
         let cmd = args.joined(separator: " ") + "\n"
+        let commandId = UUID()
+        let summary = args.prefix(4).joined(separator: " ")
         return try await withCheckedThrowingContinuation { continuation in
             // We don't know the command number until tmux echoes back
             // %begin, so we queue continuations FIFO with a sentinel key.
@@ -278,8 +304,22 @@ public actor TmuxControlClient {
             // (tmux is single-threaded internally — commands return in
             // FIFO order.)
             let key = -((pendingCommands.count + 1))  // negative sentinel until %begin maps it
-            pendingCommands[key] = continuation
-            writePTY(cmd)
+            pendingCommands[key] = PendingCommand(
+                id: commandId,
+                summary: summary,
+                continuation: continuation
+            )
+            do {
+                try writePTY(cmd)
+            } catch {
+                pendingCommands.removeValue(forKey: key)
+                continuation.resume(throwing: error)
+                return
+            }
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                await self?.timeoutPendingCommand(id: commandId)
+            }
         }
     }
 
@@ -512,22 +552,22 @@ public actor TmuxControlClient {
             // Map the sentinel-keyed continuation to the actual number.
             // First (smallest negative) sentinel wins, FIFO.
             if let sentinelKey = pendingCommands.keys.filter({ $0 < 0 }).max() {
-                let continuation = pendingCommands.removeValue(forKey: sentinelKey)!
-                pendingCommands[num] = continuation
+                let pending = pendingCommands.removeValue(forKey: sentinelKey)!
+                pendingCommands[num] = pending
                 currentCommandNumber = num
                 currentCommandBody = []
             }
         case .end(_, let num, _):
-            if let continuation = pendingCommands.removeValue(forKey: num) {
+            if let pending = pendingCommands.removeValue(forKey: num) {
                 let result = CommandResult(lines: currentCommandBody)
-                continuation.resume(returning: result)
+                pending.continuation.resume(returning: result)
             }
             currentCommandNumber = nil
             currentCommandBody = []
         case .error(_, let num, _):
-            if let continuation = pendingCommands.removeValue(forKey: num) {
+            if let pending = pendingCommands.removeValue(forKey: num) {
                 let errorText = currentCommandBody.joined(separator: "\n")
-                continuation.resume(throwing: TmuxError.commandFailed(errorText))
+                pending.continuation.resume(throwing: TmuxError.commandFailed(errorText))
             }
             currentCommandNumber = nil
             currentCommandBody = []
@@ -561,12 +601,36 @@ public actor TmuxControlClient {
         }
     }
 
-    private func writePTY(_ s: String) {
-        guard let pty else { return }
+    private func writePTY(_ s: String) throws {
+        guard let pty, pty.masterFD >= 0 else { throw TmuxError.ptyClosed }
         let bytes = Array(s.utf8)
-        _ = bytes.withUnsafeBufferPointer { buf in
+        let written = bytes.withUnsafeBufferPointer { buf in
             write(pty.masterFD, buf.baseAddress, buf.count)
         }
+        guard written >= 0 else { throw TmuxError.ptyClosed }
+        guard written == bytes.count else {
+            throw TmuxError.commandFailed("short write to tmux PTY")
+        }
+    }
+
+    private func timeoutPendingCommand(id: UUID) {
+        guard let match = pendingCommands.first(where: { $0.value.id == id }) else { return }
+        pendingCommands.removeValue(forKey: match.key)
+        if currentCommandNumber == match.key {
+            currentCommandNumber = nil
+            currentCommandBody = []
+        }
+        tmuxLogger.warning("tmux command timed out: \(match.value.summary, privacy: .public)")
+        match.value.continuation.resume(
+            throwing: TmuxError.commandFailed("tmux command timed out after 10s: \(match.value.summary)")
+        )
+        clearPTYState(reason: "tmux command timeout: \(match.value.summary)")
+    }
+
+    private static func isProcessAlive(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
     }
 
     // MARK: - Helpers
