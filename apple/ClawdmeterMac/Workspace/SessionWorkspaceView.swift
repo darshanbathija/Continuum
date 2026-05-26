@@ -5337,6 +5337,15 @@ private struct TahoeDiffPreviewPane: View {
             let computed = compute()
 
             lock.lock()
+            // A12 review fix — drop any prior recency entry for this
+            // key before appending so concurrent misses (both threads
+            // parsed, both reach this branch) don't leave duplicate
+            // keys in `order`. Duplicates would let a later eviction
+            // remove a still-warm entry from `storage`, forcing a
+            // wasteful re-parse on the next lookup.
+            if storage[key] != nil, let existing = order.firstIndex(of: key) {
+                order.remove(at: existing)
+            }
             storage[key] = computed
             order.append(key)
             while storage.count > capacity, let oldest = order.first {
