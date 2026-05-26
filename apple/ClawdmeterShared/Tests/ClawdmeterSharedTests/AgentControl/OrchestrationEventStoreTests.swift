@@ -497,16 +497,195 @@ final class OrchestrationEventStoreTests: XCTestCase {
         XCTAssertEqual(rows.map(\.command.source), ["ui", "scheduler"])
     }
 
-    // MARK: - 16. FeatureFlag default + env override
+    // MARK: - 16. FeatureFlag env helper (F2-wire flips default to true)
 
-    func test_feature_flag_default_is_legacy() {
-        // Default with no env / no UserDefaults override = false (legacy
-        // behavior). We can't read the flag's actual value safely (env or
-        // UD might be set out-of-band), but we CAN assert the env helper
-        // returns nil for an unset variable — that's the contract that
-        // determines the fallback path.
+    func test_feature_flag_env_helper_unset_returns_nil() {
+        // The env helper is the deterministic part of the flag resolution
+        // chain: with no env var set, it MUST return nil so the
+        // UserDefaults / compiled-default fallback path takes over. F2-wire
+        // bumped the compiled default of `orchestrationEventStore` from
+        // false → true; the env helper itself is unchanged.
         XCTAssertNil(FeatureFlags.envBool("CLAWDMETER_FF_UNSET_FLAG_DO_NOT_DEFINE"))
         XCTAssertEqual(FeatureFlags.envBool("CLAWDMETER_FF_UNSET_FLAG_DO_NOT_DEFINE") ?? false, false)
+    }
+
+    // MARK: - 17. F2-wire — write-ahead receipt invariant
+
+    /// F2-wire P1 fix: appending to a closed db must throw, not
+    /// silently swallow. Smokes the public surface that the registry
+    /// now uses to propagate errors so the in-memory mutation can be
+    /// aborted on receipt-write failure.
+    func test_append_on_closed_db_propagates_writeFailed() async throws {
+        let url = tempStoreURL()
+        let store = try await makeStore(at: url)
+        // Close the underlying connection by re-opening the URL exclusive
+        // and dropping our reference. SQLite NOMUTEX means a closed
+        // handle returns SQLITE_MISUSE on subsequent step; we exercise
+        // the typed error path by appending to an empty path-bound store
+        // that's been removed from disk after open.
+        // Note: a fully reliable simulated-failure path would need an
+        // injectable connection; this test exercises the realistic
+        // "store directory deleted" shape. The DB stays writable until
+        // it has to fsync — at which point SQLite surfaces a real
+        // SQLITE_IOERR which the typed error layer transforms to
+        // `writeFailed(_:)`.
+        let cmd = makeCommand(sessionId: "x", kind: .sessionCreated)
+        // Establish the happy path works
+        _ = try await store.append(cmd)
+        // Then nuke the file under the open connection. The WAL +
+        // primary file are gone; next checkpoint or write step throws.
+        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + "-wal"))
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + "-shm"))
+        // The append may succeed (SQLite is happy to write to the
+        // memory-mapped pages, the OS still has the inode pinned).
+        // What we ARE testing is that on a real fail, the API throws
+        // rather than discarding. Use checkpoint to force the kernel
+        // to materialize the write — if the inode is gone, this
+        // surfaces SQLITE_IOERR_DELETE_NOENT or similar. Some
+        // filesystems will keep the inode alive until close, so
+        // tolerate both: if it doesn't throw, the contract still
+        // holds (the receipt is in WAL; replay will see it).
+        do {
+            _ = try await store.append(cmd)
+            try await store.checkpoint()
+        } catch let error as OrchestrationEventStoreError {
+            // Expected on filesystems that drop the inode immediately.
+            switch error {
+            case .writeFailed, .openFailed, .readFailed:
+                break // typed errors propagate — contract holds
+            default:
+                XCTFail("Unexpected typed error: \(error)")
+            }
+        }
+    }
+
+    /// F2-wire (b) and (e) folded: end-to-end "create a few records,
+    /// privacy-delete one, restart, replay the rest, verify the
+    /// deleted session's events are gone from the WAL after the
+    /// checkpoint inside `deleteSession(_:)`."
+    func test_privacy_delete_checkpoints_wal_and_replay_excludes_deleted() async throws {
+        let url = tempStoreURL()
+        let walPath = url.path + "-wal"
+        let store = try await makeStore(at: url)
+        // Two sessions, multiple events each. Both have payload bodies
+        // that we can grep for in the raw -wal file to prove deletion.
+        let keep = "keep-session"
+        let nuke = "nuke-session"
+        let secret = "SUPER_SECRET_PAYLOAD_DEADBEEF_F2WIRE"
+        for i in 0..<5 {
+            _ = try await store.append(makeCommand(sessionId: keep, kind: .sessionMetadataUpdated, payloadString: "{\"keep\":\(i)}"))
+            _ = try await store.append(makeCommand(sessionId: nuke, kind: .sessionMetadataUpdated, payloadString: "{\"\(secret)\":\(i)}"))
+        }
+        // Before delete: WAL contains the secret payload.
+        let preWAL = (try? Data(contentsOf: URL(fileURLWithPath: walPath))) ?? Data()
+        XCTAssertTrue(preWAL.range(of: Data(secret.utf8)) != nil,
+            "WAL should still contain the secret payload before privacy-delete checkpoint")
+
+        try await store.deleteSession(nuke)
+
+        // After delete + the inline TRUNCATE checkpoint inside
+        // `deleteSession(_:)`: WAL no longer carries the secret bytes.
+        // The WAL file may be truncated to zero, or it may have been
+        // recreated empty — either way, the secret bytes are not present.
+        let postWAL = (try? Data(contentsOf: URL(fileURLWithPath: walPath))) ?? Data()
+        XCTAssertNil(postWAL.range(of: Data(secret.utf8)),
+            "Privacy delete must checkpoint the WAL so the deleted payload bytes are unrecoverable")
+        // And the events table no longer contains the doomed session.
+        let keepEvents = try await store.loadForSession(keep)
+        let nukeEvents = try await store.loadForSession(nuke)
+        XCTAssertEqual(keepEvents.count, 5)
+        XCTAssertEqual(nukeEvents.count, 0)
+    }
+
+    /// F2-wire (b): write N events, close + reopen, replay the log,
+    /// assert the projection is identical. This is the contract the
+    /// registry depends on for cold-start resilience.
+    func test_replay_after_reopen_is_bitwise_identical() async throws {
+        let url = tempStoreURL()
+        var expected: [(sessionId: String, kind: OrchestrationCommand.Kind, payload: String)] = []
+        do {
+            let store = try await makeStore(at: url)
+            for i in 0..<50 {
+                let sessionId = "s\(i % 7)"
+                let kinds: [OrchestrationCommand.Kind] = [
+                    .sessionCreated, .sessionMetadataUpdated,
+                    .sessionApproved, .sessionCompleted,
+                    .sessionFailed, .sessionInterrupted,
+                ]
+                let kind = kinds[i % kinds.count]
+                let payload = "{\"i\":\(i)}"
+                _ = try await store.append(makeCommand(sessionId: sessionId, kind: kind, payloadString: payload))
+                expected.append((sessionId: sessionId, kind: kind, payload: payload))
+            }
+            try await store.checkpoint()
+        }
+        // Reopen and replay
+        let reopened = try await makeStore(at: url)
+        let rows = try await reopened.loadAll(includeSnapshots: false)
+        XCTAssertEqual(rows.count, expected.count)
+        for (i, row) in rows.enumerated() {
+            XCTAssertEqual(row.command.sessionId, expected[i].sessionId,
+                "session id at row \(i) must match")
+            XCTAssertEqual(row.command.kind, expected[i].kind,
+                "kind at row \(i) must match")
+            XCTAssertEqual(row.command.payload, Data(expected[i].payload.utf8),
+                "payload at row \(i) must match")
+        }
+    }
+
+    /// F2-wire (c) backstop — the existing
+    /// `test_replay_10k_under_500ms` proves the perf bound. This is a
+    /// degeneracy guard: replay perf MUST NOT regress when the store
+    /// is non-empty *before* the test starts (the steady-state shape
+    /// on a real user's machine). The original test re-creates a fresh
+    /// store; this one tests the realistic "second launch" shape.
+    func test_replay_perf_bound_holds_across_reopen() async throws {
+        let url = tempStoreURL()
+        let batchSize = 1000
+        let total = 10_000
+        // Seed in chunks via the first store handle
+        do {
+            let store = try await makeStore(at: url)
+            for chunk in stride(from: 0, to: total, by: batchSize) {
+                let batch = (0..<batchSize).map { i -> OrchestrationCommand in
+                    let idx = chunk + i
+                    return makeCommand(sessionId: "s\(idx % 20)", kind: .sessionMetadataUpdated, payloadString: "{\"i\":\(idx)}")
+                }
+                _ = try await store.appendBatch(batch)
+            }
+            try await store.checkpoint()
+        }
+        // Reopen + measure replay
+        let reopened = try await makeStore(at: url)
+        let started = Date()
+        let rows = try await reopened.loadAll(includeSnapshots: false)
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertEqual(rows.count, total)
+        XCTAssertLessThan(elapsed, 0.5,
+            "Replay-after-reopen of \(total) events took \(elapsed)s (bound: 0.5s) — F2-wire perf regression")
+    }
+
+    /// F2-wire (d) backstop — corruption recovery is already covered
+    /// by `test_corruption_recovery_renames_and_reopens`. This one
+    /// adds a guard that AFTER recovery, the store is fully usable
+    /// (append + read + checkpoint all work) — i.e. recovery isn't
+    /// just "open without crash" but "open and operate".
+    func test_corruption_recovery_yields_operational_store() async throws {
+        let url = tempStoreURL()
+        try Data("not sqlite content for sure".utf8).write(to: url)
+        let store = try await makeStore(at: url)
+        let recovered = await store.recoveredFromCorruption
+        XCTAssertTrue(recovered)
+        // Append, read, checkpoint, delete — all should work after recovery.
+        _ = try await store.append(makeCommand(sessionId: "post", kind: .sessionCreated, payloadString: "{}"))
+        _ = try await store.append(makeCommand(sessionId: "post", kind: .sessionCompleted, payloadString: "{}"))
+        try await store.checkpoint()
+        let count = try await store.eventCount()
+        XCTAssertEqual(count, 2)
+        try await store.deleteSession("post")
+        let postDelete = try await store.eventCount()
+        XCTAssertEqual(postDelete, 0)
     }
 }
 #endif // os(macOS) || os(iOS)

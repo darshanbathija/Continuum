@@ -149,6 +149,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for observer in [prefsObserver, windowCloseObserver, showDashboardObserver] {
             if let observer { NotificationCenter.default.removeObserver(observer) }
         }
+        // F2-wire: opportunistic WAL checkpoint on normal exit so the
+        // orchestration log's sidecar files (`-wal`/`-shm`) don't accrete
+        // unbounded across reboots, and so a normal exit gives the next
+        // cold start a single-file open. Privacy-deletion paths still
+        // checkpoint inline; this catches the steady-state shutdown.
+        //
+        // We use `Task` rather than awaiting synchronously — Apple won't
+        // wait on us past a few hundred ms during termination, and a
+        // best-effort fire-and-let-the-OS-eventually-flush is correct:
+        // the next launch's `OrchestrationEventStore.init` rebuilds from
+        // the WAL anyway. Synchronous semaphore wait here would risk
+        // blocking the AppKit terminate path.
+        if let registry = AppDelegate.runtime?.agentSessionRegistry {
+            Task.detached {
+                await registry.checkpointEventStore()
+            }
+        }
     }
 
     /// Keep the app alive when the dashboard window is closed — the menu bar

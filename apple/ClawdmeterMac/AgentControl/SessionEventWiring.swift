@@ -46,7 +46,16 @@ public final class SessionEventWiring: @unchecked Sendable {
         self.doneDetector = DoneDetector(sessionId: sessionId, goal: goal) { sid, trigger in
             wiringLogger.info("Done fired: session=\(sid.uuidString) trigger=\(trigger)")
             Task { @MainActor in
-                registry.updateStatus(id: sid, status: .done)
+                // F2-wire: write-ahead failures here are best-effort
+                // logged. The done-detector path is fired from a JSONL
+                // tail; failing loud would mean a SQLite hiccup blocks
+                // status transitions from external events. Surface the
+                // breach in logs so telemetry can catch it.
+                do {
+                    try await registry.updateStatus(id: sid, status: .done)
+                } catch {
+                    wiringLogger.error("updateStatus(.done) write-ahead failed for \(sid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
                 AgentEventStream.recordEvent(
                     sessionId: sid,
                     kind: .doneDetected,
@@ -66,7 +75,11 @@ public final class SessionEventWiring: @unchecked Sendable {
         let planNotificationQueue = notifications
         self.planWatcher = PlanModeWatcher(sessionId: sessionId) { sid, planText, _ in
             Task { @MainActor in
-                registry.setPlanText(id: sid, planText: planText)
+                do {
+                    try await registry.setPlanText(id: sid, planText: planText)
+                } catch {
+                    wiringLogger.error("setPlanText write-ahead failed for \(sid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
                 AgentEventStream.recordEvent(
                     sessionId: sid,
                     kind: .planReady,

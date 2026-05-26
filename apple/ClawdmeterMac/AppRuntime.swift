@@ -330,7 +330,18 @@ final class AppRuntime: ObservableObject {
                     for s in self.agentSessionRegistry.sessions
                         where s.kind == .chat && s.archivedAt == nil && s.lastEventAt < cutoff
                     {
-                        self.agentSessionRegistry.archive(id: s.id)
+                        // F2-wire: write-ahead failures on the idle
+                        // archive sweep are best-effort logged. We
+                        // don't want a SQLite hiccup to break the
+                        // 60-second sweeper.
+                        do {
+                            try await self.agentSessionRegistry.archive(id: s.id)
+                        } catch {
+                            // No registry logger in this scope —
+                            // print is non-ideal but the sweep is
+                            // best-effort by design.
+                            print("chatIdle archive failed: \(error.localizedDescription)")
+                        }
                     }
                 }
             }

@@ -93,7 +93,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_lifecycleRouteAndClientReturnSnapshot() async throws {
-        let session = registry.create(
+        let session = try await registry.create(
             repoKey: tempDir.path,
             repoDisplayName: "Route Test",
             agent: .claude,
@@ -105,7 +105,7 @@ final class AgentControlServerChatRouteTests: XCTestCase {
             planMode: true,
             mode: .worktree
         )
-        registry.setPlanText(id: session.id, planText: "1. Verify route")
+        try await registry.setPlanText(id: session.id, planText: "1. Verify route")
 
         let raw = try await requestRaw(path: "/sessions/\(session.id.uuidString)/lifecycle", method: "GET")
         XCTAssertEqual(raw.status, 200)

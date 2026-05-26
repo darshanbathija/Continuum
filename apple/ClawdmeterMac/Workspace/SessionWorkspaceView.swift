@@ -1422,7 +1422,14 @@ private struct SidebarPane: View {
                         onPin: { try? presentationStore.togglePin(session.id) },
                         onMute: { try? presentationStore.setMuted(session.id, muted: !isMuted) },
                         onArchive: {
-                            model.registry.archive(id: session.id)
+                            // F2-wire: registry mutation is now async
+                            // throws. SwiftUI button closures are sync,
+                            // so wrap in Task. Best-effort — failures
+                            // surface as a missed archive (the row
+                            // stays in the sidebar; user can retry).
+                            Task { @MainActor in
+                                try? await model.registry.archive(id: session.id)
+                            }
                             postArchiveUndoToast(for: session)
                         }
                     )
@@ -1626,12 +1633,16 @@ private struct SidebarPane: View {
         }
         if session.archivedAt == nil {
             Button("Archive", systemImage: "archivebox") {
-                model.registry.archive(id: session.id)
+                Task { @MainActor in
+                    try? await model.registry.archive(id: session.id)
+                }
                 postArchiveUndoToast(for: session)
             }
         } else {
             Button("Unarchive", systemImage: "archivebox.fill") {
-                model.registry.unarchive(id: session.id)
+                Task { @MainActor in
+                    try? await model.registry.unarchive(id: session.id)
+                }
             }
         }
         Button("New sub-chat (⌘;)", systemImage: "bubble.left.and.bubble.right") {
@@ -2049,7 +2060,9 @@ private struct CenterThread: View {
                     Divider()
                     if session.archivedAt == nil {
                         Button("Archive") {
-                            model.registry.archive(id: session.id)
+                            Task { @MainActor in
+                                try? await model.registry.archive(id: session.id)
+                            }
                             postArchiveUndoToast(for: session)
                             workbenchState.clearSessionState(sessionId: session.id)
                             AttachmentStaging.cleanup(sessionId: session.id)

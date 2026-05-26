@@ -167,22 +167,28 @@ public enum FeatureFlags {
                        default: false)
     }
 
-    // MARK: - Orchestration event store (F2)
+    // MARK: - Orchestration event store (F2 / F2-wire)
 
     /// F2 — Orchestration event store with append-only events + WAL +
     /// replay. When true, `AgentSessionRegistry.init` seeds itself by
     /// replaying the event log; every mutation writes a receipt to the
-    /// log before the in-memory state changes. When false (default),
-    /// the registry uses the legacy `sessions.json` snapshot path
-    /// unchanged.
+    /// log before the in-memory state changes. When false, the registry
+    /// uses the legacy `sessions.json` snapshot path unchanged.
     ///
-    /// Default `false` — F2 lands as opt-in. Wire-up PR (`F2-wire`)
-    /// flips the default to `true` once parity is verified on real
-    /// session data.
+    /// **Default `true` since F2-wire.** The foundation PR (F2) shipped
+    /// the store + replay-on-init path behind this flag default-off; the
+    /// F2-wire PR (this one) wires every registry mutation through
+    /// `recordCommand` so the write-ahead-receipt invariant is honored
+    /// at the public API surface. The flag stays in place so a rollback
+    /// PR can flip the default back to `false` without code churn if the
+    /// wired path regresses in production.
+    ///
+    /// Env override remains useful for tests + CI that need the legacy
+    /// path explicitly (e.g. `CLAWDMETER_FF_ORCHESTRATION_EVENT_STORE=0`).
     public static var orchestrationEventStore: Bool {
         resolve(envName: "CLAWDMETER_FF_ORCHESTRATION_EVENT_STORE",
                 userDefaultsKey: "com.clawdmeter.featureFlags.orchestrationEventStore",
-                default: false)
+                default: true)
     }
 
     // MARK: - Test hooks
