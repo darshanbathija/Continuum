@@ -247,9 +247,17 @@ public actor ShellRunner {
     ///
     /// Resolution order (first match wins):
     /// 1. UserDefaults override at `clawdmeter.binaries.<name>` (Settings → Diagnostics)
-    /// 2. Environment override at `CLAWDMETER_BIN_<NAME_UPPERCASED>`
-    /// 3. Known candidate paths (Homebrew, system, user local)
-    /// 4. `which <name>` via PATH
+    /// 2. App-bundled vendor binary under Contents/Resources/Vendor/<name>/
+    /// 3. Environment override at `CLAWDMETER_BIN_<NAME_UPPERCASED>` (Debug only)
+    /// 4. Known candidate paths (Homebrew, system, user local)
+    /// 5. `which <name>` via PATH
+    ///
+    /// Bundled is preferred over the env override so an inherited or
+    /// attacker-set `CLAWDMETER_BIN_<NAME>` can't redirect a
+    /// security-sensitive binary (tmux, etc.) to an arbitrary path. The
+    /// env override is retained in Debug builds for dev convenience.
+    /// UserDefaults stays first because it requires an explicit Settings
+    /// action — user-consented.
     ///
     /// Replaces the previous hardcoded `/Users/darshanbathija_1/.local/bin/claude`
     /// pattern that broke for other users (T2 in Sessions v2 plan).
@@ -261,14 +269,44 @@ public actor ShellRunner {
            FileManager.default.isExecutableFile(atPath: override) {
             return override
         }
-        // 2. Environment override.
+        // 2. App-bundled vendor binary. This is the production path for
+        // app-owned infrastructure such as tmux; users should not need
+        // Homebrew just to start a session. Bundled is checked BEFORE
+        // the env override so a hostile env var can't replace a
+        // security-sensitive binary the app ships with.
+        if let resourceURL = Bundle.main.resourceURL {
+            let bundledCandidates = [
+                resourceURL
+                    .appendingPathComponent("Vendor", isDirectory: true)
+                    .appendingPathComponent(name, isDirectory: true)
+                    .appendingPathComponent("bin", isDirectory: true)
+                    .appendingPathComponent(name, isDirectory: false)
+                    .path,
+                resourceURL
+                    .appendingPathComponent("Vendor", isDirectory: true)
+                    .appendingPathComponent(name, isDirectory: true)
+                    .appendingPathComponent(name, isDirectory: false)
+                    .path,
+            ]
+            for path in bundledCandidates {
+                if FileManager.default.isExecutableFile(atPath: path) {
+                    return path
+                }
+            }
+        }
+        // 3. Environment override — DEBUG builds only. In Release the
+        // env override would let a hostile parent process redirect
+        // tmux/claude/etc. to an attacker-controlled path; user-explicit
+        // overrides go through UserDefaults instead.
+        #if DEBUG
         let envKey = "CLAWDMETER_BIN_\(name.uppercased())"
         if let envOverride = ProcessInfo.processInfo.environment[envKey],
            !envOverride.isEmpty,
            FileManager.default.isExecutableFile(atPath: envOverride) {
             return envOverride
         }
-        // 3. Known candidate paths.
+        #endif
+        // 4. Known candidate paths.
         // v0.28.0: ClawdmeterRealHome (getpwuid) rather than
         // FileManager.default.homeDirectoryForCurrentUser so the sandboxed
         // Release build searches the user's actual `~/.local/bin/` (where

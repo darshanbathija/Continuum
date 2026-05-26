@@ -284,9 +284,13 @@ enum SupportBundleWriter {
     private static func providerSnapshot() -> String {
         let providers = ["claude", "codex", "gemini", "opencode", "cursor", "tmux", "tailscale", "gh", "git"]
         return providers.map { name in
-            let path = redact(run("/bin/zsh", ["-lc", "command -v \(name) 2>/dev/null || true"]))
+            let resolvedPath = ShellRunner.locateBinary(name)
+            let path = redact(resolvedPath ?? run("/bin/zsh", ["-lc", "command -v \(name) 2>/dev/null || true"]))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let version = redact(run("/bin/zsh", ["-lc", "\(name) --version 2>&1 | head -5 || true"]))
+            let version = redact(
+                resolvedPath.map { run($0, ["--version"]) }
+                    ?? run("/bin/zsh", ["-lc", "\(name) --version 2>&1 | head -5 || true"])
+            )
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return "\(name): \(path.isEmpty ? "missing" : path)\n\(version)"
         }.joined(separator: "\n\n")

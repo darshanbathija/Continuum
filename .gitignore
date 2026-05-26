@@ -17,6 +17,10 @@ tools/package-lock.json
 # tools/build-mac-dmg.sh auto-runs the download before xcodebuild.
 apple/ClawdmeterMac/Resources/Vendor/node/
 
+# v0.29.12 bundled tmux + dylibs. Downloaded on demand by
+# tools/download-bundled-tmux.sh; gitignored to keep the repo lean.
+apple/ClawdmeterMac/Resources/Vendor/tmux/
+
 # Apple — Xcode and xcodegen
 apple/Clawdmeter.xcodeproj/xcuserdata/
 apple/Clawdmeter.xcodeproj/project.xcworkspace/xcuserdata/

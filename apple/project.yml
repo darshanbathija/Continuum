@@ -53,6 +53,10 @@ targets:
           # v0.7.15: same exclusion for the bundled uv binary used by
           # the Antigravity SDK toggle's Python venv provisioning.
           - "Resources/Vendor/uv/**"
+          # v0.29.12: bundled tmux is app infrastructure for Sessions.
+          # Keep it out of source scanning; the folder reference below
+          # copies it into Contents/Resources/Vendor/tmux/.
+          - "Resources/Vendor/tmux/**"
       # v0.27.0: Resources/Vendor/open-design/** exclusion removed —
       # the bundled Open Design daemon was stripped along with the
       # Design tab.
@@ -131,6 +135,22 @@ targets:
           fi
         outputFiles:
           - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/uv/uv
+      - name: Download bundled tmux (if missing)
+        # v0.29.12: Sessions uses tmux as internal infrastructure. Ship
+        # a known-good tmux + dylibs inside the app instead of requiring
+        # users to install Homebrew packages manually. Skip only for devs
+        # deliberately testing against a system tmux.
+        script: |
+          if [ "${CLAWDMETER_SKIP_BUNDLED_TMUX:-0}" = "1" ]; then
+            echo "Skipping bundled tmux download (CLAWDMETER_SKIP_BUNDLED_TMUX=1)"
+            exit 0
+          fi
+          REPO_ROOT="$(cd "$SRCROOT/.." && pwd)"
+          if [ ! -x "$REPO_ROOT/apple/ClawdmeterMac/Resources/Vendor/tmux/bin/tmux" ]; then
+            "$REPO_ROOT/tools/download-bundled-tmux.sh"
+          fi
+        outputFiles:
+          - $(SRCROOT)/ClawdmeterMac/Resources/Vendor/tmux/bin/tmux
       # v0.27.0: "Build bundled Open Design" preBuildScript removed —
       # the bundled Open Design daemon was stripped along with the
       # Design tab.
