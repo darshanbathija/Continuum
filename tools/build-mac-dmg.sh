@@ -213,15 +213,94 @@ fi
 rm -rf "$CERT_DIR"
 
 if printf '%s\n' "$CODESIGN_INFO" | grep -qE '^Authority=Apple Development'; then
-  echo "▸ Apple Development export detected — stripping provisioning profile and ad-hoc re-signing"
+  echo "▸ Apple Development export detected — stripping all provisioning profiles and re-signing inside-out"
   # Personal-team Apple Development exports can embed a provisioning
   # profile whose allowed entitlements do not match the final Mac app
   # entitlements after the helper/outer re-sign pass. That launches as:
   #   RBSRequestErrorDomain Code=5 / NSPOSIXErrorDomain Code=163
   # Gatekeeper is a separate notarization issue; this fixes the actual
   # launchd entitlement/provisioning mismatch for GitHub DMG users.
-  rm -f "$APP_PATH/Contents/embedded.provisionprofile"
-  codesign --force --deep --sign - "$APP_PATH" 2>&1 | sed 's/^/    /'
+  #
+  # IMPORTANT: strip embedded.provisionprofile from every nested bundle —
+  # widget appex, XPC services, helpers — not just the top-level .app.
+  # A single forgotten profile on the widget extension recreates the
+  # same launchd failure on first widget load.
+  find "$APP_PATH" -name "embedded.provisionprofile" -delete
+
+  # Expand $(AppIdentifierPrefix) in entitlements files using the
+  # TeamIdentifier on the binary. codesign does NOT expand this macro
+  # itself; without expansion, keychain-access-group is the literal
+  # string "$(AppIdentifierPrefix)com.clawdmeter" which launchd
+  # rejects (error 163).
+  TEAM_ID="$(printf '%s\n' "$CODESIGN_INFO" \
+      | grep -E '^TeamIdentifier=' \
+      | head -n1 \
+      | sed 's/^TeamIdentifier=//' || true)"
+  if [[ -z "$TEAM_ID" ]]; then
+    echo "    ⚠ Could not determine team id — falling back to deep ad-hoc sign without entitlements"
+    codesign --force --deep --sign - "$APP_PATH" 2>&1 | sed 's/^/    /'
+  else
+    # Sign inside-out: helpers → widget appex → outer app. Each bundle
+    # gets its own entitlements (with macro expanded) so launchd sees
+    # the right keychain-access-groups, application-groups, file-system
+    # exceptions, and apple-events declarations after re-sign.
+
+    # 1. Vendor helpers (opencode, uv). v0.29.4: signing these with the
+    #    Apple Development cert + hardened runtime + helper entitlements
+    #    keeps macOS Tahoe XProtect from popping the "could not verify
+    #    is free of malware" dialog on Bun's native-dylib dlopens.
+    if [[ -f "$HELPER_ENT" && -n "$SIGNING_IDENTITY" ]]; then
+      for HELPER in "${HELPER_BINARIES[@]}"; do
+        if [[ -f "$HELPER" ]]; then
+          codesign --force \
+            --sign "$SIGNING_IDENTITY" \
+            --options runtime \
+            --entitlements "$HELPER_ENT" \
+            --timestamp=none \
+            "$HELPER" 2>&1 | sed 's/^/    /' || echo "    ⚠ codesign failed for $HELPER"
+        fi
+      done
+    fi
+
+    # 2. Widget extension — must be re-signed with its own entitlements
+    #    so it gets the widget-specific app-group / keychain-access-group
+    #    instead of inheriting the outer app's (which it can't use).
+    WIDGET_APPEX="$APP_PATH/Contents/PlugIns/ClawdmeterMacWidgets.appex"
+    WIDGET_ENT="$REPO_ROOT/apple/ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements"
+    if [[ -d "$WIDGET_APPEX" ]]; then
+      if [[ -f "$WIDGET_ENT" ]]; then
+        WIDGET_ENT_EXPANDED="$(mktemp -t widget-ent.XXXXXX.plist)"
+        sed "s|\$(AppIdentifierPrefix)|${TEAM_ID}.|g" "$WIDGET_ENT" \
+            > "$WIDGET_ENT_EXPANDED"
+        codesign --force \
+          --sign - \
+          --entitlements "$WIDGET_ENT_EXPANDED" \
+          --timestamp=none \
+          "$WIDGET_APPEX" 2>&1 | sed 's/^/    /' || echo "    ⚠ widget codesign failed"
+        rm -f "$WIDGET_ENT_EXPANDED"
+      else
+        echo "    ⚠ Widget entitlements file not found — signing widget ad-hoc without entitlements"
+        codesign --force --sign - "$WIDGET_APPEX" 2>&1 | sed 's/^/    /'
+      fi
+    fi
+
+    # 3. Outer app — ad-hoc with full Release entitlements + hardened
+    #    runtime. NOT --deep: nested code was signed individually above
+    #    with its own entitlements; --deep would re-sign helpers/widget
+    #    with the outer's entitlements, which the widget can't actually
+    #    use.
+    OUTER_ENT="$(mktemp -t outer-ent.XXXXXX.plist)"
+    sed "s|\$(AppIdentifierPrefix)|${TEAM_ID}.|g" \
+        "$REPO_ROOT/apple/ClawdmeterMac/ClawdmeterMac-Release.entitlements" \
+        > "$OUTER_ENT"
+    codesign --force \
+      --sign - \
+      --entitlements "$OUTER_ENT" \
+      --options runtime \
+      --timestamp=none \
+      "$APP_PATH" 2>&1 | sed 's/^/    /' || echo "    ⚠ outer codesign failed"
+    rm -f "$OUTER_ENT"
+  fi
 elif [[ -n "$SIGNING_IDENTITY" && -f "$HELPER_ENT" ]]; then
   echo "▸ Re-signing bundled helpers with: $SIGNING_IDENTITY"
   for HELPER in "${HELPER_BINARIES[@]}"; do
