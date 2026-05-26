@@ -285,6 +285,14 @@ public actor OrchestrationEventStore {
             let dst = URL(fileURLWithPath: storeURL.path + ext + suffix)
             do {
                 try fm.moveItem(at: src, to: dst)
+                // P1 fix (review of PR #146): exclude the quarantined file
+                // from iCloud / Time Machine. The corrupt file is local-
+                // only diagnostic data — backing it up to user-visible
+                // sync targets is both wasteful and a privacy footgun.
+                var dstURL = URL(fileURLWithPath: dst.path)
+                var values = URLResourceValues()
+                values.isExcludedFromBackup = true
+                try? dstURL.setResourceValues(values)
             } catch {
                 // Best-effort: a stale -wal we can't rename is at worst
                 // an orphan; SQLite recreates one on next open.
@@ -675,6 +683,13 @@ public actor OrchestrationEventStore {
     /// Used by GDPR / CCPA "delete my data" flows and by the daemon when
     /// `AgentSessionRegistry.delete(id:)` runs. True row delete: tombstones
     /// would leak data through compaction history.
+    ///
+    /// P1 fix (review of PR #146): after the delete commits, force a WAL
+    /// checkpoint. SQLite's WAL keeps the page images of the deleted rows
+    /// in `<store>-wal` until the next opportunistic checkpoint, so a
+    /// privacy delete that doesn't checkpoint would leave the deleted
+    /// payload recoverable from the sidecar file on disk. The checkpoint
+    /// merges + truncates the WAL so the data is genuinely gone.
     public func deleteSession(_ sessionId: String) throws {
         try exec("BEGIN IMMEDIATE;")
         do {
@@ -685,6 +700,12 @@ public actor OrchestrationEventStore {
             try? exec("ROLLBACK;")
             throw error
         }
+        // Best-effort WAL flush so the privacy-deleted bytes are not
+        // recoverable from `<store>-wal`. Failing to checkpoint is non-
+        // fatal — the next opportunistic checkpoint will catch up — but
+        // we surface the error so privacy-sensitive callers can verify.
+        try? exec("PRAGMA wal_checkpoint(TRUNCATE);")
+        Self.applyBackupExclusion(at: storeURL)
     }
 
     private func deleteRows(sql: String, sessionId: String) throws {

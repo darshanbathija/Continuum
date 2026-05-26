@@ -113,10 +113,45 @@ public final class AgentSessionRegistry: ObservableObject {
     /// receipt, the JSON snapshot becomes derivable and the replay handler
     /// becomes the authoritative loader.
     private func seedFromEventReplayIfPossible(store: OrchestrationEventStore) {
-        let task = Task { () -> [AgentSession]? in
+        // P0 fix (review of PR #146): the replay Task MUST run off MainActor.
+        // The original code used `Task { ... }` here which inherits MainActor
+        // isolation. Combined with `sema.wait()` blocking the MainActor below,
+        // that deadlocked at startup whenever the event log was non-empty —
+        // the MainActor task body could not resume because MainActor was
+        // parked on the semaphore. Use `Task.detached` so the body runs on
+        // a cooperative thread; the actor isolation on `store.loadAll(...)`
+        // still serializes the sqlite work safely.
+        let replayed = Self.runReplayBlocking(store: store)
+        guard let replayed, !replayed.isEmpty else { return }
+        self.sessions = replayed
+        for s in replayed {
+            nextEventSeqBySession[s.id] = s.lastEventSeq + 1
+        }
+        registryLogger.info("Seeded \(replayed.count) sessions from OrchestrationEventStore replay")
+    }
+
+    /// Synchronously run the event-store replay from the MainActor `init`
+    /// body. Uses a detached Task so the replay body does NOT inherit
+    /// MainActor isolation — that is what makes the surrounding
+    /// `DispatchSemaphore.wait()` safe (a MainActor-isolated task body
+    /// would deadlock because resume requires the MainActor that we have
+    /// parked on the semaphore).
+    ///
+    /// The replay is bounded by the codex #9 perf gate (10k events <500ms),
+    /// so blocking init for the duration is acceptable.
+    private nonisolated static func runReplayBlocking(store: OrchestrationEventStore) -> [AgentSession]? {
+        let sema = DispatchSemaphore(value: 0)
+        // Sendable wrapper for the result so we can write from the
+        // detached task and read after the semaphore wait.
+        final class Box: @unchecked Sendable {
+            var value: [AgentSession]?
+        }
+        let box = Box()
+        Task.detached {
+            defer { sema.signal() }
             do {
                 let rows = try await store.loadAll(includeSnapshots: true)
-                guard !rows.isEmpty else { return nil }
+                guard !rows.isEmpty else { return }
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 var projection: [UUID: AgentSession] = [:]
@@ -135,39 +170,13 @@ public final class AgentSessionRegistry: ObservableObject {
                         }
                     }
                 }
-                return Array(projection.values)
+                box.value = Array(projection.values)
             } catch {
                 registryLogger.error("OrchestrationEventStore replay failed: \(error.localizedDescription, privacy: .public)")
-                return nil
             }
         }
-        // Block synchronously — init MUST finish before the daemon hands
-        // out the registry. Cost is bounded by the replay perf gate
-        // (10k events <500ms per codex #9).
-        let replayed = Self.runBlocking(task: task)
-        guard let replayed, !replayed.isEmpty else { return }
-        self.sessions = replayed
-        for s in replayed {
-            nextEventSeqBySession[s.id] = s.lastEventSeq + 1
-        }
-        registryLogger.info("Seeded \(replayed.count) sessions from OrchestrationEventStore replay")
-    }
-
-    /// Synchronously run an `async` task from a non-async context (the
-    /// MainActor init body). Uses a semaphore — adequate because the
-    /// init path is genuinely synchronous from SwiftUI's perspective and
-    /// the only thing we're awaiting is sqlite3 work on the actor.
-    private nonisolated static func runBlocking<T>(task: Task<T, Never>) -> T {
-        let sema = DispatchSemaphore(value: 0)
-        var box: T?
-        Task.detached {
-            box = await task.value
-            sema.signal()
-        }
         sema.wait()
-        // Force-unwrap is safe: `T` is `[AgentSession]?` in the only caller
-        // and the closure always assigns before signalling.
-        return box!
+        return box.value
     }
 
     // MARK: - Mutations
