@@ -11,6 +11,28 @@ public enum TahoeGlassTone: String, Sendable, CaseIterable {
     case inset   // recessed (dark fill in dark mode, ~clear in light)
 }
 
+/// Shadow weight on a `TahoeGlass` surface. A3 split the historical
+/// single boolean into three explicit levels:
+///   - `.none`     — no shadow (e.g. `inset` surfaces, status pills inline
+///                   with surrounding chrome)
+///   - `.subtle`   — radius 10, default for all glass surfaces. Reads as
+///                   "soft elevation" without the offscreen-blur cost of
+///                   the historical radius-20 shadow.
+///   - `.prominent` — radius 20, opt-in for surfaces that genuinely need
+///                    a heavier lift (modal cards, important CTAs).
+///
+/// Why the change: pre-A3, every `TahoeGlass(shadow: true)` rendered a
+/// `shadow(radius: 20)` — 78 sites stacked across the Mac UI. Each shadow
+/// is an offscreen blur pass in Core Animation; the cost compounds when
+/// the user resizes the window or scrolls between tabs. Trimming the
+/// default to radius 10 + reserving 20 for opt-in cuts per-frame work
+/// without losing visual hierarchy where it actually matters.
+public enum TahoeGlassShadow: Sendable, Equatable {
+    case none
+    case subtle
+    case prominent
+}
+
 /// The workhorse Liquid Glass primitive. Ports `glass.jsx::Glass`.
 ///
 /// Usage:
@@ -27,23 +49,53 @@ public struct TahoeGlass<Content: View>: View {
     public var tone: TahoeGlassTone
     public var solidOverride: Bool?
     public var ring: Bool
-    public var shadow: Bool
+    public var shadowStyle: TahoeGlassShadow
     public var content: Content
 
+    /// Designated init — accepts a `TahoeGlassShadow` enum.
+    ///
+    /// Default `.subtle` (radius 10) replaces the historical `radius: 20`
+    /// per A3: 78 call sites stacked the old radius and offscreen-rendered
+    /// 78 expensive blurs per frame. The trimmed default reads "soft
+    /// elevation"; pass `.prominent` for surfaces that actually need the
+    /// heavier lift (heavy modal CTAs, popovers).
     public init(
         radius: CGFloat = 18,
         tone: TahoeGlassTone = .panel,
         solid: Bool? = nil,
         ring: Bool = true,
-        shadow: Bool = true,
+        shadow: TahoeGlassShadow = .subtle,
         @ViewBuilder content: () -> Content
     ) {
         self.radius = radius
         self.tone = tone
         self.solidOverride = solid
         self.ring = ring
-        self.shadow = shadow
+        self.shadowStyle = shadow
         self.content = content()
+    }
+
+    /// Back-compat init taking `shadow: Bool` as the original boolean.
+    /// Maps `true` → `.subtle` (trimmed radius) and `false` → `.none`.
+    /// Lets the 78 call sites that pass `shadow: true` upgrade to the
+    /// new trimmed default without API churn. Sites that want the old
+    /// heavy shadow opt in to `.prominent` via the designated init.
+    public init(
+        radius: CGFloat = 18,
+        tone: TahoeGlassTone = .panel,
+        solid: Bool? = nil,
+        ring: Bool = true,
+        shadow: Bool,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.init(
+            radius: radius,
+            tone: tone,
+            solid: solid,
+            ring: ring,
+            shadow: shadow ? .subtle : .none,
+            content: content
+        )
     }
 
     private var isSolid: Bool { solidOverride ?? !t.translucent }
@@ -105,23 +157,39 @@ public struct TahoeGlass<Content: View>: View {
                 }
             }
             .clipShape(shape)
-            .modifier(TahoeShadow(isSolid: isSolid, shadow: shadow))
+            .modifier(TahoeShadow(isSolid: isSolid, style: shadowStyle))
     }
 }
 
 private struct TahoeShadow: ViewModifier {
     @Environment(\.tahoe) private var t
     let isSolid: Bool
-    let shadow: Bool
+    let style: TahoeGlassShadow
+
+    private var radius: CGFloat {
+        switch style {
+        case .none:      return 0
+        case .subtle:    return 10  // A3: down from 20
+        case .prominent: return 20  // explicit opt-in
+        }
+    }
+
+    private var yOffset: CGFloat {
+        switch style {
+        case .none:      return 0
+        case .subtle:    return 5   // proportional to radius
+        case .prominent: return 10
+        }
+    }
 
     func body(content: Content) -> some View {
-        if !shadow { return AnyView(content) }
+        if style == .none { return AnyView(content) }
         return AnyView(
             content
                 .shadow(
                     color: t.dark ? Color.black.opacity(isSolid ? 0.40 : 0.45)
                                   : Color(.sRGB, red: 15.0/255, green: 17.0/255, blue: 22.0/255, opacity: isSolid ? 0.08 : 0.10),
-                    radius: 20, x: 0, y: 10
+                    radius: radius, x: 0, y: yOffset
                 )
         )
     }
