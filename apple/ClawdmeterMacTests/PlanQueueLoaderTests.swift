@@ -154,6 +154,42 @@ final class PlanQueueLoaderTests: XCTestCase {
         XCTAssertEqual(PlanRunner.escapeForAppleScript("\\\""), "\\\\\\\"")
     }
 
+    func test_shellSingleQuote_wrapsPlainPath() {
+        XCTAssertEqual(PlanRunner.shellSingleQuote("/tmp/plain"), "'/tmp/plain'")
+    }
+
+    func test_shellSingleQuote_handlesPathWithSpace() {
+        // The default checkout lives under `~/Downloads/CC Watch/...` —
+        // single-quote wrapping keeps the space intact when the script
+        // is typed verbatim at a shell prompt by `do script`.
+        let path = "/Users/x/Downloads/CC Watch/Clawdmeter-worktrees/a5-slice"
+        XCTAssertEqual(PlanRunner.shellSingleQuote(path), "'/Users/x/Downloads/CC Watch/Clawdmeter-worktrees/a5-slice'")
+    }
+
+    func test_shellSingleQuote_escapesEmbeddedSingleQuote() {
+        // Standard POSIX `'\''` trick: close the quote, emit an escaped
+        // literal `'`, reopen the quote.
+        XCTAssertEqual(PlanRunner.shellSingleQuote("/Users/o'connor/x"),
+                       "'/Users/o'\\''connor/x'")
+    }
+
+    func test_renderSpawnScript_handlesWorktreeWithSpace() {
+        // Regression: the default `~/Downloads/CC Watch/...` path used
+        // to break the spawn because `cd '<path>'` is fine in bash, but
+        // the AppleScript `do script` types the entire command verbatim
+        // at the shell prompt, so the script PATH itself must also be
+        // shell-quoted before being handed to `do script`. This test
+        // pins the bash side; the AppleScript side is asserted via
+        // `shellSingleQuote` directly above.
+        let row = PlanQueueRow(
+            assignment: PlanAssignment(planItemId: "A1", branch: "b", worktreePath: "/tmp/CC Watch/wt", baseBranch: "main"),
+            item: PlanItem(id: "A1", priority: "P1", component: "x", files: [], effortHuman: "1d", effortCC: "1h", title: "t", sourceFinding: nil)
+        )
+        let script = PlanRunner.renderSpawnScript(promptPath: "/tmp/CC Watch/prompt.md", worktreePath: "/tmp/CC Watch/wt", row: row)
+        XCTAssertTrue(script.contains("cd '/tmp/CC Watch/wt'"))
+        XCTAssertTrue(script.contains("cat '/tmp/CC Watch/prompt.md'"))
+    }
+
     // MARK: - PlanRepoRoot
 
     func test_planRepoRoot_defaultUsesDownloadsCCWatch() {

@@ -147,9 +147,13 @@ enum PlanRunner {
     }
 
     static func renderSpawnScript(promptPath: String, worktreePath: String, row: PlanQueueRow) -> String {
-        // Heredoc-safe: PROMPT_PATH is escaped via single quotes in the
-        // generated script; the prompt file itself never gets interpolated
-        // through the shell.
+        // Both paths are wrapped via `shellSingleQuote` so a literal `'`
+        // inside the path (e.g. `/Users/o'connor/...`) doesn't break out
+        // of the surrounding single-quoted shell string. Spaces in the
+        // path (the default ~/Downloads/CC Watch/ checkout has one)
+        // are safe inside single quotes.
+        let quotedWorktree = shellSingleQuote(worktreePath)
+        let quotedPrompt = shellSingleQuote(promptPath)
         return """
         #!/bin/bash
         set -e
@@ -161,7 +165,7 @@ enum PlanRunner {
         echo "════════════════════════════════════════════════════════════"
         echo
 
-        cd '\(worktreePath)'
+        cd \(quotedWorktree)
 
         if ! command -v claude >/dev/null 2>&1; then
             echo "❌ claude CLI not on PATH — install Claude Code first."
@@ -170,7 +174,7 @@ enum PlanRunner {
             exit 1
         fi
 
-        PROMPT="$(cat '\(promptPath)')"
+        PROMPT="$(cat \(quotedPrompt))"
         exec claude --dangerously-skip-permissions "$PROMPT"
         """
     }
@@ -178,13 +182,17 @@ enum PlanRunner {
     // MARK: - osascript driver
 
     private static func runOsaScriptOpeningTerminal(scriptPath: String) async throws {
-        // `do script` opens a new Terminal window and runs the command in
-        // it. `activate` brings Terminal to the front so the user sees
-        // each window appear.
+        // `do script` types its string verbatim at the new Terminal's
+        // shell prompt — so the script path must be POSIX-shell-quoted
+        // first (the default `~/Downloads/CC Watch/...` checkout has a
+        // space, which would otherwise tokenize). After shell quoting we
+        // then AppleScript-escape the result so embedded `"` or `\`
+        // can't break out of the `do script "…"` literal.
+        let shellQuotedPath = shellSingleQuote(scriptPath)
         let appleScript = """
         tell application "Terminal"
             activate
-            do script "\(escapeForAppleScript(scriptPath))"
+            do script "\(escapeForAppleScript(shellQuotedPath))"
         end tell
         """
         try await runOsaScript(appleScript)
@@ -222,5 +230,18 @@ enum PlanRunner {
     static func escapeForAppleScript(_ s: String) -> String {
         s.replacingOccurrences(of: "\\", with: "\\\\")
          .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    /// Wraps `s` in POSIX-shell single quotes, escaping any embedded
+    /// single quote via the standard `'\''` pattern. Use this for any
+    /// value that has to be interpolated into a shell command line —
+    /// `do script` types its string verbatim at the new Terminal's
+    /// prompt, and the default repo path contains a space (`CC Watch`)
+    /// which would otherwise tokenize.
+    static func shellSingleQuote(_ s: String) -> String {
+        // Close the surrounding single quote, emit an escaped quote
+        // (`\'`) outside any quoting, then reopen the single quote.
+        let escaped = s.replacingOccurrences(of: "'", with: "'\\''")
+        return "'\(escaped)'"
     }
 }
