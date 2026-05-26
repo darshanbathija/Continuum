@@ -176,6 +176,40 @@ final class OpenCodeAdapterTests: XCTestCase {
         XCTAssertEqual(name, "opencode.role.future_role_xyz")
     }
 
+    /// Regression: unknown-role path previously leaked flat extension
+    /// keys (model_id, provider_id, …) at the top of providerExtensions,
+    /// violating the canonical contract that says keys are adapter ids.
+    /// Verify the fields are wrapped under "opencode" like the
+    /// assistant/user paths.
+    func test_unknownRole_extensionsWrappedUnderOpencodeKey() {
+        let message = parse("""
+        {
+          "role": "future_role_xyz",
+          "modelID": "claude-sonnet-4.5",
+          "providerID": "anthropic"
+        }
+        """)
+        let events = OpenCodeAdapter.translate(
+            message: message,
+            messageId: "msg-y",
+            timestamp: timestamp,
+            sessionId: "session-1",
+            sequenceStart: 0
+        )
+        XCTAssertEqual(events.count, 1)
+        guard let ext = events[0].providerExtensions else {
+            return XCTFail("Expected providerExtensions to be set")
+        }
+        // Top-level key should be "opencode", NOT raw field names.
+        XCTAssertNil(ext["model_id"], "extensions must not leak flat keys at the top level")
+        XCTAssertNil(ext["provider_id"], "extensions must not leak flat keys at the top level")
+        guard case .nested(let opencode) = ext["opencode"] else {
+            return XCTFail("Expected opencode-namespaced extension fields")
+        }
+        XCTAssertEqual(opencode["model_id"], .string("claude-sonnet-4.5"))
+        XCTAssertEqual(opencode["provider_id"], .string("anthropic"))
+    }
+
     // MARK: - Raw payload + provider instance
 
     func test_rawPayload_andProviderInstanceId_propagate() {

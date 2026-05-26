@@ -92,6 +92,13 @@ public enum OpenCodeAdapter {
             )]
 
         default:
+            // Wrap extensions under the "opencode" key to match the
+            // canonical contract (providerExtensions is keyed by adapter
+            // id, not raw field name). Assistant/user paths already do
+            // this; the unknown path was leaking flat keys.
+            let unknownExt = opencodeExtensions(from: message)
+            let unknownWrapped: [String: ProviderRuntimeEvent.ExtensionField]? =
+                unknownExt.map { ["opencode": .nested($0)] }
             return [makeEvent(
                 id: makeEventId(messageId: messageId, seq: sequenceStart),
                 sessionId: sessionId,
@@ -100,7 +107,7 @@ public enum OpenCodeAdapter {
                 providerInstanceId: providerInstanceId,
                 payload: .unknown(name: "opencode.role.\(role.isEmpty ? "missing" : role)"),
                 rawBytes: rawBytes,
-                extensions: opencodeExtensions(from: message)
+                extensions: unknownWrapped
             )]
         }
     }
