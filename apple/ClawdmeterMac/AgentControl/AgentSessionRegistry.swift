@@ -29,11 +29,44 @@ public final class AgentSessionRegistry: ObservableObject {
     /// Path to the sessions.json on-disk snapshot.
     private let storeURL: URL
 
+    /// F2 — orchestration event store. Opt-in via
+    /// `FeatureFlags.orchestrationEventStore`. When set, the registry can
+    /// (a) seed itself from event replay on init and (b) write a receipt
+    /// before every mutation. This PR ships the store + the replay-on-init
+    /// path; per-mutation write-ahead is wired in the follow-up F2-wire PR
+    /// (strangler-fig per D23) so we can A/B rollback by flipping the flag
+    /// default back to `false`.
+    ///
+    /// `nil` when the flag is off — legacy `sessions.json` snapshot path
+    /// stays unchanged.
+    private let eventStore: OrchestrationEventStore?
+
     public init(
-        storeURL: URL = AgentSessionRegistry.defaultStoreURL()
+        storeURL: URL = AgentSessionRegistry.defaultStoreURL(),
+        eventStore: OrchestrationEventStore? = nil
     ) {
         self.storeURL = storeURL
+        // Respect injected store (tests), else honor the feature flag.
+        // Wrapping in `try?` so a corrupt-recovery on init never crashes
+        // the daemon: store falls back to nil → legacy path.
+        if let injected = eventStore {
+            self.eventStore = injected
+        } else if FeatureFlags.orchestrationEventStore {
+            self.eventStore = try? OrchestrationEventStore()
+        } else {
+            self.eventStore = nil
+        }
         load()
+        // F2 replay-on-init: if we opened an event store AND the JSON
+        // snapshot was empty (cold start on a fresh install where the
+        // flag is on) AND the event log has anything, seed state from
+        // replay. The JSON snapshot is the source of truth for now —
+        // events are write-ahead, the snapshot is the projection. The
+        // wire PR will flip this so the event log is the source of
+        // truth and the snapshot becomes a cache.
+        if let store = self.eventStore, sessions.isEmpty {
+            seedFromEventReplayIfPossible(store: store)
+        }
     }
 
     public nonisolated static func defaultStoreURL() -> URL {
@@ -44,6 +77,106 @@ public final class AgentSessionRegistry: ObservableObject {
             at: appSupport, withIntermediateDirectories: true
         )
         return appSupport.appendingPathComponent("sessions.json")
+    }
+
+    // MARK: - F2 event store hooks (strangler-fig)
+
+    /// Public write-ahead hook for the F2-wire PR. Today no built-in
+    /// mutation methods call this — wire-up lands in the follow-up so the
+    /// foundation PR stays focused on the store + replay path. External
+    /// callers (the daemon's request handlers) MAY call it directly if
+    /// they want the write-ahead receipt without waiting for wire-up.
+    ///
+    /// No-op when the feature flag is off (eventStore == nil).
+    public func recordCommand(_ command: OrchestrationCommand) {
+        guard let store = eventStore else { return }
+        Task {
+            do {
+                _ = try await store.append(command)
+            } catch {
+                registryLogger.error("OrchestrationEventStore.append failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// Replays the event log and rebuilds the `sessions` projection.
+    /// Called from init when the JSON snapshot is empty + the event store
+    /// has events (the cold-start-after-restart case during rollout).
+    ///
+    /// Replay rule (foundation PR): build a per-session projection by
+    /// applying each event's payload, last-write-wins per session id. The
+    /// payload SHOULD be a JSON-encoded `AgentSession` for create / update
+    /// commands; commands without payload are skipped on the projection
+    /// side (delete commands are still applied — they remove the session).
+    ///
+    /// The F2-wire PR will tighten this — once every mutation writes a
+    /// receipt, the JSON snapshot becomes derivable and the replay handler
+    /// becomes the authoritative loader.
+    private func seedFromEventReplayIfPossible(store: OrchestrationEventStore) {
+        // P0 fix (review of PR #146): the replay Task MUST run off MainActor.
+        // The original code used `Task { ... }` here which inherits MainActor
+        // isolation. Combined with `sema.wait()` blocking the MainActor below,
+        // that deadlocked at startup whenever the event log was non-empty —
+        // the MainActor task body could not resume because MainActor was
+        // parked on the semaphore. Use `Task.detached` so the body runs on
+        // a cooperative thread; the actor isolation on `store.loadAll(...)`
+        // still serializes the sqlite work safely.
+        let replayed = Self.runReplayBlocking(store: store)
+        guard let replayed, !replayed.isEmpty else { return }
+        self.sessions = replayed
+        for s in replayed {
+            nextEventSeqBySession[s.id] = s.lastEventSeq + 1
+        }
+        registryLogger.info("Seeded \(replayed.count) sessions from OrchestrationEventStore replay")
+    }
+
+    /// Synchronously run the event-store replay from the MainActor `init`
+    /// body. Uses a detached Task so the replay body does NOT inherit
+    /// MainActor isolation — that is what makes the surrounding
+    /// `DispatchSemaphore.wait()` safe (a MainActor-isolated task body
+    /// would deadlock because resume requires the MainActor that we have
+    /// parked on the semaphore).
+    ///
+    /// The replay is bounded by the codex #9 perf gate (10k events <500ms),
+    /// so blocking init for the duration is acceptable.
+    private nonisolated static func runReplayBlocking(store: OrchestrationEventStore) -> [AgentSession]? {
+        let sema = DispatchSemaphore(value: 0)
+        // Sendable wrapper for the result so we can write from the
+        // detached task and read after the semaphore wait.
+        final class Box: @unchecked Sendable {
+            var value: [AgentSession]?
+        }
+        let box = Box()
+        Task.detached {
+            defer { sema.signal() }
+            do {
+                let rows = try await store.loadAll(includeSnapshots: true)
+                guard !rows.isEmpty else { return }
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                var projection: [UUID: AgentSession] = [:]
+                for row in rows {
+                    switch row.command.kind {
+                    case .sessionDeleted:
+                        if let uuid = UUID(uuidString: row.command.sessionId) {
+                            projection.removeValue(forKey: uuid)
+                        }
+                    case .sessionCreated, .sessionMetadataUpdated,
+                         .sessionApproved, .sessionInterrupted,
+                         .sessionCompleted, .sessionFailed:
+                        guard !row.command.payload.isEmpty else { continue }
+                        if let session = try? decoder.decode(AgentSession.self, from: row.command.payload) {
+                            projection[session.id] = session
+                        }
+                    }
+                }
+                box.value = Array(projection.values)
+            } catch {
+                registryLogger.error("OrchestrationEventStore replay failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        sema.wait()
+        return box.value
     }
 
     // MARK: - Mutations
