@@ -7,9 +7,9 @@
 #   1. Download the DMG from GitHub Releases
 #   2. Open it
 #   3. Drag Clawdmeter.app into the Applications folder
-#   4. First launch: right-click Clawdmeter.app → Open (because the build is
-#      signed with a personal Apple Developer team, not notarized — Gatekeeper
-#      asks the user to confirm exactly once, then trusts it forever).
+#   4. First launch: right-click Clawdmeter.app → Open (because the GitHub
+#      DMG is not Apple-notarized — Gatekeeper asks the user to confirm
+#      exactly once, then trusts it forever).
 #
 # Self-serve for builders (run this on any Apple Silicon Mac with Xcode):
 #   cd /path/to/Clawdmeter && ./tools/build-mac-dmg.sh
@@ -40,10 +40,16 @@ ARCHIVE_PATH="$BUILD_DIR/${APP_NAME}.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
 STAGING_DIR="$BUILD_DIR/staging"
 
+if ! /usr/bin/xcodebuild -version >/dev/null 2>&1; then
+  echo "✗ xcodebuild requires full Xcode. Install Xcode or run:" >&2
+  echo "  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+  exit 1
+fi
+
 # Pull the marketing version from the Mac target's Info.plist via xcodebuild.
 VERSION="$(/usr/bin/xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
     -configuration Release -showBuildSettings 2>/dev/null \
-    | awk -F' = ' '/MARKETING_VERSION/ {print $2; exit}' \
+    | awk -F' = ' '/MARKETING_VERSION/ && !seen {print $2; seen=1}' \
     | tr -d '[:space:]')"
 
 # Fall back to the value in Info.plist if marketing version isn't set.
@@ -101,9 +107,11 @@ echo "✓ Archive: $ARCHIVE_PATH"
 # ────────────────────────────────────────────────────────────────────────
 
 # Personal-team signing → use developer-id-distribution where possible, but
-# fall back to copying the .app straight out of the archive (which uses the
-# embedded "Apple Development" signature — works for local use, but Gatekeeper
-# will require a right-click → Open on first launch). Notarization needs a
+# fall back to copying the .app straight out of the archive. Personal-team
+# Apple Development exports are re-signed ad-hoc below after stripping the
+# embedded provisioning profile, because that profile can fail launchd
+# entitlement validation on downloaded GitHub release builds. Gatekeeper still
+# requires a right-click → Open on first launch because notarization needs a
 # paid Apple Developer Program account, which this repo doesn't have.
 
 EXPORT_PLIST="$BUILD_DIR/ExportOptions.plist"
@@ -204,7 +212,17 @@ if [[ -z "$SIGNING_IDENTITY" ]]; then
 fi
 rm -rf "$CERT_DIR"
 
-if [[ -n "$SIGNING_IDENTITY" && -f "$HELPER_ENT" ]]; then
+if printf '%s\n' "$CODESIGN_INFO" | grep -qE '^Authority=Apple Development'; then
+  echo "▸ Apple Development export detected — stripping provisioning profile and ad-hoc re-signing"
+  # Personal-team Apple Development exports can embed a provisioning
+  # profile whose allowed entitlements do not match the final Mac app
+  # entitlements after the helper/outer re-sign pass. That launches as:
+  #   RBSRequestErrorDomain Code=5 / NSPOSIXErrorDomain Code=163
+  # Gatekeeper is a separate notarization issue; this fixes the actual
+  # launchd entitlement/provisioning mismatch for GitHub DMG users.
+  rm -f "$APP_PATH/Contents/embedded.provisionprofile"
+  codesign --force --deep --sign - "$APP_PATH" 2>&1 | sed 's/^/    /'
+elif [[ -n "$SIGNING_IDENTITY" && -f "$HELPER_ENT" ]]; then
   echo "▸ Re-signing bundled helpers with: $SIGNING_IDENTITY"
   for HELPER in "${HELPER_BINARIES[@]}"; do
     if [[ -f "$HELPER" ]]; then
@@ -288,9 +306,9 @@ Continuum for Mac
    same app. Your data, sessions, and pairing carry over to Continuum.app
    automatically (the bundle identifier didn't change).
 3. First launch: right-click Continuum.app in Applications → Open →
-   "Open" in the dialog. macOS asks once because Continuum is signed
-   with a personal Apple Developer team, not notarized. After the first
-   Open, Gatekeeper remembers and never asks again.
+   "Open" in the dialog. macOS asks once because the GitHub DMG is not
+   Apple-notarized. After the first Open, Gatekeeper remembers and never
+   asks again.
 4. The Continuum icon appears in the menu bar. Click it to view your
    Claude / Codex usage; click "Open dashboard" for the full window.
 
