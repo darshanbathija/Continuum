@@ -331,7 +331,7 @@ final class AppRuntime: ObservableObject {
         }
         Task(priority: .utility) { @MainActor in
             if CodexSDKManager.shared.sdkModeActive {
-                _ = await CodexSDKManager.shared.enableSDKMode()
+                runtimeLogger.info("Codex SDK mode is enabled; deferring sidecar probe until first SDK session")
             }
             if AntigravitySidecarManager.shared.sdkModeActive {
                 _ = await AntigravitySidecarManager.shared.enableSDKMode()
