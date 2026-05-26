@@ -32,6 +32,17 @@ if ! command -v install_name_tool >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "x jq is required to verify bottle sha256 checksums." >&2
+  echo "  brew install jq" >&2
+  exit 1
+fi
+
+if ! command -v shasum >/dev/null 2>&1; then
+  echo "x shasum is required to verify bottle sha256 checksums." >&2
+  exit 1
+fi
+
 VERSION_FILE="$VENDOR_DIR/.bundled-version"
 if [[ -f "$VERSION_FILE" ]] \
   && [[ "$(cat "$VERSION_FILE")" == "$TMUX_VERSION:$BOTTLE_TAG" ]] \
@@ -47,7 +58,46 @@ fetch_and_extract() {
   brew fetch --formula --bottle-tag="$BOTTLE_TAG" "$formula" >/dev/null
   local bottle
   bottle="$(brew --cache --bottle-tag="$BOTTLE_TAG" "$formula")"
-  tar -xzf "$bottle" -C "$TMP_DIR"
+
+  # Verify the bottle's sha256 matches the hash published in Homebrew's
+  # formula manifest. Catches CDN tampering and MITM swaps — without
+  # this check, `brew fetch` would silently bundle whatever bytes
+  # arrived. The published hash itself is delivered via HTTPS by
+  # `brew info`, so an attacker would need to compromise both channels.
+  local expected_sha
+  expected_sha="$(brew info --json=v2 "$formula" \
+      | jq -r --arg tag "$BOTTLE_TAG" \
+        '.formulae[0].bottle.stable.files[$tag].sha256 // empty')"
+  if [[ -z "$expected_sha" ]]; then
+    echo "x No published sha256 for $formula:$BOTTLE_TAG in brew info — refusing to bundle unverified bottle" >&2
+    exit 1
+  fi
+  local actual_sha
+  actual_sha="$(shasum -a 256 "$bottle" | awk '{print $1}')"
+  if [[ "$expected_sha" != "$actual_sha" ]]; then
+    echo "x sha256 mismatch for $formula bottle:" >&2
+    echo "  expected: $expected_sha" >&2
+    echo "  actual:   $actual_sha" >&2
+    echo "  bottle:   $bottle" >&2
+    exit 1
+  fi
+  echo "   sha256 verified: $actual_sha"
+
+  # Reject tarballs that contain absolute paths or parent-directory
+  # traversal before extracting. tar's own defenses are limited; this
+  # is belt-and-suspenders to keep a hostile bottle from writing
+  # outside $TMP_DIR.
+  local bad
+  bad="$(tar -tzf "$bottle" | awk '/^\// || /(^|\/)\.\.(\/|$)/' | head -1)"
+  if [[ -n "$bad" ]]; then
+    echo "x Refusing to extract $formula bottle — suspicious member: $bad" >&2
+    exit 1
+  fi
+
+  # --no-same-owner blocks tarballs from forcing arbitrary uid/gid on
+  # extracted files (which they can't actually set without root, but
+  # tar issues warnings under set -e that we don't want).
+  tar --no-same-owner -xzf "$bottle" -C "$TMP_DIR"
 }
 
 find_one() {

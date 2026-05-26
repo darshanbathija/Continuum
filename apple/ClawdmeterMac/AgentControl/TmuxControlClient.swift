@@ -63,6 +63,10 @@ public actor TmuxControlClient {
         let id: UUID
         let summary: String
         let continuation: CheckedContinuation<CommandResult, Error>
+        // Owns the timeout Task created in `command()`. Cancelled by
+        // `%end`/`%error` handlers so successful commands don't keep a
+        // 10s `Task.sleep` alive and wake the actor for nothing.
+        var timeoutTask: Task<Void, Never>?
     }
     private var pendingCommands: [Int: PendingCommand] = [:]
     private var currentCommandNumber: Int?
@@ -307,7 +311,8 @@ public actor TmuxControlClient {
             pendingCommands[key] = PendingCommand(
                 id: commandId,
                 summary: summary,
-                continuation: continuation
+                continuation: continuation,
+                timeoutTask: nil
             )
             do {
                 try writePTY(cmd)
@@ -316,9 +321,20 @@ public actor TmuxControlClient {
                 continuation.resume(throwing: error)
                 return
             }
-            Task { [weak self] in
+            let timeoutTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 await self?.timeoutPendingCommand(id: commandId)
+            }
+            // PendingCommand may have already been remapped from `key`
+            // (negative sentinel) to the tmux-assigned `num` if %begin
+            // arrived before this line executed. Update whichever entry
+            // currently holds the pending continuation for this id.
+            if let existingKey = pendingCommands.first(where: { $0.value.id == commandId })?.key {
+                pendingCommands[existingKey]?.timeoutTask = timeoutTask
+            } else {
+                // Already completed (impossibly fast tmux); cancel
+                // the timer immediately to keep it from firing.
+                timeoutTask.cancel()
             }
         }
     }
@@ -559,6 +575,7 @@ public actor TmuxControlClient {
             }
         case .end(_, let num, _):
             if let pending = pendingCommands.removeValue(forKey: num) {
+                pending.timeoutTask?.cancel()
                 let result = CommandResult(lines: currentCommandBody)
                 pending.continuation.resume(returning: result)
             }
@@ -566,6 +583,7 @@ public actor TmuxControlClient {
             currentCommandBody = []
         case .error(_, let num, _):
             if let pending = pendingCommands.removeValue(forKey: num) {
+                pending.timeoutTask?.cancel()
                 let errorText = currentCommandBody.joined(separator: "\n")
                 pending.continuation.resume(throwing: TmuxError.commandFailed(errorText))
             }
@@ -604,12 +622,23 @@ public actor TmuxControlClient {
     private func writePTY(_ s: String) throws {
         guard let pty, pty.masterFD >= 0 else { throw TmuxError.ptyClosed }
         let bytes = Array(s.utf8)
-        let written = bytes.withUnsafeBufferPointer { buf in
-            write(pty.masterFD, buf.baseAddress, buf.count)
-        }
-        guard written >= 0 else { throw TmuxError.ptyClosed }
-        guard written == bytes.count else {
-            throw TmuxError.commandFailed("short write to tmux PTY")
+        // Loop until every byte is written. PTYs short-write under
+        // backpressure; throwing on a partial write would spuriously
+        // fail the in-flight tmux command and tear down the session.
+        // Retry EINTR; surface any other write(2) failure as ptyClosed
+        // so clearPTYState handles UI teardown.
+        try bytes.withUnsafeBufferPointer { buf in
+            guard let base = buf.baseAddress else { return }
+            var offset = 0
+            while offset < buf.count {
+                let n = write(pty.masterFD, base.advanced(by: offset), buf.count - offset)
+                if n > 0 {
+                    offset += n
+                    continue
+                }
+                if n == -1 && errno == EINTR { continue }
+                throw TmuxError.ptyClosed
+            }
         }
     }
 
