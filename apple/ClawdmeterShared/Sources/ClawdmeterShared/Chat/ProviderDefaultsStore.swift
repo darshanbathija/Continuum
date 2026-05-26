@@ -6,23 +6,52 @@ import Combine
 public struct ProviderDefaultsSnapshot: Codable, Hashable, Sendable {
     public var modelByVendor: [String: String]
     public var effortByVendor: [String: String]
+    /// v0.29.8 — composer model picker favorites. Per-vendor ordered list of
+    /// model ids the user has starred. Order is newest-first; the picker
+    /// renders favorites grouped under the "Starred" rail entry across
+    /// providers. Backward-compatible: snapshots persisted before v0.29.8
+    /// decode with this dictionary empty (see custom `init(from:)`).
+    public var favoriteModelsByVendor: [String: [String]]
     public var updatedAt: Date
 
     public init(
         modelByVendor: [String: String] = [:],
         effortByVendor: [String: String] = [:],
+        favoriteModelsByVendor: [String: [String]] = [:],
         updatedAt: Date = Date()
     ) {
         self.modelByVendor = modelByVendor
         self.effortByVendor = effortByVendor
+        self.favoriteModelsByVendor = favoriteModelsByVendor
         self.updatedAt = updatedAt
     }
 
     public static let empty = ProviderDefaultsSnapshot(
         modelByVendor: [:],
         effortByVendor: [:],
+        favoriteModelsByVendor: [:],
         updatedAt: Date(timeIntervalSince1970: 0)
     )
+
+    private enum CodingKeys: String, CodingKey {
+        case modelByVendor, effortByVendor, favoriteModelsByVendor, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.modelByVendor = try c.decodeIfPresent([String: String].self, forKey: .modelByVendor) ?? [:]
+        self.effortByVendor = try c.decodeIfPresent([String: String].self, forKey: .effortByVendor) ?? [:]
+        self.favoriteModelsByVendor = try c.decodeIfPresent([String: [String]].self, forKey: .favoriteModelsByVendor) ?? [:]
+        self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date(timeIntervalSince1970: 0)
+    }
+
+    public func favoriteModelIds(for vendor: ChatVendor) -> [String] {
+        favoriteModelsByVendor[vendor.rawValue] ?? []
+    }
+
+    public func isFavorite(modelId: String, vendor: ChatVendor) -> Bool {
+        favoriteModelIds(for: vendor).contains(modelId)
+    }
 
     public func modelId(for vendor: ChatVendor) -> String? {
         let value = modelByVendor[vendor.rawValue]?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -180,9 +209,42 @@ public final class ProviderDefaultsStore: ObservableObject {
         return self.snapshot
     }
 
+    /// v0.29.8 — composer model picker favorite toggle. Adds `modelId` to the
+    /// front of the vendor's favorite list if it isn't present; removes it if
+    /// it is. Returns the post-toggle snapshot. No-op for empty model ids.
+    @discardableResult
+    public func toggleFavoriteModel(_ modelId: String, for vendor: ChatVendor) -> ProviderDefaultsSnapshot {
+        let trimmed = modelId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return snapshot }
+        var next = snapshot
+        var current = next.favoriteModelsByVendor[vendor.rawValue] ?? []
+        if let index = current.firstIndex(of: trimmed) {
+            current.remove(at: index)
+        } else {
+            current.insert(trimmed, at: 0)
+        }
+        if current.isEmpty {
+            next.favoriteModelsByVendor.removeValue(forKey: vendor.rawValue)
+        } else {
+            next.favoriteModelsByVendor[vendor.rawValue] = current
+        }
+        next.updatedAt = Date()
+        persist(next)
+        return next
+    }
+
+    public func favoriteModelIds(for vendor: ChatVendor) -> [String] {
+        snapshot.favoriteModelIds(for: vendor)
+    }
+
+    public func isFavorite(modelId: String, vendor: ChatVendor) -> Bool {
+        snapshot.isFavorite(modelId: modelId, vendor: vendor)
+    }
+
     private func persist(_ next: ProviderDefaultsSnapshot) {
         defaults.set(next.modelByVendor, forKey: Self.defaultsPrefix + "modelByVendor")
         defaults.set(next.effortByVendor, forKey: Self.defaultsPrefix + "effortByVendor")
+        defaults.set(next.favoriteModelsByVendor, forKey: Self.defaultsPrefix + "favoriteModelsByVendor")
         defaults.set(next.updatedAt.timeIntervalSince1970, forKey: Self.defaultsPrefix + "updatedAt")
         snapshot = next
     }
@@ -190,10 +252,12 @@ public final class ProviderDefaultsStore: ObservableObject {
     private static func readSnapshot(defaults: UserDefaults) -> ProviderDefaultsSnapshot {
         let modelMap = defaults.dictionary(forKey: defaultsPrefix + "modelByVendor") as? [String: String] ?? [:]
         let effortMap = defaults.dictionary(forKey: defaultsPrefix + "effortByVendor") as? [String: String] ?? [:]
+        let favoritesMap = defaults.dictionary(forKey: defaultsPrefix + "favoriteModelsByVendor") as? [String: [String]] ?? [:]
         let updatedAtRaw = defaults.object(forKey: defaultsPrefix + "updatedAt") as? TimeInterval
         return ProviderDefaultsSnapshot(
             modelByVendor: modelMap,
             effortByVendor: effortMap,
+            favoriteModelsByVendor: favoritesMap,
             updatedAt: updatedAtRaw.map(Date.init(timeIntervalSince1970:)) ?? Date(timeIntervalSince1970: 0)
         )
     }
