@@ -1693,14 +1693,17 @@ private struct SidebarPane: View {
     }
 
     private func commitSessionRename(_ session: AgentSession, name: String?) {
-        _ = model.renameSession(id: session.id, name: name)
-        // Older builds wrote Rename into the client-local presentation store.
-        // Clear that shadow value so the registry-backed customName drives all
-        // surfaces after this edit.
-        if presentationStore.snapshot.titleOverrides[session.id] != nil {
-            try? presentationStore.setTitleOverride(session.id, title: nil)
+        let sessionID = session.id
+        Task { @MainActor in
+            _ = await model.renameSession(id: sessionID, name: name)
+            // Older builds wrote Rename into the client-local presentation store.
+            // Clear that shadow value so the registry-backed customName drives all
+            // surfaces after this edit.
+            if presentationStore.snapshot.titleOverrides[sessionID] != nil {
+                try? presentationStore.setTitleOverride(sessionID, title: nil)
+            }
+            resetSessionRenameState()
         }
-        resetSessionRenameState()
     }
 
     private func resetSessionRenameState() {

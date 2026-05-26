@@ -339,10 +339,14 @@ public final class SessionsModel: ObservableObject {
     /// daemon `/rename` route all read `AgentSession.customName`, so local
     /// presentation-only title overrides are not enough for session rename.
     @discardableResult
-    public func renameSession(id: UUID, name: String?) -> Bool {
+    public func renameSession(id: UUID, name: String?) async -> Bool {
         guard registry.session(id: id) != nil else { return false }
-        registry.rename(id: id, name: name)
-        return true
+        do {
+            try await registry.rename(id: id, name: name)
+            return true
+        } catch {
+            return false
+        }
     }
 
     func queueFirstSendRecovery(

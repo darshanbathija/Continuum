@@ -177,7 +177,7 @@ final class SessionLauncherModelTests: XCTestCase {
         XCTAssertNil(model.takeFirstSendRecovery(sessionId: promotedSessionId))
     }
 
-    func test_renameSessionPersistsThroughRegistryCustomName() {
+    func test_renameSessionPersistsThroughRegistryCustomName() async throws {
         let registryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SessionLauncherModelRenameTests-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: registryURL) }
@@ -188,7 +188,7 @@ final class SessionLauncherModelTests: XCTestCase {
             registry: registry,
             supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
         )
-        let session = registry.create(
+        let session = try await registry.create(
             repoKey: "/repo/clawdmeter",
             repoDisplayName: "Clawdmeter",
             agent: .codex,
@@ -201,7 +201,8 @@ final class SessionLauncherModelTests: XCTestCase {
             mode: .local
         )
 
-        XCTAssertTrue(model.renameSession(id: session.id, name: "  Rename works  "))
+        let renameSucceeded = await model.renameSession(id: session.id, name: "  Rename works  ")
+        XCTAssertTrue(renameSucceeded)
         let renamed = registry.session(id: session.id)
         XCTAssertEqual(renamed?.customName, "Rename works")
         XCTAssertEqual(renamed?.displayLabel, "Rename works")
@@ -209,8 +210,10 @@ final class SessionLauncherModelTests: XCTestCase {
         let reloaded = AgentSessionRegistry(storeURL: registryURL)
         XCTAssertEqual(reloaded.session(id: session.id)?.customName, "Rename works")
 
-        XCTAssertTrue(model.renameSession(id: session.id, name: "   \n  "))
+        let clearSucceeded = await model.renameSession(id: session.id, name: "   \n  ")
+        XCTAssertTrue(clearSucceeded)
         XCTAssertNil(registry.session(id: session.id)?.customName)
-        XCTAssertFalse(model.renameSession(id: UUID(), name: "Missing"))
+        let missingSucceeded = await model.renameSession(id: UUID(), name: "Missing")
+        XCTAssertFalse(missingSucceeded)
     }
 }
