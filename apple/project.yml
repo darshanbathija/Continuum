@@ -151,6 +151,13 @@ targets:
         # the Trash. Phase 2 bundle-id transition still pending the
         # Montauk Analytics Developer Program enrollment.
         PRODUCT_NAME: Continuum
+        # Keep the Swift module + on-disk paths under the "Clawdmeter"
+        # identity so `@testable import Clawdmeter` in every test file
+        # in `apple/ClawdmeterMacTests/` keeps resolving after the
+        # display-name flip. Without this, PRODUCT_MODULE_NAME defaults
+        # to PRODUCT_NAME → Continuum, which broke the entire Mac
+        # test suite at v0.29.8 (no test PR has gone green since).
+        PRODUCT_MODULE_NAME: Clawdmeter
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "76S62SDSD3"
         INFOPLIST_FILE: ClawdmeterMac/Info.plist
@@ -343,7 +350,11 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_OBJC_BRIDGING_HEADER: ""
         BUNDLE_LOADER: "$(TEST_HOST)"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdmeter.app/Contents/MacOS/Clawdmeter"
+        # v0.29.8 renamed the .app to Continuum.app (PRODUCT_NAME flip)
+        # but the TEST_HOST string was left pointing at the old path.
+        # Repaired so `xcodebuild test -scheme 'Clawdmeter (Mac)'` can
+        # actually load the host binary and run unit tests.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Continuum.app/Contents/MacOS/Continuum"
 
 schemes:
   Clawdmeter (Mac):
