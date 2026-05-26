@@ -360,6 +360,7 @@ private struct SidebarPane: View {
     @ObservedObject var presentationStore: SessionPresentationStore
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
 
     /// Persisted sidebar grouping + sorting + status-filter preferences.
@@ -1354,6 +1355,63 @@ private struct SidebarPane: View {
                                 .padding(.vertical, 1)
                                 .background(colorTagTint(tag).opacity(0.14), in: Capsule())
                         }
+                    }
+                    // Daemon-computed "progress vs approved plan" bar.
+                    // Appears only when the session has an approved plan
+                    // AND the daemon has produced its first compute (see
+                    // `PlanProgressTracker`). The fraction comes straight
+                    // from the wire field, so iOS and Mac sidebars agree.
+                    //
+                    // Uses `TahoePillBar` (not native ProgressView) so the
+                    // bar inherits provider-tinted gradient + halo shadow
+                    // and matches the rest of the Tahoe bar fleet.
+                    // Font and 32pt min-width on the count match the row's
+                    // subtitle typography so the bar doesn't break density.
+                    if let progress = session.planProgress {
+                        // Defensive clamp: the daemon enforces completed ≤ total,
+                        // but a future schema bump or a race could violate it. We
+                        // clamp here rather than render "7/6" to the sidebar.
+                        let safeCompleted = max(0, min(progress.completed, progress.total))
+                        let isComplete = safeCompleted >= progress.total && progress.total > 0
+                        let provider = session.agent.tahoeProvider
+                        // Use provider.halo (the same color the bar gradient
+                        // anchors on) so the milestone state stays inside the
+                        // bar's two-color vocabulary and reads correctly in
+                        // dark mode (provider.deep collapses to near-black for
+                        // Codex/Cursor, which is invisible against dark popovers).
+                        let completeTint = provider.halo.color
+                        HStack(spacing: 6) {
+                            TahoePillBar(
+                                percent: Double(safeCompleted) /
+                                          max(1, Double(progress.total)) * 100,
+                                provider: provider,
+                                height: 6
+                            )
+                            .frame(maxWidth: .infinity)
+                            if isComplete {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(completeTint)
+                                    .padding(.leading, 2)
+                                    .transition(.scale.combined(with: .opacity))
+                                    .accessibilityHidden(true)
+                            }
+                            Text("\(safeCompleted)/\(progress.total)")
+                                .font(TahoeFont.body(10.5, weight: isComplete ? .bold : .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(isComplete ? completeTint : t.fg2)
+                                .frame(minWidth: 44, alignment: .trailing)
+                                .contentTransition(reduceMotion ? .identity : .numericText())
+                        }
+                        .padding(.top, 4)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: isComplete)
+                        .help(isComplete
+                              ? "Plan complete — \(safeCompleted) of \(progress.total) steps"
+                              : "Plan progress — \(safeCompleted) of \(progress.total) steps complete")
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Plan progress")
+                        .accessibilityValue("\(safeCompleted) of \(progress.total) steps complete")
+                        .accessibilityHint(isComplete ? "Plan complete" : "")
                     }
                 }
                 Spacer()
