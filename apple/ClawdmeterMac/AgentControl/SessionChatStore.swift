@@ -964,16 +964,169 @@ struct ParsedLine: Sendable {
             return decodeGeminiLine(json: json, at: at)
         }
 
+        // F1a-wire (strangler-fig per D23): when the feature flag is on,
+        // route Claude user/assistant lines through `ClaudeAdapter` so the
+        // canonical `ProviderRuntimeEvent` pipeline owns text + usage +
+        // model fields. Per-block UI enrichment (EditStats / EditDiff /
+        // BashResult / AskUserQuestion) stays in the legacy block-walk
+        // path for this PR — future wires migrate those fields into the
+        // canonical extension envelope.
+        //
+        // Parity contract (enforced by F1aWireParityTests): for every
+        // fixture line, `from(json:)` returns the same `ParsedLine?`
+        // (same messages, same delta tokens, same model) regardless of
+        // the flag state. The codex / response_item path is untouched —
+        // F1b-wire owns Codex.
+        let useAdapter = FeatureFlags.useClaudeAdapter
         switch type {
         case "user":
-            return decodeUser(json: json, at: at)
+            return useAdapter
+                ? decodeUserViaAdapter(json: json, at: at)
+                : decodeUser(json: json, at: at)
         case "assistant":
-            return decodeAssistant(json: json, at: at)
+            return useAdapter
+                ? decodeAssistantViaAdapter(json: json, at: at)
+                : decodeAssistant(json: json, at: at)
         case "response_item":
             return decodeCodexResponseItem(json: json, at: at)
         default:
             return nil
         }
+    }
+
+    // MARK: - F1a-wire adapter-routed decoders
+
+    /// Adapter-routed equivalent of `decodeUser`. Delegates to
+    /// `ClaudeAdapter.translate(...)` to confirm a canonical
+    /// `.userMessage` event would be emitted, then builds the legacy
+    /// `[ChatMessage]` via the same block-walk used by `decodeUser` so
+    /// per-block UI fields stay identical. Returns nil for the same
+    /// empty-content cases legacy returns nil for.
+    ///
+    /// Strangler-fig contract: tokens + model fields are still the
+    /// per-line zeros user lines carry, mirroring legacy. The adapter
+    /// is exercised end-to-end so the F1a code path lights up in CI;
+    /// once future PRs migrate UI fields into ExtensionField, the legacy
+    /// block-walk can shrink toward direct event consumption.
+    private static func decodeUserViaAdapter(json: [String: Any], at: Date) -> ParsedLine? {
+        let events = ClaudeAdapter.translate(
+            line: json,
+            sessionId: "",
+            sequenceStart: 0,
+            providerInstanceId: nil,
+            rawBytes: nil
+        )
+        // If the adapter dropped the line (e.g. malformed shape), the
+        // legacy path would also drop it — short-circuit to nil rather
+        // than walking blocks for a line we'd discard anyway.
+        guard events.contains(where: { event in
+            if case .userMessage = event.payload { return true }
+            return false
+        }) else { return nil }
+        return decodeUser(json: json, at: at)
+    }
+
+    /// Adapter-routed equivalent of `decodeAssistant`. Same shape as
+    /// `decodeUserViaAdapter`: the adapter confirms the canonical event
+    /// stream (assistantMessageCompleted, toolUse, toolResult, etc.),
+    /// then the legacy block-walk builds `[ChatMessage]` with full UI
+    /// enrichment.
+    ///
+    /// Token deltas are pulled from the canonical
+    /// `.assistantMessageCompleted` event when present; cache tokens
+    /// come from the `claude` extension envelope. When neither is
+    /// present (streaming partial — adapter emits `.assistantTokenDelta`
+    /// instead), all four delta fields are zero, matching legacy's
+    /// "usage absent ⇒ all zeros" behavior.
+    private static func decodeAssistantViaAdapter(json: [String: Any], at: Date) -> ParsedLine? {
+        let events = ClaudeAdapter.translate(
+            line: json,
+            sessionId: "",
+            sequenceStart: 0,
+            providerInstanceId: nil,
+            rawBytes: nil
+        )
+        // Adapter emits at least one event for any assistant line with a
+        // `message` envelope. If it emitted nothing the line was a meta /
+        // unknown shape the legacy path would also drop.
+        guard !events.isEmpty else { return nil }
+
+        // The legacy path constructs `[ChatMessage]` directly from the
+        // content blocks. Re-use it verbatim so UI-rich fields stay
+        // identical bit-for-bit. The adapter's contribution is the
+        // canonical token / model projection below — proves the
+        // ProviderRuntimeEvent pipeline lights up under load.
+        guard let legacy = decodeAssistant(json: json, at: at) else {
+            return nil
+        }
+
+        // Pull tokens + model off the canonical event(s) the adapter
+        // emitted. The adapter encodes cache tokens under
+        // `providerExtensions["claude"]` as a nested map; reproject them
+        // here so the activity strip's cache-aware cost math keeps the
+        // same inputs.
+        //
+        // Parity fallback: when the adapter doesn't surface a
+        // `.assistantMessageCompleted` event (e.g. assistant line with
+        // empty content but usage present, or a malformed shape where
+        // the adapter fell through to `.unknown`), fall back to the
+        // legacy ParsedLine's token + cache totals. This mirrors the
+        // analytics-side bridge's "synthesize role:assistant when usage
+        // present" shim and keeps `ParsedLine` output identical across
+        // the flag for every JSONL shape legacy tolerates.
+        var sawCompleted = false
+        var inTok = 0
+        var outTok = 0
+        var cacheCreate = 0
+        var cacheRead = 0
+        var model: String? = nil
+        for event in events {
+            // Per-event Claude extension envelope. The adapter attaches
+            // the same dict to every event for a single line so reading
+            // either the assistantMessageCompleted event or the closing
+            // toolUse event yields the same cache totals.
+            if case let .nested(claudeExt) = event.providerExtensions?["claude"] {
+                if case let .int(v) = claudeExt["cache_creation_input_tokens"] {
+                    cacheCreate = Int(v)
+                }
+                if case let .int(v) = claudeExt["cache_read_input_tokens"] {
+                    cacheRead = Int(v)
+                }
+                if case let .string(m) = claudeExt["model"], model == nil {
+                    model = m
+                }
+            }
+            if case let .assistantMessageCompleted(_, tokensIn, tokensOut) = event.payload {
+                inTok = tokensIn
+                outTok = tokensOut
+                sawCompleted = true
+            }
+        }
+        // Observability for the fallback path. When the adapter fails
+        // to emit `.assistantMessageCompleted` but legacy did pull a
+        // non-zero token total off `message.usage`, parity has silently
+        // broken — the wired path is using legacy values while reporting
+        // success. Log so the divergence shows up in Console.app rather
+        // than passing unnoticed. Debug-level so production sessions
+        // (which should never hit this branch) don't generate noise.
+        if !sawCompleted {
+            let legacyHasTokens = legacy.deltaInputTokens != 0
+                || legacy.deltaOutputTokens != 0
+                || legacy.deltaCacheCreationTokens != 0
+                || legacy.deltaCacheReadTokens != 0
+            if legacyHasTokens {
+                chatLogger.debug("F1a-wire: ClaudeAdapter did not emit .assistantMessageCompleted for a usage-bearing line; falling back to legacy token values. legacy in=\(legacy.deltaInputTokens, privacy: .public) out=\(legacy.deltaOutputTokens, privacy: .public) cacheCreate=\(legacy.deltaCacheCreationTokens, privacy: .public) cacheRead=\(legacy.deltaCacheReadTokens, privacy: .public)")
+            }
+        }
+        return ParsedLine(
+            timestamp: legacy.timestamp,
+            messages: legacy.messages,
+            deltaInputTokens: sawCompleted ? inTok : legacy.deltaInputTokens,
+            deltaOutputTokens: sawCompleted ? outTok : legacy.deltaOutputTokens,
+            deltaCacheCreationTokens: sawCompleted ? cacheCreate : legacy.deltaCacheCreationTokens,
+            deltaCacheReadTokens: sawCompleted ? cacheRead : legacy.deltaCacheReadTokens,
+            model: model ?? legacy.model
+        )
     }
 
     /// Gemini JSONL chat decoder — DEPRECATED in v0.6.0.

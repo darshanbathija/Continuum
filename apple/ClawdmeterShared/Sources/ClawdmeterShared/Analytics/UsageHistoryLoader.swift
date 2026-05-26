@@ -487,8 +487,19 @@ public actor UsageHistoryLoader {
         var unpriced: [String: TokenTotals] = [:]
 
         let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
+        // F1a-wire (strangler-fig per D23): when the feature flag is on,
+        // route the raw JSONL line through ClaudeAdapter → canonical
+        // ProviderRuntimeEvent → UsageRecord. When off, use the legacy
+        // ClaudeUsageParser directly. Both paths must produce identical
+        // UsageRecord arrays for the same input — enforced by
+        // F1aWireParityTests.
+        let useAdapter = FeatureFlags.useClaudeAdapter
         for rawLine in lines {
-            guard let record = ClaudeUsageParser.parse(line: Data(rawLine)) else { continue }
+            let lineData = Data(rawLine)
+            let record: UsageRecord? = useAdapter
+                ? ClaudeAdapterUsageBridge.parseLine(lineData)
+                : ClaudeUsageParser.parse(line: lineData)
+            guard let record else { continue }
             accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced)
         }
 
@@ -628,8 +639,18 @@ public actor UsageHistoryLoader {
         // file skip/accept heuristic.
         if !result.dedupKeys.isDisjoint(with: dedup) {
             if let data = try? Data(contentsOf: URL(fileURLWithPath: result.path)) {
+                // F1a-wire (D23): mirror the strangler-fig flag check used
+                // in `parseClaudeFile` so the cross-file reparse path stays
+                // consistent with the per-file path. Without this, a parity
+                // test that exercises duplicate-dedupkey behavior would see
+                // legacy records on the reparse leg even with the flag on.
+                let useAdapter = FeatureFlags.useClaudeAdapter
                 for rawLine in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
-                    guard let record = ClaudeUsageParser.parse(line: Data(rawLine)) else { continue }
+                    let lineData = Data(rawLine)
+                    let record: UsageRecord? = useAdapter
+                        ? ClaudeAdapterUsageBridge.parseLine(lineData)
+                        : ClaudeUsageParser.parse(line: lineData)
+                    guard let record else { continue }
                     Self.accumulateGlobal(record: record, into: &byDayByRepo, dedup: &dedup, unpriced: &unpriced)
                 }
             }
