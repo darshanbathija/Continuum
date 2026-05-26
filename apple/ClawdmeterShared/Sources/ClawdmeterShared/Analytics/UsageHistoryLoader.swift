@@ -116,6 +116,93 @@ public actor UsageHistoryLoader {
         }
     }
 
+    /// Lightweight probe: returns the most-recent mtime across every
+    /// source dir + file we would parse. **Does not parse anything** —
+    /// just stats files. Consumers (B2 mtime probe + idle backoff in
+    /// `UsageHistoryStore`) use this to short-circuit `loadAll()` when
+    /// no source data changed since the last refresh.
+    ///
+    /// Returns `nil` if no source files exist (fresh machine, no agents
+    /// run yet). Caller treats `nil` as "no activity yet" — same as a
+    /// successful probe with an old timestamp.
+    ///
+    /// Per-provider strategy:
+    /// - Claude / Codex: walk top of `~/.claude/projects/` /
+    ///   `~/.codex/sessions/` (recursive); take the newest mtime found.
+    /// - Gemini Antigravity (`.pb` + `.db`) and `agy` CLI: same recursive
+    ///   walk over their respective dirs.
+    /// - OpenCode: `stat` the SQLite db file PLUS its WAL/SHM sidecars.
+    ///   OpenCode runs in WAL mode (see `OpencodeUsageParser`), so commits
+    ///   land in `opencode.db-wal` before the next checkpoint touches
+    ///   `opencode.db` itself — stat'ing only the main file would let the
+    ///   probe short-circuit a refresh that the SSE adapter just kicked
+    ///   off via `.opencodeUsageRecorded` (see PR #137 review P0 #1).
+    ///
+    /// Plan: B2 (Phase 2) — see
+    /// `.claude/plans/study-this-codebase-crystalline-shore.md`. Codex
+    /// eng-review #9 (analytics retention) folds into this probe — it's
+    /// the foundation for idle-backoff polling.
+    public func mostRecentSourceMtime() -> Date? {
+        var maxMtime: Date? = nil
+        func observe(_ date: Date?) {
+            guard let date else { return }
+            if let current = maxMtime {
+                if date > current { maxMtime = date }
+            } else {
+                maxMtime = date
+            }
+        }
+
+        for dir in [claudeDir, codexDir, geminiDir] {
+            observe(Self.mostRecentMtime(inDirectory: dir))
+        }
+        if let agyDir { observe(Self.mostRecentMtime(inDirectory: agyDir)) }
+        if let opencodeDBURL {
+            // OpenCode writes in SQLite WAL mode. The committed-but-not-
+            // checkpointed page-deltas live in `<db>-wal`; the shared-
+            // memory index lives in `<db>-shm`. Take the max across all
+            // three so a hot stream of SSE `usage` events doesn't get
+            // throttled by a probe that only sees the rarely-touched
+            // main file.
+            observe(Self.fileMtime(opencodeDBURL))
+            let walURL = URL(fileURLWithPath: opencodeDBURL.path + "-wal")
+            observe(Self.fileMtime(walURL))
+            let shmURL = URL(fileURLWithPath: opencodeDBURL.path + "-shm")
+            observe(Self.fileMtime(shmURL))
+        }
+        return maxMtime
+    }
+
+    private static func fileMtime(_ url: URL) -> Date? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return nil
+        }
+        return attrs[.modificationDate] as? Date
+    }
+
+    private static func mostRecentMtime(inDirectory dir: URL) -> Date? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.path) else { return nil }
+        // Enumerate recursively; we only need the mtime, no read.
+        guard let enumerator = fm.enumerator(
+            at: dir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        var maxMtime: Date? = nil
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let mtime = values.contentModificationDate
+            else { continue }
+            if let current = maxMtime {
+                if mtime > current { maxMtime = mtime }
+            } else {
+                maxMtime = mtime
+            }
+        }
+        return maxMtime
+    }
+
     // MARK: - Aggregation
 
     private func performLoad() async -> UsageHistorySnapshot {

@@ -90,6 +90,33 @@ public final class UsageHistoryStore: ObservableObject {
     private var refreshTimer: Timer?
     private var observers: [NSObjectProtocol] = []
 
+    // MARK: - B2 mtime probe + idle backoff
+    //
+    // Pre-B2: refresh ran every 60s unconditionally. Even with the loader's
+    // per-file mtime cache (which skips re-parsing unchanged files),
+    // walking every JSONL on disk per tick burns CPU on machines with
+    // hundreds of session files. B2 short-circuits via a single stat-only
+    // probe, and slides the timer to a longer interval after consecutive
+    // no-change ticks.
+    //
+    // States:
+    //   - **active**  (just saw a change) → 60s interval
+    //   - **idle**    (≥1 consecutive no-change tick) → 300s interval
+    //
+    // App foreground always resets to active + force-refreshes once.
+    /// Highest source mtime observed at the end of the last refresh.
+    /// Set on every successful refresh (mtime-probe or full load); used
+    /// to detect "nothing changed since last refresh" so the next tick
+    /// can short-circuit.
+    private var lastSeenMaxMtime: Date?
+    /// Consecutive ticks where the mtime probe found no change. Drives
+    /// the slide from `baseInterval` to `idleInterval`.
+    private var consecutiveIdleTicks: Int = 0
+    private static let baseInterval: TimeInterval = 60     // active
+    private static let idleInterval: TimeInterval = 300    // backoff cap (5 min)
+    /// After this many no-change ticks at base interval, slide to idle.
+    private static let idleThreshold = 2
+
     /// Whether snapshot has ever been populated. Drives the cold-load
     /// skeleton in the UI.
     public var hasInitialSnapshot: Bool {
@@ -100,8 +127,10 @@ public final class UsageHistoryStore: ObservableObject {
         self.loader = loader
         installLifecycleObservers()
         // Kick the initial load asynchronously so the constructor returns
-        // immediately and the UI can render its skeleton.
-        Task { await self.refresh() }
+        // immediately and the UI can render its skeleton. force:true on
+        // the first refresh so the probe doesn't short-circuit before
+        // lastSeenMaxMtime is initialized.
+        Task { await self.refresh(force: true) }
     }
 
     deinit {
@@ -113,7 +142,56 @@ public final class UsageHistoryStore: ObservableObject {
 
     // MARK: - Refresh
 
-    public func refresh() async {
+    /// B2: refresh that short-circuits when no source mtime changed and
+    /// applies idle-backoff to the timer interval. Pass `force: true`
+    /// to bypass the probe — used by `forceRefresh()` / `invalidate()`
+    /// / app-foreground notifications, which want to skip the probe so
+    /// the UI updates immediately.
+    ///
+    /// Mtime capture rule: we probe BEFORE `loadAll()` and save that
+    /// pre-load mtime as `lastSeenMaxMtime`. Capturing a post-load
+    /// mtime would silently mark files written *during* the load as
+    /// "already seen" without their content being reflected in the
+    /// published snapshot — the next probe would short-circuit and the
+    /// data would not surface until something else forced a refresh
+    /// (PR #137 review P1 #2). Pre-load capture means concurrent writes
+    /// bump the mtime above what we saved, triggering a re-load on the
+    /// next tick.
+    public func refresh(force: Bool = false) async {
+        // Probe mtime up front regardless of `force` so we have a
+        // pre-load baseline to save. On non-force paths the probe also
+        // gates short-circuiting; on force paths it just primes
+        // `lastSeenMaxMtime` and resets idle backoff.
+        let probedMtime = await loader.mostRecentSourceMtime()
+
+        if !force {
+            // mtime probe — single stat per source dir (no parsing).
+            // Skip the full loadAll() if nothing changed.
+            if let last = lastSeenMaxMtime, let probed = probedMtime, probed <= last {
+                // No change → bump idle counter + maybe slide timer.
+                consecutiveIdleTicks += 1
+                if consecutiveIdleTicks == Self.idleThreshold {
+                    rescheduleTimer(interval: Self.idleInterval)
+                }
+                return
+            }
+        }
+
+        // Reaching here means we're going to call loadAll(). Reset the
+        // idle-backoff state so the timer goes back to the active
+        // interval — covers both "unforced refresh detected activity"
+        // and "foreground / forceRefresh / invalidate kicked us out of
+        // backoff". Previously the force path skipped this branch and
+        // left the timer stuck at idleInterval (PR #137 review P1 #1).
+        if consecutiveIdleTicks > 0 {
+            consecutiveIdleTicks = 0
+            rescheduleTimer(interval: Self.baseInterval)
+        }
+        // Save the PRE-load probe so writes that race with loadAll()
+        // get re-detected on the next tick instead of being marked
+        // already-seen (see method-level doc).
+        if let probed = probedMtime { lastSeenMaxMtime = probed }
+
         loading = true
         let result = await loader.loadAll()
         snapshot = result
@@ -121,12 +199,26 @@ public final class UsageHistoryStore: ObservableObject {
     }
 
     public func forceRefresh() {
-        Task { await refresh() }
+        Task { await refresh(force: true) }
     }
 
     public func invalidate() async {
         await loader.invalidate()
-        await refresh()
+        await refresh(force: true)
+    }
+
+    /// Reschedule the periodic timer at a new interval. Invalidates the
+    /// old timer and registers a fresh one on the main run loop.
+    private func rescheduleTimer(interval: TimeInterval) {
+        refreshTimer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.refresh()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.refreshTimer = timer
+        logger.debug("B2 idle backoff: rescheduled refresh timer to \(interval, privacy: .public)s")
     }
 
     // MARK: - Lifecycle
@@ -134,14 +226,10 @@ public final class UsageHistoryStore: ObservableObject {
     private func installLifecycleObservers() {
         let center = NotificationCenter.default
 
-        // Periodic 60s refresh while the app is running.
-        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                await self?.refresh()
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        self.refreshTimer = timer
+        // B2: schedule the periodic refresh via rescheduleTimer() so the
+        // idle-backoff path can later swap the interval. Initial: base
+        // (60s); slides to idle (300s) after consecutive no-change ticks.
+        rescheduleTimer(interval: Self.baseInterval)
 
 #if canImport(UIKit) && !os(watchOS)
         observers.append(center.addObserver(
@@ -149,7 +237,11 @@ public final class UsageHistoryStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in await self?.refresh() }
+            // App foreground: force-refresh so the UI reflects any
+            // changes that landed while the app was backgrounded and so
+            // we exit idle-backoff (`refresh(force:)` resets the
+            // idle-tick counter + slides the timer back to baseInterval).
+            Task { @MainActor in await self?.refresh(force: true) }
         })
 #elseif canImport(AppKit)
         observers.append(center.addObserver(
@@ -157,7 +249,7 @@ public final class UsageHistoryStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in await self?.refresh() }
+            Task { @MainActor in await self?.refresh(force: true) }
         })
 #endif
         // PR #31 chunk 3: subscribe to opencode usage events so the

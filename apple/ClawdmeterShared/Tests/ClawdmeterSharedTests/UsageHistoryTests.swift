@@ -359,6 +359,109 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertTrue(small.contains("0.0042"), "Got \(small)")
     }
 
+    // MARK: - B2 mtime probe
+
+    func test_mostRecentSourceMtime_emptyDirs_returnsNil() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        let claudeDir = temp.appendingPathComponent("claude")
+        let codexDir = temp.appendingPathComponent("codex")
+        let geminiDir = temp.appendingPathComponent("gemini")
+        for dir in [claudeDir, codexDir, geminiDir] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        let loader = UsageHistoryLoader(
+            claudeDir: claudeDir,
+            codexDir: codexDir,
+            geminiDir: geminiDir,
+            agyDir: temp.appendingPathComponent("agy-missing"),
+            opencodeDBURL: temp.appendingPathComponent("missing.db"),
+            cacheURL: temp.appendingPathComponent("cache.json")
+        )
+        let mtime = await loader.mostRecentSourceMtime()
+        XCTAssertNil(mtime, "Empty dirs → no files → no mtime")
+    }
+
+    func test_mostRecentSourceMtime_returnsLatestFileMtime() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        let claudeDir = temp.appendingPathComponent("claude")
+        let codexDir = temp.appendingPathComponent("codex")
+        let geminiDir = temp.appendingPathComponent("gemini")
+        for dir in [claudeDir, codexDir, geminiDir] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        // Drop one file in claudeDir at an old timestamp, one in codexDir
+        // at a newer timestamp. The probe should return the newer.
+        let oldFile = claudeDir.appendingPathComponent("old.jsonl")
+        let newFile = codexDir.appendingPathComponent("new.jsonl")
+        try "old".data(using: .utf8)!.write(to: oldFile)
+        try "new".data(using: .utf8)!.write(to: newFile)
+
+        let oldDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let newDate = Date(timeIntervalSince1970: 1_715_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: oldDate], ofItemAtPath: oldFile.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: newDate], ofItemAtPath: newFile.path
+        )
+
+        let loader = UsageHistoryLoader(
+            claudeDir: claudeDir,
+            codexDir: codexDir,
+            geminiDir: geminiDir,
+            agyDir: temp.appendingPathComponent("agy-missing"),
+            opencodeDBURL: temp.appendingPathComponent("missing.db"),
+            cacheURL: temp.appendingPathComponent("cache.json")
+        )
+        let mtime = await loader.mostRecentSourceMtime()
+        XCTAssertEqual(mtime, newDate, "Probe must return the latest mtime across all source dirs")
+    }
+
+    /// PR #137 review P0 #1: OpenCode runs SQLite in WAL mode. Commits
+    /// land in `opencode.db-wal` first; the main `opencode.db` only
+    /// advances on checkpoint. The probe must stat the WAL sidecar too,
+    /// otherwise an SSE-driven refresh kicked off by .opencodeUsageRecorded
+    /// short-circuits because the main file's mtime hasn't moved yet.
+    func test_mostRecentSourceMtime_includesOpencodeWALSidecar() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        let claudeDir = temp.appendingPathComponent("claude")
+        let codexDir = temp.appendingPathComponent("codex")
+        let geminiDir = temp.appendingPathComponent("gemini")
+        for dir in [claudeDir, codexDir, geminiDir] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        // Main db at an old mtime; WAL sidecar at a much newer mtime
+        // (simulates an active OpenCode session that has commits in WAL
+        // but hasn't checkpointed yet).
+        let dbURL = temp.appendingPathComponent("opencode.db")
+        let walURL = temp.appendingPathComponent("opencode.db-wal")
+        try "main".data(using: .utf8)!.write(to: dbURL)
+        try "wal".data(using: .utf8)!.write(to: walURL)
+        let mainDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let walDate = Date(timeIntervalSince1970: 1_720_000_000)
+        try FileManager.default.setAttributes([.modificationDate: mainDate], ofItemAtPath: dbURL.path)
+        try FileManager.default.setAttributes([.modificationDate: walDate], ofItemAtPath: walURL.path)
+
+        let loader = UsageHistoryLoader(
+            claudeDir: claudeDir,
+            codexDir: codexDir,
+            geminiDir: geminiDir,
+            agyDir: temp.appendingPathComponent("agy-missing"),
+            opencodeDBURL: dbURL,
+            cacheURL: temp.appendingPathComponent("cache.json")
+        )
+        let mtime = await loader.mostRecentSourceMtime()
+        XCTAssertEqual(
+            mtime, walDate,
+            "Probe must include opencode.db-wal so SSE-driven refresh isn't short-circuited"
+        )
+    }
+
     // MARK: - Loader integration tests
 
     func test_loaderEmptyDirsReturnsZero() async throws {
