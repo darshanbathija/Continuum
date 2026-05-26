@@ -4,15 +4,34 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-## [Unreleased] - Track 1 perf — A13 optimistic composer UI
+## [Unreleased]
 
 ### Added
 
 - **Optimistic UI for the composer (A13).** Tap Send and your message renders as a pending bubble above the input strip within one frame — no more "did it go?" beat while the JSONL tail catches up. The bubble dissolves into the confirmed user message once the daemon's `user` line lands (auto-reconcile by body), so there's no flicker on settle. When the daemon rejects the send (HTTP 4xx, transport failure), the bubble stays visible with an inline error chip and a Retry button (D24 eng-review acceptance: no silent drop). Brief daemon outages are handled with an offline queue: messages stage locally as "queued offline" and drain in FIFO order on the next successful send. Capped at 8 entries so a long outage doesn't grow unbounded — the overflow surfaces as `.failed` so the user can manually retry.
 
+### Changed
+
+- **perf(chat): slice `SessionChatStore` publishing into per-concern slices (A5).** Splits `SessionChatStore`'s fat `@Published snapshot: ChatSnapshot` into three per-concern `ObservableObject` slices so SwiftUI views invalidate only on the concern they actually consume. Pre-A5, every staging commit (every 16 ms during a streaming burst) fanned out one `objectWillChange` to every observer regardless of whether the relevant fields had moved.
+  - **New `ChatMessagesSlice`**: `@Published` items, messages, planSteps, sourceEntries, artifactEntries, codexTodos, updateCounter. Fires on every staging commit that mutates the transcript.
+  - **New `ChatLiveStatusSlice`**: `@Published` lastEventAt, currentTurnStartedAt, currentTurnState, isLoading, hasOlderHistory, pendingPermissionPrompt. Fires on turn transitions and pagination flips.
+  - **New `ChatComposerSlice`**: `@Published` modelHint + the four token categories (cumulative + most-recent turn). Fires ONLY when an assistant turn lands new `message.usage` — tool results and user-text appends no longer invalidate the composer's context-window meter or the activity strip's cost label.
+  - Every per-slice setter is equality-guarded, so a staging commit that touches only items doesn't bump composerSlice (and vice versa).
+  - **Migrated view consumers:** `ChatThreadScroll` → messagesSlice + liveStatusSlice; `ArtifactsPane`, `SourcesPane`, `CodexPlanPane`, `PlanTrackerPane`, `PoppedChatThread` → messagesSlice; `SessionActivityStrip` → liveStatusSlice + composerSlice.
+  - `@Published snapshot`, `isLoading`, `hasOlderHistory`, `pendingPermissionPrompt` stay on `SessionChatStore` for non-view consumers (PRMirror's Combine subscription, AgentControlServer, ChatStreamWebSocketChannel, NotificationDispatcher, FrontierWebSocketChannel, DaemonChatStoreRegistry).
+
 ### Internal
 
-- New `OptimisticPendingMessage` value type in `ClawdmeterShared/Composer/` owns the `.sending → .failed | .queuedOffline | cleared` state machine. Aliased as `SessionChatStore.PendingMessage` so the slot stays addressable from existing Mac call sites. The Shared SwiftPM test target covers the value-type behaviour (7 tests); a Mac-side test file (`SessionChatStorePendingTests.swift`) covers the store wiring (inject/reconcile/offline queue) and lands ready to run once the broader `Continuum` module-rename drift in the test target is sorted out (pre-existing, not introduced by A13).
+- New `OptimisticPendingMessage` value type in `ClawdmeterShared/Composer/` owns the `.sending → .failed | .queuedOffline | cleared` state machine. Aliased as `SessionChatStore.PendingMessage` so the slot stays addressable from existing Mac call sites.
+
+### Tests
+
+- `SessionChatStoreSlicePublishingTests.swift` — verifies (a) composerSlice does NOT publish on a transcript-only user-text append, (b) composerSlice DOES publish on an assistant turn with `message.usage`, (c) permission-prompt toggle invalidates only liveStatusSlice (not messagesSlice or composerSlice), (d) all three slices mirror the staging snapshot's values after ingest.
+
+### Deferred
+
+- Find-bar overlay isolation. The find-bar inside `ChatThreadScroll` shares the parent body, so a transcript append still re-evaluates its body (small cost — TextField + 4 buttons). Full isolation requires extracting `TranscriptFindBarOverlay` as an Equatable child view with on-demand match computation.
+- `@Observable` migration (C2 in the plan) is a separate PR that will re-architect the slices as `@Observable` macro types.
 
 ## [0.29.11 build 150] - 2026-05-26 - Rebrand sweep + OpenCode status pill + design polish (`fix/v0.29.11-rebrand-bleed-and-opencode-badge`)
 

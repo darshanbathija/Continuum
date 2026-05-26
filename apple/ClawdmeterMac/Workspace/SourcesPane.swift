@@ -9,13 +9,24 @@ import ClawdmeterShared
 /// Derived purely from the chat store's `tool_call` messages. We bucket by
 /// title (Read/Grep/Glob/WebFetch/WebSearch) and count repeat references so
 /// the user can see which files the agent leaned on hardest.
+///
+/// A5 — binds to `messagesSlice` (the per-transcript-append slice on
+/// SessionChatStore) instead of the fat store. The pane invalidates
+/// on staging commits that produce new tool-call source entries; it
+/// does NOT re-render when only token usage updates or the permission
+/// prompt flips.
 struct SourcesPane: View {
     let session: AgentSession
-    @ObservedObject var chatStore: SessionChatStore
+    @ObservedObject var messagesSlice: ChatMessagesSlice
+
+    init(session: AgentSession, chatStore: SessionChatStore) {
+        self.session = session
+        _messagesSlice = ObservedObject(wrappedValue: chatStore.messagesSlice)
+    }
 
     var body: some View {
         // T9: precomputed in StagingParser; zero per-render work here.
-        let snapshotEntries = chatStore.snapshot.sourceEntries
+        let snapshotEntries = messagesSlice.sourceEntries
         let entries = snapshotEntries.map { e in render(entry: e) }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {

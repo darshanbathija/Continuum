@@ -3,10 +3,21 @@ import ClawdmeterShared
 
 /// G5: plan timeline. This pane only renders explicit pending or approved
 /// plan text; it must not promote review/verifier chat prose into a plan.
+///
+/// A5 — bound to messagesSlice. The pane reads no live-status fields,
+/// but we keep an observer so the future addition of plan-step
+/// extraction from messages will Just Work. Token/permission ticks
+/// no longer invalidate this pane.
 struct PlanTrackerPane: View {
     let session: AgentSession
-    @ObservedObject var chatStore: SessionChatStore
+    @ObservedObject var messagesSlice: ChatMessagesSlice
     let onApprove: () -> Void
+
+    init(session: AgentSession, chatStore: SessionChatStore, onApprove: @escaping () -> Void) {
+        self.session = session
+        _messagesSlice = ObservedObject(wrappedValue: chatStore.messagesSlice)
+        self.onApprove = onApprove
+    }
 
     /// Per-step manual override: when the user taps a step, their explicit
     /// state wins over the heuristic. Storing the override as a `Bool`

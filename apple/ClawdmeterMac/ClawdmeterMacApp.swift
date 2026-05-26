@@ -271,17 +271,31 @@ struct PoppedOutSessionView: View {
 /// Minimal chat-thread renderer reused inside PoppedOutSessionView. Mirrors
 /// the main workspace's `ChatThreadScroll` but with no plan-card / no
 /// review pane — just chat + send.
+///
+/// A5 — binds to messagesSlice (not the fat store), so the popped
+/// chat doesn't re-render on token deltas or permission-prompt flips.
+/// `store` is still held for the `send` action (`model.send(...)`
+/// indirection takes care of dispatch; the view doesn't read other
+/// store fields after migration).
 private struct PoppedChatThread: View {
-    @ObservedObject var store: SessionChatStore
+    let store: SessionChatStore
+    @ObservedObject private var messagesSlice: ChatMessagesSlice
     let session: AgentSession
     @ObservedObject var model: SessionsModel
     @State private var composerText: String = ""
+
+    init(store: SessionChatStore, session: AgentSession, model: SessionsModel) {
+        self.store = store
+        _messagesSlice = ObservedObject(wrappedValue: store.messagesSlice)
+        self.session = session
+        self.model = model
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(store.messages) { msg in
+                    ForEach(messagesSlice.messages) { msg in
                         HStack(alignment: .top, spacing: 6) {
                             Image(systemName: msg.kind == .userText
                                 ? "person.fill"

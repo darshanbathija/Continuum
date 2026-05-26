@@ -15,10 +15,15 @@ import ClawdmeterShared
 
 public struct CodexPlanPane: View {
 
-    @ObservedObject var chatStore: SessionChatStore
+    // A5 — bind to the per-transcript slice so this pane invalidates
+    // only on staging commits that touched codexTodos (or other
+    // message-slice fields), NOT on token deltas / permission prompts
+    // / activity ticks. The Codex SDK `todo_list` event lands as a
+    // staging snapshot mutation that bumps the messages slice.
+    @ObservedObject var messagesSlice: ChatMessagesSlice
 
     public init(chatStore: SessionChatStore) {
-        self.chatStore = chatStore
+        _messagesSlice = ObservedObject(wrappedValue: chatStore.messagesSlice)
     }
 
     public var body: some View {
@@ -26,7 +31,7 @@ public struct CodexPlanPane: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 Divider()
-                if chatStore.snapshot.codexTodos.isEmpty {
+                if messagesSlice.codexTodos.isEmpty {
                     emptyState
                 } else {
                     todosList
@@ -57,8 +62,8 @@ public struct CodexPlanPane: View {
     }
 
     @ViewBuilder private var badge: some View {
-        let total = chatStore.snapshot.codexTodos.count
-        let done = chatStore.snapshot.codexTodos.filter(\.isCompleted).count
+        let total = messagesSlice.codexTodos.count
+        let done = messagesSlice.codexTodos.filter(\.isCompleted).count
         Text("\(done)/\(total)")
             .font(.system(size: 11, weight: .medium).monospacedDigit())
             .padding(.horizontal, 6)
@@ -83,9 +88,9 @@ public struct CodexPlanPane: View {
 
     @ViewBuilder private var todosList: some View {
         let groups: [(String, [CodexTodoItem])] = [
-            ("In progress", chatStore.snapshot.codexTodos.filter(\.isInProgress)),
-            ("Pending", chatStore.snapshot.codexTodos.filter(\.isPending)),
-            ("Done", chatStore.snapshot.codexTodos.filter(\.isCompleted)),
+            ("In progress", messagesSlice.codexTodos.filter(\.isInProgress)),
+            ("Pending", messagesSlice.codexTodos.filter(\.isPending)),
+            ("Done", messagesSlice.codexTodos.filter(\.isCompleted)),
         ]
         VStack(alignment: .leading, spacing: 14) {
             ForEach(groups, id: \.0) { (label, items) in
