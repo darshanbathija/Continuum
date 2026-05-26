@@ -131,6 +131,42 @@ public enum FeatureFlags {
                        default: false)
     }
 
+    /// F1d-wire sibling for Cursor. When ON, the Cursor analytics
+    /// consumer routes each polled `UsageData` snapshot through
+    /// `CursorAdapter.translate(...)` → canonical `.sessionStarted`
+    /// `ProviderRuntimeEvent` → projected back into the legacy
+    /// `UsageData` shape via `CursorAdapterUsageBridge.project(...)`.
+    /// When OFF, the consumer uses the polled `UsageData` directly —
+    /// the pre-F1 path.
+    ///
+    /// Cursor is structurally different from the other four providers:
+    /// there's no JSONL session log and no per-turn token stream. The
+    /// adapter is a period-summary translator over polled `UsageData`,
+    /// emitting exactly one `.sessionStarted` event per poll. Each event
+    /// carries a stable id (`cursor-{sessionId}-{seq}`) so downstream
+    /// consumers can dedup on poll cadence — no double-counting on
+    /// repeated polls of the same period.
+    ///
+    /// Parity is the gating contract: with the flag in either state,
+    /// the downstream `UsageData` value rendered for Cursor must be
+    /// identical. `F1dParityTests` enforces this for every fixture
+    /// shape we ship (full period, no organizationID, status transitions,
+    /// percent/reset edge cases).
+    ///
+    /// **Default: OFF.** Flip to ON in F1-finalize after all 5 provider
+    /// wires (F1a-wire through F1e-wire) have shipped and parity has
+    /// held on real session data.
+    ///
+    /// **Override (env):** `CLAWDMETER_USE_CURSOR_ADAPTER=1`
+    /// **Override (test):** set `useCursorAdapterOverride` (auto-cleared
+    /// in tests' `tearDown`).
+    public static var useCursorAdapter: Bool {
+        if let override = useCursorAdapterOverride { return override }
+        return resolve(envName: "CLAWDMETER_USE_CURSOR_ADAPTER",
+                       userDefaultsKey: "com.clawdmeter.featureFlags.useCursorAdapter",
+                       default: false)
+    }
+
     // MARK: - Orchestration event store (F2)
 
     /// F2 — Orchestration event store with append-only events + WAL +
@@ -170,6 +206,11 @@ public enum FeatureFlags {
     /// this to force the wired path regardless of the host environment.
     /// Reset to `nil` after each test (use `defer`).
     nonisolated(unsafe) public static var useAntigravityAdapterOverride: Bool?
+
+    /// Per-call override seen by `useCursorAdapter`. Test cases set this
+    /// to force the wired path regardless of the host environment. Reset
+    /// to `nil` after each test (use `defer`).
+    nonisolated(unsafe) public static var useCursorAdapterOverride: Bool?
 
     // MARK: - Resolution
 
