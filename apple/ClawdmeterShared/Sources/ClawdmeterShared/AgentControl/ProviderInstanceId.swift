@@ -101,8 +101,29 @@ public struct ProviderInstanceId: Hashable, Codable, Sendable {
     /// `kind.rawValue` + `/` + `name`. Stable across launches; used as
     /// the wire serialization + the orchestration command store's
     /// per-instance partition key.
+    ///
+    /// Because `/` is the field separator, instance `name`s containing
+    /// `/` would make the wireId ambiguous and could collide with other
+    /// instances (or worse, with the primary sentinel). The registry's
+    /// `upsert` rejects such names; see `ProviderInstanceId.isValidName`.
     public var wireId: String {
         "\(kind.rawValue)/\(name)"
+    }
+
+    // MARK: - Name validation
+
+    /// A name is valid when it:
+    ///   - is non-empty
+    ///   - does not contain `/` (would break `wireId` round-trip)
+    ///   - is not the reserved `primaryName` sentinel UNLESS the instance
+    ///     has no overrides (i.e. is the back-compat primary). This
+    ///     prevents a masquerader (`name == "__primary__"` plus overrides)
+    ///     from being registered and overwriting the seeded primary.
+    public var isValidName: Bool {
+        guard !name.isEmpty else { return false }
+        guard !name.contains("/") else { return false }
+        if name == Self.primaryName && !isPrimary { return false }
+        return true
     }
 }
 
@@ -131,9 +152,17 @@ public actor ProviderInstanceRegistry {
         }
     }
 
-    /// Register or replace an instance. Returns the inserted record.
+    /// Register or replace an instance. Returns the inserted record on
+    /// success, or `nil` if the instance is rejected.
+    ///
+    /// Rejection rules (back-compat protection; see `isValidName`):
+    ///   - Empty name
+    ///   - Name contains `/` (would break `wireId` round-trip / collide)
+    ///   - Name equals `primaryName` but the instance carries overrides
+    ///     (masquerader trying to overwrite the seeded primary)
     @discardableResult
-    public func upsert(_ instance: ProviderInstanceId) -> ProviderInstanceId {
+    public func upsert(_ instance: ProviderInstanceId) -> ProviderInstanceId? {
+        guard instance.isValidName else { return nil }
         instances[instance.wireId] = instance
         return instance
     }

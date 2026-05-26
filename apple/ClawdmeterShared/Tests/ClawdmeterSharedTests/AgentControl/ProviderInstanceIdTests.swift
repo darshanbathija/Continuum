@@ -167,4 +167,82 @@ final class ProviderInstanceIdTests: XCTestCase {
         // 5 primaries (one per kind) + 2 custom = 7 total.
         XCTAssertEqual(all.count, AgentKind.allCases.count + 2)
     }
+
+    // MARK: - Upsert rejection (P0 back-compat / masquerader protection)
+
+    /// A masquerader (`name == "__primary__"` plus overrides set) MUST NOT
+    /// be allowed into the registry — registering it would overwrite the
+    /// seeded primary at the same wireId and break every back-compat
+    /// caller that asks for `primary(kind:)`.
+    func test_registry_upsert_rejectsPrimaryNameMasquerader() async {
+        let reg = ProviderInstanceRegistry()
+        let masquerader = ProviderInstanceId(
+            kind: .claude,
+            name: ProviderInstanceId.primaryName,
+            homePathOverride: "/tmp/sneaky"
+        )
+        let result = await reg.upsert(masquerader)
+        XCTAssertNil(result, "Masquerader must be rejected by upsert")
+
+        // The seeded primary must still be intact and unchanged.
+        let primary = await reg.lookup(wireId: "claude/__primary__")
+        XCTAssertNotNil(primary)
+        XCTAssertTrue(primary?.isPrimary == true)
+        XCTAssertNil(primary?.homePathOverride,
+                     "Seeded primary must NOT have been overwritten")
+    }
+
+    /// Names containing `/` make the `wireId` (which uses `/` as the
+    /// field separator) ambiguous. Reject them so the wire format stays
+    /// deterministic.
+    func test_registry_upsert_rejectsNameWithSlash() async {
+        let reg = ProviderInstanceRegistry()
+        let bogus = ProviderInstanceId(kind: .claude, name: "foo/bar")
+        let result = await reg.upsert(bogus)
+        XCTAssertNil(result, "Name containing '/' must be rejected")
+        let lookup = await reg.lookup(wireId: "claude/foo/bar")
+        XCTAssertNil(lookup, "Rejected instance must not be in registry")
+    }
+
+    /// Empty names produce a wireId like `claude/` — unhelpful and likely
+    /// a programming error. Reject.
+    func test_registry_upsert_rejectsEmptyName() async {
+        let reg = ProviderInstanceRegistry()
+        let bogus = ProviderInstanceId(kind: .claude, name: "")
+        let result = await reg.upsert(bogus)
+        XCTAssertNil(result, "Empty name must be rejected")
+    }
+
+    /// The true primary (built via `primary(kind:)`) re-upserts cleanly —
+    /// it has no overrides, so the masquerader check doesn't fire.
+    func test_registry_upsert_acceptsTruePrimaryReupsert() async {
+        let reg = ProviderInstanceRegistry()
+        let primary = ProviderInstanceId.primary(kind: .claude)
+        let result = await reg.upsert(primary)
+        XCTAssertNotNil(result, "True primary must be upsertable (idempotent re-seed)")
+        XCTAssertEqual(result, primary)
+    }
+
+    // MARK: - Codable forward-compat (P1)
+
+    /// Decoding a JSON payload that carries an extra field (added by a
+    /// future writer) must NOT fail — synthesized Codable skips unknown
+    /// keys, and we want to lock that contract in.
+    func test_codable_decodingExtraField_doesNotFail() throws {
+        let json = """
+        {
+          "kind": "claude",
+          "name": "personal",
+          "homePathOverride": "/Users/x/.claude-personal",
+          "keychainAccessGroupOverride": null,
+          "futureField": { "nested": "value" },
+          "anotherUnknownKey": 42
+        }
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ProviderInstanceId.self, from: json)
+        XCTAssertEqual(decoded.kind, .claude)
+        XCTAssertEqual(decoded.name, "personal")
+        XCTAssertEqual(decoded.homePathOverride, "/Users/x/.claude-personal")
+        XCTAssertNil(decoded.keychainAccessGroupOverride)
+    }
 }
