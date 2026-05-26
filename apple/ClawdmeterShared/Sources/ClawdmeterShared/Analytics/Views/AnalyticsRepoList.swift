@@ -4,12 +4,23 @@ import SwiftUI
 /// Per-repo $/% breakdown for the active window. Top 8 + optional "…N more"
 /// rollup row. Plan A7 + A17: hover/tap shows the full path on Mac/iOS;
 /// footer row surfaces unpriced model tokens.
+/// **A4 memoization (Phase 2):** the `rows` derivation used to be a
+/// computed property running three dict merges + a sort + percentage math
+/// on every body call. Now it's held in a `MemoizedDerivedStore` (from
+/// A4-pre) keyed on `(snapshot.computedAt, window, providerFilter)` —
+/// cache key matches the chart's. Cache hit ⇒ no work.
 @available(macOS 13, iOS 16, *)
 public struct AnalyticsRepoList: View {
 
     public let snapshot: UsageHistorySnapshot
     public let window: UsageHistorySnapshot.Window
     public let providerFilter: UsageHistoryStore.ProviderFilter
+
+    @StateObject private var rowsStore = MemoizedDerivedStore<RowsInput, [Row]>(
+        placeholder: [],
+        mode: .sync,
+        compute: { Self.computeRows($0) }
+    )
 
     public init(
         snapshot: UsageHistorySnapshot,
@@ -19,6 +30,20 @@ public struct AnalyticsRepoList: View {
         self.snapshot = snapshot
         self.window = window
         self.providerFilter = providerFilter
+    }
+
+    /// A4 cache key. Equatable comparison compares snapshot via
+    /// `computedAt` only — same identity ⇒ same byProvider/byRepo content.
+    fileprivate struct RowsInput: Equatable {
+        let snapshot: UsageHistorySnapshot
+        let window: UsageHistorySnapshot.Window
+        let providerFilter: UsageHistoryStore.ProviderFilter
+
+        static func == (lhs: RowsInput, rhs: RowsInput) -> Bool {
+            lhs.snapshot.computedAt == rhs.snapshot.computedAt
+                && lhs.window == rhs.window
+                && lhs.providerFilter == rhs.providerFilter
+        }
     }
 
     /// Merge each provider's byRepo for the active window, recompute %
@@ -34,7 +59,10 @@ public struct AnalyticsRepoList: View {
     /// providers dominate sort order, but the row badge surfaces Gemini's
     /// per-repo request count when present. Repos with ONLY Gemini activity
     /// still appear (with $0 cost) when `.gemini` is in the filter.
-    private var rows: [Row] {
+    fileprivate static func computeRows(_ input: RowsInput) -> [Row] {
+        let snapshot = input.snapshot
+        let window = input.window
+        let providerFilter = input.providerFilter
         var claudeByRepo: [RepoKey: TokenTotals] = [:]
         var codexByRepo: [RepoKey: TokenTotals] = [:]
         var geminiByRepo: [RepoKey: TokenTotals] = [:]
@@ -142,7 +170,28 @@ public struct AnalyticsRepoList: View {
     }
 
     public var body: some View {
-        let data = rows
+        let input = RowsInput(
+            snapshot: snapshot,
+            window: window,
+            providerFilter: providerFilter
+        )
+        // Inline-compute fallback for the first body call (and any cache
+        // miss frame): the store's `.task(id:)` driver fires AFTER body
+        // returns, so the placeholder `[]` would otherwise surface for one
+        // runloop tick — causing the misleading "No usage in this window"
+        // empty-state to flash even when there IS usage. Falling back to
+        // the static compute when `output == nil` keeps the first-render
+        // semantics identical to pre-A4 (one compute on first body), while
+        // subsequent body invocations cache-hit through the store.
+        let data = rowsStore.output ?? Self.computeRows(input)
+        return bodyWithData(data: data)
+            .task(id: input) {
+                rowsStore.update(input: input)
+            }
+    }
+
+    @ViewBuilder
+    private func bodyWithData(data: [Row]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("By repo")
