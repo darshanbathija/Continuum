@@ -96,6 +96,8 @@ PairingPayload = {
 
 Per [D22](.claude/plans/study-this-codebase-crystalline-shore.md): **per-peer tokens** — `macTok` authorizes the WebSocket open from the Mac side only; `iosTok` authorizes the iOS side only. Leaking the QR compromises only that single pairing session (which has a 15-minute TTL).
 
+**Server-side binding check (D22).** The relay Worker MUST verify on WebSocket open that the presented tuple `(sid, token, side)` matches a stored record: a `macTok` value is valid only when presented on the `?side=mac` connection for its own `sid`, and likewise for `iosTok` on `?side=ios`. Cross-side reuse (`iosTok` presented on the Mac side, or a `macTok` from session A presented against session B) MUST be rejected with 401 before any frame is forwarded. This binding is what makes "leaked QR compromises only this pairing" hold — without it, a single stolen token could be replayed against any open session.
+
 ### 4.2. ECDH key derivation
 
 When both peers connect, they perform X25519 ECDH:
@@ -149,7 +151,7 @@ Crucially, `encryptedBody` is sealed with the symmetric key from the existing re
 
 The iPhone receives the APNS push, decrypts `encryptedBody` using the same key it derived at pairing, and displays the notification.
 
-## 5. Threat model — 10+ scenarios with mitigations
+## 5. Threat model — 14 scenarios with mitigations
 
 | # | Scenario | Threat | Mitigation |
 |---|---|---|---|
@@ -165,6 +167,20 @@ The iPhone receives the APNS push, decrypts `encryptedBody` using the same key i
 | 10 | Operator's Cloudflare account is compromised | Attacker can deploy new Worker code | This is the ultimate trust root and we accept it. Mitigation = 2FA on the Cloudflare account, separate deploy keys, code review on every Worker change, signed Worker bundles (CF supports this). |
 | 11 | iOS background suspension drops the WS | iPhone misses a frame mid-session | APNS gateway path: even when WS is suspended, push delivers. iPhone foreground bring-up reconnects WS + drains backlog via the `seq` cursor — frames the relay buffered while iOS was offline replay in order. |
 | 12 | TLS-MITM by the user's enterprise network proxy | Re-signs TLS to inject monitoring | Operator deploys with HSTS + certificate pinning where iOS allows (Network.framework `NWConnection.TLSOptions` + custom verifyBlock). Falls back to legacy Tailscale LAN if pinning fails. |
+| 13 | Side-channel timing leak on the iOS / Mac decrypt path | Attacker observes wall-clock time of `aead_decrypt` or token-compare to learn key bits or token validity | Use CryptoKit / libsodium primitives that are documented constant-time (`ChaChaPoly.open`, `Curve25519.KeyAgreement.sharedSecretFromKeyAgreement`). All bearer-token comparisons (`macTok`/`iosTok` on the Worker) MUST use a constant-time compare (libsodium `sodium_memcmp` / `crypto.timingSafeEqual` on Workers). Reject with a uniform delay; do not branch on AEAD-tag-failed vs token-mismatch. Audit assertion in E2/E3 acceptance: no `==` comparisons on secret material in `apps/relay/` or `apple/.../RelayClient.swift`. |
+| 14 | Protocol or transport downgrade | Attacker on path forces a v0 (plaintext) handshake, suppresses the relay so client falls back to a weaker LAN path, or rolls the wire-protocol `v` byte | Wire-protocol version `v` is bound into the HKDF `info` string (`"clawdmeter.relay.v1"`); a flipped `v` derives a different key and AEAD fails. Both peers MUST refuse `v < current` even if signaled in the QR. The relay/Tailscale fallback (E3) is **client-side opt-in only** — the Worker cannot signal "use Tailscale instead"; only the user toggles it. iOS pins TLS minimum to 1.3; HTTP/1.1 upgrade paths to `wss://` are rejected. |
+
+## 5b. Key lifecycle + forward secrecy posture
+
+This section is normative — implementations MUST conform.
+
+- **Identity keys.** v1 ships with **no long-lived identity keys** on either peer. Every pairing generates fresh X25519 ephemeral keypairs on both sides; private keys live in process memory only and are zeroized on session close or 15-minute TTL expiry. Open Question 1 (server-pinned identity) defers identity keys to a future version.
+- **Forward secrecy.** Because the per-session key is derived from ephemeral X25519 keys that never touch disk, **compromise of any device after a session ends cannot decrypt prior captured ciphertext** — there is nothing on disk to seize. Forward secrecy is by construction, not by rekey.
+- **Post-compromise recovery.** If a device is presumed compromised mid-session, recovery is: user runs the pairing wizard again on the surviving device; this generates new ephemeral keys; old `sid` is rejected by the relay once TTL elapses (or immediately if the user hits "revoke" — see below). No transcript continuity across pairings.
+- **Rekey policy.** A pairing session has a hard maximum lifetime equal to the QR `ttl` (default 15 min). Sessions are not re-keyed mid-flight in v1; if a session needs to outlive 15 min (open question for "trusted device" UX), a future spec MUST add an explicit ratchet — do not silently extend the existing key.
+- **Revocation.** The relay Worker exposes a `DELETE /sessions/:sid` admin endpoint (operator-authenticated) that drops both bearers, closes any open WS, and tombstones `sid` for 24h to block re-use. User-initiated revoke flows route through this in E7.
+- **APNS `.p8` rotation.** The operator's APNS signing key rotates every 90 days routinely, or immediately on any suspected compromise (per threat #2). Rotation playbook + audit-log replay procedure live in `docs/runbook/apns-key-rotation.md` (E5 deliverable).
+- **Nonce lifetime.** XChaCha20 nonces are random per frame (line 114). Per-key nonce budget is 2^96 before collision probability becomes non-trivial; in practice a 15-min session never approaches this.
 
 ## 6. Sequencing + acceptance hooks
 
@@ -177,6 +193,57 @@ Per the plan's Phase 1 (E1 → E2/E5 → E3/E6 → E4 → E7 → E8) the order i
 5. **E4 (iOS → relay)** — adapter for the protocol defined here
 6. **E7 (pairing UX)** — QR + ECDH handshake UI
 7. **E8 (privacy + security docs)** — public-facing version of this doc
+
+### 6.1 Per-PR acceptance gates
+
+Each downstream PR must satisfy the following before merge. These are pulled from the wire shapes, threat-model mitigations, and key-lifecycle posture above.
+
+**E2 (relay Worker, `apps/relay/`).**
+- Worker accepts only WSS; rejects HTTP/1.1 upgrade attempts that haven't negotiated TLS 1.3.
+- On WebSocket open, verifies `(sid, token, side)` tuple via constant-time compare (timing-side-channel mitigation, threat #13).
+- Forwards opaque frames byte-for-byte; never logs payload bytes; emits only structured metadata logs (`sid`, `side`, `frame_count`, no plaintext).
+- Durable Object cleanup cron evicts sessions idle >15 min (threat #9).
+- Per-IP connection rate limit at edge.
+- Admin `DELETE /sessions/:sid` endpoint behind operator auth (revocation, §5b).
+- Test vectors in `apps/relay/test-vectors/` round-trip against §8 fixtures.
+
+**E3 (Mac → relay, `apple/Clawdmeter/.../RelayClient.swift`).**
+- Generates X25519 ephemeral keypair per pairing; private key never touches `Keychain` / disk.
+- `SecRandomCopyBytes` for both ECDH private key and every XChaCha20 nonce.
+- TLS minimum version pinned to 1.3 on `URLSessionConfiguration.tlsMinimumSupportedProtocolVersion`.
+- Constant-time bearer-token equality (`Data.constantTimeEquals` or equivalent) on any server-supplied token echo.
+- Falls back to legacy Tailscale path only on **explicit user toggle**, never on relay-signaled instruction (downgrade mitigation, threat #14).
+- Replay counter (`seq` cursor) persisted only per-session; dropped on disconnect.
+
+**E4 (iOS → relay, `apple/ClawdmeterShared/Sources/.../RelayClient.swift`).**
+- Same crypto requirements as E3 (CryptoKit `Curve25519.KeyAgreement`, `ChaChaPoly.open`).
+- Background-suspension drain path: on app foreground, reconnects WS and replays from local `seq` cursor (threat #11).
+- Certificate pinning via `NWConnection.TLSOptions` custom verifyBlock; pinning failure surfaces to UI, does **not** silently fall back (threat #12).
+- Decrypts APNS `encryptedBody` using the same per-pairing key derived in E3/E4 handshake.
+
+**E5 (APNS gateway, `apps/apns-gateway/`).**
+- `.p8` key stored only as a Cloudflare secret; never logged; never reachable from the relay Worker.
+- Per-device rate limit (100 pushes/hour, threat #2) keyed by `deviceTokenHash`.
+- Audit log entries written to KV with 90-day TTL: `{ts, deviceTokenHash, senderMacFingerprint, bundleId, topic, size}` — **never** the `encryptedBody`.
+- Emergency kill-switch env flag (`APNS_KILL_SWITCH=1`) short-circuits all sends with a structured log.
+- Explicit sandbox vs production routing (Open Q2) gated by env flag; staging always uses sandbox.
+- `.p8` rotation runbook checked in at `docs/runbook/apns-key-rotation.md`.
+
+**E6 (Mac → APNS, `apple/Clawdmeter/.../APNSGatewayClient.swift`).**
+- Seals `encryptedBody` with the HKDF-derived key using `info="clawdmeter.apns.v1"` (sibling of relay key, §4.4).
+- TLS pinning to the APNS gateway Worker hostname.
+- Backoff + retry on 5xx without leaking plaintext into logs.
+
+**E7 (pairing UX).**
+- QR codepath: `PairingPayload` CBOR encode matches §4.1 byte layout; `ttl` defaults to 15 min.
+- "Use Clawdmeter cloud" vs "Use Tailscale" choice surfaced explicitly (Open Q5).
+- Revoke-pairing button calls Worker admin `DELETE /sessions/:sid` (§5b).
+- Clear error UX when TLS pinning fails (no silent downgrade).
+
+**E8 (privacy + security docs).**
+- Public-facing version of this doc with the threat-model table and key-lifecycle posture (§5b) verbatim or strengthened.
+- Operator-account threat (#10) called out as known trust root.
+- Audit-log retention, `.p8` rotation cadence, and revocation endpoint documented for users.
 
 ## 7. Open questions
 
