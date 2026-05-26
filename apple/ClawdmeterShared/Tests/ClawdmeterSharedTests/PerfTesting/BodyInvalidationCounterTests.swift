@@ -5,24 +5,28 @@ import XCTest
 /// primitive every A6 + A8 + A9 invalidation gate is built on.
 ///
 /// Plan: A6 (Phase 2) — see .claude/plans/study-this-codebase-crystalline-shore.md
-@MainActor
 final class BodyInvalidationCounterTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        BodyInvalidationCounter.resetAll()
-        BodyInvalidationCounter.enabled = true
+        await MainActor.run {
+            BodyInvalidationCounter.resetAll()
+            BodyInvalidationCounter.enabled = true
+        }
     }
 
     override func tearDown() async throws {
-        BodyInvalidationCounter.enabled = false
-        BodyInvalidationCounter.resetAll()
+        await MainActor.run {
+            BodyInvalidationCounter.enabled = false
+            BodyInvalidationCounter.resetAll()
+        }
         try await super.tearDown()
     }
 
     // MARK: - Core counter behavior
 
-    func test_bumpIncrementsCount() {
+    @MainActor
+    func test_bumpIncrementsCount() async {
         XCTAssertEqual(BodyInvalidationCounter.count(for: "X"), 0)
         BodyInvalidationCounter.bump("X")
         XCTAssertEqual(BodyInvalidationCounter.count(for: "X"), 1)
@@ -31,7 +35,8 @@ final class BodyInvalidationCounterTests: XCTestCase {
         XCTAssertEqual(BodyInvalidationCounter.count(for: "X"), 3)
     }
 
-    func test_countsAreKeyedSeparately() {
+    @MainActor
+    func test_countsAreKeyedSeparately() async {
         BodyInvalidationCounter.bump("Sidebar")
         BodyInvalidationCounter.bump("Sidebar")
         BodyInvalidationCounter.bump("Transcript")
@@ -40,14 +45,16 @@ final class BodyInvalidationCounterTests: XCTestCase {
         XCTAssertEqual(BodyInvalidationCounter.count(for: "Composer"), 0)
     }
 
-    func test_disabledBumpIsNoOp() {
+    @MainActor
+    func test_disabledBumpIsNoOp() async {
         BodyInvalidationCounter.enabled = false
         BodyInvalidationCounter.bump("X")
         BodyInvalidationCounter.bump("X")
         XCTAssertEqual(BodyInvalidationCounter.count(for: "X"), 0)
     }
 
-    func test_resetAllZeroes() {
+    @MainActor
+    func test_resetAllZeroes() async {
         BodyInvalidationCounter.bump("A")
         BodyInvalidationCounter.bump("B")
         BodyInvalidationCounter.resetAll()
@@ -55,7 +62,8 @@ final class BodyInvalidationCounterTests: XCTestCase {
         XCTAssertEqual(BodyInvalidationCounter.count(for: "B"), 0)
     }
 
-    func test_resetSingleLeavesOthers() {
+    @MainActor
+    func test_resetSingleLeavesOthers() async {
         BodyInvalidationCounter.bump("A")
         BodyInvalidationCounter.bump("B")
         BodyInvalidationCounter.reset("A")
@@ -63,7 +71,8 @@ final class BodyInvalidationCounterTests: XCTestCase {
         XCTAssertEqual(BodyInvalidationCounter.count(for: "B"), 1)
     }
 
-    func test_snapshotReturnsAllCounts() {
+    @MainActor
+    func test_snapshotReturnsAllCounts() async {
         BodyInvalidationCounter.bump("Sidebar")
         BodyInvalidationCounter.bump("Sidebar")
         BodyInvalidationCounter.bump("Transcript")
@@ -80,7 +89,8 @@ final class BodyInvalidationCounterTests: XCTestCase {
     // as a closure — the real wiring is one `BodyInvalidationCounter.bump(_:)`
     // call in each `View.body` we want to instrument.
 
-    func test_acceptancePattern_independentSlicesDoNotCrossInvalidate() {
+    @MainActor
+    func test_acceptancePattern_independentSlicesDoNotCrossInvalidate() async {
         // Setup: two "sub-views" sharing nothing but the counter API.
         // SidebarSubView is invalidated when SidebarState changes.
         // TranscriptSubView is invalidated when TranscriptState changes.
@@ -115,7 +125,8 @@ final class BodyInvalidationCounterTests: XCTestCase {
         )
     }
 
-    func test_acceptancePattern_invalidationDropMeasurement() {
+    @MainActor
+    func test_acceptancePattern_invalidationDropMeasurement() async {
         // Demonstrates the ≥50% drop assertion shape. BEFORE the split,
         // a parent body change cascades to every child; AFTER the split,
         // only the parent re-renders.
