@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 #if canImport(OSLog)
 import OSLog
 #endif
@@ -200,7 +205,7 @@ public actor IncrementalJSONLIngest {
         }
         let currentSize = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
         let currentMtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let currentInode = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+        let currentInode = Self.inode(path: path, attrs: attrs)
 
         // Decide whether we have to reset before reading.
         var resetReason: IngestResult.ResetReason = .none
@@ -415,5 +420,19 @@ public actor IncrementalJSONLIngest {
             default: return false
             }
         }
+    }
+
+    private static func inode(path: String, attrs: [FileAttributeKey: Any]) -> UInt64 {
+        if let inode = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value, inode != 0 {
+            return inode
+        }
+
+        #if canImport(Darwin) || canImport(Glibc)
+        var statBuffer = stat()
+        guard stat(path, &statBuffer) == 0 else { return 0 }
+        return UInt64(statBuffer.st_ino)
+        #else
+        return 0
+        #endif
     }
 }
