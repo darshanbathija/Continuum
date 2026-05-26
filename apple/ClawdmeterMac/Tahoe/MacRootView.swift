@@ -85,18 +85,21 @@ struct MacRootView: View {
     }
 
     var body: some View {
-        // Reading the @ObservedObject child publishers in the body makes
-        // SwiftUI's dependency tracking subscribe to each of them. Without
-        // these touches, `runtime.tahoeLive` / `runtime.tahoeCode` would
-        // still compute correctly but the parent wouldn't re-render when
-        // the underlying @Published fired.
-        _ = claudeModel.usage
-        _ = codexModel.usage
-        _ = geminiModel.usage
+        // A8 (v0.30.x): the per-provider usage reads used to live at the
+        // top of body unconditionally. Result: a background usage poll for
+        // any of the three providers invalidated the WHOLE MacRootView
+        // body — re-rendering Chat / Code / Settings tabs that don't
+        // consume usage at all. Moved into the `case .usage` arm below
+        // so usage polls only re-render MacRootView when Usage is the
+        // active tab.
+        //
+        // sessionsModel.repos + agentSessionRegistry.sessions stay at the
+        // top because MacTitlebar reads `runtime?.sessionsModel.repos` and
+        // the code breadcrumb reads `runtime?.sessionsModel.openSession` —
+        // those need to live-update across every tab.
         _ = sessionsModel.repos
         _ = agentSessionRegistry.sessions
 
-        let live = runtime.tahoeLive
         return ZStack {
             TahoeWallpaperView()
             VStack(spacing: 0) {
@@ -141,6 +144,16 @@ struct MacRootView: View {
                             runtime: runtime
                         )
                     case .usage:
+                        // A8: per-provider usage reads moved here from the
+                        // top of body. SwiftUI subscribes MacRootView to
+                        // claudeModel/codexModel/geminiModel ONLY when this
+                        // case is evaluated — i.e. only when Usage tab is
+                        // active. Background polls during Chat/Code/Settings
+                        // no longer invalidate the parent.
+                        let _ = claudeModel.usage
+                        let _ = codexModel.usage
+                        let _ = geminiModel.usage
+                        let live = runtime.tahoeLive
                         MacUsageView(
                             data: live,
                             claudeModel: claudeModel,
