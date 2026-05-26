@@ -31,9 +31,6 @@ public struct LiveSessionActivityIndicator: View {
     /// documented in `SessionChatStore.lastEventAt`.
     public let activityWindow: TimeInterval
 
-    @State private var now: Date = Date()
-    @State private var ticker: Timer?
-
     public init(
         agent: AgentKind,
         lastEventAt: Date?,
@@ -47,48 +44,55 @@ public struct LiveSessionActivityIndicator: View {
     }
 
     public var body: some View {
-        Group {
-            if isActive {
-                HStack(spacing: 8) {
-                    spinner
-                    Text("\(elapsedString) · thinking…")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+        // v0.30.x (PR A1): replaced the `Timer.scheduledTimer @ 20Hz +
+        // @State now = Date()` pattern with `TimelineView(.periodic)`.
+        // The old timer fired 20× per second per visible chat and mutated
+        // `@State now` on every tick, invalidating the pill body + the
+        // surrounding view chain. `TimelineView` drives `context.date`
+        // without `@State` mutation, so SwiftUI only re-renders the body
+        // closure (Capsule + Material + Text) on each tick, not the whole
+        // view tree. Reduce-Motion downgrades to 1Hz; otherwise 0.2s (5Hz)
+        // since the elapsed string only displays one decimal anyway.
+        TimelineView(.periodic(from: .now, by: reduceMotion ? 1.0 : 0.2)) { context in
+            let now = context.date
+            let active = isActive(at: now)
+            Group {
+                if active {
+                    HStack(spacing: 8) {
+                        spinner
+                        Text("\(elapsedString(at: now)) · thinking…")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.thinMaterial, in: Capsule())
+                    .overlay(
+                        Capsule().stroke(accent.opacity(0.25), lineWidth: 0.5)
+                    )
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(.thinMaterial, in: Capsule())
-                .overlay(
-                    Capsule().stroke(accent.opacity(0.25), lineWidth: 0.5)
-                )
-                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
-                .onAppear { startTicker() }
-                .onDisappear { stopTicker() }
             }
-        }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isActive)
-        .onChange(of: reduceMotion) { _, _ in
-            if isActive { startTicker() }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: active)
         }
     }
 
     // MARK: - Derived
 
-    private var isActive: Bool {
+    private func isActive(at now: Date) -> Bool {
         guard let lastEventAt else { return false }
         return now.timeIntervalSince(lastEventAt) < activityWindow
     }
 
-    private var elapsedSeconds: TimeInterval {
+    private func elapsedSeconds(at now: Date) -> TimeInterval {
         let start = activityStartedAt ?? lastEventAt ?? now
         return max(0, now.timeIntervalSince(start))
     }
 
-    private var elapsedString: String {
-        // v0.29.4: one decimal — the pill ticks 10x/sec, and the second
-        // decimal place is noise at that refresh rate.
-        let s = elapsedSeconds
+    private func elapsedString(at now: Date) -> String {
+        // v0.29.4: one decimal — pairs with the 0.2s TimelineView tick.
+        let s = elapsedSeconds(at: now)
         if s < 60 { return String(format: "%.1fs", s) }
         let m = Int(s) / 60
         let r = s - Double(m * 60)
@@ -150,23 +154,6 @@ public struct LiveSessionActivityIndicator: View {
         }
     }
 
-    // MARK: - Timer
-
-    private func startTicker() {
-        stopTicker()
-        // Hundredths are useful for live motion; Reduce Motion downgrades
-        // to a one-second ticker and static glyphs.
-        ticker = Timer.scheduledTimer(withTimeInterval: reduceMotion ? 1.0 : 0.05, repeats: true) { _ in
-            Task { @MainActor in
-                self.now = Date()
-            }
-        }
-    }
-
-    private func stopTicker() {
-        ticker?.invalidate()
-        ticker = nil
-    }
 }
 
 // MARK: - Spinners
