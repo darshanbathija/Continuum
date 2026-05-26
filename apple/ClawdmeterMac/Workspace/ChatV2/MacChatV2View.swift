@@ -787,6 +787,15 @@ private struct ComposerBar: View {
     @FocusState private var focused: Bool
     @State private var openVendorPicker: ChatVendor?
     @State private var addVendorPickerPresented = false
+    // v0.29.8 — backing store for the new ComposerModelPicker. Each
+    // ProviderDefaultsStore instance reads/writes the same UserDefaults
+    // keys, so writes from the picker persist and other instances pick
+    // them up on their next `refresh()` / init. Live in-memory snapshots
+    // on sibling stores will lag until they re-read. This is consistent
+    // with how MacSettingsView, SessionLauncherModel, and AgentControlServer
+    // already instantiate their own stores — the picker does not
+    // introduce a new divergence pattern.
+    @StateObject private var providerDefaultsStore = ProviderDefaultsStore()
 
     var body: some View {
         TahoeGlass(radius: 20, tone: .raised) {
@@ -933,11 +942,22 @@ private struct ComposerBar: View {
     }
 
     private func providerPickerPopover(for vendor: ChatVendor) -> some View {
-        MacChatModelSelectorPanel(
+        // v0.29.8: per-vendor chip taps open the in-composer ComposerModelPicker
+        // (left rail of providers + search + ⌘N shortcuts + star favorites).
+        // The legacy MacChatModelSelectorPanel remains the surface used by the
+        // "Add" / "Configure" button beside the chips for multi-vendor setup.
+        //
+        // We pass every ChatVendor so the picker's rail is a true
+        // cross-provider switcher — the user can navigate to a vendor that
+        // isn't currently in `store.selectedVendors` and pick a model for
+        // it. (A future Settings → Providers "enabled" toggle will narrow
+        // this list; until that ships, we surface all vendors.)
+        ComposerModelPicker(
             initialVendor: vendor,
             store: store,
-            client: client,
-            providerMatrix: providerMatrix,
+            defaultsStore: providerDefaultsStore,
+            catalog: .bundled,
+            enabledVendors: ChatVendor.allCases,
             onClose: { openVendorPicker = nil }
         )
     }
