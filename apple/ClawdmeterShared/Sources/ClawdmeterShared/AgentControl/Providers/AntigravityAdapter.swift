@@ -35,6 +35,13 @@ public enum AntigravityAdapter {
     ///
     /// Use this for Antigravity 2.0.6+ sessions (current-session `.db`
     /// files). For archived `.pb` sessions, use `translate(legacyRecord:)`.
+    ///
+    /// **Platform-gated:** matches `AntigravityDBUsageParser`'s
+    /// `#if os(macOS) || os(iOS)` — Antigravity's `.db` files only exist
+    /// on those platforms, and `AntigravityDBUsage` itself doesn't
+    /// compile on watchOS. The `.pb` overload below stays available on
+    /// every platform.
+    #if os(macOS) || os(iOS)
     public static func translate(
         dbUsage usage: AntigravityDBUsage,
         conversationUUID: String,
@@ -77,6 +84,7 @@ public enum AntigravityAdapter {
             extensions: ["antigravity": .nested(antigravityExt)]
         )]
     }
+    #endif
 
     /// Translate a single legacy `.pb` archive UsageRecord into a
     /// canonical event. The legacy parser uses a byte-÷-4 token
