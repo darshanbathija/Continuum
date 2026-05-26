@@ -2005,16 +2005,18 @@ private struct ClaudeCLIProviderRow: View {
             authMessage = "Couldn't find a Claude OAuth token. Paste the bare `sk-ant-…` value or Claude Code's Keychain JSON."
             return
         }
-        guard PastedAnthropicTokenProvider.shared().setToken(extracted) else {
-            authFailed = true
-            authMessage = "Continuum could not save the token to its own Keychain entry."
-            return
-        }
-
-        pastedTokenDraft = ""
-        authFailed = false
-        authMessage = "Authenticated. Continuum will use its own Keychain copy from now on."
         Task { @MainActor in
+            let saved = await Task.detached(priority: .userInitiated) { () -> Bool in
+                PastedAnthropicTokenProvider.shared().setToken(extracted)
+            }.value
+            guard saved else {
+                authFailed = true
+                authMessage = "Continuum could not save the token to its own Keychain entry."
+                return
+            }
+            pastedTokenDraft = ""
+            authFailed = false
+            authMessage = "Authenticated. Continuum will use its own Keychain copy from now on."
             await refreshProbe()
             claudeModel.forcePoll()
         }

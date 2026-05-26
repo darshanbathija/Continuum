@@ -135,6 +135,13 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
         var q: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
+            // Explicit protection class. AfterFirstUnlock is the most
+            // restrictive that is still iCloud-sync-compatible; we drop
+            // the ThisDeviceOnly variant on the synchronizable instance
+            // because iCloud Keychain rejects ThisDeviceOnly entries.
+            kSecAttrAccessible as String: synchronizable
+                ? kSecAttrAccessibleAfterFirstUnlock
+                : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         if let accessGroup {
             q[kSecAttrAccessGroup as String] = accessGroup
