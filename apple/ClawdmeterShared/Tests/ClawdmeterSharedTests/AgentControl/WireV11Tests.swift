@@ -16,9 +16,11 @@ final class WireV11Tests: XCTestCase {
     // MARK: - Wire version constants
 
     func test_currentWireVersionIsNineteen() {
-        // v19 (2026-05-25): adds lifecycle snapshots/subscription and paired
-        // Mac provider default model/effort endpoints.
-        XCTAssertEqual(AgentControlWireVersion.current, 19)
+        // F3-wire bumped current to 20 (configured-instance fields on
+        // session DTOs + per-instance keys on the UsageEnvelope dict).
+        // This test originally locked the v19 floor; it now asserts the
+        // forward-compat ratchet (current is at least 19, never below).
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 19)
     }
 
     func test_workspacesMinimumIsSixteen() {
