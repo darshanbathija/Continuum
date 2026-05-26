@@ -57,26 +57,35 @@ public enum FeatureFlags {
                        default: false)
     }
 
-    /// When ON, the OpenCode branch in `OpencodeSSEAdapter` (chat) and
-    /// `OpencodeUsageParser` (analytics) routes raw OpenCode JSON blobs
-    /// through `OpenCodeAdapter.translate(...)` → canonical
-    /// `ProviderRuntimeEvent`s, then materializes downstream values
-    /// (`ChatMessage`, `UsageRecord`) from those events. When OFF, both
-    /// call sites use their original in-line parsers — the pre-F1c path.
+    /// F1b-wire sibling of `useClaudeAdapter` for the Codex provider.
+    /// When ON, the Codex branch in `SessionChatStore` (chat) and
+    /// `UsageHistoryLoader` (analytics) routes raw Codex JSONL through
+    /// `CodexAdapter.translate(...)` → canonical `ProviderRuntimeEvent`s.
     ///
-    /// Parity is the gating contract: with the flag in either state, the
-    /// downstream `ChatMessage` / `[UsageRecord]` arrays produced by a
-    /// fixed OpenCode JSON dict must be identical. The
-    /// `F1cWireParityTests` + `F1cWireChatParityTests` suites enforce
-    /// this for every fixture shape we ship.
+    /// Unlike Claude's adapter, `CodexAdapter` is **stateful** —
+    /// cumulative→delta token math + running `currentCwd` / `currentModel`
+    /// must survive across `translate(line:)` calls within a session.
+    /// The wire owns the per-session lifetime: one adapter per file
+    /// (analytics) / per `response_item` line (chat — `response_item`
+    /// itself is stateless for the adapter, but the bridge constructs a
+    /// fresh adapter per call to keep the contract uniform).
     ///
-    /// **Default: OFF.** Flip to ON in F1-finalize after all 5 provider
-    /// wires (F1a-wire through F1e-wire) have shipped and parity has
-    /// held on real session data.
+    /// Parity contract enforced by `F1bParityTests`.
+    /// Default OFF; flipped in F1-finalize after all 5 wires merge.
+    public static var useCodexAdapter: Bool {
+        if let override = useCodexAdapterOverride { return override }
+        return resolve(envName: "CLAWDMETER_USE_CODEX_ADAPTER",
+                       userDefaultsKey: "com.clawdmeter.featureFlags.useCodexAdapter",
+                       default: false)
+    }
+
+    /// F1c-wire sibling for OpenCode. When ON, `OpencodeSSEAdapter` (chat)
+    /// and `OpencodeUsageParser` (analytics) route through
+    /// `OpenCodeAdapter.translate(...)` → canonical events. Stateless
+    /// adapter, so the bridge is line-level not file-level.
     ///
-    /// **Override (env):** `CLAWDMETER_USE_OPENCODE_ADAPTER=1`
-    /// **Override (test):** set `useOpenCodeAdapterOverride` (auto-cleared
-    /// in tests' `tearDown`).
+    /// Parity contract enforced by `F1cWireParityTests` +
+    /// `F1cWireChatParityTests`. Default OFF; flipped in F1-finalize.
     public static var useOpenCodeAdapter: Bool {
         if let override = useOpenCodeAdapterOverride { return override }
         return resolve(envName: "CLAWDMETER_USE_OPENCODE_ADAPTER",
@@ -108,6 +117,11 @@ public enum FeatureFlags {
     /// to force the wired path regardless of the host environment. Reset
     /// to `nil` after each test (use `defer`).
     nonisolated(unsafe) public static var useClaudeAdapterOverride: Bool?
+
+    /// Per-call override seen by `useCodexAdapter`. Test cases set this
+    /// to force the wired path regardless of the host environment. Reset
+    /// to `nil` after each test (use `defer`).
+    nonisolated(unsafe) public static var useCodexAdapterOverride: Bool?
 
     /// Per-call override seen by `useOpenCodeAdapter`. Test cases set this
     /// to force the wired path regardless of the host environment. Reset

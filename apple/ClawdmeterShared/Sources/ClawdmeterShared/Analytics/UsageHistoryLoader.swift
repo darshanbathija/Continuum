@@ -609,7 +609,21 @@ public actor UsageHistoryLoader {
     }
 
     private nonisolated static func parseCodexFile(at url: URL) throws -> PerFileResult {
-        let records = try CodexUsageParser.parse(file: url)
+        // F1b-wire (strangler-fig per D23): when the feature flag is on,
+        // route the file through CodexAdapter → canonical
+        // ProviderRuntimeEvent → UsageRecord. When off, use the legacy
+        // CodexUsageParser directly. Both paths must produce identical
+        // UsageRecord arrays for the same input — enforced by
+        // F1bParityTests.
+        //
+        // CodexAdapter is stateful (cumulative→delta math + running
+        // model/cwd), so the bridge constructs one adapter per file and
+        // walks lines in order. The legacy parser owns its own internal
+        // state machine of the same shape — the bridge is a behavioral
+        // identity over it.
+        let records: [UsageRecord] = FeatureFlags.useCodexAdapter
+            ? try CodexAdapterUsageBridge.parseFile(at: url)
+            : try CodexUsageParser.parse(file: url)
         var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
         var dedupKeys = Set<String>()
         var unpriced: [String: TokenTotals] = [:]
