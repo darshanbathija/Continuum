@@ -71,15 +71,28 @@ Per-env Cloudflare KV namespaces:
 
 Per D21 mitigation suite — target: rotation within 1h of detection.
 
-1. `wrangler secret put APNS_KILL_SWITCH --env production --value on` — immediate; gateway returns 503 for every send
+> **Never** put secret values on the command line (e.g. `--value <secret>`).
+> Wrangler's `secret put` does not accept `--value`; the supported flows
+> are the interactive prompt or piping via stdin. Anything on argv lands
+> in shell history and the process table.
+
+1. Flip the killswitch — pipe the value via stdin to keep it out of shell
+   history:
+   ```bash
+   printf 'on' | wrangler secret put APNS_KILL_SWITCH --env production
+   ```
+   Gateway then returns 503 for every send.
 2. `wrangler tail --env production` — observe the rejection rate; confirm killswitch is active
 3. Replay the `APNS_AUDIT_LOG` from the past 30 days to identify any forged sends since suspected compromise window:
    ```bash
    wrangler kv key list --binding=APNS_AUDIT_LOG --env production | \
      jq -r '.[].name' | xargs -I {} wrangler kv key get {} --binding=APNS_AUDIT_LOG --env production
    ```
-4. Issue a fresh `.p8` via the Apple portal; set `APNS_P8_KEY_PRODUCTION` + `APNS_KEY_ID` per the routine playbook
-5. `wrangler secret put APNS_KILL_SWITCH --env production --value off`
+4. Issue a fresh `.p8` via the Apple portal; set `APNS_P8_KEY_PRODUCTION` + `APNS_KEY_ID` per the routine playbook (paste PEM at the interactive prompt — do NOT echo it on the command line)
+5. Disable the killswitch (same stdin-pipe pattern):
+   ```bash
+   printf 'off' | wrangler secret put APNS_KILL_SWITCH --env production
+   ```
 6. Notify affected users via in-app banner (Clawdmeter daemon polls a Worker `/notice` endpoint to surface operator-side advisories)
 
 ## CI deploy gates

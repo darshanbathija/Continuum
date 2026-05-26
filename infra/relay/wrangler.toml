@@ -5,6 +5,14 @@
 # is in place. Per the design doc (docs/design/secure-relay-apns-2026-05-26.md),
 # the Worker is a thin WebSocket fan-out over Durable Objects — one DO per
 # pairing session, 15-min idle eviction.
+#
+# IMPORTANT: bindings (kv_namespaces, durable_objects, vars) are
+# NON-INHERITABLE per
+# https://developers.cloudflare.com/workers/wrangler/configuration/#non-inheritable-keys
+# Because we override `vars` per env, we MUST re-declare kv_namespaces +
+# durable_objects.bindings inside EACH [env.*] block, otherwise the
+# deployed Worker will have NO bindings. Top-level blocks below are for
+# `wrangler dev` (no --env) only.
 
 name = "clawdmeter-relay"
 main = "src/index.ts"
@@ -27,39 +35,24 @@ bindings = [
   { name = "RELAY_SESSIONS", class_name = "RelaySession" }
 ]
 
+# Migrations are inheritable across envs (per Cloudflare DO migration
+# docs); a single top-level migration list applies to every env unless
+# explicitly overridden at [env.<name>.migrations].
 [[migrations]]
 tag = "v1"
 new_classes = ["RelaySession"]
 
-# KV namespaces — populated via `wrangler kv namespace create` per env;
-# IDs filled in by the operator at deploy time. Placeholders below.
+# Top-level (dev) KV bindings. Operator fills IDs in via
+# `wrangler kv namespace create`.
 [[kv_namespaces]]
 binding = "RELAY_AUDIT_LOG"
-id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+id = "REPLACE_WITH_DEV_NAMESPACE_ID"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
 [[kv_namespaces]]
 binding = "RELAY_RATE_LIMIT"
-id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+id = "REPLACE_WITH_DEV_NAMESPACE_ID"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
-
-# ---- Per-env overrides ----
-# Defaults above target development. Staging + production override route
-# + KV IDs. Wrangler picks one via --env <name>.
-
-[env.staging]
-name = "clawdmeter-relay-staging"
-routes = [
-  { pattern = "relay-staging.clawdmeter.dev/*", custom_domain = true }
-]
-
-[env.production]
-name = "clawdmeter-relay"
-routes = [
-  { pattern = "relay.clawdmeter.dev/*", custom_domain = true }
-]
-[env.production.limits]
-cpu_ms = 50
 
 # Vars (non-secret config). Secrets go via `wrangler secret put`.
 [vars]
@@ -67,10 +60,59 @@ ENVIRONMENT = "development"
 LOG_LEVEL = "info"
 SESSION_TTL_SECONDS = "900"   # 15-min idle eviction per D22
 
+# ---- Per-env overrides ----
+# Wrangler picks one via --env <name>. Each env MUST re-declare
+# kv_namespaces + durable_objects.bindings (non-inheritable keys).
+
+# -------- staging --------
+[env.staging]
+name = "clawdmeter-relay-staging"
+routes = [
+  { pattern = "relay-staging.clawdmeter.dev/*", custom_domain = true }
+]
+
+[[env.staging.durable_objects.bindings]]
+name = "RELAY_SESSIONS"
+class_name = "RelaySession"
+
+[[env.staging.kv_namespaces]]
+binding = "RELAY_AUDIT_LOG"
+id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[[env.staging.kv_namespaces]]
+binding = "RELAY_RATE_LIMIT"
+id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
 [env.staging.vars]
 ENVIRONMENT = "staging"
 LOG_LEVEL = "debug"
 SESSION_TTL_SECONDS = "900"
+
+# -------- production --------
+[env.production]
+name = "clawdmeter-relay"
+routes = [
+  { pattern = "relay.clawdmeter.dev/*", custom_domain = true }
+]
+
+[env.production.limits]
+cpu_ms = 50
+
+[[env.production.durable_objects.bindings]]
+name = "RELAY_SESSIONS"
+class_name = "RelaySession"
+
+[[env.production.kv_namespaces]]
+binding = "RELAY_AUDIT_LOG"
+id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+
+[[env.production.kv_namespaces]]
+binding = "RELAY_RATE_LIMIT"
+id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
 [env.production.vars]
 ENVIRONMENT = "production"

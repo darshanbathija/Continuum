@@ -11,7 +11,7 @@
     "typecheck": "echo 'E0 scaffold only — tsc check lands in E5'"
   },
   "devDependencies": {
-    "wrangler": "^3.95.0",
-    "@cloudflare/workers-types": "^4.20260101.0"
+    "wrangler": "3.95.0",
+    "@cloudflare/workers-types": "4.20260101.0"
   }
 }
