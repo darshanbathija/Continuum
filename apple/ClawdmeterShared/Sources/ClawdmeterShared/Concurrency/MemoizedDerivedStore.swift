@@ -137,6 +137,12 @@ public final class MemoizedDerivedStore<Input: Equatable, Output>: ObservableObj
                 if Task.isCancelled { return }
                 await MainActor.run { [weak self] in
                     guard let self else { return }
+                    // Re-check cancellation after the main-actor hop: a
+                    // newer `update(input:)` may have landed and cancelled
+                    // this task between the pre-hop check and now. Without
+                    // this gate, a stale result can briefly clobber the
+                    // newer compute's placeholder/result (UI flicker).
+                    if Task.isCancelled { return }
                     self.output = next
                 }
             }
