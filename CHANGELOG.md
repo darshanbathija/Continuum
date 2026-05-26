@@ -4,7 +4,7 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-## [0.29.10 build 149] - 2026-05-26 - Rebrand sweep + OpenCode status pill (`fix/v0.29.10-rebrand-bleed-and-opencode-badge`)
+## [0.29.11 build 150] - 2026-05-26 - Rebrand sweep + OpenCode status pill + design polish (`fix/v0.29.11-rebrand-bleed-and-opencode-badge`)
 
 Verifier loop on v0.29.9 surfaced two classes of leftover work from the Continuum rebrand and the new OpenCode CLI auth row. Folded both into a single follow-up.
 
@@ -17,12 +17,13 @@ Verifier loop on v0.29.9 surfaced two classes of leftover work from the Continuu
   - iOS Settings + iOS Pairing + Watch ContentView + Mac widgets + iOS notification copy: "Open ~~Clawdmeter~~ Continuum on your Mac / iPhone …".
   - Mac widget configurationDisplayName: "~~Clawdmeter~~ Continuum".
 
-### Known not-fixed (will land in v0.29.11 or later)
+### Known not-fixed
 
 - The "Probing…" subtitle on the OpenCode row when auth.json is missing takes ~25s to resolve to "No upstream providers yet". The new status pill mitigates this (it shows "Checking…" so the row no longer looks frozen) but the underlying probe latency is still slow. Tracking separately.
 - macOS LaunchServices can nondeterministically launch `/Applications/Clawdmeter.app` (legacy) instead of `/Applications/Continuum.app` (current) when both exist with the same bundle identifier `com.clawdmeter.mac`. INSTALL.txt tells users to trash the legacy app, but the install path could detect and warn proactively. Tracking separately — full bundle-ID transition (Phase 2 under Montauk Analytics paid dev) makes this moot.
+- Latest design critique scored 95.35/100 — short of the 98 floor /verify calls for. Three follow-up items would push it to 98+: F-09 chip-cluster overflow to "+N" inline chip, F-02 system-wide `TahoeTokens.statusColor()` token, F-10 chip stroke removal.
 
-Bumps `MARKETING_VERSION` 0.29.9 -> 0.29.10, `CURRENT_PROJECT_VERSION` 148 -> 149.
+Bumps `MARKETING_VERSION` 0.29.9 -> 0.29.11, `CURRENT_PROJECT_VERSION` 148 -> 150.
 
 ## [0.29.9 build 148] - 2026-05-26 - OpenCode auth flows through the CLI (`feat/opencode-cli-auth`)
 
