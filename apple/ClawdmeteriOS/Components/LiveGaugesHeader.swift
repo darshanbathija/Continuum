@@ -528,7 +528,7 @@ private struct WaitingForMacCard: View {
             Text(isPairedWithMac ? "Waiting for the Mac app" : "Not paired with a Mac")
                 .font(.headline)
             Text(isPairedWithMac
-                ? "Codex usage syncs from your paired Mac over Tailscale. Open Clawdmeter on the Mac and make sure `~/.codex/sessions/` has at least one rollout."
+                ? "Codex usage syncs from your paired Mac over Tailscale. Open Continuum on the Mac and make sure `~/.codex/sessions/` has at least one rollout."
                 : "Codex usage syncs from your paired Mac over Tailscale. Tap **Pair with iPhone** on the Mac, then scan the QR or paste the URL below.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -552,7 +552,7 @@ private struct UnauthenticatedCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Waiting for your Mac")
                 .font(.title2.bold())
-            Text("Open Clawdmeter on your Mac while signed into the same Apple ID — your Claude token will sync over iCloud Keychain and this screen will fill in automatically.")
+            Text("Open Continuum on your Mac while signed into the same Apple ID — your Claude token will sync over iCloud Keychain and this screen will fill in automatically.")
                 .font(.body)
                 .foregroundStyle(.secondary)
             Button(action: { model.forcePoll() }) {

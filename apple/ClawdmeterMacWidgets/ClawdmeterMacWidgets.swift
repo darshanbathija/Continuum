@@ -66,7 +66,7 @@ struct CombinedWidget: Widget {
             CombinedWidgetView(entry: entry)
                 .containerBackground(.fill.tertiary, for: .widget)
         }
-        .configurationDisplayName("Clawdmeter")
+        .configurationDisplayName("Continuum")
         .description("Side-by-side Claude and Codex usage.")
         .supportedFamilies([.systemMedium, .systemLarge])
     }
@@ -204,7 +204,7 @@ struct ProviderWidgetView: View {
             Text("—")
                 .font(.system(size: 32, weight: .bold))
                 .foregroundStyle(.tertiary)
-            Text("Open Clawdmeter")
+            Text("Open Continuum")
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
         }

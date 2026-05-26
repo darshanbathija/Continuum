@@ -4,6 +4,26 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.10 build 149] - 2026-05-26 - Rebrand sweep + OpenCode status pill (`fix/v0.29.10-rebrand-bleed-and-opencode-badge`)
+
+Verifier loop on v0.29.9 surfaced two classes of leftover work from the Continuum rebrand and the new OpenCode CLI auth row. Folded both into a single follow-up.
+
+### Fixed
+
+- **OpenCode row now shows a status pill** like Claude Code + Cursor SDK do. "Ready" (green) when CLI auth has providers, "Sign-in pending" (yellow) when the binary is installed but auth.json is empty, "Not installed" (orange) when the CLI isn't on PATH, "Checking…" while the probe is still running. Previously the row was the only authenticated provider without an at-a-glance state indicator — the info was in the subtitle but you had to read 8 words to know whether OpenCode was ready.
+- **Rebrand string bleed cleaned up.** v0.29.7 / v0.29.8 swept the obvious visible strings, but a verifier pass on v0.29.9 caught more references that still said "Clawdmeter":
+  - Settings → Providers header subtitle: "External agent runtimes ~~Clawdmeter~~ Continuum can drive."
+  - AppleScript-fallback alert text for both Claude Code + OpenCode "Auth via CLI" buttons: "Couldn't drive Terminal from ~~Clawdmeter~~ Continuum (…)".
+  - iOS Settings + iOS Pairing + Watch ContentView + Mac widgets + iOS notification copy: "Open ~~Clawdmeter~~ Continuum on your Mac / iPhone …".
+  - Mac widget configurationDisplayName: "~~Clawdmeter~~ Continuum".
+
+### Known not-fixed (will land in v0.29.11 or later)
+
+- The "Probing…" subtitle on the OpenCode row when auth.json is missing takes ~25s to resolve to "No upstream providers yet". The new status pill mitigates this (it shows "Checking…" so the row no longer looks frozen) but the underlying probe latency is still slow. Tracking separately.
+- macOS LaunchServices can nondeterministically launch `/Applications/Clawdmeter.app` (legacy) instead of `/Applications/Continuum.app` (current) when both exist with the same bundle identifier `com.clawdmeter.mac`. INSTALL.txt tells users to trash the legacy app, but the install path could detect and warn proactively. Tracking separately — full bundle-ID transition (Phase 2 under Montauk Analytics paid dev) makes this moot.
+
+Bumps `MARKETING_VERSION` 0.29.9 -> 0.29.10, `CURRENT_PROJECT_VERSION` 148 -> 149.
+
 ## [0.29.9 build 148] - 2026-05-26 - OpenCode auth flows through the CLI (`feat/opencode-cli-auth`)
 
 Clawdmeter no longer maintains a parallel "paste an OpenRouter key" affordance for OpenCode. The user's `opencode` CLI session is now the single source of truth — Clawdmeter reads `~/.local/share/opencode/auth.json` to enumerate connected upstream providers and routes chat through the long-running `opencode serve` daemon (which already uses those CLI creds upstream). Settings → Providers → OpenCode now mirrors the Claude Code row's "Auth via CLI" shape.

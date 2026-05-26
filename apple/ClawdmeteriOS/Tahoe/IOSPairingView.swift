@@ -85,7 +85,7 @@ public struct IOSPairingView: View {
                     .font(TahoeFont.rounded(18, weight: .heavy))
                     .tracking(-0.3)
                     .foregroundStyle(t.fg)
-                Text("Open Clawdmeter on your Mac → Pair with iPhone. Both devices need to be on the same Tailnet.")
+                Text("Open Continuum on your Mac → Pair with iPhone. Both devices need to be on the same Tailnet.")
                     .font(TahoeFont.body(14))
                     .foregroundStyle(t.fg3)
                     .multilineTextAlignment(.center)
@@ -215,7 +215,7 @@ private struct PasteURLSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Open Clawdmeter on your Mac → Settings → Sessions → Copy pairing URL. Then paste it below.")
+                Text("Open Continuum on your Mac → Settings → Sessions → Copy pairing URL. Then paste it below.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -164,7 +164,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Waiting for iPhone")
                 .font(.headline)
-            Text("Open Clawdmeter on your iPhone. Once it has a token, it pushes here automatically.")
+            Text("Open Continuum on your iPhone. Once it has a token, it pushes here automatically.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

@@ -159,7 +159,7 @@ public final class iOSNotificationManager: ObservableObject {
     ) async -> Bool {
         let content = UNMutableNotificationContent()
         content.title = event.title
-        content.body = preferences.sensitivePreviews ? event.body : "Open Clawdmeter to review this session."
+        content.body = preferences.sensitivePreviews ? event.body : "Open Continuum to review this session."
         content.sound = preferences.playChimes ? .default : nil
         content.threadIdentifier = event.sessionId.uuidString
         content.userInfo = [
@@ -190,7 +190,7 @@ public final class iOSNotificationManager: ObservableObject {
         content.title = "\(events.count) Clawdmeter updates"
         content.body = preferences.sensitivePreviews
             ? events.map(\.title).prefix(3).joined(separator: ", ")
-            : "Open Clawdmeter to review pending sessions."
+            : "Open Continuum to review pending sessions."
         content.sound = preferences.playChimes ? .default : nil
         content.threadIdentifier = "clawdmeter.batch"
         content.userInfo = [
