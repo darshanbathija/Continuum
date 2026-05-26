@@ -1,0 +1,94 @@
+name: Refresh pricing snapshot
+
+# B4 (Phase 0): keep apple/ClawdmeterShared/.../Analytics/pricing.json in
+# sync with the upstream BerriAI/litellm snapshot without manual ritual.
+#
+# Runs `tools/refresh-pricing.sh` (curl + jq + override merge) and opens a
+# PR with the diff. Reviewer (human) inspects the diff before merging — no
+# auto-merge.
+#
+# Plan B4 + acceptance criterion: "Workflow runs weekly, opens PR with
+# pricing.json diff". Plan reference:
+# .claude/plans/study-this-codebase-crystalline-shore.md
+#
+# Manual triggering supported via workflow_dispatch — useful when LiteLLM
+# pushes mid-week or when adding a new entry to pricing-overrides.json.
+
+on:
+  schedule:
+    # Every Monday at 12:00 UTC (5am Pacific, 8am Eastern). Catches the
+    # LiteLLM weekend updates without colliding with morning standup
+    # release windows.
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Run refresh-pricing.sh + open PR if diff
+    runs-on: ubuntu-24.04
+    permissions:
+      # peter-evans/create-pull-request needs both contents:write (to push
+      # the new branch) and pull-requests:write (to open the PR). The
+      # workflow's job-scoped escalation keeps the rest of the repo's
+      # default token at read-only.
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: Run refresh-pricing.sh
+        id: refresh
+        run: |
+          ./tools/refresh-pricing.sh
+          # Detect whether the script produced a diff against the
+          # checked-in snapshot. If yes, the subsequent step opens a PR.
+          if git diff --quiet -- apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing.json; then
+            echo "diff=none" >> "$GITHUB_OUTPUT"
+            echo "No pricing snapshot drift detected — LiteLLM matches the in-tree snapshot."
+          else
+            echo "diff=present" >> "$GITHUB_OUTPUT"
+            echo "Pricing snapshot drift detected — will open PR."
+            git diff --stat apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing.json
+          fi
+
+      - name: Open PR with pricing snapshot diff
+        if: steps.refresh.outputs.diff == 'present'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          # Use the workflow token; permissions block above grants the
+          # write scopes peter-evans/create-pull-request needs.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(pricing): refresh LiteLLM snapshot"
+          title: "chore(pricing): weekly LiteLLM snapshot refresh"
+          body: |
+            Automated weekly refresh of `apple/ClawdmeterShared/.../Analytics/pricing.json`
+            from the upstream BerriAI/litellm snapshot, plus any manual entries from
+            `tools/pricing-overrides.json`.
+
+            ### Review checklist
+
+            - [ ] Skim the diff for surprise rate changes — Anthropic, OpenAI, Google rate updates show as line-level edits to per-model `input_cost_per_token` / `output_cost_per_token` fields.
+            - [ ] Verify any newly-added models match expected provider naming (no third-party noise sneaking past the filter).
+            - [ ] If an `overrides` entry in `tools/pricing-overrides.json` was made redundant by LiteLLM catching up, drop it (per the `_meta.policy` field in that file).
+
+            ### Provenance
+
+            - Trigger: `${{ github.event_name }}`
+            - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - Source: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
+
+            Plan reference: B4 from `.claude/plans/study-this-codebase-crystalline-shore.md`.
+          branch: chore/pricing-refresh-${{ github.run_id }}
+          delete-branch: true
+          labels: |
+            chore
+            pricing
+            automated
