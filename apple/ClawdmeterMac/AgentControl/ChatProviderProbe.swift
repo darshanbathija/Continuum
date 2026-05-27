@@ -149,7 +149,11 @@ public actor ChatProviderProbe {
             let opencodeOpenRouterAuthAvailable = opencodeProviderIds.contains("openrouter")
                 || (ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?.isEmpty == false)
             let openRouterModelState = await OpenRouterModelProbe.shared.currentState()
-            let cursorState = await CursorModelProbe.shared.currentState()
+            // Passive provider discovery must not launch cursor-agent or
+            // touch Cursor's login Keychain item. In dev/AI test builds,
+            // those reads can surface SecurityAgent prompts repeatedly
+            // because every build may have a new signing requirement.
+            let cursorState = await CursorModelProbe.shared.passiveState()
             return (
                 claudeAvailable,
                 codexAvailable,
@@ -466,6 +470,17 @@ public actor CursorModelProbe {
 
     public func currentModels() async -> [ModelCatalogEntry] {
         await currentState().models
+    }
+
+    public func passiveState() async -> CursorModelProbeState {
+        let now = Date()
+        return CursorModelProbeState(
+            binaryPath: ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent"),
+            models: [CursorModelCatalog.autoEntry],
+            authenticated: false,
+            reason: "Cursor auth not checked until explicit Cursor use",
+            probedAt: now
+        )
     }
 
     public func currentState() async -> CursorModelProbeState {

@@ -1126,7 +1126,7 @@ private struct PendingMessageStrip: View {
             ? (pending.attachmentRefs.isEmpty
                 ? "(empty message)"
                 : pending.attachmentRefs.joined(separator: ", "))
-            : pending.body
+            : ClawdmeterMac_displaySkillInvocations(in: pending.body)
         VStack(alignment: .trailing, spacing: 4) {
             if !pending.attachmentRefs.isEmpty, !pending.body.isEmpty {
                 Text(pending.attachmentRefs.joined(separator: " · "))
@@ -1241,10 +1241,11 @@ private struct PendingMessageStrip: View {
     }
 
     private func accessibilityLabel(_ pending: SessionChatStore.PendingMessage) -> String {
+        let body = ClawdmeterMac_displaySkillInvocations(in: pending.body)
         switch pending.state {
-        case .sending:        return "Sending message: \(pending.body)"
-        case .queuedOffline:  return "Queued offline: \(pending.body)"
-        case .failed:         return "Failed to send: \(pending.body). \(pending.errorDescription ?? "")"
+        case .sending:        return "Sending message: \(body)"
+        case .queuedOffline:  return "Queued offline: \(body)"
+        case .failed:         return "Failed to send: \(body). \(pending.errorDescription ?? "")"
         }
     }
 }

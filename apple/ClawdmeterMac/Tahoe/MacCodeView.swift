@@ -1124,7 +1124,7 @@ private struct JsonlPreviewMsg: View {
     private var userBubble: some View {
         HStack(alignment: .top, spacing: 0) {
             Spacer(minLength: 60)
-            Text(msg.body)
+            Text(ClawdmeterMac_displaySkillInvocations(in: msg.body))
                 .font(TahoeFont.body(13))
                 .foregroundStyle(t.fg)
                 .textSelection(.enabled)

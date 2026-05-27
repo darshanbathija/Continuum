@@ -59,4 +59,18 @@ final class ChatItemRowSubtitleTests: XCTestCase {
             "Running Grep · pattern"
         )
     }
+
+    func test_skillInvocationMarkdown_rendersFriendlySkillLabel() {
+        XCTAssertEqual(
+            ClawdmeterMac_displaySkillInvocations(in: "[review](/Users/me/.agents/skills/gstack/review/SKILL.md)"),
+            "Skill: Review"
+        )
+    }
+
+    func test_skillInvocationDisplay_preservesSurroundingText() {
+        XCTAssertEqual(
+            ClawdmeterMac_displaySkillInvocations(in: "Start [plan-ceo-review](/tmp/plan-ceo-review/SKILL.md) now"),
+            "Start Skill: Plan CEO Review now"
+        )
+    }
 }
