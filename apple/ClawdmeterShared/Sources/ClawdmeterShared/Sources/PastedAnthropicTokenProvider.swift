@@ -31,6 +31,17 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
     private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "PastedAnthropicTokenProvider")
     private let lock = NSLock()
     private var cached: String?
+    /// Set to `true` after we observe `errSecMissingEntitlement (-34018)`
+    /// from any SecItem call against the configured shared access group.
+    /// That happens when the host process is signed without the matching
+    /// `keychain-access-groups` entitlement — most commonly an ad-hoc /
+    /// Debug build of the Mac app, or a developer signed under a team
+    /// that isn't the one baked into `sharedAccessGroup`. We fall back
+    /// to a local-only Keychain entry (no access group, not
+    /// synchronizable) so Continuum still works locally; the only
+    /// feature lost is cross-Apple-device iCloud Keychain sync, which is
+    /// gated by the access group anyway.
+    private var fellBackToLocalKeychain: Bool = false
 
     public init(
         serviceName: String = defaultService,
@@ -168,6 +179,12 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
     // MARK: - Keychain
 
     private func baseQuery() -> [String: Any] {
+        // Effective synchronizable + accessGroup honor the runtime
+        // fallback set by `recordMissingEntitlementFallback`. Once we
+        // hit -34018 against the shared access group, every subsequent
+        // query goes local-only so reads and writes keep landing on the
+        // same Keychain entry.
+        let effectiveSyncable = synchronizable && !fellBackToLocalKeychain
         var q: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
@@ -175,17 +192,29 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
             // restrictive that is still iCloud-sync-compatible; we drop
             // the ThisDeviceOnly variant on the synchronizable instance
             // because iCloud Keychain rejects ThisDeviceOnly entries.
-            kSecAttrAccessible as String: synchronizable
+            kSecAttrAccessible as String: effectiveSyncable
                 ? kSecAttrAccessibleAfterFirstUnlock
                 : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        if let accessGroup {
+        if !fellBackToLocalKeychain, let accessGroup {
             q[kSecAttrAccessGroup as String] = accessGroup
         }
-        if synchronizable {
+        if effectiveSyncable {
             q[kSecAttrSynchronizable as String] = kCFBooleanTrue
         }
         return q
+    }
+
+    /// Called from a SecItem call site whenever the OS returns
+    /// `errSecMissingEntitlement (-34018)`. Returns `true` the first time
+    /// it's called against a configured access group (caller should
+    /// retry); `false` thereafter (so we don't infinite-loop). Caller
+    /// must already hold `lock`.
+    private func recordMissingEntitlementFallback() -> Bool {
+        guard accessGroup != nil, !fellBackToLocalKeychain else { return false }
+        fellBackToLocalKeychain = true
+        logger.notice("Keychain access group entitlement missing (errSecMissingEntitlement). Falling back to local-only Keychain entry. Cross-device iCloud Keychain sync will not work in this build; install a properly-signed release to re-enable.")
+        return true
     }
 
     private func readFromKeychain() -> String? {
@@ -194,7 +223,17 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         PassiveKeychainAccess.apply(to: &query)
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        var status = SecItemCopyMatching(query as CFDictionary, &item)
+        // Missing-entitlement fall-through: retry against the local-only
+        // Keychain (no accessGroup, no synchronizable) so a Debug / ad-hoc
+        // host can still read its own stored token.
+        if status == -34018, recordMissingEntitlementFallback() {
+            var retry = baseQuery()
+            retry[kSecReturnData as String] = true
+            retry[kSecMatchLimit as String] = kSecMatchLimitOne
+            PassiveKeychainAccess.apply(to: &retry)
+            status = SecItemCopyMatching(retry as CFDictionary, &item)
+        }
         guard status == errSecSuccess,
               let data = item as? Data,
               let s = String(data: data, encoding: .utf8) else {
@@ -209,26 +248,41 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         PassiveKeychainAccess.apply(to: &query)
         var item: CFTypeRef?
-        return SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess
+        var status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == -34018, recordMissingEntitlementFallback() {
+            var retry = baseQuery()
+            retry[kSecReturnAttributes as String] = true
+            retry[kSecMatchLimit as String] = kSecMatchLimitOne
+            PassiveKeychainAccess.apply(to: &retry)
+            status = SecItemCopyMatching(retry as CFDictionary, &item)
+        }
+        return status == errSecSuccess
     }
 
     @discardableResult
     private func writeToKeychain(value: String) -> Bool {
         guard let data = value.data(using: .utf8) else { return false }
-        let query = baseQuery()
         let attrs: [String: Any] = [kSecValueData as String: data]
 
-        let updateStatus = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+        // First try with the configured (possibly shared-group) query.
+        let updateStatus = SecItemUpdate(baseQuery() as CFDictionary, attrs as CFDictionary)
         if updateStatus == errSecSuccess { return true }
+        if updateStatus == -34018, recordMissingEntitlementFallback() {
+            // Re-enter with the local-only baseQuery now in effect.
+            return writeToKeychain(value: value)
+        }
         if updateStatus != errSecItemNotFound {
-            logger.error("PastedAnthropicTokenProvider update failed: \(updateStatus, privacy: .public) group=\(self.accessGroup ?? "nil", privacy: .public) sync=\(self.synchronizable, privacy: .public)")
+            logger.error("PastedAnthropicTokenProvider update failed: \(updateStatus, privacy: .public) group=\(self.accessGroup ?? "nil", privacy: .public) sync=\(self.synchronizable, privacy: .public) localFallback=\(self.fellBackToLocalKeychain, privacy: .public)")
         }
         // Doesn't exist yet — add a fresh entry.
-        var addQuery = query
+        var addQuery = baseQuery()
         addQuery[kSecValueData as String] = data
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus == -34018, recordMissingEntitlementFallback() {
+            return writeToKeychain(value: value)
+        }
         if addStatus != errSecSuccess {
-            logger.error("PastedAnthropicTokenProvider add failed: \(addStatus, privacy: .public) group=\(self.accessGroup ?? "nil", privacy: .public) sync=\(self.synchronizable, privacy: .public)")
+            logger.error("PastedAnthropicTokenProvider add failed: \(addStatus, privacy: .public) group=\(self.accessGroup ?? "nil", privacy: .public) sync=\(self.synchronizable, privacy: .public) localFallback=\(self.fellBackToLocalKeychain, privacy: .public)")
             return false
         }
         return true
@@ -236,7 +290,10 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
 
     @discardableResult
     private func deleteFromKeychain() -> Bool {
-        let status = SecItemDelete(baseQuery() as CFDictionary)
+        var status = SecItemDelete(baseQuery() as CFDictionary)
+        if status == -34018, recordMissingEntitlementFallback() {
+            status = SecItemDelete(baseQuery() as CFDictionary)
+        }
         // ALWAYS clear the in-memory cache, even when the Keychain delete
         // fails — sign-out must invalidate the local copy regardless. If
         // we only cleared on errSecSuccess/errSecItemNotFound, a locked
