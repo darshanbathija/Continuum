@@ -327,11 +327,15 @@ public final class MobileCommandOutbox: ObservableObject {
                 adminOverride: body.adminOverride,
                 idempotencyKey: envelope.idempotencyKey
             ) != nil
-        case .permissionResponse, .terminalInput, .pickWinner, .updateWorkspace:
+        case .permissionResponse, .terminalInput, .pickWinner, .updateWorkspace,
+             .openLocalFolder, .cloneFromGitHub, .quickStartRepo, .wakeMac:
             // Pre-wired outbox kinds we don't surface enqueue helpers
             // for yet. Treat as success so a stale entry from a future
-            // build doesn't permanently stick in the queue. The legacy
-            // direct-call path on iOS still handles these.
+            // build doesn't permanently stick in the queue. The v23
+            // workspace-onboarding kinds (openLocalFolder / cloneFromGitHub
+            // / quickStartRepo / wakeMac) are reached from the iOS sheets
+            // via direct `AgentControlClient` calls; they only land here
+            // if a future build enqueues them through the outbox.
             outboxLogger.warning("Skipping unsupported kind \(envelope.kind.rawValue, privacy: .public) — pretending success")
             return true
         }

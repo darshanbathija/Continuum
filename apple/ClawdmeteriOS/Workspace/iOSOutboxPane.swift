@@ -119,6 +119,10 @@ private extension MobileCommandKind {
         case .setAutopilot: return "Toggle autopilot"
         case .pickWinner: return "Pick winner"
         case .updateWorkspace: return "Update workspace defaults"
+        case .openLocalFolder: return "Open project on Mac"
+        case .cloneFromGitHub: return "Clone from GitHub"
+        case .quickStartRepo: return "Quick start"
+        case .wakeMac: return "Wake Mac"
         }
     }
 }

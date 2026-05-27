@@ -2048,6 +2048,188 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    // MARK: - v23 workspace onboarding (Add Repo flow)
+
+    /// Outcome of a workspace-onboarding daemon call. `record` is set on
+    /// success; `error` carries a structured `RepoOnboardingError`; `state`
+    /// surfaces the CGSession liveness when the daemon returns 423 Locked
+    /// (the iOS layer uses this to show the "Mac is asleep" banner).
+    public struct WorkspaceOnboardingResult: Sendable {
+        public let record: CodeWorkspaceRecord?
+        public let error: RepoOnboardingError?
+        public let macLocked: Bool
+        public let unsupportedServer: Bool
+
+        public init(
+            record: CodeWorkspaceRecord? = nil,
+            error: RepoOnboardingError? = nil,
+            macLocked: Bool = false,
+            unsupportedServer: Bool = false
+        ) {
+            self.record = record
+            self.error = error
+            self.macLocked = macLocked
+            self.unsupportedServer = unsupportedServer
+        }
+    }
+
+    /// `POST /workspaces/open-local`. Mac focuses + opens NSOpenPanel.
+    /// `record` set on .OK; `macLocked` set on 423; nil/nil on user-cancel.
+    @MainActor
+    public func openLocalFolderOnMac(idempotencyKey: String? = nil) async -> WorkspaceOnboardingResult {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return WorkspaceOnboardingResult(unsupportedServer: true)
+        }
+        return await postWorkspaceOnboarding(
+            path: "/workspaces/open-local",
+            body: OpenLocalFolderRequest(idempotencyKey: idempotencyKey)
+        )
+    }
+
+    /// `POST /workspaces/from-github`. Daemon shells out to `gh repo clone`
+    /// (or `git clone` fallback). Returns the new workspace on success or
+    /// a typed `RepoOnboardingError` on failure.
+    @MainActor
+    public func cloneFromGitHubOnMac(
+        spec: String,
+        destinationParent: String? = nil,
+        idempotencyKey: String? = nil
+    ) async -> WorkspaceOnboardingResult {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return WorkspaceOnboardingResult(unsupportedServer: true)
+        }
+        return await postWorkspaceOnboarding(
+            path: "/workspaces/from-github",
+            body: CloneFromGitHubRequest(
+                spec: spec,
+                destinationParent: destinationParent,
+                idempotencyKey: idempotencyKey
+            )
+        )
+    }
+
+    /// `POST /workspaces/quick-start`. Daemon mkdirs `parent/name` + git inits.
+    @MainActor
+    public func quickStartRepoOnMac(
+        name: String,
+        parent: String? = nil,
+        idempotencyKey: String? = nil
+    ) async -> WorkspaceOnboardingResult {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return WorkspaceOnboardingResult(unsupportedServer: true)
+        }
+        return await postWorkspaceOnboarding(
+            path: "/workspaces/quick-start",
+            body: QuickStartRepoRequest(
+                name: name,
+                parent: parent,
+                idempotencyKey: idempotencyKey
+            )
+        )
+    }
+
+    /// `POST /workspaces/wake-mac`. Returns true on 200, false otherwise.
+    @MainActor
+    public func wakeMacForOpenLocal(idempotencyKey: String? = nil) async -> Bool {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return false
+        }
+        let body = (try? JSONEncoder().encode(WakeMacRequest(idempotencyKey: idempotencyKey))) ?? Data()
+        guard var request = makeRequest(path: "/workspaces/wake-mac", method: "POST", body: body) else {
+            return false
+        }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            _ = try await sendChecked(request)
+            return true
+        } catch {
+            self.lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// `GET /workspaces/allow-list`. Returns the resolved Mac-side path
+    /// allow-list so iOS can pre-validate user-typed destinations.
+    @MainActor
+    public func fetchWorkspaceAllowList() async -> WorkspaceAllowListResponse? {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return nil
+        }
+        guard let request = makeRequest(path: "/workspaces/allow-list", method: "GET") else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            return try JSONDecoder().decode(WorkspaceAllowListResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Shared POST body for the three workspace-onboarding write endpoints.
+    /// Bypasses `sendChecked` so we can read the response body on non-2xx
+    /// statuses (the daemon encodes `RepoOnboardingError` as JSON in the
+    /// body even on 403/500). 423 means the Mac is locked; 401 means
+    /// `gh auth login` is needed; 403 means the path is outside the
+    /// allow-list.
+    @MainActor
+    private func postWorkspaceOnboarding<Body: Encodable>(
+        path: String,
+        body: Body
+    ) async -> WorkspaceOnboardingResult {
+        let encoded = (try? JSONEncoder().encode(body)) ?? Data()
+        guard var request = makeRequest(path: path, method: "POST", body: encoded) else {
+            return WorkspaceOnboardingResult()
+        }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            let (data, response) = try await runRequest(request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            switch status {
+            case 200, 201:
+                if let record = try? decoder.decode(CodeWorkspaceRecord.self, from: data) {
+                    if !workspaces.contains(where: { $0.id == record.id }) {
+                        workspaces.append(record)
+                    }
+                    return WorkspaceOnboardingResult(record: record)
+                }
+                return WorkspaceOnboardingResult()
+            case 204:
+                // User cancelled the picker; not an error.
+                return WorkspaceOnboardingResult()
+            case 401:
+                return WorkspaceOnboardingResult(error: .ghAuthFailed)
+            case 403:
+                if let decoded = try? decoder.decode(RepoOnboardingError.self, from: data) {
+                    return WorkspaceOnboardingResult(error: decoded)
+                }
+                return WorkspaceOnboardingResult(error: .pathNotAllowed(reason: "Forbidden"))
+            case 404:
+                if let decoded = try? decoder.decode(RepoOnboardingError.self, from: data) {
+                    return WorkspaceOnboardingResult(error: decoded)
+                }
+                return WorkspaceOnboardingResult(error: .pathMissing)
+            case 423:
+                return WorkspaceOnboardingResult(macLocked: true)
+            default:
+                if let decoded = try? decoder.decode(RepoOnboardingError.self, from: data) {
+                    return WorkspaceOnboardingResult(error: decoded)
+                }
+                return WorkspaceOnboardingResult(
+                    error: .persistenceFailed(message: "HTTP \(status)")
+                )
+            }
+        } catch {
+            self.lastError = error.localizedDescription
+            return WorkspaceOnboardingResult(
+                error: .persistenceFailed(message: error.localizedDescription)
+            )
+        }
+    }
+
     // MARK: - v18 Code workbench remote runtime
 
     @MainActor
