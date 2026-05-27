@@ -1897,18 +1897,21 @@ private struct SidebarPane: View {
                         .fill(t.accent)
                         .frame(width: 7, height: 7)
                         .help("Unread")
+                        .accessibilityLabel("Unread")
                 }
                 if isPinned {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 9))
                         .foregroundStyle(t.accent)
                         .help("Pinned")
+                        .accessibilityLabel("Pinned")
                 }
                 if isMuted {
                     Image(systemName: "bell.slash.fill")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .help("Muted")
+                        .accessibilityLabel("Muted")
                 }
                 ForEach(reasons.prefix(2), id: \.self) { reason in
                     AttentionBadge(reason: reason)
@@ -1917,18 +1920,22 @@ private struct SidebarPane: View {
                     Image(systemName: "archivebox.fill")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
+                        .help("Archived")
+                        .accessibilityLabel("Archived")
                 }
                 if session.planText != nil {
                     Image(systemName: "doc.text.fill")
                         .font(.system(size: 10))
                         .foregroundStyle(terraCotta)
                         .help("Plan approval pending")
+                        .accessibilityLabel("Plan approval pending")
                 }
                 if model.chatStore(for: session)?.pendingPermissionPrompt != nil {
                     Image(systemName: "hand.raised.fill")
                         .font(.system(size: 10))
                         .foregroundStyle(.orange)
                         .help("User input required")
+                        .accessibilityLabel("User input required")
                 }
                 let queued = workbenchState.queuedSendCount(for: session.id)
                 if queued > 0 {

@@ -63,6 +63,8 @@ struct ModelEffortChip: View {
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
         .help("Change model or effort (⌘⌥M)")
+        .accessibilityLabel("Model and effort")
+        .accessibilityValue(summaryText)
         .accessibilityIdentifier("code.composer.model-effort")
         .onHover { isHovered = $0 }
         .onReceive(NotificationCenter.default.publisher(for: .composerOpenModelEffort)) { _ in
@@ -147,6 +149,8 @@ struct ContextUsageChip: View {
         }
         .buttonStyle(.plain)
         .help("Context window utilisation — click for plan usage (⌘⌥C)")
+        .accessibilityLabel("Context window")
+        .accessibilityValue(percentText)
         .accessibilityIdentifier("code.composer.context-usage")
         .onHover { isHovered = $0 }
         .onReceive(NotificationCenter.default.publisher(for: .composerOpenContextUsage)) { _ in
