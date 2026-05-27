@@ -205,6 +205,26 @@ public final class AgentControlServer {
     /// returns 503.
     public var setAutoReviveCallback: (@MainActor (AgentKind, Bool) -> Void)?
 
+    /// v23: workspace onboarding (Add Repo flow) — the same `RepoOnboarding`
+    /// the Mac UI uses, reused on the daemon side for iOS-relayed flows.
+    /// Lazy because it captures `self.workspaceStore` and `self.repoIndex`
+    /// which need init to finish first. Refresh closure fires
+    /// `RepoIndex.refresh()` so the iOS workspace switcher sees the new
+    /// repo within a tick of the response.
+    lazy var repoOnboardingService: RepoOnboarding = {
+        let index = self.repoIndex
+        return RepoOnboarding(
+            workspaceStore: self.workspaceStore,
+            repoIndex: index,
+            refresh: { await index.refresh() },
+            onWorkspaceRegistered: { _ in }
+        )
+    }()
+
+    /// v23: CGSession liveness probe for `/workspaces/open-local`. Injected
+    /// for testability; production uses the live CGSession dictionary.
+    var cgSession: CGSessionLiveness = LiveCGSession()
+
     public init(
         pairingTokens: PairingTokenStore = .shared,
         repoIndex: RepoIndex,
@@ -1088,6 +1108,25 @@ public final class AgentControlServer {
                 request: req,
                 connection: conn
             )
+        }
+        // v23: Add-Repo workspace onboarding endpoints. iOS posts here to
+        // drive the Mac through one of the three Conductor-style flows.
+        // Path validation (A9-B) + CGSession liveness (A3-A) gate the write
+        // endpoints. All writes idempotent-keyed via MobileCommandOutbox.
+        t.register(method: "POST", pattern: "/workspaces/open-local") { [weak self] req, conn, _ in
+            await self?.handleOpenLocalFolder(request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/workspaces/from-github") { [weak self] req, conn, _ in
+            await self?.handleCloneFromGitHub(request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/workspaces/quick-start") { [weak self] req, conn, _ in
+            await self?.handleQuickStartRepo(request: req, connection: conn)
+        }
+        t.register(method: "POST", pattern: "/workspaces/wake-mac") { [weak self] req, conn, _ in
+            await self?.handleWakeMac(request: req, connection: conn)
+        }
+        t.register(method: "GET", pattern: "/workspaces/allow-list") { [weak self] _, conn, _ in
+            self?.handleGetWorkspaceAllowList(connection: conn)
         }
         t.register(method: "PUT", pattern: "/provider-defaults/:vendor") { [weak self] req, conn, params in
             await self?.handlePutProviderDefault(
@@ -7321,7 +7360,7 @@ public final class AgentControlServer {
     // v0.27.0: isSafeDesignImportBase(_:) removed along with the Design
     // tab + Open Design /design/import-folder route.
 
-    private func sendResponse(_ response: HTTPResponse, on connection: NWConnection) {
+    func sendResponse(_ response: HTTPResponse, on connection: NWConnection) {
         let bytes = httpResponseBytes(
             status: response.status,
             statusText: response.reason,
@@ -7380,13 +7419,43 @@ public final class AgentControlServer {
     /// side effect (send to tmux, swap model, merge PR) doesn't repeat.
     /// `kind` is recorded into the audit log but is not strictly required
     /// for the lookup itself — keys are globally unique by construction.
+    ///
+    /// `payloadHash` (optional) enables the payload-mismatch gate. When
+    /// supplied AND the cached entry has a stored hash that DIFFERS, the
+    /// daemon sends `422 Unprocessable` instead of replaying — protects
+    /// against an iOS retry that reused the persisted key but edited
+    /// the request body (e.g. user edited the GitHub spec between
+    /// taps). Callers without a hash skip the check (back-compat).
     @discardableResult
-    private func tryReplayIdempotent(
+    func tryReplayIdempotent(
         key: String?,
-        on connection: NWConnection
+        on connection: NWConnection,
+        payloadHash: String? = nil
     ) async -> Bool {
         guard let key, !key.isEmpty else { return false }
         guard let cached = await mobileCommandOutbox.entry(forKey: key) else { return false }
+        // Payload-mismatch gate. Cached entries without a stored hash
+        // (audit-log replay seeds, old entries from before this field)
+        // skip the check — we can't distinguish a real mismatch from a
+        // missing-record without the hash, and we'd rather replay than
+        // surface a spurious 422.
+        if let incoming = payloadHash,
+           let stored = cached.payloadHash,
+           !stored.isEmpty,
+           incoming != stored {
+            let body = Data(#"{"error":"idempotency-key-reused-with-different-payload"}"#.utf8)
+            sendResponse(
+                HTTPResponse(
+                    status: 422,
+                    reason: "Unprocessable",
+                    contentType: "application/json",
+                    body: body
+                ),
+                on: connection
+            )
+            serverLogger.warning("idempotent payload mismatch (key=\(key.prefix(8), privacy: .public)…)")
+            return true
+        }
         // Re-emit the cached response bytes. When the cache only carried
         // the receipt (audit-log replay path, no body), synthesize a
         // minimal JSON body that still carries the receipt so iOS can
@@ -7443,7 +7512,8 @@ public final class AgentControlServer {
                 kind: kind,
                 error: errorMessage ?? "unknown",
                 responseStatus: responseStatus,
-                responseBody: responseBody
+                responseBody: responseBody,
+                payloadHash: payloadHash
             )
         } else {
             entry = await mobileCommandOutbox.record(
@@ -7451,7 +7521,8 @@ public final class AgentControlServer {
                 kind: kind,
                 responseBody: responseBody,
                 responseContentType: responseContentType,
-                responseStatus: responseStatus
+                responseStatus: responseStatus,
+                payloadHash: payloadHash
             )
         }
         await AuditLog.shared.recordMobileCommand(
@@ -7469,7 +7540,7 @@ public final class AgentControlServer {
     /// receipt into the body dict so iOS can match by idempotencyKey,
     /// caches the bytes for replay, and writes the audit row. Equivalent
     /// to `sendJSON(body)` when `key` is nil (legacy clients).
-    private func sendCommandResponse(
+    func sendCommandResponse(
         body: [String: Any],
         key: String?,
         kind: MobileCommandKind,

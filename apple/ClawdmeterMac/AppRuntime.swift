@@ -254,12 +254,17 @@ final class AppRuntime: ObservableObject {
         let repoEnvStoreURL = uiTestingAppSupport?.appendingPathComponent("repo-env-variables.json")
             ?? RepoEnvStore.defaultStoreURL()
 
-        self.repoIndex = RepoIndex()
-        self.agentSessionRegistry = AgentSessionRegistry(storeURL: sessionsStoreURL)
         self.workspaceStore = WorkspaceStore(
             storeURL: workspacesStoreURL,
             sessionsURL: sessionsStoreURL
         )
+        let workspaceStoreRef = self.workspaceStore
+        self.repoIndex = RepoIndex(
+            workspaceSnapshotProvider: { @Sendable in
+                await MainActor.run { workspaceStoreRef.workspaces }
+            }
+        )
+        self.agentSessionRegistry = AgentSessionRegistry(storeURL: sessionsStoreURL)
         self.repoEnvStore = RepoEnvStore(storeURL: repoEnvStoreURL)
         self.repoEnvRuntimeResolver = RepoEnvRuntimeResolver(
             workspaceStore: self.workspaceStore,

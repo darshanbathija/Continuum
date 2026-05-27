@@ -10,6 +10,18 @@ struct iOSWorkspaceSwitcherSheet: View {
 
     @State private var query = ""
     @State private var isLoading = true
+    @State private var addRepoDialogPresented = false
+    @State private var showingCloneSheet = false
+    @State private var showingQuickStartSheet = false
+    @State private var showingWakeBanner = false
+    @State private var openLocalInFlight = false
+    @State private var openLocalMessage: String? = nil
+    /// Persisted idempotency key for the Open-Project-on-Mac flow.
+    /// Survives app kill via `RepoOnboardingIdempotencyStore` so a
+    /// retry after the user finished the picker on the Mac replays
+    /// the registered record instead of re-firing NSOpenPanel.
+    @State private var openLocalIdempotencyKey: String = RepoOnboardingIdempotencyStore.currentKey(for: .openLocal)
+    @StateObject private var allowList = WorkspaceAllowListCache()
 
     private var sessions: [AgentSession] {
         client.sessions.sorted { $0.lastEventAt > $1.lastEventAt }
@@ -68,6 +80,27 @@ struct iOSWorkspaceSwitcherSheet: View {
                     }
                 }
 
+                if AgentControlWireVersion.supportsWorkspaceOnboarding(serverWireVersion: client.serverWireVersion) {
+                    Section {
+                        Button { addRepoDialogPresented = true } label: {
+                            Label("Add project", systemImage: "plus.rectangle.on.folder")
+                        }
+                        if showingWakeBanner {
+                            IOSWakeMacBanner(client: client) {
+                                showingWakeBanner = false
+                            }
+                        }
+                        if let openLocalMessage {
+                            Text(openLocalMessage).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } else if client.serverWireVersion != nil {
+                    Section {
+                        Text("Update Clawdmeter on the Mac to add projects from iOS.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("Sessions") {
                     if visibleSessions.isEmpty {
                         ContentUnavailableView(
@@ -97,9 +130,96 @@ struct iOSWorkspaceSwitcherSheet: View {
                     }
                 }
             }
-            .task { await loadWorkspaces() }
-            .refreshable { await loadWorkspaces() }
+            .task {
+                await loadWorkspaces()
+                allowList.attach(client: client)
+                await allowList.refresh()
+            }
+            .refreshable {
+                await loadWorkspaces()
+                await allowList.refresh(force: true)
+            }
+            .confirmationDialog(
+                "Add project",
+                isPresented: $addRepoDialogPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Open Project on Mac") {
+                    Task { await triggerOpenLocalOnMac() }
+                }
+                Button("Open GitHub Project") { showingCloneSheet = true }
+                Button("Quick Start") { showingQuickStartSheet = true }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Each option runs on your paired Mac.")
+            }
+            .sheet(isPresented: $showingCloneSheet) {
+                IOSCloneRepoSheet(
+                    client: client,
+                    allowList: allowList,
+                    onSuccess: { _ in Task { await client.refreshWorkspaces() } }
+                )
+            }
+            .sheet(isPresented: $showingQuickStartSheet) {
+                IOSQuickStartSheet(
+                    client: client,
+                    allowList: allowList,
+                    onSuccess: { _ in Task { await client.refreshWorkspaces() } }
+                )
+            }
         }
+    }
+
+    /// Tap "Open Project on Mac" → daemon focuses Mac + opens NSOpenPanel.
+    /// If the Mac is asleep/locked, surface the Wake-Mac banner.
+    @MainActor
+    private func triggerOpenLocalOnMac() async {
+        guard !openLocalInFlight else { return }
+        openLocalInFlight = true
+        openLocalMessage = "Asking your Mac to open a folder picker…"
+        defer { openLocalInFlight = false }
+        let result = await client.openLocalFolderOnMac(idempotencyKey: openLocalIdempotencyKey)
+        if result.unsupportedServer {
+            openLocalMessage = "Update Clawdmeter on the Mac to enable this."
+            return
+        }
+        if result.macLocked {
+            showingWakeBanner = true
+            openLocalMessage = "Mac is asleep — wake it and try again."
+            return
+        }
+        if let record = result.record {
+            await client.refreshWorkspaces()
+            openLocalMessage = "Added \(record.repoDisplayName) — open it from the sidebar."
+            // Final outcome — clear the persisted key + generate a fresh
+            // one for the next attempt. Without this the cached receipt
+            // would replay the same record on a re-tap.
+            RepoOnboardingIdempotencyStore.clear(.openLocal)
+            openLocalIdempotencyKey = RepoOnboardingIdempotencyStore.currentKey(for: .openLocal)
+            return
+        }
+        if result.replayedWithoutRecord {
+            // Daemon-restart replay: the open-local picker already
+            // completed before the restart wiped its in-memory cache.
+            // Refresh workspaces + rotate the key.
+            await client.refreshWorkspaces()
+            openLocalMessage = "Open Project was already completed earlier — workspace list refreshed."
+            RepoOnboardingIdempotencyStore.clear(.openLocal)
+            openLocalIdempotencyKey = RepoOnboardingIdempotencyStore.currentKey(for: .openLocal)
+            return
+        }
+        if let err = result.error {
+            // Codex R4 #2: transport error preserves the key.
+            if result.transportError {
+                openLocalMessage = "Network error — try again when reachable."
+                return
+            }
+            openLocalMessage = iosFriendlyMessage(for: err)
+            RepoOnboardingIdempotencyStore.clear(.openLocal)
+            openLocalIdempotencyKey = RepoOnboardingIdempotencyStore.currentKey(for: .openLocal)
+            return
+        }
+        openLocalMessage = "Pick a folder on your Mac to finish."
     }
 
     private func workspaceRow(_ workspace: CodeWorkspaceRecord) -> some View {

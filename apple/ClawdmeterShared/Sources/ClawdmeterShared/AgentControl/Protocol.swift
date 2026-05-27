@@ -160,7 +160,14 @@ public enum AgentControlWireVersion {
     /// can audit which sibling transcripts seeded its first prompt, plus
     /// `ownsWorktree` so same-workspace tabs can share a cwd without
     /// inheriting destructive worktree-delete ownership.
-    public static let current: Int = 22
+    /// v23 (2026-05-27): workspace onboarding endpoints. Five new routes
+    /// for the Code-tab Add-Repo flow (`POST /workspaces/open-local`,
+    /// `/from-github`, `/quick-start`, `/wake-mac`, `GET /workspaces/allow-list`).
+    /// Mac drives the local Add-Repo menu; iOS posts the same payloads via
+    /// `MobileCommandOutbox` so a paired iPhone can clone or quick-start a
+    /// repo on the Mac. Older clients 404 the routes; iOS surfaces an
+    /// "Update Clawdmeter on the Mac" banner when `serverWireVersion < 23`.
+    public static let current: Int = 23
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -317,6 +324,14 @@ public enum AgentControlWireVersion {
     /// Minimum wire version that exposes workspace-tab inherited context
     /// metadata on `AgentSession`.
     public static let tabContextMinimum: Int = 22
+
+    /// Minimum wire version that supports the workspace-onboarding routes
+    /// (Add-Repo flow). Mac daemons on `< 23` 404 the requests; iOS surfaces
+    /// "Update Clawdmeter on the Mac" instead of letting the user fire a
+    /// request that will silently drop. Endpoints gated:
+    /// `POST /workspaces/open-local`, `/from-github`, `/quick-start`,
+    /// `/wake-mac`, `GET /workspaces/allow-list`.
+    public static let workspaceOnboardingMinimum: Int = 23
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -501,6 +516,15 @@ public enum AgentControlWireVersion {
     public static func supportsTabContext(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= tabContextMinimum
+    }
+
+    /// Whether the paired Mac supports the Add-Repo workspace-onboarding
+    /// flow (Open Project / Clone from GitHub / Quick Start). iOS gates
+    /// the workspace switcher's "+ Add project" footer on this; older
+    /// Macs see no footer and a banner saying to update.
+    public static func supportsWorkspaceOnboarding(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= workspaceOnboardingMinimum
     }
 }
 
@@ -1713,6 +1737,11 @@ public enum MobileCommandKind: String, Codable, Hashable, Sendable, CaseIterable
     case setAutopilot = "set_autopilot"
     case pickWinner = "pick_winner"
     case updateWorkspace = "update_workspace"
+    /// v23: workspace onboarding (Add Repo flow).
+    case openLocalFolder = "open_local_folder"
+    case cloneFromGitHub = "clone_from_github"
+    case quickStartRepo = "quick_start_repo"
+    case wakeMac = "wake_mac"
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -1854,6 +1883,170 @@ public struct UpdateWorkspaceDefaultsRequest: Codable, Sendable {
         self.providerDefaults = providerDefaults
         self.filesToCopy = filesToCopy
         self.idempotencyKey = idempotencyKey
+    }
+}
+
+// MARK: - Workspace onboarding (Add Repo flow, wire v23)
+
+/// `POST /workspaces/open-local` body. iOS triggers the Mac to focus and
+/// open NSOpenPanel. The Mac is the picker host; iOS is the remote.
+/// CGSession-asleep → 423 Locked (use `/workspaces/wake-mac` to wake).
+public struct OpenLocalFolderRequest: Codable, Sendable {
+    public let idempotencyKey: String?
+
+    public init(idempotencyKey: String? = nil) {
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+/// `POST /workspaces/from-github` body. Daemon shells `gh repo clone` or
+/// falls back to `git clone https://github.com/<spec>.git`. `spec` accepts
+/// `owner/repo`, `https://github.com/owner/repo[.git]`, or
+/// `git@github.com:owner/repo.git`; daemon normalizes to `owner/repo`.
+/// `destinationParent` must canonicalize under `defaultParent` or one of
+/// the configured scan roots; otherwise → 403.
+public struct CloneFromGitHubRequest: Codable, Sendable {
+    public let spec: String
+    public let destinationParent: String?
+    public let idempotencyKey: String?
+
+    public init(
+        spec: String,
+        destinationParent: String? = nil,
+        idempotencyKey: String? = nil
+    ) {
+        self.spec = spec
+        self.destinationParent = destinationParent
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+/// `POST /workspaces/quick-start` body. Daemon `mkdir`s `parent/name` then
+/// `git init`s the new directory. `name` must be non-empty, no `/`, no
+/// leading `.`. `parent` is gated like `CloneFromGitHubRequest.destinationParent`.
+public struct QuickStartRepoRequest: Codable, Sendable {
+    public let name: String
+    public let parent: String?
+    public let idempotencyKey: String?
+
+    public init(name: String, parent: String? = nil, idempotencyKey: String? = nil) {
+        self.name = name
+        self.parent = parent
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+/// `POST /workspaces/wake-mac` body. iOS calls this when an
+/// `/workspaces/open-local` request returned 423 Locked.
+///
+/// **Honest scope:** the daemon can only run when the Mac is already
+/// reachable. A fully-asleep Mac cannot serve this endpoint at all —
+/// the iOS request never arrives. What the daemon *can* do:
+///   1. Run `tailscale wake <hostname>` if Tailscale is installed and a
+///      Wake-on-LAN peer is configured. This actually wakes a sleeping
+///      Mac if WoL is set up on the LAN.
+///   2. Run `caffeinate -u -t 5` to nudge the display awake. This helps
+///      when the screen is dimmed/asleep but the Mac is still running
+///      (the common case when the daemon receives this request).
+/// Neither of these unlocks a screen-locked Mac — that still requires
+/// the user to enter their password. The 200 response means a wake
+/// signal was sent, NOT that the Mac is now usable for NSOpenPanel.
+/// iOS surfaces "Wake signal sent" in the banner and the user must
+/// physically unlock if the lock screen is up.
+/// 503 returns when neither Tailscale nor caffeinate is available.
+public struct WakeMacRequest: Codable, Sendable {
+    public let idempotencyKey: String?
+
+    public init(idempotencyKey: String? = nil) {
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+/// `GET /workspaces/allow-list` response. iOS caches with a 5-min TTL and
+/// pre-validates parent paths in the Clone / Quick Start sheets so a bad
+/// path fails inline instead of after a round-trip.
+public struct WorkspaceAllowListResponse: Codable, Sendable {
+    public let allowedRoots: [String]
+    public let deniedSubpaths: [String]
+
+    public init(allowedRoots: [String], deniedSubpaths: [String]) {
+        self.allowedRoots = allowedRoots
+        self.deniedSubpaths = deniedSubpaths
+    }
+}
+
+/// Typed error surface for the Add-Repo flow. Used by Mac UI (LocalizedError
+/// conformance lives on the Mac side in `RepoOnboardingError+Localized.swift`)
+/// AND by iOS (decoded from non-2xx daemon response bodies). Conforms to
+/// `Codable` + `Error` here in shared so both surfaces see the same shape.
+public enum RepoOnboardingError: Error, Codable, Sendable, Equatable {
+    case pathMissing
+    case notADirectory
+    case alreadyRegistered(workspaceId: UUID)
+    case notAGitRepo
+    case ghAuthFailed
+    case cloneFailed(stderr: String)
+    case gitInitFailed(stderr: String)
+    case persistenceFailed(message: String)
+    case pathNotAllowed(reason: String)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, workspaceId, stderr, message, reason
+    }
+
+    private enum Kind: String, Codable {
+        case pathMissing, notADirectory, alreadyRegistered, notAGitRepo
+        case ghAuthFailed, cloneFailed, gitInitFailed, persistenceFailed, pathNotAllowed
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decode(Kind.self, forKey: .kind)
+        switch kind {
+        case .pathMissing: self = .pathMissing
+        case .notADirectory: self = .notADirectory
+        case .alreadyRegistered:
+            self = .alreadyRegistered(workspaceId: try c.decode(UUID.self, forKey: .workspaceId))
+        case .notAGitRepo: self = .notAGitRepo
+        case .ghAuthFailed: self = .ghAuthFailed
+        case .cloneFailed:
+            self = .cloneFailed(stderr: try c.decode(String.self, forKey: .stderr))
+        case .gitInitFailed:
+            self = .gitInitFailed(stderr: try c.decode(String.self, forKey: .stderr))
+        case .persistenceFailed:
+            self = .persistenceFailed(message: try c.decode(String.self, forKey: .message))
+        case .pathNotAllowed:
+            self = .pathNotAllowed(reason: try c.decode(String.self, forKey: .reason))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .pathMissing:
+            try c.encode(Kind.pathMissing, forKey: .kind)
+        case .notADirectory:
+            try c.encode(Kind.notADirectory, forKey: .kind)
+        case .alreadyRegistered(let workspaceId):
+            try c.encode(Kind.alreadyRegistered, forKey: .kind)
+            try c.encode(workspaceId, forKey: .workspaceId)
+        case .notAGitRepo:
+            try c.encode(Kind.notAGitRepo, forKey: .kind)
+        case .ghAuthFailed:
+            try c.encode(Kind.ghAuthFailed, forKey: .kind)
+        case .cloneFailed(let stderr):
+            try c.encode(Kind.cloneFailed, forKey: .kind)
+            try c.encode(stderr, forKey: .stderr)
+        case .gitInitFailed(let stderr):
+            try c.encode(Kind.gitInitFailed, forKey: .kind)
+            try c.encode(stderr, forKey: .stderr)
+        case .persistenceFailed(let message):
+            try c.encode(Kind.persistenceFailed, forKey: .kind)
+            try c.encode(message, forKey: .message)
+        case .pathNotAllowed(let reason):
+            try c.encode(Kind.pathNotAllowed, forKey: .kind)
+            try c.encode(reason, forKey: .reason)
+        }
     }
 }
 

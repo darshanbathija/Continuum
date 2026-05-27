@@ -181,11 +181,46 @@ public actor AuditLog {
 
     /// Read recent entries from the given log kind. Used by Settings →
     /// Diagnostics → Session Event Timeline (T17).
+    ///
+    /// **Codex R5 #2**: also walks the most-recent rotated archive file
+    /// (`<kind>.<stamp>.jsonl`) when the current file alone doesn't hit
+    /// `limit`. Without this, restart replay via
+    /// `MobileCommandOutbox.replayFromAuditLog` would miss receipts
+    /// that rotated between the original request and the restart —
+    /// inside the outbox's claimed 24h recovery window.
     public func recentEntries(kind: String, limit: Int = 200) -> [String] {
-        let url = rootDir.appendingPathComponent("\(kind).jsonl")
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        let text = String(decoding: data, as: UTF8.self)
-        let lines = text.split(separator: "\n").map(String.init)
+        let current = rootDir.appendingPathComponent("\(kind).jsonl")
+        var lines: [String] = []
+        if let data = try? Data(contentsOf: current) {
+            let text = String(decoding: data, as: UTF8.self)
+            lines = text.split(separator: "\n").map(String.init)
+        }
+        if lines.count < limit {
+            // Pull the most-recent rotated archive for this kind too.
+            // Archives are named `<kind>.<iso8601>.jsonl`; we sort by
+            // modification time descending to find the newest.
+            if let contents = try? FileManager.default.contentsOfDirectory(
+                at: rootDir,
+                includingPropertiesForKeys: [.contentModificationDateKey]
+            ) {
+                let prefix = "\(kind)."
+                let archives = contents
+                    .filter { $0.lastPathComponent.hasPrefix(prefix) && $0.pathExtension == "jsonl" && $0.lastPathComponent != "\(kind).jsonl" }
+                    .compactMap { url -> (URL, Date)? in
+                        guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                        else { return nil }
+                        return (url, mtime)
+                    }
+                    .sorted { $0.1 > $1.1 }
+                for (archiveURL, _) in archives {
+                    guard let data = try? Data(contentsOf: archiveURL) else { continue }
+                    let text = String(decoding: data, as: UTF8.self)
+                    let archived = text.split(separator: "\n").map(String.init)
+                    lines = archived + lines
+                    if lines.count >= limit { break }
+                }
+            }
+        }
         return Array(lines.suffix(limit))
     }
 

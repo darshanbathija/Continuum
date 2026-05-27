@@ -4,7 +4,10 @@ import XCTest
 final class WireV20WorkspaceTabsTests: XCTestCase {
 
     func test_wireVersionAndGateExposeTabContext() {
-        XCTAssertEqual(AgentControlWireVersion.current, 22)
+        // Wire version bumps roll forward across PRs (e.g. v23
+        // workspace-onboarding). Assert `current` hasn't regressed below
+        // the tab-context floor instead of pinning the exact number.
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 22)
         XCTAssertEqual(AgentControlWireVersion.tabContextMinimum, 22)
         XCTAssertFalse(AgentControlWireVersion.supportsTabContext(serverWireVersion: 21))
         XCTAssertTrue(AgentControlWireVersion.supportsTabContext(serverWireVersion: 22))

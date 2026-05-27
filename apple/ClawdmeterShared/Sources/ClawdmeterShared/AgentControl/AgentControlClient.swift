@@ -532,8 +532,29 @@ public final class AgentControlClient: ObservableObject {
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        req.timeoutInterval = 8
+        req.timeoutInterval = Self.timeoutForPath(path)
         return req
+    }
+
+    /// Per-endpoint timeout. Default is 8s for fast HTTP queries.
+    /// Workspace-onboarding endpoints can take MUCH longer:
+    /// `/workspaces/open-local` blocks while the user finds + picks a
+    /// folder on the Mac (the daemon's 5-min zombie cap is the actual
+    /// upper bound); `/workspaces/from-github` runs `gh repo clone`
+    /// which can take a minute on a large repo. Without these per-path
+    /// timeouts the URLSession would time out at 8s, surface the
+    /// transport error to the sheet, the sheet would clear the
+    /// idempotency key, and the user's retry would re-execute the
+    /// clone (which then 409s with "destination exists").
+    private static func timeoutForPath(_ path: String) -> TimeInterval {
+        switch path {
+        case "/workspaces/open-local":   return 300  // matches daemon's NSOpenPanel cap
+        case "/workspaces/from-github":  return 300  // matches ShellRunner gh-clone cap
+        case "/workspaces/quick-start":  return 30   // mkdir + git init
+        case "/workspaces/wake-mac":     return 15   // tailscale wake + caffeinate
+        case "/workspaces/allow-list":   return 5    // pure read
+        default:                         return 8    // existing default
+        }
     }
 
     /// Wrap raw IPv6 literals in brackets so `URL(string:)` parses the
@@ -2045,6 +2066,247 @@ public final class AgentControlClient: ObservableObject {
         } catch {
             self.lastError = error.localizedDescription
             return nil
+        }
+    }
+
+    // MARK: - v23 workspace onboarding (Add Repo flow)
+
+    /// Outcome of a workspace-onboarding daemon call. `record` is set on
+    /// success; `error` carries a structured `RepoOnboardingError`; `state`
+    /// surfaces the CGSession liveness when the daemon returns 423 Locked
+    /// (the iOS layer uses this to show the "Mac is asleep" banner).
+    public struct WorkspaceOnboardingResult: Sendable {
+        public let record: CodeWorkspaceRecord?
+        public let error: RepoOnboardingError?
+        public let macLocked: Bool
+        public let unsupportedServer: Bool
+        /// Daemon replayed a receipt-only entry (the original response
+        /// body wasn't preserved across daemon restart — see
+        /// `MobileCommandOutbox.entry`'s audit-log replay path). The
+        /// operation completed on the Mac at some prior point; the
+        /// sheet should refresh the workspace list + dismiss rather
+        /// than show "unknown failure" or re-fire the operation.
+        public let replayedWithoutRecord: Bool
+        /// The URLSession call threw before any server response landed
+        /// (network drop, app background, 300s client-side timeout).
+        /// The Mac MIGHT have completed the operation, but iOS never
+        /// saw the answer. Sheets MUST NOT clear the persisted
+        /// idempotency key on transport errors — the next retry needs
+        /// to reuse the key to either replay the daemon's cached
+        /// response or pick up the in-flight reservation.
+        public let transportError: Bool
+
+        public init(
+            record: CodeWorkspaceRecord? = nil,
+            error: RepoOnboardingError? = nil,
+            macLocked: Bool = false,
+            unsupportedServer: Bool = false,
+            replayedWithoutRecord: Bool = false,
+            transportError: Bool = false
+        ) {
+            self.record = record
+            self.error = error
+            self.macLocked = macLocked
+            self.unsupportedServer = unsupportedServer
+            self.replayedWithoutRecord = replayedWithoutRecord
+            self.transportError = transportError
+        }
+    }
+
+    /// `POST /workspaces/open-local`. Mac focuses + opens NSOpenPanel.
+    /// `record` set on .OK; `macLocked` set on 423; nil/nil on user-cancel.
+    @MainActor
+    public func openLocalFolderOnMac(idempotencyKey: String? = nil) async -> WorkspaceOnboardingResult {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return WorkspaceOnboardingResult(unsupportedServer: true)
+        }
+        return await postWorkspaceOnboarding(
+            path: "/workspaces/open-local",
+            body: OpenLocalFolderRequest(idempotencyKey: idempotencyKey)
+        )
+    }
+
+    /// `POST /workspaces/from-github`. Daemon shells out to `gh repo clone`
+    /// (or `git clone` fallback). Returns the new workspace on success or
+    /// a typed `RepoOnboardingError` on failure.
+    @MainActor
+    public func cloneFromGitHubOnMac(
+        spec: String,
+        destinationParent: String? = nil,
+        idempotencyKey: String? = nil
+    ) async -> WorkspaceOnboardingResult {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return WorkspaceOnboardingResult(unsupportedServer: true)
+        }
+        return await postWorkspaceOnboarding(
+            path: "/workspaces/from-github",
+            body: CloneFromGitHubRequest(
+                spec: spec,
+                destinationParent: destinationParent,
+                idempotencyKey: idempotencyKey
+            )
+        )
+    }
+
+    /// `POST /workspaces/quick-start`. Daemon mkdirs `parent/name` + git inits.
+    @MainActor
+    public func quickStartRepoOnMac(
+        name: String,
+        parent: String? = nil,
+        idempotencyKey: String? = nil
+    ) async -> WorkspaceOnboardingResult {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return WorkspaceOnboardingResult(unsupportedServer: true)
+        }
+        return await postWorkspaceOnboarding(
+            path: "/workspaces/quick-start",
+            body: QuickStartRepoRequest(
+                name: name,
+                parent: parent,
+                idempotencyKey: idempotencyKey
+            )
+        )
+    }
+
+    /// `POST /workspaces/wake-mac`. Returns true on 200, false otherwise.
+    @MainActor
+    public func wakeMacForOpenLocal(idempotencyKey: String? = nil) async -> Bool {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return false
+        }
+        let body = (try? JSONEncoder().encode(WakeMacRequest(idempotencyKey: idempotencyKey))) ?? Data()
+        guard var request = makeRequest(path: "/workspaces/wake-mac", method: "POST", body: body) else {
+            return false
+        }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            _ = try await sendChecked(request)
+            return true
+        } catch {
+            self.lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// `GET /workspaces/allow-list`. Returns the resolved Mac-side path
+    /// allow-list so iOS can pre-validate user-typed destinations.
+    @MainActor
+    public func fetchWorkspaceAllowList() async -> WorkspaceAllowListResponse? {
+        if let v = serverWireVersion, v < AgentControlWireVersion.workspaceOnboardingMinimum {
+            return nil
+        }
+        guard let request = makeRequest(path: "/workspaces/allow-list", method: "GET") else {
+            return nil
+        }
+        do {
+            let data = try await sendChecked(request)
+            return try JSONDecoder().decode(WorkspaceAllowListResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Shared POST body for the three workspace-onboarding write endpoints.
+    /// Bypasses `sendChecked` so we can read the response body on non-2xx
+    /// statuses (the daemon encodes `RepoOnboardingError` as JSON in the
+    /// body even on 403/500). 423 means the Mac is locked; 401 means
+    /// `gh auth login` is needed; 403 means the path is outside the
+    /// allow-list.
+    @MainActor
+    private func postWorkspaceOnboarding<Body: Encodable>(
+        path: String,
+        body: Body
+    ) async -> WorkspaceOnboardingResult {
+        let encoded = (try? JSONEncoder().encode(body)) ?? Data()
+        guard var request = makeRequest(path: path, method: "POST", body: encoded) else {
+            return WorkspaceOnboardingResult()
+        }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            let (data, response) = try await runRequest(request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            switch status {
+            case 200, 201:
+                if let record = try? decoder.decode(CodeWorkspaceRecord.self, from: data) {
+                    if !workspaces.contains(where: { $0.id == record.id }) {
+                        workspaces.append(record)
+                    }
+                    return WorkspaceOnboardingResult(record: record)
+                }
+                // Daemon-restart replay path: body is `{"receipt": ..., "replay": true}`
+                // because the audit log only carries the receipt, not the
+                // original CodeWorkspaceRecord. The operation already
+                // completed on the Mac at some prior point — surface this
+                // so the sheet can refresh + dismiss instead of stranding
+                // the user on "unknown failure".
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let replay = json["replay"] as? Bool, replay {
+                    return WorkspaceOnboardingResult(replayedWithoutRecord: true)
+                }
+                return WorkspaceOnboardingResult()
+            case 204:
+                // User cancelled the picker; not an error.
+                return WorkspaceOnboardingResult()
+            case 401:
+                return WorkspaceOnboardingResult(error: .ghAuthFailed)
+            case 403:
+                if let decoded = try? decoder.decode(RepoOnboardingError.self, from: data) {
+                    return WorkspaceOnboardingResult(error: decoded)
+                }
+                return WorkspaceOnboardingResult(error: .pathNotAllowed(reason: "Forbidden"))
+            case 404:
+                if let decoded = try? decoder.decode(RepoOnboardingError.self, from: data) {
+                    return WorkspaceOnboardingResult(error: decoded)
+                }
+                return WorkspaceOnboardingResult(error: .pathMissing)
+            case 409:
+                // Two 409 shapes share the status code:
+                //   1. alreadyRegistered (RepoOnboardingError body) —
+                //      surface via the typed error so iOS sheets hit
+                //      their .alreadyRegistered branch.
+                //   2. In-flight reservation conflict (plain JSON
+                //      `{"error":"another-request-with-same-idempotency-key-is-in-flight"}`)
+                //      — surface as .persistenceFailed so the sheet
+                //      shows a retryable banner.
+                if let decoded = try? decoder.decode(RepoOnboardingError.self, from: data) {
+                    return WorkspaceOnboardingResult(error: decoded)
+                }
+                return WorkspaceOnboardingResult(
+                    error: .persistenceFailed(message: "Another request with the same idempotency key is already in flight — try again in a moment.")
+                )
+            case 422:
+                // Payload mismatch: same idempotency key reused with
+                // edited request body. iOS should clear the persisted
+                // key + tell the user to retry; the next attempt gets
+                // a fresh slot.
+                return WorkspaceOnboardingResult(
+                    error: .persistenceFailed(message: "Idempotency key was reused with a different request. Try again — a new key will be generated.")
+                )
+            case 423:
+                return WorkspaceOnboardingResult(macLocked: true)
+            default:
+                if let decoded = try? decoder.decode(RepoOnboardingError.self, from: data) {
+                    return WorkspaceOnboardingResult(error: decoded)
+                }
+                return WorkspaceOnboardingResult(
+                    error: .persistenceFailed(message: "HTTP \(status)")
+                )
+            }
+        } catch {
+            // URLSession threw before any server response — network
+            // drop, timeout, app suspend. The Mac MAY still complete
+            // the work; iOS must keep the idempotency key so the next
+            // retry hits the daemon's in-flight reservation or replay
+            // path. The `transportError: true` flag signals the sheet
+            // to surface a retryable banner instead of clearing the key.
+            self.lastError = error.localizedDescription
+            return WorkspaceOnboardingResult(
+                error: .persistenceFailed(message: error.localizedDescription),
+                transportError: true
+            )
         }
     }
 
