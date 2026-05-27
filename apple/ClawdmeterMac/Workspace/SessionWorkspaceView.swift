@@ -2579,10 +2579,13 @@ private struct CenterThread: View {
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                         .font(.system(size: 14))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
-                .frame(width: 26)
+                .frame(width: 30)
                 .help("Transcript density")
+                .accessibilityLabel("Transcript density")
                 Menu {
                     Button("Open terminal tab (⇧⌘T)") {
                         Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
@@ -2635,9 +2638,12 @@ private struct CenterThread: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: 14))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
-                .frame(width: 26)
+                .frame(width: 30)
+                .accessibilityLabel("More actions")
             }
         }
         .padding(.horizontal, 22)
@@ -3929,28 +3935,34 @@ private struct ChatThreadScroll: View {
                 .frame(minWidth: 54, alignment: .trailing)
             Button(action: { jumpToFindMatch(proxy, delta: -1) }) {
                 Image(systemName: "chevron.up")
-                    .frame(width: 22, height: 22)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(findMatches.isEmpty)
             .help("Previous match (⌘⇧G)")
+            .accessibilityLabel("Previous match")
             Button(action: { jumpToFindMatch(proxy, delta: 1) }) {
                 Image(systemName: "chevron.down")
-                    .frame(width: 22, height: 22)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(findMatches.isEmpty)
             .help("Next match (⌘G)")
+            .accessibilityLabel("Next match")
             Button(action: {
                 findQuery = ""
                 selectedMatchIndex = nil
                 showingFindBar = false
             }) {
                 Image(systemName: "xmark")
-                    .frame(width: 22, height: 22)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Close find")
+            .accessibilityLabel("Close find")
         }
         .font(TahoeFont.body(12))
         .padding(.horizontal, 10)
@@ -5477,7 +5489,7 @@ private struct TahoePRCompactPane: View {
     private func prStatusRow(_ name: String, _ status: String, _ passed: Bool) -> some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(passed ? Color.green : Color.yellow)
+                .fill(passed ? SessionsV2Theme.success : SessionsV2Theme.warn)
                 .frame(width: 14, height: 14)
                 .overlay {
                     if passed {

@@ -304,7 +304,7 @@ struct ChatItemRowContent: View {
         switch payload.highlight {
         case .none: return .clear
         case .selectedMatch: return t.accentAlpha(0.18)
-        case .match: return Color.yellow.opacity(t.dark ? 0.16 : 0.22)
+        case .match: return SessionsV2Theme.warn.opacity(t.dark ? 0.16 : 0.22)
         }
     }
 
@@ -486,7 +486,7 @@ struct ChatItemRowContent: View {
                    bashResult == nil || (bashResult?.stdout == nil && bashResult?.stderr == nil) {
                     Text(result.body)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(isError ? .red : .secondary)
+                        .foregroundStyle(isError ? AnyShapeStyle(SessionsV2Theme.danger) : AnyShapeStyle(.secondary))
                         .textSelection(.enabled)
                         .lineLimit(toolOutputLineLimit)
                         .frame(maxWidth: .infinity, alignment: .leading)

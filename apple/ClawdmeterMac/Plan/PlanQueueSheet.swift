@@ -91,12 +91,13 @@ struct PlanQueueSheet: View {
             }
             Spacer()
             Button(action: onDismiss) {
-                TahoeIcon("x", size: 11)
+                TahoeIcon("x", size: 12)
                     .foregroundStyle(t.fg3)
-                    .frame(width: 24, height: 24)
-                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .frame(width: 30, height: 30)
+                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
             .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
             .help("Close")
             .accessibilityLabel("Close")
         }
@@ -166,7 +167,7 @@ struct PlanQueueSheet: View {
             if let lastError {
                 Text(lastError)
                     .font(TahoeFont.body(11))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(SessionsV2Theme.danger)
                     .lineLimit(1)
                     .truncationMode(.middle)
             } else {

@@ -139,7 +139,9 @@ public struct TahoeDashTab: View {
         .buttonStyle(.plain)
         .help(tooltip)
         .accessibilityIdentifier("dash.tab.\(label.lowercased())")
+        #if !os(watchOS)
         .onHover { isHovered = $0 }
+        #endif
     }
 
     private var tooltip: String {

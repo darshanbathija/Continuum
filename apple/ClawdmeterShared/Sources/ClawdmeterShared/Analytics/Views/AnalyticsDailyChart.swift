@@ -220,8 +220,10 @@ public struct AnalyticsDailyChart: View {
                 .foregroundStyle(by: .value("Provider", pt.provider))
             }
             .chartForegroundStyleScale([
-                "Claude": Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255),
-                "Codex": Color.accentColor,
+                "Claude": SessionsV2Theme.accent,
+                "Codex": SessionsV2Theme.codexBlue,
+                "OpenCode": Color.green,
+                "Cursor": Color.purple,
             ])
             .chartLegend(.hidden)
             .chartXAxis {
@@ -290,28 +292,35 @@ public struct AnalyticsDailyChart: View {
     private var costLegendRow: some View {
         HStack(spacing: 14) {
             if providerFilter.includes(.claude) {
-                HStack(spacing: 5) {
-                    ProviderBadgeImage(assetName: "ClaudeLogo", isTemplate: false, size: 11)
-                    Circle()
-                        .fill(Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255))
-                        .frame(width: 6, height: 6)
-                    Text("Claude")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
+                legendItem(asset: "ClaudeLogo", isTemplate: false,
+                           color: SessionsV2Theme.accent, label: "Claude")
             }
             if providerFilter.includes(.codex) {
-                HStack(spacing: 5) {
-                    ProviderBadgeImage(assetName: "CodexLogo", isTemplate: true, size: 11)
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 6, height: 6)
-                    Text("Codex")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
+                legendItem(asset: "CodexLogo", isTemplate: true,
+                           color: SessionsV2Theme.codexBlue, label: "Codex")
+            }
+            if providerFilter.includes(.opencode) {
+                legendItem(asset: "OpencodeLogo", isTemplate: true,
+                           color: Color.green, label: "OpenCode")
+            }
+            if providerFilter.includes(.cursor) {
+                legendItem(asset: "CodexLogo", isTemplate: true,
+                           color: Color.purple, label: "Cursor")
             }
             Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private func legendItem(asset: String, isTemplate: Bool, color: Color, label: String) -> some View {
+        HStack(spacing: 5) {
+            ProviderBadgeImage(assetName: asset, isTemplate: isTemplate, size: 11)
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
         }
     }
 
