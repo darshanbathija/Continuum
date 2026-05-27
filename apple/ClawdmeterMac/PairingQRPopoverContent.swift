@@ -22,6 +22,11 @@ struct PairingQRPopoverContent: View {
     @State private var didCopy: Bool = false
     @State private var now: Date = Date()
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    /// Active Tahoe accent (Halo blue by default; tracks the user's theme).
+    /// All chrome inside this popover routes through this so the brackets,
+    /// halo, and Copy URL CTA stay on-brand instead of leaking the legacy
+    /// terra-cotta heritage color from SessionsV2Theme.accent.
+    @Environment(\.tahoe) private var t
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
@@ -157,7 +162,7 @@ struct PairingQRPopoverContent: View {
             // Corner brackets — TL/BR get one asymmetric radius pattern,
             // TR/BL get the mirror. 3px stroke + accent glow shadow.
             ForEach(cornerSpecs, id: \.self) { spec in
-                CornerBracket(spec: spec, color: SessionsV2Theme.accent)
+                CornerBracket(spec: spec, color: t.accent)
             }
         }
         .frame(width: 280, height: 280)
@@ -167,7 +172,7 @@ struct PairingQRPopoverContent: View {
             RoundedRectangle(cornerRadius: 50, style: .continuous)
                 .fill(
                     RadialGradient(
-                        colors: [SessionsV2Theme.accent.opacity(0.30), .clear],
+                        colors: [t.accent.opacity(0.30), .clear],
                         center: .center, startRadius: 0, endRadius: 200
                     )
                 )
@@ -200,7 +205,11 @@ struct PairingQRPopoverContent: View {
         }
     }
 
-    private var terraCotta: Color { SessionsV2Theme.accent }
+    /// Effective brand accent — routes through the active Tahoe accent
+    /// (Halo blue by default; tracks the user's chosen theme) rather than
+    /// the legacy terra-cotta heritage color. Per user feedback during
+    /// live verification: orange isn't part of the modern brand.
+    private var terraCotta: Color { t.accent }
 
     // MARK: - Actions
 

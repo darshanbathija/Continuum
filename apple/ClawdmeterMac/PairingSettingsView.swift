@@ -36,6 +36,8 @@ struct PairingSettingsView: View {
     /// state change from the pairing service.
     @State private var now: Date = Date()
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    /// Active Tahoe accent (Halo blue by default; tracks the user's theme).
+    @Environment(\.tahoe) private var t
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
@@ -204,7 +206,7 @@ struct PairingSettingsView: View {
             RoundedRectangle(cornerRadius: 50, style: .continuous)
                 .fill(
                     RadialGradient(
-                        colors: [SessionsV2Theme.accent.opacity(0.30), .clear],
+                        colors: [t.accent.opacity(0.30), .clear],
                         center: .center, startRadius: 0, endRadius: 200
                     )
                 )
