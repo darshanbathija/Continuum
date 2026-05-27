@@ -38,8 +38,10 @@ final class WireV14ContractTests: XCTestCase {
         // `deepResearchMinimum`, `chatSearchMinimum`); only `current`
         // has advanced. v18 added remote Code workbench run/checkpoint
         // endpoints for iOS parity; v19 added lifecycle and provider-default
-        // endpoints.
-        XCTAssertEqual(AgentControlWireVersion.current, 19)
+        // endpoints; v20 added `providerInstanceId` + per-instance HOME
+        // isolation (F3-wire); v21 split chat snapshots into shell + detail
+        // streams for ≥80% per-event payload reduction (A10).
+        XCTAssertEqual(AgentControlWireVersion.current, 21)
     }
 
     func test_v14_minimums_match() {
