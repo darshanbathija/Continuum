@@ -114,16 +114,43 @@ final class AppRuntime: ObservableObject {
         // taps "Pair iPhone" in Settings to mint a fresh bundle.
         self.relayPairingService = RelayPairingService()
 
-        // Claude polling uses Continuum's own Keychain entry. Importing from
-        // Claude Code's third-party Keychain item is now an explicit Settings
-        // action so macOS never asks for the laptop password from a background
-        // poll or startup mirror.
+        // Claude polling reads from Continuum's own Keychain entry. The
+        // first-party token is loaded in one of two ways:
+        //
+        // 1. Explicit: the user clicks "Authenticate from Claude Code" in
+        //    Settings, which copies Claude Code's third-party Keychain entry
+        //    into Continuum's own. Always available.
+        //
+        // 2. Auto-import at launch (opt-in via the
+        //    `clawdmeter.claude.autoImportFromClaudeCode` UserDefault). When
+        //    enabled, this mirrors Claude Code's Keychain item on every
+        //    launch so the iPhone / Watch see the latest refreshed token
+        //    without manual action. Default OFF — #133 disabled the silent
+        //    auto-mirror after macOS treated the background read as
+        //    third-party Keychain access and prompted for the laptop
+        //    password. The Settings toggle flips ON automatically the
+        //    first time the user successfully clicks Authenticate, so
+        //    one-time auth carries through subsequent launches.
         let claudeTokenProvider = PastedAnthropicTokenProvider.shared()
         self.claudeModel = AppModel(
             config: .claude,
             source: AnthropicSource(tokenProvider: claudeTokenProvider),
             tokenProvider: claudeTokenProvider
         )
+        if UserDefaults.standard.bool(forKey: "clawdmeter.claude.autoImportFromClaudeCode") {
+            Task.detached(priority: .utility) {
+                if let token = KeychainTokenProvider().currentAccessToken {
+                    let didMirror = PastedAnthropicTokenProvider.shared().setToken(token)
+                    if didMirror {
+                        runtimeLogger.info("Auto-imported Claude token (\(token.count, privacy: .public) chars) into shared Keychain at launch")
+                    } else {
+                        runtimeLogger.info("Auto-import skipped at launch: shared Keychain write unavailable")
+                    }
+                } else {
+                    runtimeLogger.info("Auto-import enabled but no Claude Code token found in third-party Keychain")
+                }
+            }
+        }
 
         let codexTokenProvider = CodexTokenProvider()
         self.codexModel = AppModel(
