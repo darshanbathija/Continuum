@@ -2639,39 +2639,14 @@ private struct CenterThread: View {
                 .frame(maxWidth: 190)
                 .help(branchTooltip)
             }
-            Menu {
-                Section("Mode") {
-                    ForEach(headerPermissionModes, id: \.self) { candidate in
-                        Button(action: {
-                            Task { await changePermissionMode(to: candidate) }
-                        }) {
-                            Label(
-                                candidate.displayName,
-                                systemImage: permissionModeStore.currentMode(for: session) == candidate ? "checkmark" : ""
-                            )
-                        }
-                    }
-                }
-            } label: {
-                TahoePill(tone: .chip) {
-                    HStack(spacing: 5) {
-                        TahoeIcon("bolt", size: 10)
-                            .foregroundStyle(t.fg2)
-                        Text(permissionModeLabel)
-                            .font(TahoeFont.body(11))
-                            .foregroundStyle(t.fg2)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 7, weight: .semibold))
-                            .foregroundStyle(t.fg3)
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Permission mode")
+            // v0.29.25: header `⚡ ask` permission-mode pill removed per
+            // user feedback. The composer's `PermissionModeChip` already
+            // sits to the right of the model+effort chip and exposes the
+            // same `ask / accept edits / plan / bypass` Menu plus the
+            // ⇧⌘1-4 shortcuts — so the header copy was just a duplicate
+            // floating to the right of the branch chip. Keeping the
+            // composer pill keeps mode-selection adjacent to where the
+            // user is about to type, which is the better mental model.
             // v0.5.2: the prominent "Read-only" pill was dropped per user
             // feedback — the composer's "Continue here" placeholder + the
             // disabled-action menu state already signal read-only mode.
@@ -2767,25 +2742,9 @@ private struct CenterThread: View {
         .padding(.bottom, 10)
     }
 
-    private var permissionModeLabel: String {
-        switch permissionModeStore.currentMode(for: session) {
-        case .ask: return "ask"
-        case .acceptEdits: return "accept edits"
-        case .plan: return "plan"
-        case .bypass: return "bypass"
-        }
-    }
-
-    /// Modes shown in the header pill's dropdown. Mirrors the composer
-    /// `PermissionModeChip` list, minus Cursor's plan-mode hole (Cursor
-    /// agents don't support `.plan` — see `availablePermissionModes` in
-    /// `ComposerInputCore`).
-    private var headerPermissionModes: [PermissionMode] {
-        if session.agent == .cursor {
-            return [.ask, .acceptEdits, .bypass]
-        }
-        return [.ask, .acceptEdits, .plan, .bypass]
-    }
+    // v0.29.25: `permissionModeLabel` + `headerPermissionModes` deleted
+    // alongside the redundant header pill. Composer's `PermissionModeChip`
+    // owns mode-selection now.
 
     private var workspaceDraftDefaults: ComposerStore.ChipDefaults {
         ComposerStore.ChipDefaults(
@@ -3078,6 +3037,12 @@ private struct CenterThread: View {
                 density: density,
                 showPlanHalo: shouldShowInlinePlanHalo,
                 canApprovePlan: !isReadOnly,
+                // v0.29.25: thread the right-pane visibility flag in so
+                // ChatThreadScroll can re-anchor to the bottom sentinel
+                // after the workspace width changes. Without this, the
+                // scroll view kept its absolute offset and the user
+                // landed mid-history every time they toggled the pane.
+                isReviewPaneVisible: workbenchState.showingReviewPane,
                 onPlanRefine: primePlanRefinement,
                 onPlanApprove: {
                     Task {
@@ -3796,6 +3761,13 @@ private struct ChatThreadScroll: View {
     let density: TranscriptDensity
     let showPlanHalo: Bool
     let canApprovePlan: Bool
+    /// v0.29.25: track the right-pane visibility so a toggle can re-anchor
+    /// the scroll view to the bottom sentinel. The chat list's
+    /// `userPinnedToBottom` state survives the width change, but the
+    /// scroll position itself doesn't — the LazyVStack relays out at the
+    /// new width, item heights shift, and the absolute content offset
+    /// the scroll view kept now points mid-history.
+    let isReviewPaneVisible: Bool
     let onPlanRefine: () -> Void
     let onPlanApprove: () -> Void
     @Environment(\.tahoe) private var t
@@ -3809,6 +3781,7 @@ private struct ChatThreadScroll: View {
         density: TranscriptDensity,
         showPlanHalo: Bool,
         canApprovePlan: Bool,
+        isReviewPaneVisible: Bool,
         onPlanRefine: @escaping () -> Void,
         onPlanApprove: @escaping () -> Void
     ) {
@@ -3821,6 +3794,7 @@ private struct ChatThreadScroll: View {
         self.density = density
         self.showPlanHalo = showPlanHalo
         self.canApprovePlan = canApprovePlan
+        self.isReviewPaneVisible = isReviewPaneVisible
         self.onPlanRefine = onPlanRefine
         self.onPlanApprove = onPlanApprove
     }
@@ -3913,6 +3887,24 @@ private struct ChatThreadScroll: View {
                 }
                 .onChange(of: messagesSlice.updateCounter) { _, counter in
                     stickToBottomIfPinned(proxy, updateCounter: counter)
+                }
+                .onChange(of: isReviewPaneVisible) { _, _ in
+                    // v0.29.25: width change relays the LazyVStack at a
+                    // different per-row height (text wraps differently),
+                    // so the absolute content offset that was bottom-
+                    // anchored now lands mid-history. Re-pin only when
+                    // the user was already at the bottom; respect the
+                    // jump-to-latest CTA otherwise.
+                    guard userPinnedToBottom else { return }
+                    autoScrollTask?.cancel()
+                    autoScrollTask = Task { @MainActor in
+                        // One yield lets SwiftUI commit the new layout
+                        // before we ask the proxy to scroll, otherwise
+                        // we measure pre-resize geometry.
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        await jumpToBottom(proxy, animated: false)
+                    }
                 }
                 .onAppear {
                     userPinnedToBottom = true

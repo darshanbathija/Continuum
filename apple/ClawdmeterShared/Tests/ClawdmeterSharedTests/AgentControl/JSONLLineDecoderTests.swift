@@ -213,4 +213,39 @@ final class JSONLLineDecoderTests: XCTestCase {
         // Both paths route through this stripper now.
         XCTAssertNil(JSONLLineDecoder.cleanPrompt("<task-notification>x</task-notification>"))
     }
+
+    func test_stripSystemContent_removesSystemInstructionAttachmentBlock() {
+        // Claude Code wraps the "The user has attached these files. Read
+        // them before proceeding" copy in `<system_instruction>` when an
+        // image / PDF lands in the user turn. The wrapper is not user
+        // intent; only the surviving text (or nothing) should reach the
+        // chat bubble.
+        let raw = """
+            <system_instruction>
+            The user has attached these files. Read them before proceeding.
+            - .context/attachments/RNy3Zr/Screenshot 2026-05-27 at 9.56.07 pm.png (442.9 KB)
+            </system_instruction>
+
+            .context/attachments/RNy3Zr/Screenshot 2026-05-27 at 9.56.07 pm.png
+            """
+        XCTAssertEqual(
+            JSONLLineDecoder.stripSystemContent(raw),
+            ".context/attachments/RNy3Zr/Screenshot 2026-05-27 at 9.56.07 pm.png"
+        )
+    }
+
+    func test_stripSystemContent_dropsSystemInstructionOnlyBody() {
+        // When the entire user turn is just the harness-injected wrapper
+        // (no user-typed text alongside), the bubble should collapse
+        // entirely instead of rendering a stray empty pill.
+        let raw = "<system_instruction>be careful</system_instruction>"
+        XCTAssertNil(JSONLLineDecoder.stripSystemContent(raw))
+    }
+
+    func test_stripSystemContent_handlesUnderscoreAndHyphenVariants() {
+        // Belt-and-suspenders: `<system-instruction>` (hyphen) is in the
+        // strip list too in case Claude Code's wrapper ever flips style.
+        let raw = "fix the auth bug<system-instruction>x</system-instruction>"
+        XCTAssertEqual(JSONLLineDecoder.stripSystemContent(raw), "fix the auth bug")
+    }
 }
