@@ -184,13 +184,17 @@ final class SessionLauncherModelTests: XCTestCase {
     func test_renameSessionPersistsThroughRegistryCustomName() async throws {
         let registryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SessionLauncherModelRenameTests-\(UUID().uuidString).json")
+        let workspaceStoreURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SessionLauncherModelRenameTests-workspaces-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: registryURL) }
+        defer { try? FileManager.default.removeItem(at: workspaceStoreURL) }
         let registry = AgentSessionRegistry(storeURL: registryURL)
         let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
+            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
+            workspaceStore: WorkspaceStore(storeURL: workspaceStoreURL, sessionsURL: registryURL)
         )
         let session = try await registry.create(
             repoKey: "/repo/clawdmeter",

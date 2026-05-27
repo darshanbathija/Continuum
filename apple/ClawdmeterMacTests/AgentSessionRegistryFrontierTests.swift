@@ -113,9 +113,9 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
         XCTAssertEqual(binding?.metadata["chatVendor"], ChatVendor.cursor.rawValue)
     }
 
-    func test_updateRuntimeUpdatesEffectiveCwd() async {
+    func test_updateRuntimeUpdatesEffectiveCwd() async throws {
         let reg = registry()
-        let session = reg.create(
+        let session = try await reg.create(
             repoKey: "/tmp/source-repo",
             repoDisplayName: "source-repo",
             agent: .claude,
@@ -128,7 +128,7 @@ final class AgentSessionRegistryFrontierTests: XCTestCase {
             mode: .local
         )
 
-        reg.updateRuntime(
+        try await reg.updateRuntime(
             id: session.id,
             worktreePath: "/tmp/source-repo-worktree",
             runtimeCwd: .some("/tmp/source-repo-worktree"),
