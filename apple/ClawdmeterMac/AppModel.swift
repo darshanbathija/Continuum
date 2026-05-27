@@ -134,14 +134,16 @@ public final class AppModel: ObservableObject {
         logger.info("consume \(self.config.id) ENTER: \(String(describing: event))")
         switch event {
         case .usage(let u):
-            // F1d-wire (strangler-fig per D23): when the feature flag is
-            // on AND this is the Cursor consumer, route the polled
-            // UsageData through CursorAdapter → canonical
+            // F1d-wire shipped in #171 and is now default-ON per
+            // F1-finalize: when this is the Cursor consumer, polled
+            // UsageData routes through CursorAdapter → canonical
             // .sessionStarted event → projected back into UsageData via
-            // CursorAdapterUsageBridge. With the flag off, use the
-            // polled UsageData directly — the pre-F1 path. Both paths
-            // must produce identical UsageData for the same input —
-            // enforced by F1dParityTests.
+            // CursorAdapterUsageBridge. The
+            // `FeatureFlags.useCursorAdapter` env/UserDefaults override
+            // remains live as a rollback escape hatch — flip the env to
+            // `CLAWDMETER_USE_CURSOR_ADAPTER=0` and the polled UsageData
+            // flows through unchanged (the pre-F1 path). Parity enforced
+            // by `F1dParityTests`.
             //
             // Dedup contract: the canonical event id is
             // `cursor-{sessionId}-{seq}` where sessionId is derived

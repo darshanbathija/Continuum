@@ -329,12 +329,15 @@ public final class OpencodeSSEAdapter {
     /// the opencode HTTP API for the full state. Internal so tests
     /// can drive each known wire shape directly.
     ///
-    /// F1c-wire (strangler-fig per D23): when `FeatureFlags.useOpenCodeAdapter`
-    /// is on, route through `parseMessageAddedViaAdapter` so the canonical
+    /// F1c-wire shipped in #164 and is now default-ON per F1-finalize:
+    /// every `message.added` SSE event routes through
+    /// `parseMessageAddedViaAdapter` so the canonical
     /// `ProviderRuntimeEvent` pipeline owns the role + content extraction.
-    /// When off, use the legacy in-line parser unchanged. Both paths must
-    /// return identical `ChatMessage?` values for every fixture — enforced
-    /// by `F1cWireChatParityTests`.
+    /// The `FeatureFlags.useOpenCodeAdapter` env/UserDefaults override
+    /// remains live as a rollback escape hatch — flip the env to
+    /// `CLAWDMETER_USE_OPENCODE_ADAPTER=0` and `parseMessageAddedLegacy`
+    /// lights back up unchanged. Parity enforced by
+    /// `F1cWireChatParityTests`.
     internal static func parseMessageAdded(properties: [String: Any]) -> ChatMessage? {
         if FeatureFlags.useOpenCodeAdapter {
             return parseMessageAddedViaAdapter(properties: properties)
