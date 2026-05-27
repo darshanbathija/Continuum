@@ -22,6 +22,11 @@ struct PairingQRPopoverContent: View {
     @State private var didCopy: Bool = false
     @State private var now: Date = Date()
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    /// Active Tahoe accent (Halo blue by default; tracks the user's theme).
+    /// All chrome inside this popover routes through this so the brackets,
+    /// halo, and Copy URL CTA stay on-brand instead of leaking the legacy
+    /// terra-cotta heritage color from SessionsV2Theme.accent.
+    @Environment(\.tahoe) private var t
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
@@ -129,26 +134,61 @@ struct PairingQRPopoverContent: View {
     // MARK: - Subviews
 
     private var qrTile: some View {
-        Group {
-            if let qr = qrImage {
-                Image(nsImage: qr)
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: 200, height: 200)
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.quaternary)
-                    .frame(width: 200, height: 200)
-                    .overlay(ProgressView().controlSize(.small))
+        // Per DESIGN.md: pairing QR is 280x280 with an accent halo (inset
+        // -30, radius 50, blur 10px) and four corner brackets (32x32, 3px
+        // solid accent, asymmetric radius). Inner QR image renders at 224.
+        ZStack {
+            // Glass tile
+            Group {
+                if let qr = qrImage {
+                    Image(nsImage: qr)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: 224, height: 224)
+                } else {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.quaternary)
+                        .frame(width: 224, height: 224)
+                        .overlay(ProgressView().controlSize(.small))
+                }
+            }
+            .padding(28)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 28))
+            .frame(width: 280, height: 280)
+            .accessibilityLabel("Pairing QR code")
+            .accessibilityHint("Scan with your iPhone's camera to pair this Mac.")
+
+            // Corner brackets — TL/BR get one asymmetric radius pattern,
+            // TR/BL get the mirror. 3px stroke + accent glow shadow.
+            ForEach(cornerSpecs, id: \.self) { spec in
+                CornerBracket(spec: spec, color: t.accent)
             }
         }
-        .padding(10)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(.quaternary, lineWidth: 1)
+        .frame(width: 280, height: 280)
+        .background(
+            // Halo: inset -30 (so the gradient extends past the tile),
+            // radius 50, blur 10px per DESIGN.md.
+            RoundedRectangle(cornerRadius: 50, style: .continuous)
+                .fill(
+                    RadialGradient(
+                        colors: [t.accent.opacity(0.30), .clear],
+                        center: .center, startRadius: 0, endRadius: 200
+                    )
+                )
+                .blur(radius: 10)
+                .padding(-30)
+                .allowsHitTesting(false)
         )
+    }
+
+    private var cornerSpecs: [QRCornerBracketSpec] {
+        [
+            .init(corner: .topLeft),
+            .init(corner: .topRight),
+            .init(corner: .bottomLeft),
+            .init(corner: .bottomRight),
+        ]
     }
 
     private func labelRow(_ label: String, value: String) -> some View {
@@ -165,7 +205,11 @@ struct PairingQRPopoverContent: View {
         }
     }
 
-    private var terraCotta: Color { SessionsV2Theme.accent }
+    /// Effective brand accent — routes through the active Tahoe accent
+    /// (Halo blue by default; tracks the user's chosen theme) rather than
+    /// the legacy terra-cotta heritage color. Per user feedback during
+    /// live verification: orange isn't part of the modern brand.
+    private var terraCotta: Color { t.accent }
 
     // MARK: - Actions
 
@@ -207,5 +251,73 @@ struct PairingQRPopoverContent: View {
         let minutes = remaining / 60
         let seconds = remaining % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+// MARK: - QR corner bracket
+
+/// Four L-shaped accent brackets that frame the QR tile, mirroring the
+/// iOS `IOSPairingView` spec. Each bracket is 32×32, 3px stroke, with an
+/// asymmetric corner radius that bends inward toward the QR.
+struct QRCornerBracketSpec: Hashable {
+    enum Corner { case topLeft, topRight, bottomLeft, bottomRight }
+    let corner: Corner
+}
+
+private struct CornerBracket: View {
+    let spec: QRCornerBracketSpec
+    let color: Color
+
+    var body: some View {
+        let s: CGFloat = 32
+        let stroke: CGFloat = 3
+        let r: CGFloat = 10
+        Path { p in
+            switch spec.corner {
+            case .topLeft:
+                p.move(to: CGPoint(x: s, y: 0))
+                p.addLine(to: CGPoint(x: r, y: 0))
+                p.addArc(center: CGPoint(x: r, y: r), radius: r,
+                         startAngle: .degrees(-90), endAngle: .degrees(180),
+                         clockwise: true)
+                p.addLine(to: CGPoint(x: 0, y: s))
+            case .topRight:
+                p.move(to: CGPoint(x: 0, y: 0))
+                p.addLine(to: CGPoint(x: s - r, y: 0))
+                p.addArc(center: CGPoint(x: s - r, y: r), radius: r,
+                         startAngle: .degrees(-90), endAngle: .degrees(0),
+                         clockwise: false)
+                p.addLine(to: CGPoint(x: s, y: s))
+            case .bottomLeft:
+                p.move(to: CGPoint(x: 0, y: 0))
+                p.addLine(to: CGPoint(x: 0, y: s - r))
+                p.addArc(center: CGPoint(x: r, y: s - r), radius: r,
+                         startAngle: .degrees(180), endAngle: .degrees(90),
+                         clockwise: true)
+                p.addLine(to: CGPoint(x: s, y: s))
+            case .bottomRight:
+                p.move(to: CGPoint(x: s, y: 0))
+                p.addLine(to: CGPoint(x: s, y: s - r))
+                p.addArc(center: CGPoint(x: s - r, y: s - r), radius: r,
+                         startAngle: .degrees(0), endAngle: .degrees(90),
+                         clockwise: false)
+                p.addLine(to: CGPoint(x: 0, y: s))
+            }
+        }
+        .stroke(color, style: StrokeStyle(lineWidth: stroke, lineCap: .round, lineJoin: .round))
+        .frame(width: s, height: s)
+        .shadow(color: color.opacity(0.5), radius: 5)
+        .offset(offset(for: spec.corner))
+        .accessibilityHidden(true)
+    }
+
+    private func offset(for corner: QRCornerBracketSpec.Corner) -> CGSize {
+        let inset: CGFloat = 280 / 2 - 16 + 6  // tile half - bracket half + 6 outward
+        switch corner {
+        case .topLeft:     return CGSize(width: -inset, height: -inset)
+        case .topRight:    return CGSize(width: inset,  height: -inset)
+        case .bottomLeft:  return CGSize(width: -inset, height: inset)
+        case .bottomRight: return CGSize(width: inset,  height: inset)
+        }
     }
 }

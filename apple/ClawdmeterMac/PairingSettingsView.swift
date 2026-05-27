@@ -36,6 +36,8 @@ struct PairingSettingsView: View {
     /// state change from the pairing service.
     @State private var now: Date = Date()
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    /// Active Tahoe accent (Halo blue by default; tracks the user's theme).
+    @Environment(\.tahoe) private var t
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
@@ -178,24 +180,42 @@ struct PairingSettingsView: View {
     }
 
     private var relayQRTile: some View {
+        // Match the pairing-popover spec from DESIGN.md: 280x280 outer
+        // with halo + glass tile + 224 inner image. Settings + popover
+        // share the same dimensions so users see one consistent surface.
         Group {
             if let qr = qrImage {
                 Image(nsImage: qr)
                     .interpolation(.none)
                     .resizable()
-                    .frame(width: 160, height: 160)
+                    .frame(width: 224, height: 224)
+                    .accessibilityLabel("Pairing QR code")
+                    .accessibilityHint("Scan with your iPhone's camera to pair this Mac.")
             } else {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 12)
                     .fill(.quaternary)
-                    .frame(width: 160, height: 160)
+                    .frame(width: 224, height: 224)
                     .overlay(ProgressView().controlSize(.small))
             }
         }
-        .padding(8)
+        .padding(28)
         .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 28))
+        .frame(width: 280, height: 280)
+        .background(
+            RoundedRectangle(cornerRadius: 50, style: .continuous)
+                .fill(
+                    RadialGradient(
+                        colors: [t.accent.opacity(0.30), .clear],
+                        center: .center, startRadius: 0, endRadius: 200
+                    )
+                )
+                .blur(radius: 10)
+                .padding(-30)
+                .allowsHitTesting(false)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 28)
                 .strokeBorder(.quaternary, lineWidth: 1)
         )
     }

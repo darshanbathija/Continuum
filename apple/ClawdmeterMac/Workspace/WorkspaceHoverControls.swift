@@ -6,6 +6,7 @@ import ClawdmeterShared
 /// not re-render just because an icon button is highlighted.
 struct CodeHoverChrome: ViewModifier {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     let cornerRadius: CGFloat
@@ -16,7 +17,7 @@ struct CodeHoverChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(
-                isHovered ? t.hair2.opacity(t.dark ? 0.95 : 1.2) : Color.clear,
+                isHovered ? t.hair2.opacity(t.dark ? 0.95 : 1.0) : Color.clear,
                 in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             )
             .overlay(
@@ -27,7 +28,7 @@ struct CodeHoverChrome: ViewModifier {
             .accessibilityLabel(accessibilityLabel ?? help ?? "")
             .accessibilityIdentifier(accessibilityIdentifier ?? "")
             .onHover { isHovered = $0 }
-            .animation(.easeOut(duration: 0.12), value: isHovered)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
     }
 }
 

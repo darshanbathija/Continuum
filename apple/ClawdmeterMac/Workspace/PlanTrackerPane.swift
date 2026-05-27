@@ -64,10 +64,10 @@ struct PlanTrackerPane: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if let goal = session.goal, !goal.isEmpty {
-                        goalCard(goal)
+                        goalSection(goal)
                     }
                     if let planText = displayPlanText {
-                        planCard(planText)
+                        planSection(planText)
                     }
                     if !displaySteps.isEmpty {
                         stepsSection(displaySteps)
@@ -97,39 +97,48 @@ struct PlanTrackerPane: View {
         .padding(.vertical, 8)
     }
 
-    private func goalCard(_ goal: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "scope")
-                .foregroundStyle(terraCotta)
-                .font(.system(size: 11))
+    private func goalSection(_ goal: String) -> some View {
+        // Per DESIGN.md hard rule: cards only when card IS the
+        // interaction. Goal/plan text are read-only — render them as
+        // section heads + inline text rather than passive cards.
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "scope")
+                    .foregroundStyle(terraCotta)
+                    .font(.system(size: 11))
+                Text("Goal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .tracking(0.4)
+            }
             Text(goal)
                 .font(.system(size: 13, design: .serif))
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer()
+                .padding(.leading, 17)
         }
-        .padding(10)
-        .background(terraCotta.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 
-    private func planCard(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
+    private func planSection(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
                 Image(systemName: "doc.text")
                     .foregroundStyle(.secondary)
                     .font(.system(size: 11))
                 Text("Plan")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .tracking(0.4)
             }
             Text(text)
                 .font(.system(size: 12))
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 17)
         }
-        .padding(10)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
