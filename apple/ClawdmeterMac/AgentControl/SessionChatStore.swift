@@ -454,7 +454,14 @@ public final class SessionChatStore {
         if combined.count <= Self.offlineQueueLimit {
             queuedPendingMessages = combined
         } else {
-            queuedPendingMessages = Array(combined.suffix(Self.offlineQueueLimit))
+            // `combined = entries + queuedPendingMessages` puts the
+            // newly-prepended re-enqueued entries at the HEAD and the
+            // oldest already-queued entries at the TAIL. `suffix(cap)`
+            // would keep the tail (oldest) and drop the head (newest) —
+            // the opposite of "trim oldest first". Use `prefix(cap)` to
+            // keep the freshly-failed entries the caller cares about and
+            // shed the stale tail.
+            queuedPendingMessages = Array(combined.prefix(Self.offlineQueueLimit))
         }
     }
 
