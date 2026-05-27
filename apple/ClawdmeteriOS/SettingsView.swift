@@ -233,9 +233,20 @@ struct SettingsView: View {
         // @AppStorage updates. Applying it here on the sheet's own root
         // makes the active sheet re-theme the instant the user picks a
         // new value from the Theme menu above.
-        .preferredColorScheme(
-            (AppearanceMode(rawValue: appearanceRaw) ?? .system).colorScheme
-        )
+        //
+        // Mirrors the resolver in ClawdmeteriOSApp: explicit legacy pin
+        // wins; otherwise follow the Tahoe theme (default .dark). Never
+        // returns nil — the App-level modifier is now always-concrete,
+        // and this sheet matches so it doesn't degrade to system colors.
+        .preferredColorScheme(resolvedColorScheme)
+    }
+
+    @AppStorage("tahoe.appearance") private var tahoeAppearanceRaw: String = "dark"
+    private var resolvedColorScheme: ColorScheme {
+        if let explicit = (AppearanceMode(rawValue: appearanceRaw) ?? .system).colorScheme {
+            return explicit
+        }
+        return tahoeAppearanceRaw == "light" ? .light : .dark
     }
 
     /// Pull the clipboard contents into the token draft. The iOS Simulator
