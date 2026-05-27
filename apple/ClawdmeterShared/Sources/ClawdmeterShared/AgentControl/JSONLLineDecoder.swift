@@ -20,47 +20,66 @@ import Foundation
 /// `ClawdmeterSharedTests/AgentControl/JSONLLineDecoderTests.swift`.
 public enum JSONLLineDecoder {
 
+    /// Harness-internal block tags that wrap content the user never
+    /// typed: system context Claude Code injects, background-task
+    /// completion pings the runtime injects when a tool returns,
+    /// slash-command-message wrappers. Stripping these is the
+    /// difference between a chat bubble that says "<task-notification>
+    /// <task-id>bywgnqlgg</task-id>..." and no bubble at all.
+    public static let systemBlockTags: [String] = [
+        "system-reminder",
+        "task-notification",
+        "local-command-stdout",
+        "command-message",
+        "command-args",
+    ]
+
+    /// Strip harness-injected `<system-*>` and `<task-*>` blocks from a
+    /// user-message body. Preserves whitespace + line breaks in the
+    /// surviving text so the chat bubble renders the way the user
+    /// actually typed. Returns nil if NOTHING user-visible remains
+    /// (e.g., the entire body was a `<task-notification>` and the
+    /// chat UI should suppress the bubble entirely).
+    public static func stripSystemContent(_ raw: String) -> String? {
+        var text = raw
+        for tag in systemBlockTags {
+            let open = "<\(tag)>"
+            let close = "</\(tag)>"
+            while let openRange = text.range(of: open) {
+                if let closeRange = text.range(of: close,
+                                                range: openRange.upperBound..<text.endIndex) {
+                    text.removeSubrange(openRange.lowerBound..<closeRange.upperBound)
+                } else {
+                    // Unterminated wrapper — drop to end of body.
+                    text.removeSubrange(openRange.lowerBound..<text.endIndex)
+                }
+            }
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     /// Normalize a raw user-message body for display. Strips system-only
     /// content (system reminders, slash-command wrappers), collapses
     /// whitespace, trims to one line, caps at `maxLength` characters with
     /// a `…` suffix if needed. Returns `nil` if nothing user-visible
     /// remains after stripping.
     public static func cleanPrompt(_ raw: String, maxLength: Int = 80) -> String? {
-        var text = raw
-        // Strip <system-reminder>...</system-reminder> blocks Claude
-        // Code injects with project context. They look user-typed in the
-        // JSONL but the user never wrote them.
-        while let openRange = text.range(of: "<system-reminder>") {
-            let afterOpen = openRange.upperBound
-            if let closeRange = text.range(of: "</system-reminder>",
-                                            range: afterOpen..<text.endIndex) {
-                text.removeSubrange(openRange.lowerBound..<closeRange.upperBound)
-            } else {
-                text.removeSubrange(openRange.lowerBound..<text.endIndex)
-            }
-        }
-        // <command-name> unwrap (keep the inner text — that IS the
-        // user-intended summary for slash-command invocations). Other
-        // command-* tags are stripped wholesale.
-        for tag in ["command-name", "command-args", "command-message",
-                    "local-command-stdout"] {
-            let open = "<\(tag)>"
-            let close = "</\(tag)>"
-            while let openRange = text.range(of: open) {
-                if let closeRange = text.range(of: close,
-                                                range: openRange.upperBound..<text.endIndex) {
-                    if tag == "command-name" {
-                        let inner = text[openRange.upperBound..<closeRange.lowerBound]
-                        text = String(inner)
-                        break
-                    } else {
-                        text.removeSubrange(openRange.lowerBound..<closeRange.upperBound)
-                    }
-                } else {
-                    text.removeSubrange(openRange.lowerBound..<text.endIndex)
-                    break
-                }
-            }
+        // Strip every harness-internal wrapper (<system-reminder>,
+        // <task-notification>, etc.) — they look user-typed in the JSONL
+        // but the user never wrote them. Returns nil if the body
+        // collapses to empty, which lets the caller skip the whole
+        // sidebar row.
+        guard var text = stripSystemContent(raw) else { return nil }
+        // <command-name> unwrap: keep the inner text — that IS the
+        // user-intended summary for slash-command invocations
+        // (the wholesale-strip <command-args>, <command-message>,
+        // and <local-command-stdout> wrappers were already handled
+        // by stripSystemContent above).
+        if let openRange = text.range(of: "<command-name>"),
+           let closeRange = text.range(of: "</command-name>",
+                                        range: openRange.upperBound..<text.endIndex) {
+            text = String(text[openRange.upperBound..<closeRange.lowerBound])
         }
         let collapsed = text
             .replacingOccurrences(of: "\n", with: " ")

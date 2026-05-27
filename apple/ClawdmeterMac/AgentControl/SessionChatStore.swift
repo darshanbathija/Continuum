@@ -1807,20 +1807,27 @@ struct ParsedLine: Sendable {
         guard let message = json["message"] as? [String: Any] else { return nil }
         var out: [ChatMessage] = []
         if let s = message["content"] as? String, !s.isEmpty {
-            out.append(ChatMessage(
-                id: SessionChatStore.stableId(json, suffix: "user-text"),
-                kind: .userText, title: "You", body: s, at: at
-            ))
+            // Strip harness-injected `<system-reminder>` /
+            // `<task-notification>` blocks before rendering. The user
+            // never typed those; showing them as user bubbles is the
+            // exact UX bug we're fixing.
+            if let cleaned = JSONLLineDecoder.stripSystemContent(s) {
+                out.append(ChatMessage(
+                    id: SessionChatStore.stableId(json, suffix: "user-text"),
+                    kind: .userText, title: "You", body: cleaned, at: at
+                ))
+            }
         } else if let blocks = message["content"] as? [[String: Any]] {
             for (i, block) in blocks.enumerated() {
                 let blockType = block["type"] as? String ?? ""
                 let baseId = SessionChatStore.stableId(json, suffix: "u\(i)-\(blockType)")
                 switch blockType {
                 case "text":
-                    if let s = block["text"] as? String, !s.isEmpty {
+                    if let s = block["text"] as? String, !s.isEmpty,
+                       let cleaned = JSONLLineDecoder.stripSystemContent(s) {
                         out.append(ChatMessage(
                             id: baseId, kind: .userText, title: "You",
-                            body: s, at: at
+                            body: cleaned, at: at
                         ))
                     }
                 case "tool_result":

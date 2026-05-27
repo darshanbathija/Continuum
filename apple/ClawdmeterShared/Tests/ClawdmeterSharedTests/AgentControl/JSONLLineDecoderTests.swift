@@ -174,4 +174,43 @@ final class JSONLLineDecoderTests: XCTestCase {
     func testDecodeJSONEmptyReturnsNil() {
         XCTAssertNil(JSONLLineDecoder.decodeJSON(line: Data()))
     }
+
+    // MARK: - stripSystemContent
+
+    func test_stripSystemContent_removesTaskNotification() {
+        let raw = "<task-notification>\n<task-id>bywgnqlgg</task-id>\n<status>completed</status>\n</task-notification>"
+        XCTAssertNil(JSONLLineDecoder.stripSystemContent(raw),
+                     "A body that's only a task-notification should collapse to nil")
+    }
+
+    func test_stripSystemContent_removesSystemReminder() {
+        let raw = "<system-reminder>The task tools haven't been used recently.</system-reminder>"
+        XCTAssertNil(JSONLLineDecoder.stripSystemContent(raw))
+    }
+
+    func test_stripSystemContent_preservesUserTextAroundInjection() {
+        let raw = "fix the auth bug\n<system-reminder>be careful</system-reminder>"
+        XCTAssertEqual(JSONLLineDecoder.stripSystemContent(raw), "fix the auth bug")
+    }
+
+    func test_stripSystemContent_stripsMultipleConsecutiveInjections() {
+        let raw = """
+            <task-notification>x</task-notification>
+            user text
+            <system-reminder>y</system-reminder>
+            """
+        XCTAssertEqual(JSONLLineDecoder.stripSystemContent(raw), "user text")
+    }
+
+    func test_stripSystemContent_unterminatedTagDropsToEnd() {
+        let raw = "real prompt <task-notification>unterminated everything after lost"
+        XCTAssertEqual(JSONLLineDecoder.stripSystemContent(raw), "real prompt")
+    }
+
+    func test_cleanPrompt_dropsTaskNotificationOnlyBodies() {
+        // Codex bug surface: task-notification injections were showing up
+        // as full user-bubbles in the chat thread AND as sidebar labels.
+        // Both paths route through this stripper now.
+        XCTAssertNil(JSONLLineDecoder.cleanPrompt("<task-notification>x</task-notification>"))
+    }
 }
