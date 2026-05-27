@@ -155,7 +155,12 @@ public enum AgentControlWireVersion {
     /// heavy fields to a separate frame that consumers can render
     /// after the shell summary lands. Non-chat events (lifecycle,
     /// usage, etc.) keep their existing single-frame shape.
-    public static let current: Int = 21
+    /// v22 (2026-05-27): workspace session tabs. `AgentSession` gains
+    /// optional `inheritedContextSourceIds` so a newly-created code tab
+    /// can audit which sibling transcripts seeded its first prompt, plus
+    /// `ownsWorktree` so same-workspace tabs can share a cwd without
+    /// inheriting destructive worktree-delete ownership.
+    public static let current: Int = 22
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -308,6 +313,10 @@ public enum AgentControlWireVersion {
     /// drives the lightweight activity strip / sidebar summary; the
     /// detail event fills in the full body when it arrives.
     public static let shellDetailMinimum: Int = 21
+
+    /// Minimum wire version that exposes workspace-tab inherited context
+    /// metadata on `AgentSession`.
+    public static let tabContextMinimum: Int = 22
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -485,6 +494,13 @@ public enum AgentControlWireVersion {
     public static func supportsShellDetail(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= shellDetailMinimum
+    }
+
+    /// Whether the paired Mac includes workspace-tab inherited context
+    /// metadata on session payloads.
+    public static func supportsTabContext(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= tabContextMinimum
     }
 }
 
@@ -2546,6 +2562,19 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// Keychain / env scrubbing posture.
     public let providerInstanceId: String?
 
+    // MARK: - Schema v9 additions (v0.29 workspace session tabs, wire v22)
+
+    /// Sibling code-session ids whose transcript digests were inserted
+    /// into this session's first user turn. Nil/empty means no inherited
+    /// context. Kept separate from `parentSessionId`: parent sessions are
+    /// threaded children, while this field is one-shot starting context.
+    public let inheritedContextSourceIds: [UUID]?
+
+    /// True only when Clawdmeter created this session's `worktreePath` via
+    /// `WorktreeManager.add` and may therefore remove it when the session is
+    /// ended. Same-workspace tabs can run in a worktree without owning it.
+    public let ownsWorktree: Bool
+
     public init(
         id: UUID,
         repoKey: String?,
@@ -2587,7 +2616,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         antigravityProjectId: String? = nil,
         deepResearch: Bool = false,
         planProgress: PlanProgress? = nil,
-        providerInstanceId: String? = nil
+        providerInstanceId: String? = nil,
+        inheritedContextSourceIds: [UUID]? = nil,
+        ownsWorktree: Bool = false
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -2630,6 +2661,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.deepResearch = deepResearch
         self.planProgress = planProgress
         self.providerInstanceId = providerInstanceId
+        self.inheritedContextSourceIds = inheritedContextSourceIds
+        self.ownsWorktree = ownsWorktree
     }
 
     public init(from decoder: Decoder) throws {
@@ -2712,6 +2745,17 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         // decodes with this nil, resolving at lookup time to
         // `ProviderInstanceId.primary(kind: agent)`.
         self.providerInstanceId = (try? c.decodeIfPresent(String.self, forKey: .providerInstanceId)) ?? nil
+        // v0.29 schema v9 addition: workspace-tab inherited context.
+        // Optional + decoder-tolerant so older sessions stay nil.
+        self.inheritedContextSourceIds = (try? c.decodeIfPresent([UUID].self, forKey: .inheritedContextSourceIds)) ?? nil
+        // v0.29 schema v9 addition: explicit worktree ownership. Missing
+        // legacy values decode to false because destructive cleanup must be
+        // opt-in once same-workspace tabs can share a worktree path.
+        if let decodedOwnsWorktree = try? c.decodeIfPresent(Bool.self, forKey: .ownsWorktree) {
+            self.ownsWorktree = decodedOwnsWorktree
+        } else {
+            self.ownsWorktree = false
+        }
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -2762,7 +2806,10 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              // Plan-progress schema addition (daemon-side).
              planProgress,
              // F3-wire schema v8 (configured-instance pin).
-             providerInstanceId
+             providerInstanceId,
+             // v0.29 schema v9 (workspace session tabs).
+             inheritedContextSourceIds,
+             ownsWorktree
     }
 
     /// Resolve `providerInstanceId` (a `ProviderInstanceId.wireId` string)

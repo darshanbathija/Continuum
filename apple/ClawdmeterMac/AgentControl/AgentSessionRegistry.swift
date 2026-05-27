@@ -287,6 +287,8 @@ public final class AgentSessionRegistry: ObservableObject {
         geminiBackend: GeminiBackend? = nil,
         antigravityConversationId: UUID? = nil,
         antigravityProjectId: String? = nil,
+        inheritedContextSourceIds: [UUID]? = nil,
+        ownsWorktree: Bool = false,
         id: UUID = UUID()
     ) async throws -> AgentSession {
         let now = Date()
@@ -321,7 +323,9 @@ public final class AgentSessionRegistry: ObservableObject {
             abPairSessionId: abPairSessionId,
             geminiBackend: geminiBackend,
             antigravityConversationId: antigravityConversationId,
-            antigravityProjectId: antigravityProjectId
+            antigravityProjectId: antigravityProjectId,
+            inheritedContextSourceIds: inheritedContextSourceIds,
+            ownsWorktree: ownsWorktree
         )
         // Write-ahead: receipt lands BEFORE in-memory mutation. If the
         // event store rejects the write, we propagate and the caller
@@ -603,7 +607,8 @@ public final class AgentSessionRegistry: ObservableObject {
         runtimeCwd: String?? = nil,
         tmuxWindowId: String?,
         tmuxPaneId: String?,
-        mode: SessionMode
+        mode: SessionMode,
+        ownsWorktree: Bool? = nil
     ) async throws {
         guard let s = session(id: id) else { return }
         let projected = with(
@@ -613,7 +618,8 @@ public final class AgentSessionRegistry: ObservableObject {
             tmuxWindowId: tmuxWindowId,
             tmuxPaneId: tmuxPaneId,
             mode: mode,
-            runtimeCwd: runtimeCwd
+            runtimeCwd: runtimeCwd,
+            ownsWorktree: ownsWorktree
         )
         try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
         update(id: id) { _ in projected }
@@ -812,6 +818,13 @@ public final class AgentSessionRegistry: ObservableObject {
         update(id: sessionId) { _ in projected }
     }
 
+    public func setInheritedContextSources(sessionId: UUID, sourceIds: [UUID]) async throws {
+        guard let s = session(id: sessionId) else { return }
+        let projected = with(s, inheritedContextSourceIds: sourceIds.isEmpty ? .some(nil) : .some(sourceIds))
+        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: sessionId, session: projected)
+        update(id: sessionId) { _ in projected }
+    }
+
     /// Mutate one session by id via a transform closure. Saves on every
     /// successful mutation. Single source of truth for v3-field propagation
     /// (T41 audit) — every public mutation goes through here, so adding a
@@ -860,6 +873,8 @@ public final class AgentSessionRegistry: ObservableObject {
         chatCwd: String?? = nil,
         runtimeBinding: SessionRuntimeBinding?? = nil,
         prMirrorState: PRMirrorState?? = nil,
+        inheritedContextSourceIds: [UUID]?? = nil,
+        ownsWorktree: Bool? = nil,
         lastEventSeq: UInt64? = nil,
         frontierGroupId: UUID?? = nil,
         frontierChildIndex: Int?? = nil,
@@ -921,7 +936,10 @@ public final class AgentSessionRegistry: ObservableObject {
             antigravityConversationId: Self.resolve(antigravityConversationId, fallback: s.antigravityConversationId),
             antigravityProjectId: Self.resolve(antigravityProjectId, fallback: s.antigravityProjectId),
             deepResearch: s.deepResearch,
-            planProgress: Self.resolve(planProgress, fallback: s.planProgress)
+            planProgress: Self.resolve(planProgress, fallback: s.planProgress),
+            providerInstanceId: s.providerInstanceId,
+            inheritedContextSourceIds: Self.resolve(inheritedContextSourceIds, fallback: s.inheritedContextSourceIds),
+            ownsWorktree: ownsWorktree ?? s.ownsWorktree
         )
     }
 

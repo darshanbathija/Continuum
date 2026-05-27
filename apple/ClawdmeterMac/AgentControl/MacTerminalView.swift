@@ -22,19 +22,22 @@ public struct MacTerminalView: NSViewRepresentable {
     /// G12 multi-terminal: override the session's primary pane with a
     /// specific tmux pane id (e.g. "%9"). nil = use primary.
     public let paneId: String?
+    public let onFirstOutput: (() -> Void)?
 
     public init(
         sessionId: UUID,
         host: String,
         wsPort: Int,
         token: String,
-        paneId: String? = nil
+        paneId: String? = nil,
+        onFirstOutput: (() -> Void)? = nil
     ) {
         self.sessionId = sessionId
         self.host = host
         self.wsPort = wsPort
         self.token = token
         self.paneId = paneId
+        self.onFirstOutput = onFirstOutput
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -43,7 +46,8 @@ public struct MacTerminalView: NSViewRepresentable {
             host: host,
             wsPort: wsPort,
             token: token,
-            paneId: paneId
+            paneId: paneId,
+            onFirstOutput: onFirstOutput
         )
     }
 
@@ -70,16 +74,26 @@ public struct MacTerminalView: NSViewRepresentable {
         let wsPort: Int
         let token: String
         let paneId: String?
+        let onFirstOutput: (() -> Void)?
 
         weak var terminalView: TerminalView?
         private var task: URLSessionWebSocketTask?
+        private var sawOutput = false
 
-        init(sessionId: UUID, host: String, wsPort: Int, token: String, paneId: String?) {
+        init(
+            sessionId: UUID,
+            host: String,
+            wsPort: Int,
+            token: String,
+            paneId: String?,
+            onFirstOutput: (() -> Void)?
+        ) {
             self.sessionId = sessionId
             self.host = host
             self.wsPort = wsPort
             self.token = token
             self.paneId = paneId
+            self.onFirstOutput = onFirstOutput
         }
 
         func connect() {
@@ -144,6 +158,10 @@ public struct MacTerminalView: NSViewRepresentable {
             switch tag {
             case .output:
                 let arr = Array(payload)
+                if !arr.isEmpty, !sawOutput {
+                    sawOutput = true
+                    onFirstOutput?()
+                }
                 terminalView?.feed(byteArray: ArraySlice(arr))
             case .title:
                 let title = String(decoding: payload, as: UTF8.self)

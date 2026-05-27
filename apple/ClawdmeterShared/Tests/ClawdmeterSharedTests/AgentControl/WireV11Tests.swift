@@ -15,11 +15,10 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsNineteen() {
-        // F3-wire bumped current to 20 (configured-instance fields on
-        // session DTOs + per-instance keys on the UsageEnvelope dict).
-        // This test originally locked the v19 floor; it now asserts the
-        // forward-compat ratchet (current is at least 19, never below).
+    func test_currentWireVersionIsAtLeastNineteen() {
+        // Later wire releases keep ratcheting `current`; this legacy v11
+        // suite only needs to prove the lifecycle/defaults floor never
+        // regresses below v19.
         XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 19)
     }
 

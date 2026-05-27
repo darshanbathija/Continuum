@@ -91,6 +91,7 @@ public final class ComposerStore: ObservableObject {
     @Published public var permissionMode: PermissionMode = .ask
     @Published public var agent: AgentKind = .claude
     @Published public var repoKey: String?
+    @Published public var inheritedContextSourceIds: Set<UUID> = []
     @Published public private(set) var isSending: Bool = false
     @Published public private(set) var lastError: SendError?
     /// True when palette popovers are active. Views toggle via setters.
@@ -175,6 +176,11 @@ public final class ComposerStore: ObservableObject {
         effort = defaults.effort
         mode = defaults.mode
         planMode = defaults.planMode
+        resetInheritedContext()
+    }
+
+    public func resetInheritedContext() {
+        inheritedContextSourceIds.removeAll()
     }
 
     public struct ChipDefaults: Sendable, Equatable {

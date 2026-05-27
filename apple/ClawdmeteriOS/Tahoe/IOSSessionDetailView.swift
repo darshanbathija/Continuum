@@ -75,6 +75,7 @@ public struct IOSSessionDetailView: View {
     @ObservedObject var presentationStore: SessionPresentationStore
     var sessionId: UUID
     var data: TahoeCodeBindings
+    var onOpenSession: (UUID) -> Void
     var onBack: () -> Void
 
     @State private var composerText: String = ""
@@ -111,6 +112,7 @@ public struct IOSSessionDetailView: View {
         sessionId: UUID,
         data: TahoeCodeBindings,
         presentationStore: SessionPresentationStore,
+        onOpenSession: @escaping (UUID) -> Void = { _ in },
         onBack: @escaping () -> Void
     ) {
         self.agentClient = agentClient
@@ -118,6 +120,7 @@ public struct IOSSessionDetailView: View {
         self.presentationStore = presentationStore
         self.sessionId = sessionId
         self.data = data
+        self.onOpenSession = onOpenSession
         self.onBack = onBack
         let args = ProcessInfo.processInfo.arguments
         _chatStore = StateObject(wrappedValue: iOSChatStore(sessionId: sessionId, client: agentClient))
@@ -239,6 +242,23 @@ public struct IOSSessionDetailView: View {
                 }
             }
             .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
+
+            if let realAgentSession,
+               let workspaceKey = WorkspaceKey.of(realAgentSession) {
+                IOSWorkspaceTabStrip(
+                    workspaceKey: workspaceKey,
+                    sessions: agentClient.sessions,
+                    activeSessionId: realAgentSession.id,
+                    terminalAvailable: !(realAgentSession.tmuxPaneId?.isEmpty ?? true),
+                    onOpenSession: { id in onOpenSession(id) },
+                    onOpenTerminal: {
+                        if visibleTabs.contains(.terminal) {
+                            selectTab(.terminal)
+                        }
+                    }
+                )
+                .padding(.bottom, 6)
+            }
 
             // The workbench tabs are real panes, not a hidden menu item:
             // Plan, Run, PR, and Terminal are directly reachable from the

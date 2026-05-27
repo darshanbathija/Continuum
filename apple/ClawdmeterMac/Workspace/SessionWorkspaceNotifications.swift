@@ -12,8 +12,9 @@ extension Notification.Name {
     static let toggleCodeReviewPane = Notification.Name("clawdmeter.workspace.toggleCodeReviewPane")
     static let openCodeReviewPane = Notification.Name("clawdmeter.workspace.openCodeReviewPane")
     static let popOutSession = Notification.Name("clawdmeter.workspace.popOutSession")
-    /// Posted to open the raw tmux Cmd+T overlay on a specific session.
-    /// (Wave B: chat-first; terminal demoted to overlay.)
+    /// Posted to open a first-class workspace terminal tab on a specific session.
+    /// Kept as the stable external name for older posters that still say
+    /// "raw terminal".
     static let showRawTerminal = Notification.Name("clawdmeter.workspace.showRawTerminal")
     static let transcriptFind = Notification.Name("clawdmeter.workspace.transcriptFind")
     static let transcriptNextMatch = Notification.Name("clawdmeter.workspace.transcriptNextMatch")
