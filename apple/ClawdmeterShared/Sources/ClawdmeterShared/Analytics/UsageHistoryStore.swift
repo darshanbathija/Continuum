@@ -1,6 +1,10 @@
 import Foundation
+#if canImport(Combine)
 import Combine
+#endif
+#if canImport(Darwin)
 import Observation
+#endif
 #if canImport(OSLog)
 import OSLog
 #endif
@@ -34,8 +38,12 @@ public extension Notification.Name {
     static let opencodeUsageRecorded = Notification.Name("clawdmeter.opencode.usage.recorded")
 }
 
+#if canImport(Darwin)
 @MainActor
 @Observable
+#else
+@MainActor
+#endif
 public final class UsageHistoryStore {
 
     public private(set) var snapshot: UsageHistorySnapshot?
@@ -49,7 +57,7 @@ public final class UsageHistoryStore {
     /// `@Observable` keypath tracking and does NOT touch this; it
     /// exists solely so the iCloud mirror's subscription survives
     /// the C2 migration.
-    @ObservationIgnored private let snapshotSubject = PassthroughSubject<UsageHistorySnapshot?, Never>()
+    private let snapshotSubject = PassthroughSubject<UsageHistorySnapshot?, Never>()
     /// Public Combine bridge equivalent to the pre-C2 `$snapshot`
     /// publisher. Daemon/runtime code that needs Combine semantics
     /// (`.compactMap`, `.receive(on:)`, `.sink`) bridges through
@@ -62,7 +70,7 @@ public final class UsageHistoryStore {
     /// C2 — Combine bridge for opencode live-records updates. The
     /// `OpencodeStatusController` in AppDelegate.swift refreshes the
     /// menu-bar dollar gauge on every SSE record append.
-    @ObservationIgnored private let opencodeLiveRecordsSubject = PassthroughSubject<[UsageRecord], Never>()
+    private let opencodeLiveRecordsSubject = PassthroughSubject<[UsageRecord], Never>()
     /// Public Combine bridge equivalent to the pre-C2
     /// `$opencodeLiveRecords` publisher. Replace
     /// `store.$opencodeLiveRecords` with
@@ -120,14 +128,11 @@ public final class UsageHistoryStore {
         }
     }
 
-    // C2 — these are pure plumbing fields. Marking them
-    // `@ObservationIgnored` keeps `@Observable`'s synthesized tracking
-    // off them so a refresh-timer reschedule or a notification
-    // observation never accidentally invalidates a view body.
-    @ObservationIgnored private let loader: UsageHistoryLoader
-    @ObservationIgnored private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "Analytics")
-    @ObservationIgnored private var refreshTimer: Timer?
-    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    // C2 — these are pure plumbing fields with no view-facing semantics.
+    private let loader: UsageHistoryLoader
+    private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "Analytics")
+    private var refreshTimer: Timer?
+    private var observers: [NSObjectProtocol] = []
 
     // MARK: - B2 mtime probe + idle backoff
     //
@@ -147,10 +152,10 @@ public final class UsageHistoryStore {
     /// Set on every successful refresh (mtime-probe or full load); used
     /// to detect "nothing changed since last refresh" so the next tick
     /// can short-circuit.
-    @ObservationIgnored private var lastSeenMaxMtime: Date?
+    private var lastSeenMaxMtime: Date?
     /// Consecutive ticks where the mtime probe found no change. Drives
     /// the slide from `baseInterval` to `idleInterval`.
-    @ObservationIgnored private var consecutiveIdleTicks: Int = 0
+    private var consecutiveIdleTicks: Int = 0
     private static let baseInterval: TimeInterval = 60     // active
     private static let idleInterval: TimeInterval = 300    // backoff cap (5 min)
     /// After this many no-change ticks at base interval, slide to idle.
@@ -342,9 +347,8 @@ public final class UsageHistoryStore {
     }
 
     /// Timestamp of the last opencode-event-triggered refresh. Drives the
-    /// 10s debounce in `scheduleOpencodeMirrorRefresh`. Internal-only —
-    /// not a view-relevant field, kept off the `@Observable` keypath set.
-    @ObservationIgnored private var lastOpencodeMirrorRefreshAt: Date?
+    /// 10s debounce in `scheduleOpencodeMirrorRefresh`.
+    private var lastOpencodeMirrorRefreshAt: Date?
 
     /// Append a live opencode UsageRecord. Trims to the 5000-item
     /// retention cap so memory stays bounded over a long-running day.
