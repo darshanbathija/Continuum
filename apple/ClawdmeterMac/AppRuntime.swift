@@ -244,9 +244,16 @@ final class AppRuntime: ObservableObject {
         // NotificationDispatcher is an actor. SessionsModel bridges to UI.
         // Per the feature flag plan (T18): gate the daemon start on
         // `UserDefaults.clawdmeter.sessions.enabled`. Default on in v1.
-        self.repoIndex = RepoIndex()
-        self.agentSessionRegistry = AgentSessionRegistry()
+        // Workspace store first — RepoIndex's 4th source (A1-A) reads its
+        // snapshot to surface freshly-added repos that have no JSONL history.
         self.workspaceStore = WorkspaceStore()
+        let workspaceStoreRef = self.workspaceStore
+        self.repoIndex = RepoIndex(
+            workspaceSnapshotProvider: { @Sendable in
+                await MainActor.run { workspaceStoreRef.workspaces }
+            }
+        )
+        self.agentSessionRegistry = AgentSessionRegistry()
         self.tmuxClient = TmuxControlClient()
         self.tmuxSupervisor = TmuxSupervisor(
             tmux: self.tmuxClient,

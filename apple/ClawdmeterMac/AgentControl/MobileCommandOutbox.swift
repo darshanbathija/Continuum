@@ -39,6 +39,15 @@ public actor MobileCommandOutbox {
         public let responseContentType: String
         public let responseStatus: Int
         public let cachedAt: Date
+        /// Hex SHA-256 of the original request payload. On replay,
+        /// `tryReplayIdempotent` compares against the incoming envelope's
+        /// payloadHash so a key reused with edited payload (e.g. user
+        /// tapped Clone, edited the spec, tapped Clone again with the
+        /// SAME persisted key) is rejected instead of silently replaying
+        /// the wrong response. nil for receipts replayed from the audit
+        /// log on daemon restart (we don't carry the original payload
+        /// through the JSONL).
+        public let payloadHash: String?
 
         public init(
             receipt: MobileCommandReceipt,
@@ -46,7 +55,8 @@ public actor MobileCommandOutbox {
             responseBody: Data?,
             responseContentType: String = "application/json",
             responseStatus: Int = 200,
-            cachedAt: Date = Date()
+            cachedAt: Date = Date(),
+            payloadHash: String? = nil
         ) {
             self.receipt = receipt
             self.kind = kind
@@ -54,11 +64,17 @@ public actor MobileCommandOutbox {
             self.responseContentType = responseContentType
             self.responseStatus = responseStatus
             self.cachedAt = cachedAt
+            self.payloadHash = payloadHash
         }
     }
 
     private var cache: [String: CachedEntry] = [:]
     private var insertionOrder: [String] = []
+    /// Keys currently being processed by a request handler. Used to gate
+    /// concurrent same-key requests so two simultaneous clones with the
+    /// same idempotency key don't both pass the nil-cache check + run
+    /// twice. Cleared in `releaseInFlight(_:)` from a defer block.
+    private var inFlight: Set<String> = []
 
     /// Upper bound on resident entries before LRU eviction kicks in.
     /// At 256 entries x ~1KB cached response = ~256KB worst case, well
@@ -102,7 +118,8 @@ public actor MobileCommandOutbox {
         responseContentType: String = "application/json",
         responseStatus: Int = 200,
         processedAt: Date = Date(),
-        serverReceiptId: String = UUID().uuidString
+        serverReceiptId: String = UUID().uuidString,
+        payloadHash: String? = nil
     ) -> CachedEntry {
         let receipt = MobileCommandReceipt(
             idempotencyKey: key,
@@ -117,10 +134,33 @@ public actor MobileCommandOutbox {
             responseBody: responseBody,
             responseContentType: responseContentType,
             responseStatus: responseStatus,
-            cachedAt: processedAt
+            cachedAt: processedAt,
+            payloadHash: payloadHash
         )
         upsert(key: key, entry: entry)
         return entry
+    }
+
+    // MARK: - In-flight reservation
+
+    /// Try to mark `key` as currently being processed. Returns `true` if
+    /// reserved (caller proceeds with work + must release in defer);
+    /// returns `false` if another concurrent request is already
+    /// processing this key (caller should return 409 Conflict).
+    /// Idempotency-key collisions across different handlers (e.g. the
+    /// same key submitted for clone + open-local) collide here too,
+    /// which is the correct behavior — the daemon's audit log records
+    /// the first one's outcome, and the second is genuinely ambiguous.
+    public func tryReserveInFlight(_ key: String) -> Bool {
+        if inFlight.contains(key) { return false }
+        inFlight.insert(key)
+        return true
+    }
+
+    /// Pair with `tryReserveInFlight`. Always call in a defer so a
+    /// thrown error from the handler doesn't pin the slot forever.
+    public func releaseInFlight(_ key: String) {
+        inFlight.remove(key)
     }
 
     /// Cache a failed command so the next retry sees the failure
@@ -136,7 +176,8 @@ public actor MobileCommandOutbox {
         responseStatus: Int,
         responseBody: Data? = nil,
         processedAt: Date = Date(),
-        serverReceiptId: String = UUID().uuidString
+        serverReceiptId: String = UUID().uuidString,
+        payloadHash: String? = nil
     ) -> CachedEntry {
         let receipt = MobileCommandReceipt(
             idempotencyKey: key,
@@ -152,7 +193,8 @@ public actor MobileCommandOutbox {
             responseBody: responseBody,
             responseContentType: "application/json",
             responseStatus: responseStatus,
-            cachedAt: processedAt
+            cachedAt: processedAt,
+            payloadHash: payloadHash
         )
         upsert(key: key, entry: entry)
         return entry
@@ -197,6 +239,12 @@ public actor MobileCommandOutbox {
             let kind = MobileCommandKind(rawValue: kindRaw) ?? .send
             let status = MobileCommandStatus(rawValue: statusRaw) ?? .acknowledged
             let serverReceiptId = (dict["serverReceiptId"] as? String) ?? UUID().uuidString
+            // Pull payloadHash out of the audit row so the 422 mismatch
+            // gate works against post-restart replayed entries too
+            // (Codex R4 #1 fix). Without this, a retry with edited
+            // payload after daemon restart would silently replay the
+            // wrong response.
+            let payloadHash = dict["payloadHash"] as? String
             let receipt = MobileCommandReceipt(
                 idempotencyKey: key,
                 status: status,
@@ -209,7 +257,8 @@ public actor MobileCommandOutbox {
                 kind: kind,
                 responseBody: nil,
                 responseStatus: status == .failed ? 500 : 200,
-                cachedAt: Date()
+                cachedAt: Date(),
+                payloadHash: payloadHash
             )
             upsert(key: key, entry: entry)
             seeded += 1

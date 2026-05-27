@@ -590,6 +590,10 @@ private struct SidebarPane: View {
     @State private var renameTarget: AgentSession?
     @State private var renameInput: String = ""
     @State private var showingRenameAlert: Bool = false
+    /// Add Repo flow sheets. "Open project" doesn't need a sheet — it pops
+    /// NSOpenPanel directly. Clone + Quick Start each get a SwiftUI sheet.
+    @State private var showingCloneRepoSheet: Bool = false
+    @State private var showingQuickStartRepoSheet: Bool = false
     // v0.5.10 — parallel state for Recent JSONL row rename. Keyed by path
     // (not session id) because these rows aren't Clawdmeter-owned
     // sessions; they're files we surface.
@@ -738,25 +742,78 @@ private struct SidebarPane: View {
                 ProgressView().controlSize(.mini)
             }
             filterMenu
-            Button(action: { model.prepareNewSession(in: nil) }) {
-                TahoeIcon("folderPlus", size: 15, weight: .semibold)
-                    .foregroundStyle(t.accent)
-                    .frame(width: 30, height: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(t.accentAlpha(t.dark ? 0.18 : 0.12))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(t.accentAlpha(0.32), lineWidth: 0.5)
-                    )
-            }
-            .buttonStyle(.plain)
-            .help("New session")
+            addRepoMenu
         }
         .padding(.horizontal, 14)
         .padding(.top, 8)
         .padding(.bottom, 6)
+        .sheet(isPresented: $showingCloneRepoSheet) {
+            CloneRepoSheet(onboarding: model.repoOnboarding) { _ in }
+        }
+        .sheet(isPresented: $showingQuickStartRepoSheet) {
+            QuickStartRepoSheet(onboarding: model.repoOnboarding) { _ in }
+        }
+    }
+
+    /// Sidebar header's "+ Add project" Menu. Replaces the previous
+    /// "New session" entry point on this button. New Session now lives on
+    /// `Cmd+N` (unchanged) and the per-repo `+` button. Three rows mirror
+    /// Conductor's Add-Repo popover.
+    @ViewBuilder
+    private var addRepoMenu: some View {
+        Menu {
+            Button {
+                Task {
+                    do { _ = try await model.repoOnboarding.openLocalFolder() }
+                    catch let err as RepoOnboardingError {
+                        if case .alreadyRegistered = err { return }
+                        await MainActor.run { presentRepoOnboardingError(err) }
+                    } catch {
+                        await MainActor.run { presentRepoOnboardingError(error) }
+                    }
+                }
+            } label: {
+                Label("Open project", systemImage: "folder")
+            }
+            Button {
+                showingCloneRepoSheet = true
+            } label: {
+                Label("Open GitHub project", systemImage: "globe")
+            }
+            Button {
+                showingQuickStartRepoSheet = true
+            } label: {
+                Label("Quick start", systemImage: "plus.rectangle.on.folder")
+            }
+        } label: {
+            TahoeIcon("folderPlus", size: 15, weight: .semibold)
+                .foregroundStyle(t.accent)
+                .frame(width: 30, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(t.accentAlpha(t.dark ? 0.18 : 0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(t.accentAlpha(0.32), lineWidth: 0.5)
+                )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Add project")
+    }
+
+    private func presentRepoOnboardingError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Couldn't add project"
+        alert.informativeText = (error as? LocalizedError)?.errorDescription
+            ?? error.localizedDescription
+        if let suggestion = (error as? LocalizedError)?.recoverySuggestion {
+            alert.informativeText += "\n\n\(suggestion)"
+        }
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     /// Linear-style filter / group / sort menu. Active non-default

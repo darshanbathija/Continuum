@@ -261,6 +261,41 @@ public final class MobileCommandOutbox: ObservableObject {
     private func dispatch(_ envelope: MobileCommandEnvelope) async -> Bool {
         guard let payloadData = envelope.payload.data(using: .utf8) else { return false }
         let decoder = JSONDecoder()
+        // Workspace-onboarding commands are workspace-level — no sessionId.
+        // Handle them BEFORE the session-scoped guard so a queued entry
+        // actually fires through the client instead of silently pretending
+        // success (which would delete the pending entry without doing
+        // any work). iOS sheets call client.* directly today; outbox
+        // entries only exist if a future build wires the enqueue path.
+        switch envelope.kind {
+        case .openLocalFolder:
+            let result = await client.openLocalFolderOnMac(idempotencyKey: envelope.idempotencyKey)
+            return isDefinitive(result)
+        case .cloneFromGitHub:
+            guard let body = try? decoder.decode(CloneFromGitHubRequest.self, from: payloadData) else {
+                return false
+            }
+            let result = await client.cloneFromGitHubOnMac(
+                spec: body.spec,
+                destinationParent: body.destinationParent,
+                idempotencyKey: envelope.idempotencyKey
+            )
+            return isDefinitive(result)
+        case .quickStartRepo:
+            guard let body = try? decoder.decode(QuickStartRepoRequest.self, from: payloadData) else {
+                return false
+            }
+            let result = await client.quickStartRepoOnMac(
+                name: body.name,
+                parent: body.parent,
+                idempotencyKey: envelope.idempotencyKey
+            )
+            return isDefinitive(result)
+        case .wakeMac:
+            return await client.wakeMacForOpenLocal(idempotencyKey: envelope.idempotencyKey)
+        default:
+            break
+        }
         guard let sessionId = envelope.sessionId else { return false }
         switch envelope.kind {
         case .send:
@@ -330,11 +365,30 @@ public final class MobileCommandOutbox: ObservableObject {
         case .permissionResponse, .terminalInput, .pickWinner, .updateWorkspace:
             // Pre-wired outbox kinds we don't surface enqueue helpers
             // for yet. Treat as success so a stale entry from a future
-            // build doesn't permanently stick in the queue. The legacy
-            // direct-call path on iOS still handles these.
+            // build doesn't permanently stick in the queue.
             outboxLogger.warning("Skipping unsupported kind \(envelope.kind.rawValue, privacy: .public) — pretending success")
             return true
+        case .openLocalFolder, .cloneFromGitHub, .quickStartRepo, .wakeMac:
+            // Dispatched above the sessionId guard. Unreachable here but
+            // Swift requires exhaustive cases.
+            return true
         }
+    }
+
+    /// Treat a `WorkspaceOnboardingResult` as a definitive outcome iff the
+    /// daemon returned either a record (success) or a structured
+    /// `RepoOnboardingError` (final failure — auth-failed, path-not-
+    /// allowed, etc.). `macLocked` and `unsupportedServer` are also
+    /// definitive (no point retrying until the user wakes/updates the
+    /// Mac). Empty results signal a transport-layer hiccup and should
+    /// retry. This keeps queued entries off the persistent queue once
+    /// the Mac has actually responded.
+    private func isDefinitive(_ result: AgentControlClient.WorkspaceOnboardingResult) -> Bool {
+        if result.record != nil { return true }
+        if result.error != nil { return true }
+        if result.macLocked { return true }
+        if result.unsupportedServer { return true }
+        return false
     }
 
     private func markAcknowledged(_ envelope: MobileCommandEnvelope) {
