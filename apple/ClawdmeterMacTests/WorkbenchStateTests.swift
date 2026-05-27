@@ -28,7 +28,10 @@ final class WorkbenchStateTests: XCTestCase {
 
         XCTAssertEqual(state.density, .balanced)
         XCTAssertEqual(state.selectedRightPane, .plan)
-        XCTAssertTrue(state.showingReviewPane)
+        // v0.30: new users default to a collapsed review pane — see
+        // WorkbenchStateSnapshot.init(showingReviewPane:) for rationale.
+        // Persisted state still wins on subsequent launches.
+        XCTAssertFalse(state.showingReviewPane)
         XCTAssertEqual(state.workspaceWidth, 1400)
     }
 
@@ -94,7 +97,9 @@ final class WorkbenchStateTests: XCTestCase {
 
         XCTAssertEqual(state.selectedRightPane, .plan)
         XCTAssertEqual(state.density, .balanced)
-        XCTAssertTrue(state.showingReviewPane)
+        // v0.30: snapshot decode default matches the init default — see
+        // WorkbenchStateSnapshot.init(from:) decodeIfPresent fallback.
+        XCTAssertFalse(state.showingReviewPane)
     }
 
     func test_serviceCachesPersist() {
