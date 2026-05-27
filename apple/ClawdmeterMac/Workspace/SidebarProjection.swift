@@ -60,9 +60,9 @@ struct SidebarProjection {
 ///   - registryFingerprint: id, lastEventSeq, status, archivedAt,
 ///     planText.isEmpty, prMirrorState?.state — every field the grouper
 ///     buckets / sorts / filters on, plus the review-bucket inputs —
-///     and customName, because `sessionRow` reads it via
-///     `sessionTitle` and `registry.rename(...)` mutates it without
-///     bumping `lastEventSeq`.
+///     and customName, because Rename persists through
+///     `registry.rename(...)` and mutates it without bumping
+///     `lastEventSeq`.
 ///   - reposFingerprint: per-repo key, displayName, liveSessionCount,
 ///     hasActiveSessions, recents (path + lastModified + alias).
 ///   - workbenchPRCacheFingerprint: per-session prCache.state, since
@@ -248,8 +248,8 @@ enum SidebarProjectionBuilder {
             hasher.combine(s.goal)
             hasher.combine(s.agent)
             hasher.combine(s.lastEventAt)
-            // Sidebar row title falls back to `customName` after
-            // titleOverrides + before goal (see `sessionTitle` in
+            // Sidebar row title uses `customName` before legacy
+            // titleOverrides and before goal (see `sessionTitle` in
             // SessionWorkspaceView). `registry.rename(...)` mutates
             // customName *without* bumping `lastEventSeq` (it's a
             // local-state mutation, not a cross-device event), so we

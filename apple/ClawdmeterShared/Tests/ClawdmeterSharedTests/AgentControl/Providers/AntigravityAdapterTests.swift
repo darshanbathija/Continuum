@@ -15,6 +15,7 @@ final class AntigravityAdapterTests: XCTestCase {
 
     // MARK: - .db path
 
+#if os(macOS) || os(iOS)
     func test_translate_dbUsage_emitsAssistantMessageCompleted() {
         let usage = AntigravityDBUsage(
             inputTokens: 1500,
@@ -170,4 +171,5 @@ final class AntigravityAdapterTests: XCTestCase {
         XCTAssertEqual(events[0].providerInstanceId, "antigravity_personal")
         XCTAssertEqual(events[0].sequenceNumber, 7)
     }
+#endif
 }

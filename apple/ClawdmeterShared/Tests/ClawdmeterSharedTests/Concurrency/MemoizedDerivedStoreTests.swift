@@ -4,7 +4,6 @@ import XCTest
 /// Tests for the A4-pre `MemoizedDerivedStore` utility. Locks in the
 /// cache-hit, cache-miss, cancellation, and detached-mode behavior that
 /// A4 / C1 / F1 will depend on.
-@MainActor
 final class MemoizedDerivedStoreTests: XCTestCase {
 
     // MARK: - Cache key
@@ -16,7 +15,8 @@ final class MemoizedDerivedStoreTests: XCTestCase {
 
     // MARK: - Sync mode
 
-    func test_sync_cacheHit_skipsCompute() {
+    @MainActor
+    func test_sync_cacheHit_skipsCompute() async {
         let computeCount = LockedCounter()
         let store = MemoizedDerivedStore<Key, Int>(mode: .sync) { input in
             computeCount.increment()
@@ -32,7 +32,8 @@ final class MemoizedDerivedStoreTests: XCTestCase {
         XCTAssertEqual(computeCount.value, 1, "Cache hit on identical input must not recompute")
     }
 
-    func test_sync_cacheMiss_recomputes() {
+    @MainActor
+    func test_sync_cacheMiss_recomputes() async {
         let computeCount = LockedCounter()
         let store = MemoizedDerivedStore<Key, Int>(mode: .sync) { input in
             computeCount.increment()
@@ -48,7 +49,8 @@ final class MemoizedDerivedStoreTests: XCTestCase {
         XCTAssertEqual(computeCount.value, 3)
     }
 
-    func test_sync_placeholder_isInitialOutput() {
+    @MainActor
+    func test_sync_placeholder_isInitialOutput() async {
         let store = MemoizedDerivedStore<Key, Int>(
             placeholder: -1,
             mode: .sync
@@ -58,7 +60,8 @@ final class MemoizedDerivedStoreTests: XCTestCase {
         XCTAssertEqual(store.output, -1, "Placeholder surfaces before any update lands")
     }
 
-    func test_invalidate_resetsToPlaceholder() {
+    @MainActor
+    func test_invalidate_resetsToPlaceholder() async {
         let store = MemoizedDerivedStore<Key, Int>(
             placeholder: -1,
             mode: .sync
@@ -88,6 +91,7 @@ final class MemoizedDerivedStoreTests: XCTestCase {
 
     // MARK: - Detached mode
 
+    @MainActor
     func test_detached_surfacesPlaceholderWhileComputing() async throws {
         // Use a continuation we control so we can observe the placeholder
         // state mid-compute.
@@ -117,6 +121,7 @@ final class MemoizedDerivedStoreTests: XCTestCase {
         XCTAssertEqual(store.output, "value=42")
     }
 
+    @MainActor
     func test_update_cancelsInflightWork() async throws {
         // First update is slow; second update should cancel the first
         // before it can land. Compute closures are sync, so cancellation
@@ -152,7 +157,8 @@ final class MemoizedDerivedStoreTests: XCTestCase {
 
     // MARK: - Type behavior
 
-    func test_genericOverArbitraryEquatableInput() {
+    @MainActor
+    func test_genericOverArbitraryEquatableInput() async {
         // Make sure the generic accepts a struct with multiple fields,
         // mirroring A4's `(snapshot.computedAt, window, providerFilter)`
         // composite key shape.

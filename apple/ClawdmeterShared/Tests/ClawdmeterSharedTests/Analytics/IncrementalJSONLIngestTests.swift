@@ -152,6 +152,30 @@ final class IncrementalJSONLIngestTests: XCTestCase {
         XCTAssertEqual(result.stateAfter.lineCount, 3)
     }
 
+    func test_rotation_sameInodeButPrefixChanged_resetsToByteZero() async throws {
+        let url = try writeJSONL(name: "rot-same-inode.jsonl", lines: [
+            #"{"old":1}"#,
+            #"{"old":2}"#,
+        ])
+        let actor = IncrementalJSONLIngest()
+        _ = try await actor.ingest(at: url, autoCommit: true)
+
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data([
+            #"{"new":1}"#,
+            #"{"new":2}"#,
+            #"{"new":3}"#,
+        ].joined(separator: "\n").appending("\n").utf8))
+        try handle.close()
+
+        let result = try await actor.ingest(at: url, autoCommit: true)
+        XCTAssertTrue(result.didReset)
+        XCTAssertEqual(result.resetReason, .inodeChanged)
+        XCTAssertEqual(result.lines.count, 3)
+        XCTAssertEqual(String(data: result.lines[0], encoding: .utf8), #"{"new":1}"#)
+    }
+
     // MARK: - Truncation
 
     func test_truncation_resetsToByteZero() async throws {
@@ -383,11 +407,27 @@ final class IncrementalJSONLIngestTests: XCTestCase {
             lineCount: 56,
             size: 7890,
             mtime: 1700000000.5,
-            inode: 999999
+            inode: 999999,
+            prefixHash: 424242,
+            prefixByteCount: 512
         )
         let encoded = try JSONEncoder().encode(state)
         let decoded = try JSONDecoder().decode(IncrementalJSONLIngest.FileState.self, from: encoded)
         XCTAssertEqual(state, decoded)
+    }
+
+    func test_fileStateDecodesLegacyPayloadWithoutPrefixHash() throws {
+        let legacy = Data("""
+        {"byteOffset":1234,"lineCount":56,"size":7890,"mtime":1700000000.5,"inode":999999}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(IncrementalJSONLIngest.FileState.self, from: legacy)
+        XCTAssertEqual(decoded.byteOffset, 1234)
+        XCTAssertEqual(decoded.lineCount, 56)
+        XCTAssertEqual(decoded.size, 7890)
+        XCTAssertEqual(decoded.mtime, 1700000000.5)
+        XCTAssertEqual(decoded.inode, 999999)
+        XCTAssertEqual(decoded.prefixHash, 0)
+        XCTAssertEqual(decoded.prefixByteCount, 0)
     }
 
     // MARK: - Integration with ClaudeUsageParser

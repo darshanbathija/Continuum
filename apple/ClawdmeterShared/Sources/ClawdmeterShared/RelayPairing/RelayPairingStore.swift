@@ -38,15 +38,20 @@ public final class RelayPairingStore: @unchecked Sendable {
 
     private let lock = NSLock()
     private let fileURL: URL
+#if canImport(Security)
     private let keychainService: String
     private let keychainAccount = "relay-pairing-symmetric-key"
+#else
+    private let keyFileURL: URL
+#endif
 
     public init(
         fileURL: URL? = nil,
         keychainService: String = "com.clawdmeter.relay.pairing"
     ) {
+        let resolvedFileURL: URL
         if let fileURL {
-            self.fileURL = fileURL
+            resolvedFileURL = fileURL
         } else {
             let support = FileManager.default
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask)
@@ -54,9 +59,17 @@ public final class RelayPairingStore: @unchecked Sendable {
             // Mirror the rest of the app: per-bundle subdir under Application Support.
             let dir = support.appendingPathComponent("Clawdmeter", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            self.fileURL = dir.appendingPathComponent("relay-pairing.json", isDirectory: false)
+            resolvedFileURL = dir.appendingPathComponent("relay-pairing.json", isDirectory: false)
         }
+        self.fileURL = resolvedFileURL
+#if canImport(Security)
         self.keychainService = keychainService
+#else
+        _ = keychainService
+        self.keyFileURL = resolvedFileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("relay-pairing.key", isDirectory: false)
+#endif
     }
 
     // MARK: - Read
@@ -102,9 +115,9 @@ public final class RelayPairingStore: @unchecked Sendable {
         deleteKeychain()
     }
 
-    // MARK: - Keychain helpers
+    // MARK: - Key material helpers
 
-    #if canImport(Security)
+#if canImport(Security)
     private func keychainQuery() -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -138,13 +151,19 @@ public final class RelayPairingStore: @unchecked Sendable {
     private func deleteKeychain() {
         _ = SecItemDelete(keychainQuery() as CFDictionary)
     }
-    #else
+#else
     private func readKeychain() -> Data? {
-        nil
+        try? Data(contentsOf: keyFileURL)
     }
 
-    private func writeKeychain(_: Data) {}
+    private func writeKeychain(_ data: Data) {
+        let directory = keyFileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: keyFileURL, options: [.atomic])
+    }
 
-    private func deleteKeychain() {}
-    #endif
+    private func deleteKeychain() {
+        try? FileManager.default.removeItem(at: keyFileURL)
+    }
+#endif
 }

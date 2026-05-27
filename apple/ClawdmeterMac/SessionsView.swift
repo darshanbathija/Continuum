@@ -407,6 +407,21 @@ public final class SessionsModel: ObservableObject {
         openOutsideJSONLPath = nil
     }
 
+    /// Persist a user-facing code-session label through the registry-backed
+    /// session record. The sidebar, header, command palette, iOS mirror, and
+    /// daemon `/rename` route all read `AgentSession.customName`, so local
+    /// presentation-only title overrides are not enough for session rename.
+    @discardableResult
+    public func renameSession(id: UUID, name: String?) async -> Bool {
+        guard registry.session(id: id) != nil else { return false }
+        do {
+            try await registry.rename(id: id, name: name)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func queueFirstSendRecovery(
         sessionId: UUID,
         text: String,
