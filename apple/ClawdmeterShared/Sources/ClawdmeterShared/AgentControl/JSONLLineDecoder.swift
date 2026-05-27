@@ -28,6 +28,10 @@ public enum JSONLLineDecoder {
     /// <task-id>bywgnqlgg</task-id>..." and no bubble at all.
     public static let systemBlockTags: [String] = [
         "system-reminder",
+        "system_instruction",     // harness uses underscore here; wraps
+                                  // "user has attached these files" copy
+                                  // around image / PDF attachments.
+        "system-instruction",     // belt-and-suspenders alternate spelling.
         "task-notification",
         "local-command-stdout",
         "command-message",
