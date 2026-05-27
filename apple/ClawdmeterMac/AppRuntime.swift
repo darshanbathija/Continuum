@@ -218,7 +218,17 @@ final class AppRuntime: ObservableObject {
         claudeModel.start()
         codexModel.start()
         geminiModel.start()
-        cursorModel.start()
+        // Cursor's OAuth token is owned by cursor-agent in the user's
+        // login keychain. Development / AI-built app bundles often have a
+        // changing code-signing requirement, so even "Always Allow" can
+        // degrade into a SecurityAgent prompt on every launch. Do not touch
+        // Cursor auth at app startup; explicit Cursor UI/actions can still
+        // probe or start sessions.
+        if Self.cursorStartupPollingEnabled {
+            cursorModel.start()
+        } else {
+            runtimeLogger.info("Cursor startup polling disabled; deferring keychain access until explicit Cursor use")
+        }
 
         // Analytics history: walks the on-disk JSONL caches, computes
         // calendar-day-aligned totals, mirrors the snapshot into iCloud KV
@@ -533,6 +543,13 @@ final class AppRuntime: ObservableObject {
             }
             await ChatProviderProbe.shared.invalidate()
         }
+    }
+
+    private static var cursorStartupPollingEnabled: Bool {
+        if let raw = ProcessInfo.processInfo.environment["CLAWDMETER_CURSOR_STARTUP_POLLING"] {
+            return raw == "1" || raw.lowercased() == "true" || raw.lowercased() == "yes"
+        }
+        return UserDefaults.standard.object(forKey: "clawdmeter.cursor.startupPolling.enabled") as? Bool ?? false
     }
 
     // MARK: - F3-wire instance-aware accessors (Codex eng-review #10)
