@@ -6,13 +6,8 @@ import ClawdmeterShared
 final class WorkspaceTabsTests: XCTestCase {
 
     func test_openDraftWorkspaceTabDoesNotPersistSessionOrChangeWorktree() async throws {
-        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTabsTests")
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTabsTests")
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        let model = SessionsModel(
-            repoIndex: RepoIndex(),
-            registry: registry,
-            supervisor: TmuxSupervisor(tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")), registry: registry)
-        )
         let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
@@ -135,13 +130,8 @@ final class WorkspaceTabsTests: XCTestCase {
     }
 
     func test_openWorkspaceTerminalTabUsesExistingSessionWithoutCreatingWorktree() async throws {
-        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTerminalTabs")
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalTabs")
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        let model = SessionsModel(
-            repoIndex: RepoIndex(),
-            registry: registry,
-            supervisor: TmuxSupervisor(tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")), registry: registry)
-        )
         let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
@@ -166,13 +156,8 @@ final class WorkspaceTabsTests: XCTestCase {
     }
 
     func test_openWorkspaceTerminalTabRejectsSessionsWithoutTmuxPane() async throws {
-        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTerminalNoPane")
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalNoPane")
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        let model = SessionsModel(
-            repoIndex: RepoIndex(),
-            registry: registry,
-            supervisor: TmuxSupervisor(tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")), registry: registry)
-        )
         let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
@@ -195,13 +180,8 @@ final class WorkspaceTabsTests: XCTestCase {
     }
 
     func test_workspaceTerminalTabsAreScopedAndIgnoreMissingPaneRefs() async throws {
-        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTerminalScope")
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalScope")
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        let model = SessionsModel(
-            repoIndex: RepoIndex(),
-            registry: registry,
-            supervisor: TmuxSupervisor(tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")), registry: registry)
-        )
         let first = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
@@ -234,7 +214,7 @@ final class WorkspaceTabsTests: XCTestCase {
         try await registry.removeTerminalPane(sessionId: first.id, paneRefId: pane.id)
 
         XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(first)!).count, 0)
-        XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(second)!).map(\.sessionId), [second.id])
+        XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(second)!).map { $0.sessionId }, [second.id])
         XCTAssertEqual(model.selectedWorkspaceTerminalTab?.sessionId, second.id)
     }
 
@@ -280,7 +260,7 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertTrue(staged.contains(manifestURL))
         let copiedFiles = staged.filter { $0.lastPathComponent != InheritedAttachmentStager.manifestFilename }
         XCTAssertEqual(copiedFiles.count, 1)
-        XCTAssertEqual(try String(contentsOf: copiedFiles[0]), "hello")
+        XCTAssertEqual(try String(contentsOf: copiedFiles[0], encoding: .utf8), "hello")
         let manifest = try JSONDecoder().decode(
             InheritedAttachmentStager.Manifest.self,
             from: Data(contentsOf: manifestURL)
@@ -309,7 +289,7 @@ final class WorkspaceTabsTests: XCTestCase {
 
         let copiedPayloads = try staged
             .filter { $0.lastPathComponent != InheritedAttachmentStager.manifestFilename }
-            .map { try String(contentsOf: $0) }
+            .map { try String(contentsOf: $0, encoding: .utf8) }
         XCTAssertEqual(copiedPayloads, ["selected"])
     }
 
@@ -341,5 +321,24 @@ final class WorkspaceTabsTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let registryURL = directory.appendingPathComponent("sessions.json")
         return (AgentSessionRegistry(storeURL: registryURL), directory)
+    }
+
+    private static func makeIsolatedModel(_ name: String) throws -> (SessionsModel, AgentSessionRegistry, URL) {
+        let (registry, directory) = try makeIsolatedRegistry(name)
+        let workspaceStore = WorkspaceStore(
+            storeURL: directory.appendingPathComponent("workspaces.json"),
+            sessionsURL: directory.appendingPathComponent("sessions.json")
+        )
+        let supervisor = TmuxSupervisor(
+            tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")),
+            registry: registry
+        )
+        let model = SessionsModel(
+            repoIndex: RepoIndex(),
+            registry: registry,
+            supervisor: supervisor,
+            workspaceStore: workspaceStore
+        )
+        return (model, registry, directory)
     }
 }
