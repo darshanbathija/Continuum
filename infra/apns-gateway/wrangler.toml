@@ -24,8 +24,10 @@ compatibility_flags = ["nodejs_compat"]
 
 # Cost guardrails. APNS JWT generation + HTTP/2 forwarding fits easily
 # inside 50ms CPU.
-[limits]
-cpu_ms = 50
+# NOTE: CPU limits require the Workers Paid plan ($5/mo). Re-enable once
+# the account is upgraded; the free plan defaults to 10 ms cpu_ms anyway.
+# [limits]
+# cpu_ms = 50
 
 [observability]
 enabled = true
@@ -70,24 +72,24 @@ P8_MAX_AGE_SECONDS = "7776000"
 # -------- staging --------
 [env.staging]
 name = "clawdmeter-apns-gateway-staging"
-routes = [
-  { pattern = "apns-gateway-staging.clawdmeter.dev", custom_domain = true }
-]
+workers_dev = true
+# Custom domain disabled for initial staging deploy (operator does not yet
+# own clawdmeter.dev). Re-enable once DNS is wired.
+# routes = [
+#   { pattern = "apns-gateway-staging.clawdmeter.dev", custom_domain = true }
+# ]
 
 [[env.staging.kv_namespaces]]
 binding = "APNS_AUDIT_LOG"
-id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+id = "69dad3c2edc4459c85350bda5d008d9d"
 
 [[env.staging.kv_namespaces]]
 binding = "APNS_RATE_LIMIT"
-id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+id = "a4139faaf7784a04b53d75fa2ca9719e"
 
 [[env.staging.kv_namespaces]]
 binding = "APNS_DEVICE_TOKENS"
-id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+id = "138c11709f114e9f9cac18891ef7292a"
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
