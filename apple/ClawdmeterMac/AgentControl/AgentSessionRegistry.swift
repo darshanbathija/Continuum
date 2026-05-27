@@ -205,7 +205,9 @@ public final class AgentSessionRegistry: ObservableObject {
         // the right SQLite DB.
         geminiBackend: GeminiBackend? = nil,
         antigravityConversationId: UUID? = nil,
-        antigravityProjectId: String? = nil
+        antigravityProjectId: String? = nil,
+        inheritedContextSourceIds: [UUID]? = nil,
+        ownsWorktree: Bool = false
     ) -> AgentSession {
         let id = UUID()
         let now = Date()
@@ -240,7 +242,9 @@ public final class AgentSessionRegistry: ObservableObject {
             abPairSessionId: abPairSessionId,
             geminiBackend: geminiBackend,
             antigravityConversationId: antigravityConversationId,
-            antigravityProjectId: antigravityProjectId
+            antigravityProjectId: antigravityProjectId,
+            inheritedContextSourceIds: inheritedContextSourceIds,
+            ownsWorktree: ownsWorktree
         )
         sessions.append(session)
         save()
@@ -446,7 +450,8 @@ public final class AgentSessionRegistry: ObservableObject {
         worktreePath: String?,
         tmuxWindowId: String?,
         tmuxPaneId: String?,
-        mode: SessionMode
+        mode: SessionMode,
+        ownsWorktree: Bool? = nil
     ) {
         update(id: id) { s in
             with(
@@ -454,7 +459,8 @@ public final class AgentSessionRegistry: ObservableObject {
                 worktreePath: worktreePath,
                 tmuxWindowId: tmuxWindowId,
                 tmuxPaneId: tmuxPaneId,
-                mode: mode
+                mode: mode,
+                ownsWorktree: ownsWorktree
             )
         }
     }
@@ -622,6 +628,12 @@ public final class AgentSessionRegistry: ObservableObject {
         }
     }
 
+    public func setInheritedContextSources(sessionId: UUID, sourceIds: [UUID]) {
+        update(id: sessionId) { s in
+            with(s, inheritedContextSourceIds: sourceIds.isEmpty ? .some(nil) : .some(sourceIds))
+        }
+    }
+
     /// Mutate one session by id via a transform closure. Saves on every
     /// successful mutation. Single source of truth for v3-field propagation
     /// (T41 audit) — every public mutation goes through here, so adding a
@@ -669,6 +681,8 @@ public final class AgentSessionRegistry: ObservableObject {
         chatCwd: String?? = nil,
         runtimeBinding: SessionRuntimeBinding?? = nil,
         prMirrorState: PRMirrorState?? = nil,
+        inheritedContextSourceIds: [UUID]?? = nil,
+        ownsWorktree: Bool? = nil,
         lastEventSeq: UInt64? = nil,
         frontierGroupId: UUID?? = nil,
         frontierChildIndex: Int?? = nil
@@ -727,7 +741,9 @@ public final class AgentSessionRegistry: ObservableObject {
             geminiBackend: Self.resolve(geminiBackend, fallback: s.geminiBackend),
             antigravityConversationId: Self.resolve(antigravityConversationId, fallback: s.antigravityConversationId),
             antigravityProjectId: Self.resolve(antigravityProjectId, fallback: s.antigravityProjectId),
-            deepResearch: s.deepResearch
+            deepResearch: s.deepResearch,
+            inheritedContextSourceIds: Self.resolve(inheritedContextSourceIds, fallback: s.inheritedContextSourceIds),
+            ownsWorktree: ownsWorktree ?? s.ownsWorktree
         )
     }
 

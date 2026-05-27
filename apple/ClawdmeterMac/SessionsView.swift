@@ -238,6 +238,56 @@ struct PendingFirstSendRecovery: Equatable {
     let error: ComposerStore.SendError
 }
 
+struct WorkspaceDraftTab: Identifiable, Equatable {
+    let id: UUID
+    let workspaceKey: WorkspaceKey
+    let mode: SessionMode
+    let agent: AgentKind
+    let modelId: String?
+    let effort: ReasoningEffort?
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        workspaceKey: WorkspaceKey,
+        mode: SessionMode,
+        agent: AgentKind,
+        modelId: String?,
+        effort: ReasoningEffort?,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.workspaceKey = workspaceKey
+        self.mode = mode
+        self.agent = agent
+        self.modelId = modelId
+        self.effort = effort
+        self.createdAt = createdAt
+    }
+}
+
+struct WorkspaceTerminalTab: Identifiable, Equatable {
+    let id: UUID
+    let sessionId: UUID
+    let workspaceKey: WorkspaceKey
+    let paneRefId: UUID?
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        workspaceKey: WorkspaceKey,
+        paneRefId: UUID?,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.workspaceKey = workspaceKey
+        self.paneRefId = paneRefId
+        self.createdAt = createdAt
+    }
+}
+
 // MARK: - Model
 
 @MainActor
@@ -252,6 +302,9 @@ public final class SessionsModel: ObservableObject {
     /// Currently-open session in the workspace center pane. nil = empty
     /// center pane (workspace still renders sidebar + review).
     @Published public var openSessionId: UUID?
+    @Published var draftWorkspaceTab: WorkspaceDraftTab?
+    @Published var workspaceTerminalTabs: [WorkspaceTerminalTab] = []
+    @Published var selectedWorkspaceTerminalTabId: UUID?
 
     /// When the user opens an outside-Clawdmeter session (any JSONL in the
     /// recent-activity window), we synthesize a read-only AgentSession.
@@ -295,6 +348,21 @@ public final class SessionsModel: ObservableObject {
         openOutsideJSONLPath != nil && openSessionId == nil
     }
 
+    var selectedWorkspaceTerminalTab: WorkspaceTerminalTab? {
+        guard let id = selectedWorkspaceTerminalTabId,
+              let tab = workspaceTerminalTabs.first(where: { $0.id == id }),
+              let session = registry.session(id: tab.sessionId),
+              canOpenWorkspaceTerminalTab(from: session),
+              let sessionKey = WorkspaceKey.of(session),
+              sessionKey == tab.workspaceKey
+        else { return nil }
+        if let paneRefId = tab.paneRefId,
+           !session.terminalPanes.contains(where: { $0.id == paneRefId }) {
+            return nil
+        }
+        return tab
+    }
+
     /// Open a specific outside-Clawdmeter JSONL as a read-only chat. Each
     /// JSONL gets its own synthetic AgentSession, so flipping between
     /// recent rows in the sidebar doesn't share state.
@@ -302,6 +370,8 @@ public final class SessionsModel: ObservableObject {
         let url = URL(fileURLWithPath: recent.path)
         let path = recent.path
         if let existing = syntheticOutsideSessions[path] {
+            draftWorkspaceTab = nil
+            selectedWorkspaceTerminalTabId = nil
             openOutsideJSONLPath = path
             openSessionId = nil
             forcedChatStoreURLs[existing.id] = url
@@ -325,12 +395,15 @@ public final class SessionsModel: ObservableObject {
         )
         syntheticOutsideSessions[path] = synth
         forcedChatStoreURLs[synth.id] = url
+        draftWorkspaceTab = nil
+        selectedWorkspaceTerminalTabId = nil
         openOutsideJSONLPath = path
         openSessionId = nil
     }
 
     public func closeChatView() {
         openSessionId = nil
+        selectedWorkspaceTerminalTabId = nil
         openOutsideJSONLPath = nil
     }
 
@@ -629,8 +702,136 @@ public final class SessionsModel: ObservableObject {
     public func openVisibleSession(at index: Int) {
         guard index >= 1, index <= visibleSessions.count else { return }
         let session = visibleSessions[index - 1]
+        draftWorkspaceTab = nil
+        selectedWorkspaceTerminalTabId = nil
         openOutsideJSONLPath = nil
         openSessionId = session.id
+    }
+
+    public func openSession(_ session: AgentSession) {
+        draftWorkspaceTab = nil
+        selectedWorkspaceTerminalTabId = nil
+        openOutsideJSONLPath = nil
+        openSessionId = session.id
+    }
+
+    public func openDraftWorkspaceTab(
+        from session: AgentSession,
+        defaults: ComposerStore.ChipDefaults
+    ) {
+        guard let key = WorkspaceKey.of(session) else { return }
+        selectedWorkspaceTerminalTabId = nil
+        draftWorkspaceTab = WorkspaceDraftTab(
+            workspaceKey: key,
+            mode: session.mode,
+            agent: defaults.agent,
+            modelId: defaults.modelId,
+            effort: defaults.effort
+        )
+        openOutsideJSONLPath = nil
+        openSessionId = nil
+    }
+
+    public func clearDraftWorkspaceTab() {
+        draftWorkspaceTab = nil
+    }
+
+    func workspaceTerminalTabs(in workspaceKey: WorkspaceKey) -> [WorkspaceTerminalTab] {
+        workspaceTerminalTabs
+            .compactMap { tab -> WorkspaceTerminalTab? in
+                guard tab.workspaceKey == workspaceKey,
+                      let session = registry.session(id: tab.sessionId),
+                      canOpenWorkspaceTerminalTab(from: session),
+                      let sessionKey = WorkspaceKey.of(session),
+                      sessionKey == workspaceKey
+                else { return nil }
+                if let paneRefId = tab.paneRefId,
+                   !session.terminalPanes.contains(where: { $0.id == paneRefId }) {
+                    return nil
+                }
+                return tab
+            }
+            .sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+    }
+
+    func canOpenWorkspaceTerminalTab(from session: AgentSession) -> Bool {
+        guard session.archivedAt == nil,
+              WorkspaceKey.of(session) != nil,
+              let paneId = session.tmuxPaneId,
+              !paneId.isEmpty
+        else { return false }
+        return true
+    }
+
+    func selectWorkspaceTerminalTab(_ tab: WorkspaceTerminalTab) {
+        guard let session = registry.session(id: tab.sessionId),
+              canOpenWorkspaceTerminalTab(from: session),
+              let sessionKey = WorkspaceKey.of(session),
+              sessionKey == tab.workspaceKey
+        else { return }
+        draftWorkspaceTab = nil
+        openOutsideJSONLPath = nil
+        openSessionId = tab.sessionId
+        selectedWorkspaceTerminalTabId = tab.id
+    }
+
+    func openWorkspaceTerminalTab(
+        from session: AgentSession,
+        paneRefId: UUID? = nil,
+        createdAt: Date = Date()
+    ) {
+        guard canOpenWorkspaceTerminalTab(from: session),
+              let workspaceKey = WorkspaceKey.of(session)
+        else { return }
+        if let existing = workspaceTerminalTabs.first(where: {
+            $0.sessionId == session.id && $0.paneRefId == paneRefId && $0.workspaceKey == workspaceKey
+        }) {
+            selectWorkspaceTerminalTab(existing)
+            return
+        }
+        let tab = WorkspaceTerminalTab(
+            sessionId: session.id,
+            workspaceKey: workspaceKey,
+            paneRefId: paneRefId,
+            createdAt: createdAt
+        )
+        workspaceTerminalTabs.append(tab)
+        selectWorkspaceTerminalTab(tab)
+    }
+
+    func openOrCreateWorkspaceTerminalTab(from session: AgentSession) async {
+        guard canOpenWorkspaceTerminalTab(from: session) else { return }
+        let primary = workspaceTerminalTabs.first {
+            $0.sessionId == session.id && $0.paneRefId == nil
+        }
+        if primary == nil {
+            openWorkspaceTerminalTab(from: session)
+            return
+        }
+        if let _ = await addTerminalPane(sessionId: session.id),
+           let paneRef = registry.session(id: session.id)?.terminalPanes.last {
+            openWorkspaceTerminalTab(from: session, paneRefId: paneRef.id)
+        } else if let primary {
+            selectWorkspaceTerminalTab(primary)
+        }
+    }
+
+    func closeWorkspaceTerminalTab(_ tab: WorkspaceTerminalTab) async {
+        if let paneRefId = tab.paneRefId,
+           let session = registry.session(id: tab.sessionId),
+           let pane = session.terminalPanes.first(where: { $0.id == paneRefId }) {
+            await closeTerminalPane(sessionId: tab.sessionId, paneRef: pane)
+        }
+        workspaceTerminalTabs.removeAll { $0.id == tab.id }
+        if selectedWorkspaceTerminalTabId == tab.id {
+            selectedWorkspaceTerminalTabId = nil
+            if registry.session(id: tab.sessionId) != nil {
+                openSessionId = tab.sessionId
+            }
+        }
     }
 
     public func refresh() async {
@@ -849,15 +1050,250 @@ public final class SessionsModel: ObservableObject {
             tmuxPaneId: window.paneId,
             planMode: effectivePlanMode,
             mode: mode,
-            effort: effort
+            effort: effort,
+            ownsWorktree: worktreePath != nil
         )
         if let pinned = pinnedJSONLURL {
             forcedChatStoreURLs[session.id] = pinned
         }
         expandedRepoKeys.insert(repoPath)
+        draftWorkspaceTab = nil
         openSessionId = session.id
         await self.refresh()
         return session
+    }
+
+    /// Spawn a sibling code session inside an existing workspace/worktree.
+    /// Unlike `spawnSession(... mode: .worktree ...)`, this never calls
+    /// `WorktreeManager.add`; the caller supplies the already-existing
+    /// workspace path that should become the runtime cwd.
+    public func spawnSessionInExistingWorkspace(
+        repoPath: String,
+        workspacePath: String,
+        agent: AgentKind,
+        planMode: Bool,
+        goal: String?,
+        mode: SessionMode,
+        tmux: TmuxControlClient,
+        model: String? = nil,
+        effort: ReasoningEffort? = nil,
+        acceptEdits: Bool = false,
+        autopilot: Bool = false,
+        initialMessage: String? = nil,
+        inheritedContextSourceIds: [UUID] = []
+    ) async throws -> AgentSession {
+        let paths = Self.existingWorkspaceRecordPaths(
+            repoPath: repoPath,
+            workspacePath: workspacePath,
+            mode: mode
+        )
+        if agent == .gemini {
+            let session = try await spawnAntigravitySession(
+                repoPath: repoPath,
+                workspacePath: workspacePath,
+                goal: goal,
+                mode: mode,
+                model: model,
+                effort: effort,
+                planMode: planMode,
+                initialMessage: initialMessage
+            )
+            registry.setInheritedContextSources(sessionId: session.id, sourceIds: inheritedContextSourceIds)
+            return registry.session(id: session.id) ?? session
+        }
+        if agent == .opencode {
+            return try await spawnOpencodeSessionInExistingWorkspace(
+                repoPath: repoPath,
+                workspacePath: workspacePath,
+                goal: goal,
+                mode: mode,
+                model: model,
+                effort: effort,
+                inheritedContextSourceIds: inheritedContextSourceIds
+            )
+        }
+        if agent == .cursor, planMode {
+            throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
+        }
+        if let reason = AgentSpawner.preflight(agent: agent) {
+            throw SpawnError.missingBinary(reason)
+        }
+        if agent == .cursor {
+            let cursorState = await CursorModelProbe.shared.currentState()
+            guard cursorState.binaryPath != nil else {
+                throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
+            }
+            guard cursorState.authenticated else {
+                throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
+            }
+            if let model,
+               !CursorModelCatalog.isAutoModel(model),
+               !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
+                throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
+            }
+        }
+
+        try await tmux.start()
+        let cwd = paths.cwd
+        let argv: [String]
+        switch agent {
+        case .claude:
+            argv = AgentSpawner.claudeArgv(
+                model: model,
+                planMode: planMode,
+                effort: effort,
+                autopilot: autopilot,
+                acceptEdits: acceptEdits,
+                resumeSessionId: nil
+            ) ?? []
+        case .codex:
+            argv = AgentSpawner.codexArgv(
+                model: model,
+                planMode: planMode,
+                effort: effort,
+                autopilot: autopilot,
+                acceptEdits: acceptEdits,
+                resumeSessionId: nil
+            ) ?? []
+        case .cursor:
+            argv = AgentSpawner.cursorArgv(
+                model: model,
+                planMode: planMode,
+                effort: effort,
+                autopilot: autopilot,
+                acceptEdits: acceptEdits,
+                resumeSessionId: nil,
+                workspacePath: cwd
+            ) ?? []
+        case .gemini, .opencode, .unknown:
+            argv = []
+        }
+        guard !argv.isEmpty else {
+            throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
+        }
+        let window = try await tmux.newWindow(cwd: cwd, child: argv)
+        let session = registry.create(
+            repoKey: repoPath,
+            repoDisplayName: (repoPath as NSString).lastPathComponent,
+            agent: agent,
+            model: model,
+            goal: goal,
+            worktreePath: paths.worktreePath,
+            tmuxWindowId: window.windowId,
+            tmuxPaneId: window.paneId,
+            planMode: planMode,
+            mode: mode,
+            effort: effort,
+            inheritedContextSourceIds: inheritedContextSourceIds,
+            ownsWorktree: false
+        )
+        expandedRepoKeys.insert(repoPath)
+        draftWorkspaceTab = nil
+        openOutsideJSONLPath = nil
+        openSessionId = session.id
+        await self.refresh()
+        return session
+    }
+
+    static func existingWorkspaceRecordPaths(
+        repoPath: String,
+        workspacePath: String,
+        mode: SessionMode
+    ) -> (cwd: String, worktreePath: String?) {
+        let fallback = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? repoPath
+            : workspacePath
+        let cwd = WorkspaceKey.canonicalPath(fallback)
+        return (cwd: cwd, worktreePath: mode == .worktree ? cwd : nil)
+    }
+
+    private func spawnOpencodeSessionInExistingWorkspace(
+        repoPath: String,
+        workspacePath: String,
+        goal: String?,
+        mode: SessionMode,
+        model: String?,
+        effort: ReasoningEffort?,
+        inheritedContextSourceIds: [UUID]
+    ) async throws -> AgentSession {
+        let paths = Self.existingWorkspaceRecordPaths(
+            repoPath: repoPath,
+            workspacePath: workspacePath,
+            mode: mode
+        )
+        guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
+            switch OpencodeProcessManager.shared.state {
+            case .notInstalled:
+                throw SpawnError.missingBinary("OpenCode is not installed. Install OpenCode, then add an OpenRouter key in Settings.")
+            case .failed(let detail):
+                throw SpawnError.missingBinary("OpenCode serve failed: \(detail)")
+            default:
+                throw SpawnError.missingBinary("OpenCode serve is not running.")
+            }
+        }
+
+        OpencodeSSEAdapter.shared.start()
+        guard var request = OpencodeProcessManager.shared.makeAuthorizedRequest(path: "/session") else {
+            throw SpawnError.missingBinary("OpenCode serve is not reachable.")
+        }
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let titleSource = goal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? goal!
+            : (repoPath as NSString).lastPathComponent
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "title": String(titleSource.prefix(60))
+        ])
+
+        let opencodeID: String
+        do {
+            let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode < 400 else {
+                throw SpawnError.missingBinary("OpenCode session creation failed.")
+            }
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = object["id"] as? String,
+                  !id.isEmpty else {
+                throw SpawnError.missingBinary("OpenCode returned an invalid session response.")
+            }
+            opencodeID = id
+        } catch let error as SpawnError {
+            throw error
+        } catch {
+            throw SpawnError.missingBinary("OpenCode session creation failed: \(error.localizedDescription)")
+        }
+
+        let session = registry.create(
+            repoKey: repoPath,
+            repoDisplayName: (repoPath as NSString).lastPathComponent,
+            agent: .opencode,
+            model: model,
+            goal: goal,
+            worktreePath: paths.worktreePath,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            planMode: false,
+            mode: mode,
+            effort: effort,
+            inheritedContextSourceIds: inheritedContextSourceIds,
+            ownsWorktree: false
+        )
+        OpencodeSSEAdapter.shared.register(
+            clawdmeterID: session.id,
+            opencodeID: opencodeID,
+            repo: paths.cwd
+        )
+        AgentEventStream.recordEvent(
+            sessionId: session.id,
+            kind: .sessionCreated,
+            payload: ["repo": paths.cwd, "agent": "opencode", "opencodeID": opencodeID]
+        )
+        expandedRepoKeys.insert(repoPath)
+        draftWorkspaceTab = nil
+        openOutsideJSONLPath = nil
+        openSessionId = session.id
+        await self.refresh()
+        return registry.session(id: session.id) ?? session
     }
 
     // MARK: - v0.8.0 Antigravity agentapi spawn (D4 hard-stop)
@@ -875,6 +1311,7 @@ public final class SessionsModel: ObservableObject {
     /// All surface as `.antigravityNotReady(message)` in the composer.
     private func spawnAntigravitySession(
         repoPath: String,
+        workspacePath: String? = nil,
         goal: String?,
         mode: SessionMode,
         model: String?,
@@ -923,6 +1360,11 @@ public final class SessionsModel: ObservableObject {
                 "Open this repo in Antigravity 2 first, then come back."
             )
         case .ready(_, let projectId):
+            let paths = Self.existingWorkspaceRecordPaths(
+                repoPath: repoPath,
+                workspacePath: workspacePath ?? repoPath,
+                mode: mode
+            )
             // The first turn of the conversation gets locked in here —
             // agentapi has no separate "send first user message" call.
             // Codex P1.2: original draft passed `goal` (truncated to 80
@@ -957,16 +1399,18 @@ public final class SessionsModel: ObservableObject {
                 agent: .gemini,
                 model: model,
                 goal: goal,
-                worktreePath: nil,  // no worktree for agentapi sessions in v0.8.0
+                worktreePath: paths.worktreePath,
                 tmuxWindowId: nil,  // no tmux pane
                 tmuxPaneId: nil,
                 planMode: planMode,
                 mode: mode,
                 effort: effort,
                 geminiBackend: .agentapi,
-                antigravityConversationId: conversationId
+                antigravityConversationId: conversationId,
+                ownsWorktree: false
             )
             expandedRepoKeys.insert(repoPath)
+            draftWorkspaceTab = nil
             openSessionId = session.id
             await self.refresh()
             return session
@@ -1159,7 +1603,8 @@ public final class SessionsModel: ObservableObject {
                 worktreePath: newWorktree,
                 tmuxWindowId: newWindow.windowId,
                 tmuxPaneId: newWindow.paneId,
-                mode: newMode
+                mode: newMode,
+                ownsWorktree: newMode == .worktree && newWorktree != nil
             )
         } catch {
             // Spawn failed — surface via lastError once we plumb it; for now,
@@ -1234,7 +1679,7 @@ public final class SessionsModel: ObservableObject {
         // v0.8 REV-DELETE: code sessions go through WorktreeManager; chat
         // sessions get ChatCwdCleaner in Phase 4. Guard here so Phase 2
         // doesn't crash on a chat session reaching this path.
-        if session.kind == .code, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
+        if session.kind == .code, session.ownsWorktree, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
             _ = try? await WorktreeManager.shared.delete(
                 repoRoot: repoRoot,
                 worktreePath: worktreePath,
@@ -1285,7 +1730,8 @@ public final class SessionsModel: ObservableObject {
                 tmuxPaneId: window.paneId,
                 planMode: false,
                 mode: parent.mode,
-                parentSessionId: parentId
+                parentSessionId: parentId,
+                ownsWorktree: false
             )
             openSessionId = child.id
             await refresh()
@@ -1372,7 +1818,8 @@ public final class SessionsModel: ObservableObject {
                 worktreePath: session.worktreePath,
                 tmuxWindowId: window.windowId,
                 tmuxPaneId: window.paneId,
-                mode: session.mode
+                mode: session.mode,
+                ownsWorktree: session.ownsWorktree
             )
             registry.markPlanApproved(id: id)
             registry.updateStatus(id: id, status: .running)

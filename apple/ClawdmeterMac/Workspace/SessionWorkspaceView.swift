@@ -80,7 +80,11 @@ struct SessionWorkspaceView: View {
                 TahoeGlass(radius: 20, tone: .panel) {
                     HStack(spacing: 0) {
                         ZStack(alignment: .bottom) {
-                            if let session = model.openSession {
+                            if let terminalTab = model.selectedWorkspaceTerminalTab,
+                               let terminalSession = model.registry.session(id: terminalTab.sessionId) {
+                                centerTerminal(terminalTab, session: terminalSession)
+                                    .id(terminalTab.id)
+                            } else if let session = model.openSession {
                                 CenterThread(
                                     session: session,
                                     isReadOnly: model.openSessionIsReadOnly,
@@ -95,6 +99,9 @@ struct SessionWorkspaceView: View {
                                     }
                                 )
                                 .id(session.id)
+                            } else if let draft = model.draftWorkspaceTab {
+                                centerDraft(draft)
+                                    .id(draft.id)
                             } else {
                                 centerEmpty
                             }
@@ -105,7 +112,8 @@ struct SessionWorkspaceView: View {
                             // PermissionPromptCard + MacPermissionResponder.
                             // Replaces the deleted LegacyMacPermissionPromptCard
                             // that used to live in ChatSoloView.swift.
-                            if let session = model.openSession,
+                            if model.selectedWorkspaceTerminalTab == nil,
+                               let session = model.openSession,
                                let store = model.chatStore(for: session),
                                let prompt = store.pendingPermissionPrompt {
                                 PermissionPromptCard(
@@ -226,6 +234,39 @@ struct SessionWorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openWorkspaceSwitcher)) { _ in
             showingWorkspaceSwitcher = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenWorkspaceChatTab)) { _ in
+            guard let session = model.openSession else { return }
+            model.openDraftWorkspaceTab(
+                from: session,
+                defaults: ComposerStore.ChipDefaults(
+                    agent: session.agent,
+                    modelId: session.model,
+                    effort: session.effort,
+                    mode: session.mode,
+                    planMode: false
+                )
+            )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenWorkspaceTerminalTab)) { _ in
+            if let session = model.openSession {
+                guard model.canOpenWorkspaceTerminalTab(from: session) else { return }
+                Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
+            } else if let draft = model.draftWorkspaceTab,
+                      let sibling = WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
+                        .first(where: { model.canOpenWorkspaceTerminalTab(from: $0) }) {
+                Task { await model.openOrCreateWorkspaceTerminalTab(from: sibling) }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showRawTerminal)) { note in
+            guard let id = note.userInfo?["sessionId"] as? UUID else { return }
+            if let open = model.openSession, open.id == id {
+                guard model.canOpenWorkspaceTerminalTab(from: open) else { return }
+                Task { await model.openOrCreateWorkspaceTerminalTab(from: open) }
+            } else if let session = model.registry.sessions.first(where: { $0.id == id }) {
+                guard model.canOpenWorkspaceTerminalTab(from: session) else { return }
+                Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
+            }
+        }
         .task {
             await launcher.refreshProviderAvailability()
         }
@@ -254,7 +295,8 @@ struct SessionWorkspaceView: View {
     }
 
     private func restorePersistedSessionSelectionIfPossible() {
-        guard model.openSessionId == nil,
+        guard model.draftWorkspaceTab == nil,
+              model.openSessionId == nil,
               let selected = workbenchState.selectedSessionId,
               model.registry.sessions.contains(where: { $0.id == selected && $0.archivedAt == nil })
         else {
@@ -282,8 +324,34 @@ struct SessionWorkspaceView: View {
                         .opacity(0)
                         .frame(width: 0, height: 0)
                 }
+                Button("") {
+                    if let session = model.openSession {
+                        model.openDraftWorkspaceTab(
+                            from: session,
+                            defaults: ComposerStore.ChipDefaults(
+                                agent: session.agent,
+                                modelId: session.model,
+                                effort: session.effort,
+                                mode: session.mode,
+                                planMode: false
+                            )
+                        )
+                    }
+                }
+                .keyboardShortcut("t", modifiers: [.command])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+
+                Button("") {
+                    if let session = model.openSession,
+                       model.canOpenWorkspaceTerminalTab(from: session) {
+                        Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
+                    }
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .opacity(0)
+                .frame(width: 0, height: 0)
             }
-            .allowsHitTesting(false)
         }
     }
 
@@ -292,6 +360,88 @@ struct SessionWorkspaceView: View {
     private var centerEmpty: some View {
         EmptyStateCenteredComposer(model: model, launcher: launcher, presentationStore: presentationStore)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func centerDraft(_ draft: WorkspaceDraftTab) -> some View {
+        VStack(spacing: 0) {
+            WorkspaceTabStrip(
+                model: model,
+                workspaceKey: draft.workspaceKey,
+                activeSession: nil,
+                activeSessionId: nil,
+                draftTab: draft,
+                terminalTabs: model.workspaceTerminalTabs(in: draft.workspaceKey),
+                activeTerminalTabId: nil,
+                terminalAvailable: WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
+                    .contains(where: { model.canOpenWorkspaceTerminalTab(from: $0) }),
+                onNewChat: {},
+                onNewTerminal: {
+                    if let first = WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
+                        .first(where: { model.canOpenWorkspaceTerminalTab(from: $0) }) {
+                        Task { await model.openOrCreateWorkspaceTerminalTab(from: first) }
+                    }
+                },
+                onSelectTerminal: { model.selectWorkspaceTerminalTab($0) },
+                onCloseTerminal: { tab in Task { await model.closeWorkspaceTerminalTab(tab) } }
+            )
+            EmptyStateCenteredComposer(
+                model: model,
+                launcher: launcher,
+                presentationStore: presentationStore,
+                workspaceDraft: draft
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func centerTerminal(_ tab: WorkspaceTerminalTab, session: AgentSession) -> some View {
+        VStack(spacing: 0) {
+            WorkspaceTabStrip(
+                model: model,
+                workspaceKey: tab.workspaceKey,
+                activeSession: session,
+                activeSessionId: session.id,
+                draftTab: model.draftWorkspaceTab,
+                terminalTabs: model.workspaceTerminalTabs(in: tab.workspaceKey),
+                activeTerminalTabId: tab.id,
+                terminalAvailable: model.canOpenWorkspaceTerminalTab(from: session),
+                onNewChat: {
+                    model.openDraftWorkspaceTab(
+                        from: session,
+                        defaults: ComposerStore.ChipDefaults(
+                            agent: session.agent,
+                            modelId: session.model,
+                            effort: session.effort,
+                            mode: session.mode,
+                            planMode: false
+                        )
+                    )
+                },
+                onNewTerminal: {
+                    Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
+                },
+                onSelectTerminal: { model.selectWorkspaceTerminalTab($0) },
+                onCloseTerminal: { terminalTab in
+                    Task { await model.closeWorkspaceTerminalTab(terminalTab) }
+                }
+            )
+            if let runtime = AppDelegate.runtime,
+               let port = runtime.agentControlServer.boundWsPort {
+                WorkspaceTerminalPane(
+                    session: session,
+                    terminalTab: tab,
+                    wsPort: Int(port),
+                    token: PairingTokenStore.shared.currentToken()
+                )
+            } else {
+                ContentUnavailableView(
+                    "Daemon offline",
+                    systemImage: "wifi.exclamationmark",
+                    description: Text("Restart Clawdmeter to reconnect terminal tabs.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
     }
 
     // MARK: - Mode-switch overlay (D13)
@@ -1845,6 +1995,28 @@ private struct CenterThread: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let workspaceKey = WorkspaceKey.of(session) {
+                WorkspaceTabStrip(
+                    model: model,
+                    workspaceKey: workspaceKey,
+                    activeSession: session,
+                    activeSessionId: session.id,
+                    draftTab: model.draftWorkspaceTab,
+                terminalTabs: model.workspaceTerminalTabs(in: workspaceKey),
+                activeTerminalTabId: nil,
+                terminalAvailable: model.canOpenWorkspaceTerminalTab(from: session),
+                onNewChat: {
+                        model.openDraftWorkspaceTab(from: session, defaults: workspaceDraftDefaults)
+                    },
+                    onNewTerminal: {
+                        Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
+                    },
+                    onSelectTerminal: { model.selectWorkspaceTerminalTab($0) },
+                    onCloseTerminal: { terminalTab in
+                        Task { await model.closeWorkspaceTerminalTab(terminalTab) }
+                    }
+                )
+            }
             header
             Divider()
             chatPane
@@ -1871,11 +2043,6 @@ private struct CenterThread: View {
                 onCancel: { restorePlan = nil },
                 onRestore: { Task { await restoreCheckpoint(plan) } }
             )
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .showRawTerminal)) { note in
-            if let id = note.userInfo?["sessionId"] as? UUID, id == session.id {
-                showingTerminalOverlay = true
-            }
         }
         .onChange(of: session.status) { _, newValue in
             if newValue == .running {
@@ -1967,8 +2134,11 @@ private struct CenterThread: View {
                 .frame(width: 26)
                 .help("Transcript density")
                 Menu {
-                    Button("Show raw terminal (⌘T)") { showingTerminalOverlay = true }
-                        .keyboardShortcut("t", modifiers: [.command])
+                    Button("Open terminal tab (⇧⌘T)") {
+                        Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
+                    }
+                        .keyboardShortcut("t", modifiers: [.command, .shift])
+                        .disabled(!model.canOpenWorkspaceTerminalTab(from: session))
                     Button("Schedule follow-up…", systemImage: "clock") {
                         showingScheduler = true
                     }
@@ -1996,7 +2166,7 @@ private struct CenterThread: View {
                             workbenchState.clearSessionState(sessionId: session.id)
                             AttachmentStaging.cleanup(sessionId: session.id)
                             if let wt = session.worktreePath {
-                                AttachmentStaging.cleanupWorktree(at: wt)
+                                AttachmentStaging.cleanupWorktree(at: wt, sessionId: session.id)
                             }
                         }
                     }
@@ -2006,7 +2176,7 @@ private struct CenterThread: View {
                             workbenchState.clearSessionState(sessionId: session.id)
                             AttachmentStaging.cleanup(sessionId: session.id)
                             if let wt = session.worktreePath {
-                                AttachmentStaging.cleanupWorktree(at: wt)
+                                AttachmentStaging.cleanupWorktree(at: wt, sessionId: session.id)
                             }
                         }
                     }
@@ -2030,6 +2200,20 @@ private struct CenterThread: View {
         case .plan: return "plan"
         case .bypass: return "bypass"
         }
+    }
+
+    private var workspaceDraftDefaults: ComposerStore.ChipDefaults {
+        ComposerStore.ChipDefaults(
+            agent: session.agent,
+            modelId: session.model ?? Self.effectiveModelId(for: session, catalog: catalog),
+            effort: session.effort ?? Self.effectiveEffort(
+                for: session,
+                modelId: session.model ?? Self.effectiveModelId(for: session, catalog: catalog),
+                catalog: catalog
+            ),
+            mode: session.mode,
+            planMode: false
+        )
     }
 
     private func densityLabel(_ density: TranscriptDensity) -> String {
@@ -2056,30 +2240,53 @@ private struct CenterThread: View {
 
     @ViewBuilder
     private var terminalOverlay: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Raw terminal — \(headerLabel(for: session))")
-                    .font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Button("Close (Esc)") { showingTerminalOverlay = false }
+        TahoeGlass(radius: 18, tone: .raised, shadow: .prominent) {
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "terminal.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                        .frame(width: 26, height: 26)
+                        .background(t.accentAlpha(t.dark ? 0.18 : 0.12), in: RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Raw terminal")
+                            .font(TahoeFont.body(12.5, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                        Text(headerLabel(for: session))
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(t.fg3)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Button { showingTerminalOverlay = false } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(t.fg3)
+                    .background(t.surfaceSolid2.opacity(0.70), in: RoundedRectangle(cornerRadius: 8))
                     .keyboardShortcut(.cancelAction)
-            }
-            .padding(10)
-            Divider()
-            if let runtime = AppDelegate.runtime,
-               let port = runtime.agentControlServer.boundWsPort {
-                TerminalTabContainer(
-                    session: session,
-                    model: model,
-                    wsPort: Int(port),
-                    token: PairingTokenStore.shared.currentToken()
-                )
-            } else {
-                ContentUnavailableView(
-                    "Daemon offline",
-                    systemImage: "wifi.exclamationmark",
-                    description: Text("Restart Clawdmeter to reconnect.")
-                )
+                    .help("Close terminal")
+                }
+                .padding(12)
+                TahoeHairline()
+                if let runtime = AppDelegate.runtime,
+                   let port = runtime.agentControlServer.boundWsPort {
+                    TerminalTabContainer(
+                        session: session,
+                        model: model,
+                        wsPort: Int(port),
+                        token: PairingTokenStore.shared.currentToken()
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "Daemon offline",
+                        systemImage: "wifi.exclamationmark",
+                        description: Text("Restart Clawdmeter to reconnect.")
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .frame(minWidth: 700, minHeight: 500)
@@ -5350,7 +5557,138 @@ private struct TahoeEmptyReviewState: View {
 
 // MARK: - G12 multi-terminal tab strip
 
+private struct WorkspaceTerminalPane: View {
+    @Environment(\.tahoe) private var t
+    let session: AgentSession
+    let terminalTab: WorkspaceTerminalTab
+    let wsPort: Int
+    let token: String
+
+    @State private var sawOutput = false
+
+    var body: some View {
+        ZStack {
+            Color.black
+            if terminalTab.paneRefId == nil || paneId != nil {
+                MacTerminalView(
+                    sessionId: session.id,
+                    host: "127.0.0.1",
+                    wsPort: wsPort,
+                    token: token,
+                    paneId: paneId,
+                    onFirstOutput: { sawOutput = true }
+                )
+                .id(paneId ?? "primary")
+                if !sawOutput {
+                    terminalPendingOverlay
+                }
+            } else {
+                ContentUnavailableView(
+                    "Terminal pane unavailable",
+                    systemImage: "terminal",
+                    description: Text("This pane no longer exists on the Mac.")
+                )
+                .foregroundStyle(.white)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            terminalStatusBadge
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: terminalTab.id) { _, _ in
+            sawOutput = false
+        }
+    }
+
+    private var paneId: String? {
+        guard let paneRefId = terminalTab.paneRefId,
+              let pane = session.terminalPanes.first(where: { $0.id == paneRefId })
+        else { return nil }
+        return pane.paneId
+    }
+
+    private var activePaneTitle: String {
+        guard let paneRefId = terminalTab.paneRefId,
+              let pane = session.terminalPanes.first(where: { $0.id == paneRefId })
+        else { return "\(session.agent.rawValue.capitalized)" }
+        let title = pane.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? "Terminal" : title
+    }
+
+    private var terminalCwdLabel: String {
+        let last = (session.effectiveCwd as NSString).lastPathComponent
+        return last.isEmpty ? session.repoDisplayName : last
+    }
+
+    private var terminalPendingOverlay: some View {
+        TahoeGlass(radius: 14, tone: .raised, shadow: .subtle) {
+            VStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(t.accentAlpha(t.dark ? 0.20 : 0.12))
+                    Image(systemName: "terminal.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                }
+                .frame(width: 44, height: 44)
+
+                VStack(spacing: 4) {
+                    Text("Connecting to terminal")
+                        .font(TahoeFont.body(13, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text("Opening \(activePaneTitle) in \(terminalCwdLabel).")
+                        .font(TahoeFont.body(11.5))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                }
+
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(t.accent)
+                    Text("Waiting for visible shell output")
+                        .font(TahoeFont.body(10.5, weight: .medium))
+                        .foregroundStyle(t.fg3)
+                }
+            }
+            .padding(18)
+            .frame(width: 300)
+        }
+    }
+
+    private var terminalStatusBadge: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(sawOutput ? Color.green.opacity(0.85) : t.accent)
+                .frame(width: 7, height: 7)
+            Text(sawOutput ? "Terminal connected" : "Terminal starting")
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .foregroundStyle(t.fg)
+            TahoeHair(vertical: true).frame(height: 12)
+            Text(activePaneTitle)
+                .font(TahoeFont.mono(10.5, weight: .semibold))
+                .foregroundStyle(t.fg2)
+                .lineLimit(1)
+            Text("in \(terminalCwdLabel)")
+                .font(TahoeFont.body(10.5))
+                .foregroundStyle(t.fg3)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(t.surfaceSolid2.opacity(0.94), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(t.hairline, lineWidth: 0.75)
+        )
+        .padding(10)
+        .help("\(activePaneTitle)\n\(session.effectiveCwd)")
+    }
+}
+
 private struct TerminalTabContainer: View {
+    @Environment(\.tahoe) private var t
     let session: AgentSession
     @ObservedObject var model: SessionsModel
     let wsPort: Int
@@ -5358,12 +5696,17 @@ private struct TerminalTabContainer: View {
 
     /// nil = primary pane. Non-nil = a TerminalPaneRef.id from session.terminalPanes.
     @State private var selectedSecondaryId: UUID? = nil
+    @State private var sawOutput = false
 
     var body: some View {
         VStack(spacing: 0) {
             tabStrip
-            Divider()
+            TahoeHairline()
             terminal
+        }
+        .background(t.surfaceSolid)
+        .onChange(of: selectedSecondaryId) { _, _ in
+            sawOutput = false
         }
     }
 
@@ -5385,16 +5728,17 @@ private struct TerminalTabContainer: View {
             }) {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .foregroundStyle(t.fg3)
+                    .background(t.surfaceSolid2.opacity(0.65), in: RoundedRectangle(cornerRadius: 7))
             }
             .buttonStyle(.plain)
             .help("New terminal pane")
             Spacer()
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(t.surfaceSolid2.opacity(0.45))
     }
 
     private var primaryTabTitle: String {
@@ -5415,16 +5759,21 @@ private struct TerminalTabContainer: View {
                     Image(systemName: isPrimary ? "sparkle" : "terminal")
                         .font(.system(size: 9))
                     Text(title)
-                        .font(.system(size: 11))
+                        .font(TahoeFont.body(11, weight: .semibold))
+                        .lineLimit(1)
                 }
                 .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                .padding(.vertical, 5)
+                .foregroundStyle(isSelected ? t.fg : t.fg3)
                 .background(
                     isSelected
-                        ? Color.accentColor.opacity(0.18)
-                        : Color.clear,
+                        ? t.accentAlpha(t.dark ? 0.18 : 0.12)
+                        : t.surfaceSolid2.opacity(0.35),
                     in: RoundedRectangle(cornerRadius: 5)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(isSelected ? t.accentAlpha(0.45) : t.hairline, lineWidth: 0.5)
                 )
             }
             .buttonStyle(.plain)
@@ -5439,7 +5788,7 @@ private struct TerminalTabContainer: View {
                 }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(t.fg4)
                 }
                 .buttonStyle(.plain)
                 .help("Close pane")
@@ -5458,14 +5807,102 @@ private struct TerminalTabContainer: View {
         // SwiftUI re-creates the view (and the WS connection) when the
         // .id() changes. That's what we want: switching tabs hangs up the
         // previous WS and opens one for the new pane.
-        MacTerminalView(
-            sessionId: session.id,
-            host: "127.0.0.1",
-            wsPort: wsPort,
-            token: token,
-            paneId: targetPaneId
+        ZStack {
+            Color.black
+            MacTerminalView(
+                sessionId: session.id,
+                host: "127.0.0.1",
+                wsPort: wsPort,
+                token: token,
+                paneId: targetPaneId,
+                onFirstOutput: { sawOutput = true }
+            )
+            .id(targetPaneId ?? "primary")
+            if !sawOutput {
+                terminalPendingOverlay
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            terminalStatusBadge
+        }
+    }
+
+    private var terminalPendingOverlay: some View {
+        TahoeGlass(radius: 14, tone: .raised, shadow: .subtle) {
+            VStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(t.accentAlpha(t.dark ? 0.20 : 0.12))
+                    Image(systemName: "terminal.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                }
+                .frame(width: 44, height: 44)
+
+                VStack(spacing: 4) {
+                    Text("Connecting to raw terminal")
+                        .font(TahoeFont.body(13, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text("Opening \(activePaneTitle) in \(terminalCwdLabel).")
+                        .font(TahoeFont.body(11.5))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                }
+
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(t.accent)
+                    Text("Waiting for visible shell output")
+                        .font(TahoeFont.body(10.5, weight: .medium))
+                        .foregroundStyle(t.fg3)
+                }
+            }
+            .padding(18)
+            .frame(width: 300)
+        }
+    }
+
+    private var terminalStatusBadge: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(sawOutput ? Color.green.opacity(0.85) : t.accent)
+                .frame(width: 7, height: 7)
+            Text(sawOutput ? "Terminal connected" : "Terminal starting")
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .foregroundStyle(t.fg)
+            TahoeHair(vertical: true).frame(height: 12)
+            Text(activePaneTitle)
+                .font(TahoeFont.mono(10.5, weight: .semibold))
+                .foregroundStyle(t.fg2)
+                .lineLimit(1)
+            Text("in \(terminalCwdLabel)")
+                .font(TahoeFont.body(10.5))
+                .foregroundStyle(t.fg3)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(t.surfaceSolid2.opacity(0.94), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(t.hairline, lineWidth: 0.75)
         )
-        .id(targetPaneId ?? "primary")
+        .padding(10)
+        .help("\(activePaneTitle)\n\(session.effectiveCwd)")
+    }
+
+    private var activePaneTitle: String {
+        guard let selectedSecondaryId,
+              let pane = session.terminalPanes.first(where: { $0.id == selectedSecondaryId })
+        else { return primaryTabTitle }
+        return pane.title
+    }
+
+    private var terminalCwdLabel: String {
+        let last = (session.effectiveCwd as NSString).lastPathComponent
+        return last.isEmpty ? session.repoDisplayName : last
     }
 }
 

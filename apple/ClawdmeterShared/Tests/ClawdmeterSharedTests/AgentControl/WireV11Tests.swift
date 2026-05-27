@@ -15,10 +15,9 @@ final class WireV11Tests: XCTestCase {
 
     // MARK: - Wire version constants
 
-    func test_currentWireVersionIsNineteen() {
-        // v19 (2026-05-25): adds lifecycle snapshots/subscription and paired
-        // Mac provider default model/effort endpoints.
-        XCTAssertEqual(AgentControlWireVersion.current, 19)
+    func test_currentWireVersionIsTwenty() {
+        // v20 (2026-05-26): adds workspace-tab inherited context metadata.
+        XCTAssertEqual(AgentControlWireVersion.current, 20)
     }
 
     func test_workspacesMinimumIsSixteen() {

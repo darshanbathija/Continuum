@@ -2079,7 +2079,8 @@ public final class AgentControlServer {
                 worktreePath: nil,
                 tmuxWindowId: window.windowId,
                 tmuxPaneId: window.paneId,
-                planMode: false
+                planMode: false,
+                ownsWorktree: false
             )
             if req.agent == .claude {
                 attachClaudeWiring(for: session, cwd: req.repoKey)
@@ -3665,7 +3666,8 @@ public final class AgentControlServer {
             worktreePath: nil,
             tmuxWindowId: nil,
             tmuxPaneId: nil,
-            planMode: false  // opencode handles plan/approval internally
+            planMode: false,  // opencode handles plan/approval internally
+            ownsWorktree: false
         )
         // PR #32: stash repo too so opencode `usage` events tag
         // analytics records with the right cwd instead of "(unknown)".
@@ -4546,7 +4548,8 @@ public final class AgentControlServer {
                 tmuxPaneId: window.paneId,
                 planMode: effectivePlanMode,
                 mode: req.useWorktree ? .worktree : .local,
-                effort: req.effort
+                effort: req.effort,
+                ownsWorktree: worktreePath != nil
             )
             // Wire up JSONL tail + done-detector + plan-watcher for this
             // session (Phase 4). Best-effort: find the agent's JSONL file
@@ -6713,7 +6716,7 @@ public final class AgentControlServer {
             // deleted chat doesn't leak its history under
             // ~/Library/Application Support/Clawdmeter/sdk-chat-transcripts/.
             SDKChatTranscriptMirror.removeMirror(sessionId: uuid)
-        } else if session.kind == .code, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
+        } else if session.kind == .code, session.ownsWorktree, let worktreePath = session.worktreePath, let repoRoot = session.repoKey {
             do {
                 let result = try await WorktreeManager.shared.delete(
                     repoRoot: repoRoot,

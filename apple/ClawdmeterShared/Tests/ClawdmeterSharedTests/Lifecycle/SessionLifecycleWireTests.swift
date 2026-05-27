@@ -3,7 +3,7 @@ import XCTest
 
 final class SessionLifecycleWireTests: XCTestCase {
     func test_wireV19LifecycleGate() {
-        XCTAssertEqual(AgentControlWireVersion.current, 19)
+        XCTAssertEqual(AgentControlWireVersion.current, 20)
         XCTAssertEqual(AgentControlWireVersion.lifecycleMinimum, 19)
         XCTAssertFalse(AgentControlWireVersion.supportsLifecycle(serverWireVersion: nil))
         XCTAssertFalse(AgentControlWireVersion.supportsLifecycle(serverWireVersion: 18))

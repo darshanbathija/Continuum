@@ -125,7 +125,12 @@ public enum AgentControlWireVersion {
     /// and provider default endpoints (`GET /provider-defaults`,
     /// `PUT /provider-defaults/:vendor`). v18 `AgentSession.status`
     /// remains the compatibility status for older clients.
-    public static let current: Int = 19
+    /// v20 (2026-05-26): workspace session tabs. `AgentSession` gains
+    /// optional `inheritedContextSourceIds` so a newly-created code tab
+    /// can audit which sibling transcripts seeded its first prompt, plus
+    /// `ownsWorktree` so same-workspace tabs can share a cwd without
+    /// inheriting destructive worktree-delete ownership.
+    public static let current: Int = 20
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -246,6 +251,10 @@ public enum AgentControlWireVersion {
 
     /// Minimum wire version that exposes durable per-provider defaults.
     public static let providerDefaultsMinimum: Int = 19
+
+    /// Minimum wire version that exposes workspace-tab inherited context
+    /// metadata on `AgentSession`.
+    public static let tabContextMinimum: Int = 20
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -404,6 +413,13 @@ public enum AgentControlWireVersion {
     public static func supportsProviderDefaults(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= providerDefaultsMinimum
+    }
+
+    /// Whether the paired Mac includes workspace-tab inherited context
+    /// metadata on session payloads.
+    public static func supportsTabContext(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= tabContextMinimum
     }
 }
 
@@ -2255,6 +2271,19 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// Defaults to false on older sessions.
     public let deepResearch: Bool
 
+    // MARK: - Schema v8 additions (v0.27 workspace session tabs, wire v20)
+
+    /// Sibling code-session ids whose transcript digests were inserted
+    /// into this session's first user turn. Nil/empty means no inherited
+    /// context. Kept separate from `parentSessionId`: parent sessions are
+    /// threaded children, while this field is one-shot starting context.
+    public let inheritedContextSourceIds: [UUID]?
+
+    /// True only when Clawdmeter created this session's `worktreePath` via
+    /// `WorktreeManager.add` and may therefore remove it when the session is
+    /// ended. Same-workspace tabs can run in a worktree without owning it.
+    public let ownsWorktree: Bool
+
     public init(
         id: UUID,
         repoKey: String?,
@@ -2293,7 +2322,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         geminiBackend: GeminiBackend? = nil,
         antigravityConversationId: UUID? = nil,
         antigravityProjectId: String? = nil,
-        deepResearch: Bool = false
+        deepResearch: Bool = false,
+        inheritedContextSourceIds: [UUID]? = nil,
+        ownsWorktree: Bool = false
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -2333,6 +2364,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.antigravityConversationId = antigravityConversationId
         self.antigravityProjectId = antigravityProjectId
         self.deepResearch = deepResearch
+        self.inheritedContextSourceIds = inheritedContextSourceIds
+        self.ownsWorktree = ownsWorktree
     }
 
     public init(from decoder: Decoder) throws {
@@ -2404,6 +2437,17 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         // restore/retry preserves the flag. Older sessions.json files
         // decode this as false.
         self.deepResearch = (try? c.decodeIfPresent(Bool.self, forKey: .deepResearch)) ?? false
+        // v0.27 schema v8 addition: workspace-tab inherited context.
+        // Optional + decoder-tolerant so older sessions stay nil.
+        self.inheritedContextSourceIds = (try? c.decodeIfPresent([UUID].self, forKey: .inheritedContextSourceIds)) ?? nil
+        // v0.27 schema v9 addition: explicit worktree ownership. Missing
+        // legacy values decode to false because destructive cleanup must be
+        // opt-in once same-workspace tabs can share a worktree path.
+        if let decodedOwnsWorktree = try? c.decodeIfPresent(Bool.self, forKey: .ownsWorktree) {
+            self.ownsWorktree = decodedOwnsWorktree
+        } else {
+            self.ownsWorktree = false
+        }
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -2450,7 +2494,11 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              // v0.9 schema addition (chat-via-agentapi).
              antigravityProjectId,
              // v0.23 schema v7 (Chat V2 Deep Research).
-             deepResearch
+             deepResearch,
+             // v0.27 schema v8 (workspace session tabs).
+             inheritedContextSourceIds,
+             // v0.27 schema v9 (worktree ownership).
+             ownsWorktree
     }
 }
 

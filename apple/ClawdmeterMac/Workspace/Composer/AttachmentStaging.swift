@@ -12,8 +12,10 @@ private let stagingLogger = Logger(subsystem: "com.clawdmeter.mac", category: "A
 /// Path selection (Codex P1 sandbox fix):
 /// - Claude session (any mode) OR Codex `.local` mode →
 ///     `~/Library/Application Support/Clawdmeter/attachments/<sessionId>/<uuid>.<ext>`
-/// - Codex + worktree mode → `<worktreePath>/.clawdmeter-attachments/<uuid>.<ext>`
-///   so the file lives inside Codex's read-only/workspace-write sandbox root.
+/// - Codex + worktree mode →
+///     `<worktreePath>/.clawdmeter-attachments/<sessionId>/<uuid>.<ext>`
+///   so the file lives inside Codex's read-only/workspace-write sandbox root
+///   without sharing staged attachments across sibling sessions.
 ///
 /// We deliberately read bytes via `Data(contentsOf:)` and write to the
 /// destination instead of `ditto`/`copyItem`, so symlinks get resolved at
@@ -22,13 +24,22 @@ enum AttachmentStaging {
 
     static let workspaceWorktreeSubdir = ".clawdmeter-attachments"
 
+    private static func codexWorktreeStagingDir(for session: AgentSession) -> URL? {
+        guard session.agent == .codex, session.mode == .worktree else { return nil }
+        let workspacePath = (session.worktreePath ?? session.runtimeCwd ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workspacePath.isEmpty else { return nil }
+        return URL(fileURLWithPath: workspacePath)
+            .appendingPathComponent(workspaceWorktreeSubdir, isDirectory: true)
+            .appendingPathComponent(session.id.uuidString, isDirectory: true)
+    }
+
     /// Resolve the staging directory for the given session. Creates the
     /// dir tree if needed. Returns nil if the path cannot be created.
     static func stagingDir(for session: AgentSession) -> URL? {
         let url: URL
-        if session.agent == .codex, session.mode == .worktree, let worktree = session.worktreePath {
-            url = URL(fileURLWithPath: worktree)
-                .appendingPathComponent(workspaceWorktreeSubdir, isDirectory: true)
+        if let codexDir = codexWorktreeStagingDir(for: session) {
+            url = codexDir
         } else {
             guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
             url = appSupport
@@ -45,6 +56,24 @@ enum AttachmentStaging {
         }
     }
 
+    static func existingStagingDir(for session: AgentSession) -> URL? {
+        let url: URL
+        if let codexDir = codexWorktreeStagingDir(for: session) {
+            url = codexDir
+        } else {
+            guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+            url = appSupport
+                .appendingPathComponent("Clawdmeter", isDirectory: true)
+                .appendingPathComponent("attachments", isDirectory: true)
+                .appendingPathComponent(session.id.uuidString, isDirectory: true)
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+              isDir.boolValue
+        else { return nil }
+        return url
+    }
+
     /// Empty-state staging dir — not yet bound to a session id. Files written
     /// here are migrated into the spawned session's dir on first-send success.
     static let emptyStateStagingDir: URL? = {
@@ -56,6 +85,15 @@ enum AttachmentStaging {
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
         return url
     }()
+
+    static func makePendingStagingDir() throws -> URL {
+        guard let root = emptyStateStagingDir else {
+            throw NSError(domain: "ClawdmeterStaging", code: 2, userInfo: [NSLocalizedDescriptionKey: "Attachment staging root unavailable"])
+        }
+        let url = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+        return url
+    }
 
     /// Copy one source URL into the destination dir, resolving symlinks at
     /// read-time. Returns the staged URL or throws.
@@ -107,11 +145,16 @@ enum AttachmentStaging {
         }
     }
 
-    /// Worktree-side cleanup: remove `.clawdmeter-attachments` inside the
-    /// session's worktree (Codex sandbox path).
-    static func cleanupWorktree(at worktreePath: String) {
-        let url = URL(fileURLWithPath: worktreePath)
+    /// Worktree-side cleanup: remove the session-specific
+    /// `.clawdmeter-attachments/<sessionId>` directory inside the worktree.
+    /// Passing nil keeps the legacy whole-root cleanup for callers that are
+    /// explicitly removing a registry-owned worktree.
+    static func cleanupWorktree(at worktreePath: String, sessionId: UUID? = nil) {
+        var url = URL(fileURLWithPath: worktreePath)
             .appendingPathComponent(workspaceWorktreeSubdir, isDirectory: true)
+        if let sessionId {
+            url = url.appendingPathComponent(sessionId.uuidString, isDirectory: true)
+        }
         if FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: url)
         }
