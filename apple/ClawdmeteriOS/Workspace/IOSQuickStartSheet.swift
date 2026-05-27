@@ -14,6 +14,9 @@ struct IOSQuickStartSheet: View {
     @State private var parent: String = ""
     @State private var isCreating: Bool = false
     @State private var errorMessage: String? = nil
+    /// Stable idempotency key for the sheet's lifetime — see
+    /// `IOSCloneRepoSheet` for the rationale.
+    @State private var idempotencyKey: String = UUID().uuidString
 
     var body: some View {
         NavigationStack {
@@ -80,7 +83,7 @@ struct IOSQuickStartSheet: View {
         let result = await client.quickStartRepoOnMac(
             name: name,
             parent: parent,
-            idempotencyKey: UUID().uuidString
+            idempotencyKey: idempotencyKey
         )
         if result.unsupportedServer {
             errorMessage = "This Mac is on an older version. Update Clawdmeter on the Mac to enable iOS Quick Start."

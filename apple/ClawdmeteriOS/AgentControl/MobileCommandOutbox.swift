@@ -261,6 +261,22 @@ public final class MobileCommandOutbox: ObservableObject {
     private func dispatch(_ envelope: MobileCommandEnvelope) async -> Bool {
         guard let payloadData = envelope.payload.data(using: .utf8) else { return false }
         let decoder = JSONDecoder()
+        // Workspace-onboarding commands are workspace-level — no sessionId.
+        // Handle them BEFORE the session-scoped guard so a queued entry
+        // doesn't loop forever returning false. iOS sheets call the
+        // client directly today (see IOSCloneRepoSheet), so these only
+        // appear if a future build enqueues them. Pretend-success matches
+        // the existing fallthrough; the actual side effect already
+        // happened (or never will) — no point retrying.
+        switch envelope.kind {
+        case .openLocalFolder, .cloneFromGitHub, .quickStartRepo, .wakeMac:
+            outboxLogger.warning(
+                "Workspace-onboarding command \(envelope.kind.rawValue, privacy: .public) in outbox — pretending success (sheets call client directly)"
+            )
+            return true
+        default:
+            break
+        }
         guard let sessionId = envelope.sessionId else { return false }
         switch envelope.kind {
         case .send:
@@ -327,16 +343,15 @@ public final class MobileCommandOutbox: ObservableObject {
                 adminOverride: body.adminOverride,
                 idempotencyKey: envelope.idempotencyKey
             ) != nil
-        case .permissionResponse, .terminalInput, .pickWinner, .updateWorkspace,
-             .openLocalFolder, .cloneFromGitHub, .quickStartRepo, .wakeMac:
+        case .permissionResponse, .terminalInput, .pickWinner, .updateWorkspace:
             // Pre-wired outbox kinds we don't surface enqueue helpers
             // for yet. Treat as success so a stale entry from a future
-            // build doesn't permanently stick in the queue. The v23
-            // workspace-onboarding kinds (openLocalFolder / cloneFromGitHub
-            // / quickStartRepo / wakeMac) are reached from the iOS sheets
-            // via direct `AgentControlClient` calls; they only land here
-            // if a future build enqueues them through the outbox.
+            // build doesn't permanently stick in the queue.
             outboxLogger.warning("Skipping unsupported kind \(envelope.kind.rawValue, privacy: .public) — pretending success")
+            return true
+        case .openLocalFolder, .cloneFromGitHub, .quickStartRepo, .wakeMac:
+            // Handled above the sessionId guard. This case is unreachable
+            // but required for exhaustiveness.
             return true
         }
     }

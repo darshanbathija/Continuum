@@ -1937,10 +1937,23 @@ public struct QuickStartRepoRequest: Codable, Sendable {
 }
 
 /// `POST /workspaces/wake-mac` body. iOS calls this when an
-/// `/workspaces/open-local` request returned 423 Locked. Daemon attempts
-/// `tailscale wake <hostname>` if Tailscale is installed; falls back to
-/// `pmset displaywakeup` for same-host wake. Returns 200 on success or
-/// 503 if no wake mechanism is available on this Mac.
+/// `/workspaces/open-local` request returned 423 Locked.
+///
+/// **Honest scope:** the daemon can only run when the Mac is already
+/// reachable. A fully-asleep Mac cannot serve this endpoint at all —
+/// the iOS request never arrives. What the daemon *can* do:
+///   1. Run `tailscale wake <hostname>` if Tailscale is installed and a
+///      Wake-on-LAN peer is configured. This actually wakes a sleeping
+///      Mac if WoL is set up on the LAN.
+///   2. Run `caffeinate -u -t 5` to nudge the display awake. This helps
+///      when the screen is dimmed/asleep but the Mac is still running
+///      (the common case when the daemon receives this request).
+/// Neither of these unlocks a screen-locked Mac — that still requires
+/// the user to enter their password. The 200 response means a wake
+/// signal was sent, NOT that the Mac is now usable for NSOpenPanel.
+/// iOS surfaces "Wake signal sent" in the banner and the user must
+/// physically unlock if the lock screen is up.
+/// 503 returns when neither Tailscale nor caffeinate is available.
 public struct WakeMacRequest: Codable, Sendable {
     public let idempotencyKey: String?
 

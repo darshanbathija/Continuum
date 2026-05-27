@@ -16,6 +16,10 @@ struct iOSWorkspaceSwitcherSheet: View {
     @State private var showingWakeBanner = false
     @State private var openLocalInFlight = false
     @State private var openLocalMessage: String? = nil
+    /// Stable idempotency key for the Open-Project-on-Mac flow. Reused
+    /// across retries so a lost response replays the daemon's cached
+    /// result instead of re-firing NSOpenPanel on the Mac.
+    @State private var openLocalIdempotencyKey: String = UUID().uuidString
     @StateObject private var allowList = WorkspaceAllowListCache()
 
     private var sessions: [AgentSession] {
@@ -173,7 +177,7 @@ struct iOSWorkspaceSwitcherSheet: View {
         openLocalInFlight = true
         openLocalMessage = "Asking your Mac to open a folder picker…"
         defer { openLocalInFlight = false }
-        let result = await client.openLocalFolderOnMac(idempotencyKey: UUID().uuidString)
+        let result = await client.openLocalFolderOnMac(idempotencyKey: openLocalIdempotencyKey)
         if result.unsupportedServer {
             openLocalMessage = "Update Clawdmeter on the Mac to enable this."
             return
@@ -186,10 +190,16 @@ struct iOSWorkspaceSwitcherSheet: View {
         if let record = result.record {
             await client.refreshWorkspaces()
             openLocalMessage = "Added \(record.repoDisplayName) — open it from the sidebar."
+            // Rotate the idempotency key so the user's NEXT "Open Project"
+            // tap starts a fresh request — otherwise the cached receipt
+            // would replay the same record on a re-tap.
+            openLocalIdempotencyKey = UUID().uuidString
             return
         }
         if let err = result.error {
             openLocalMessage = iosFriendlyMessage(for: err)
+            // Final errors (not retryable transient) rotate the key.
+            openLocalIdempotencyKey = UUID().uuidString
             return
         }
         openLocalMessage = "Pick a folder on your Mac to finish."

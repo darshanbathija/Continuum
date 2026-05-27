@@ -44,7 +44,7 @@ struct IOSWakeMacBanner: View {
         defer { isWaking = false }
         let ok = await client.wakeMacForOpenLocal(idempotencyKey: UUID().uuidString)
         lastResult = ok
-            ? "Wake signal sent. Try Open Project again."
-            : "Couldn't wake the Mac. Open it manually."
+            ? "Wake signal sent. If the lock screen is up, unlock it on the Mac before tapping Open Project again."
+            : "Couldn't reach the wake daemon. Open the Mac manually."
     }
 }

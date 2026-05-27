@@ -2212,6 +2212,19 @@ public final class AgentControlClient: ObservableObject {
                     return WorkspaceOnboardingResult(error: decoded)
                 }
                 return WorkspaceOnboardingResult(error: .pathMissing)
+            case 409:
+                // alreadyRegistered. Decode the RepoOnboardingError body
+                // so iOS sheets can hit their .alreadyRegistered branch
+                // and refresh + dismiss instead of falling through to
+                // "unknown reason". The daemon's onWorkspaceRegistered
+                // callback already fired for the existing record, so the
+                // workspace list will refresh on the next /workspaces poll.
+                if let decoded = try? decoder.decode(RepoOnboardingError.self, from: data) {
+                    return WorkspaceOnboardingResult(error: decoded)
+                }
+                return WorkspaceOnboardingResult(
+                    error: .alreadyRegistered(workspaceId: UUID())
+                )
             case 423:
                 return WorkspaceOnboardingResult(macLocked: true)
             default:

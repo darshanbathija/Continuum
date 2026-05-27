@@ -113,6 +113,88 @@ final class PathAllowListTests: XCTestCase {
         }
     }
 
+    // MARK: - P0a: symlink bypass
+
+    /// The attack: user (or attacker with a paired iPhone) creates
+    /// `<allowed>/link -> /etc` and submits `<allowed>/link/file` as the
+    /// quick-start parent. String-prefix check would accept (path starts
+    /// with `<allowed>/`), but the actual mkdir/git init follows the
+    /// symlink and writes outside the allow-list. Canonicalization must
+    /// resolve the symlink before the prefix check.
+    func test_validate_rejectsSymlinkPointingOutsideAllowList() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("plal-symlink-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let allowedRoot = tempDir.appendingPathComponent("allowed")
+        let outsideTarget = tempDir.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: allowedRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideTarget, withIntermediateDirectories: true)
+
+        // Plant the malicious symlink: <allowed>/link -> <outside>
+        let symlink = allowedRoot.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: outsideTarget)
+
+        defaults.set(allowedRoot.path, forKey: PathAllowList.defaultParentKey)
+        let result = PathAllowList.validate(symlink.path, userDefaults: defaults)
+        switch result {
+        case .failure(.pathNotAllowed):
+            break // expected
+        default:
+            XCTFail("Symlink pointing outside allow-list must reject; got \(result)")
+        }
+    }
+
+    /// Quick Start passes `parent/name` where `name` doesn't exist yet.
+    /// If `parent` is a symlink pointing outside the allow-list, the
+    /// validate path must still resolve it (the deepest-existing-ancestor
+    /// walk).
+    func test_validate_rejectsParentSymlink_whenChildDoesntExistYet() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("plal-parent-symlink-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let allowedRoot = tempDir.appendingPathComponent("allowed")
+        let outsideTarget = tempDir.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: allowedRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideTarget, withIntermediateDirectories: true)
+
+        // <allowed>/link -> <outside>. Submit <allowed>/link/newrepo (the
+        // `newrepo` segment doesn't exist — Quick Start case).
+        let symlink = allowedRoot.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: outsideTarget)
+
+        defaults.set(allowedRoot.path, forKey: PathAllowList.defaultParentKey)
+        let target = symlink.appendingPathComponent("newrepo").path
+        let result = PathAllowList.validate(target, userDefaults: defaults)
+        switch result {
+        case .failure(.pathNotAllowed):
+            break // expected
+        default:
+            XCTFail("Symlinked parent must reject before Quick Start runs; got \(result)")
+        }
+    }
+
+    // MARK: - P0b: real-home expansion (sandbox-aware)
+
+    /// In sandboxed Release builds, `NSHomeDirectory()` returns the
+    /// container, not `/Users/<user>/`. The deny-list must expand `~`
+    /// against the *real* user home (via `ClawdmeterRealHome`) so that
+    /// `~/.ssh` always means the user's real keys.
+    func test_resolveDeniedSubpaths_expandsAgainstRealHome() {
+        let denied = PathAllowList.resolveDeniedSubpaths()
+        let realHome = ClawdmeterRealHome.path()
+        let expectedSSH = (realHome as NSString).appendingPathComponent(".ssh")
+        XCTAssertTrue(
+            denied.contains(where: { $0 == expectedSSH || $0.hasPrefix(expectedSSH) }),
+            "Deny-list must include real-home ~/.ssh; got \(denied)"
+        )
+    }
+
+    // MARK: - existing collision check
+
     func test_validate_doesNotAcceptPrefixCollision() {
         // /foo/barz must NOT match /foo/bar (the prefix-with-/ check).
         defaults.set("/foo/bar", forKey: PathAllowList.defaultParentKey)

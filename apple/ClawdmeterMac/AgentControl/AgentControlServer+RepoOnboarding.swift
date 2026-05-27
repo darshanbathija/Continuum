@@ -211,41 +211,98 @@ extension AgentControlServer {
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
 
-        // Use `caffeinate -u -t 5` to nudge the display awake. This works
-        // on a screen-locked-but-not-sleeping Mac and is harmless when the
-        // Mac is fully awake (the 5-second display wake-lock just expires).
-        guard let caffeinate = ShellRunner.locateBinary("caffeinate") else {
-            sendResponse(serviceUnavailable(reason: "caffeinate not found"), on: connection)
-            return
-        }
-        do {
-            let result = try await ShellRunner.shared.run(
-                executable: caffeinate,
-                arguments: ["-u", "-t", "5"],
-                timeout: 10
-            )
-            if result.exitStatus != 0 {
-                sendResponse(
-                    serviceUnavailable(reason: "caffeinate exit \(result.exitStatus): \(result.stderrString)"),
-                    on: connection
-                )
-                return
+        // Two-step wake strategy. Both are best-effort; we report success
+        // if either fires. iOS surfaces "Wake signal sent" in the banner
+        // — that's all we promise. A locked screen still requires user
+        // interaction; we don't pretend otherwise.
+        var triedAny = false
+        var lastError: String? = nil
+
+        // 1. Tailscale wake — wakes a tailnet peer via Wake-on-LAN if
+        //    the user has it set up. The hostname is the local Mac's
+        //    Tailscale name. `tailscale wake <self>` is a no-op when
+        //    we're already awake (this endpoint runs in-process, so
+        //    "fully asleep" can't even reach us — but a LAN-side wake
+        //    signal still helps if a sibling Mac on the tailnet is the
+        //    one actually asleep).
+        if let tailscale = ShellRunner.locateBinary("tailscale") {
+            triedAny = true
+            if let hostname = await currentTailscaleHostname() {
+                do {
+                    let result = try await ShellRunner.shared.run(
+                        executable: tailscale,
+                        arguments: ["wake", hostname],
+                        timeout: 5
+                    )
+                    if result.exitStatus != 0 {
+                        lastError = "tailscale wake exit \(result.exitStatus): \(result.stderrString.prefix(200))"
+                    }
+                } catch {
+                    lastError = "tailscale wake failed: \(error.localizedDescription)"
+                }
             }
-        } catch {
+        }
+
+        // 2. Local caffeinate — nudges the display awake on a screen-
+        //    dimmed-but-still-running Mac. Doesn't unlock a locked
+        //    screen, but does bring the display back so NSOpenPanel
+        //    is visible after the user types their password.
+        if let caffeinate = ShellRunner.locateBinary("caffeinate") {
+            triedAny = true
+            do {
+                let result = try await ShellRunner.shared.run(
+                    executable: caffeinate,
+                    arguments: ["-u", "-t", "5"],
+                    timeout: 10
+                )
+                if result.exitStatus != 0 {
+                    lastError = "caffeinate exit \(result.exitStatus): \(result.stderrString.prefix(200))"
+                }
+            } catch {
+                lastError = "caffeinate failed: \(error.localizedDescription)"
+            }
+        }
+
+        if !triedAny {
             sendResponse(
-                serviceUnavailable(reason: "caffeinate failed: \(error.localizedDescription)"),
+                serviceUnavailable(reason: "neither tailscale nor caffeinate is installed"),
                 on: connection
             )
             return
         }
         await sendCommandResponse(
-            body: ["ok": true],
+            body: ["ok": true, "lastError": lastError ?? "none"],
             key: req.idempotencyKey,
             kind: MobileCommandKind.wakeMac,
             sessionId: nil as UUID?,
             payloadHash: payloadHash,
             on: connection
         )
+    }
+
+    /// Best-effort: read the local Tailscale hostname from `tailscale status
+    /// --self --json` if it parses. Returns nil if Tailscale is offline,
+    /// not configured, or the JSON shape is unexpected.
+    private func currentTailscaleHostname() async -> String? {
+        guard let tailscale = ShellRunner.locateBinary("tailscale") else { return nil }
+        let result: ShellRunner.Result
+        do {
+            result = try await ShellRunner.shared.run(
+                executable: tailscale,
+                arguments: ["status", "--self", "--json"],
+                timeout: 3
+            )
+        } catch {
+            return nil
+        }
+        guard result.exitStatus == 0,
+              let json = try? JSONSerialization.jsonObject(with: result.stdout) as? [String: Any],
+              let self_ = json["Self"] as? [String: Any],
+              let dns = self_["DNSName"] as? String,
+              !dns.isEmpty
+        else { return nil }
+        // DNSName ends with `.`; strip for `tailscale wake` arg.
+        return dns.hasSuffix(".") ? String(dns.dropLast()) : dns
     }
 
     // MARK: - Allow-list (GET — no idempotency needed)
@@ -300,7 +357,13 @@ extension AgentControlServer {
     ) async {
         let status: Int
         switch error {
-        case .alreadyRegistered:    status = 200
+        // 409 Conflict — the workspace already exists. Critical: must NOT
+        // be 200, because the client's success path tries to decode
+        // CodeWorkspaceRecord and the alreadyRegistered body is a
+        // RepoOnboardingError. Returning 200 here made the iOS sheet's
+        // `.alreadyRegistered` branch unreachable; the user saw "unknown
+        // reason" instead of the duplicate-add toast.
+        case .alreadyRegistered:    status = 409
         case .pathNotAllowed:       status = 403
         case .ghAuthFailed:         status = 401
         case .pathMissing,

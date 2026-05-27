@@ -11,19 +11,24 @@ import ClawdmeterShared
 /// panel implies consent. This gate only fires on daemon-relayed endpoints
 /// where iOS supplied the path via a text field.
 ///
-/// Canonicalization uses `URL.standardizingFileURL` which resolves `..` and
-/// `~` so attackers can't escape the allow-list via traversal. The deny-list
-/// check happens after canonicalization, so `~/.ssh/../code` ends up as
-/// `~/code` and is fine.
+/// Canonicalization expands `~` (against the *real* user home — sandboxed
+/// builds otherwise resolve `~` to the container path and the deny-list
+/// misses real `~/.ssh`), normalizes `..`, and resolves symlinks on the
+/// deepest-existing ancestor. A symlink at any segment that points outside
+/// the allow-list rejects — string-prefix-only would otherwise let an
+/// attacker create `<allowed>/link -> ~/.ssh` and bypass the gate.
 public enum PathAllowList {
 
     /// UserDefaults key for the user's preferred default-parent. Falls back
-    /// to `~/code/` when unset. Created lazily on first use.
+    /// to `~/code/` (against the real home) when unset. Created lazily on
+    /// first use.
     public static let defaultParentKey = "clawdmeter.repos.defaultParent"
 
     /// Deny-listed home-relative subpaths. Any canonicalized path that lives
     /// under one of these → reject. Strings are expanded against
-    /// `NSHomeDirectory()` before comparison.
+    /// `ClawdmeterRealHome.path()` (NOT `NSHomeDirectory()` — sandboxed
+    /// builds resolve the latter to the container, so `~/.ssh` would point
+    /// at the container's empty `.ssh` instead of the real user's keys).
     public static let deniedSubpaths: [String] = [
         "~/.ssh",
         "~/.aws",
@@ -64,12 +69,16 @@ public enum PathAllowList {
     /// any denied subpath. Returns `.success(canonical)` on accept or
     /// `.failure(.pathNotAllowed(reason:))` on reject. Caller surfaces the
     /// reason verbatim.
+    ///
+    /// The canonical form returned has both `..` and symlinks resolved
+    /// against the filesystem, so callers can safely pass it to mkdir /
+    /// git init / git clone without risk of the operation following a
+    /// post-validation symlink swap.
     public static func validate(
         _ path: String,
         userDefaults: UserDefaults = .standard
     ) -> Result<String, RepoOnboardingError> {
         let canonical = canonicalize(path)
-        // Empty input is an error class of its own.
         if canonical.isEmpty {
             return .failure(.pathNotAllowed(reason: "empty path"))
         }
@@ -91,27 +100,87 @@ public enum PathAllowList {
 
     // MARK: - Private
 
-    /// `~/code/` — created lazily by the daemon when first needed. We do
-    /// NOT create the directory here; that's the caller's responsibility
-    /// (validating that the dir exists is a separate concern from the
-    /// allow-list check).
+    /// `<real-home>/code/` — created lazily by the daemon when first needed.
+    /// We do NOT create the directory here; that's the caller's
+    /// responsibility (validating that the dir exists is a separate
+    /// concern from the allow-list check).
     private static func defaultParentFallback() -> String {
-        let home = NSHomeDirectory()
-        return (home as NSString).appendingPathComponent("code")
+        (ClawdmeterRealHome.path() as NSString).appendingPathComponent("code")
     }
 
-    /// Expand `~` and resolve `..` / symlinks via `standardizingPath`. We
-    /// intentionally do NOT touch the filesystem (no `realpath`) because
-    /// the path may not exist yet (Quick Start case — we're creating it).
-    private static func canonicalize(_ path: String) -> String {
-        let expanded = (path as NSString).expandingTildeInPath
+    /// Expand `~` against the real user home, normalize `..`, then resolve
+    /// symlinks on the deepest-existing ancestor. The trailing component
+    /// may not exist yet (Quick Start creates a new dir under `parent/name`),
+    /// so we walk UP until we find an existing dir, `realpath` that, and
+    /// append the remaining components.
+    ///
+    /// **Why resolve symlinks here, not just at use-time?** Without this,
+    /// `<allowed>/link -> ~/.ssh` would pass the string-prefix check
+    /// (`/Users/me/code/link` starts with `/Users/me/code/`) and the
+    /// subsequent `mkdir` / `git clone` would follow the symlink and write
+    /// outside the gate. Resolving the deepest-existing ancestor catches
+    /// every symlink between the path and the filesystem root.
+    static func canonicalize(_ path: String) -> String {
+        // Step 1: expand `~` against the REAL user home (not the sandbox
+        // container's home). Sandbox-aware tildes only matter for the
+        // app's own data; the deny-list is about the user's keys.
+        let expanded: String
+        if path.hasPrefix("~") {
+            let realHome = ClawdmeterRealHome.path()
+            if path == "~" {
+                expanded = realHome
+            } else if path.hasPrefix("~/") {
+                expanded = (realHome as NSString).appendingPathComponent(String(path.dropFirst(2)))
+            } else {
+                // `~user/...` form — uncommon, fall back to NSString's
+                // expansion which queries pwd.
+                expanded = (path as NSString).expandingTildeInPath
+            }
+        } else {
+            expanded = path
+        }
+        // Step 2: standardize — collapses `..`, `.`, multiple slashes.
         let standardized = (expanded as NSString).standardizingPath
-        // Strip trailing slashes but keep root `/`.
-        var stripped = standardized
+        // Step 3: resolve symlinks on the deepest-existing ancestor.
+        let resolved = resolveSymlinksOnExistingPrefix(standardized)
+        // Step 4: strip trailing slashes but keep root `/`.
+        var stripped = resolved
         while stripped.count > 1 && stripped.hasSuffix("/") {
             stripped.removeLast()
         }
         return stripped
+    }
+
+    /// Walk up `path` until we find an existing directory, resolve symlinks
+    /// on that ancestor via `URL.resolvingSymlinksInPath()`, then append
+    /// the remaining non-existing components. This is the only sound way
+    /// to defend against symlink-bypass for paths that don't exist yet
+    /// (Quick Start case).
+    private static func resolveSymlinksOnExistingPrefix(_ path: String) -> String {
+        let fm = FileManager.default
+        // Fast path: the full path exists. realpath() it directly.
+        if fm.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        }
+        // Walk up. Cap at 64 iterations to bound pathological inputs.
+        var ancestor = (path as NSString).deletingLastPathComponent
+        var trailing = [(path as NSString).lastPathComponent]
+        var safety = 64
+        while !ancestor.isEmpty && ancestor != "/" && safety > 0 {
+            if fm.fileExists(atPath: ancestor) {
+                let resolvedAncestor = URL(fileURLWithPath: ancestor).resolvingSymlinksInPath().path
+                let trailingPath = trailing.reversed().joined(separator: "/")
+                return (resolvedAncestor as NSString).appendingPathComponent(trailingPath)
+            }
+            trailing.append((ancestor as NSString).lastPathComponent)
+            ancestor = (ancestor as NSString).deletingLastPathComponent
+            safety -= 1
+        }
+        // Nothing along the chain exists. Return the standardized path
+        // as-is — the operation will fail downstream when it tries to
+        // mkdir / write, and the validate() prefix check still uses the
+        // canonicalized form against the resolved roots.
+        return path
     }
 
     /// True if `path` equals `root` or lives under it. Uses path component

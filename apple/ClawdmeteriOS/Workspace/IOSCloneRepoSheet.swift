@@ -15,6 +15,11 @@ struct IOSCloneRepoSheet: View {
     @State private var isCloning: Bool = false
     @State private var errorMessage: String? = nil
     @State private var showAuthBanner: Bool = false
+    /// Stable idempotency key for this sheet's lifetime. Generated once at
+    /// mount; reused on every Clone tap so a lost response retried with
+    /// the same key replays the cached server result instead of
+    /// re-executing the clone (which would 409 with "destination exists").
+    @State private var idempotencyKey: String = UUID().uuidString
 
     var body: some View {
         NavigationStack {
@@ -93,7 +98,7 @@ struct IOSCloneRepoSheet: View {
         let result = await client.cloneFromGitHubOnMac(
             spec: spec,
             destinationParent: destinationParent,
-            idempotencyKey: UUID().uuidString
+            idempotencyKey: idempotencyKey
         )
         if result.unsupportedServer {
             errorMessage = "This Mac is on an older version. Update Clawdmeter on the Mac to enable iOS clone."
