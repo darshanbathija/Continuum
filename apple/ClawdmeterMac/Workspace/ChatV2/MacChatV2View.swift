@@ -763,7 +763,7 @@ private struct MessageRow: View {
             case .userText:
                 HStack {
                     Spacer(minLength: 40)
-                    Text(message.body)
+                    Text(ClawdmeterMac_displaySkillInvocations(in: message.body))
                         .font(TahoeFont.body(12.5))
                         .foregroundStyle(t.fg)
                         .padding(.horizontal, 12)

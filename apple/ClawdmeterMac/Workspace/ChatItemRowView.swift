@@ -330,7 +330,7 @@ struct ChatItemRowContent: View {
             Spacer(minLength: 64)
             VStack(alignment: .trailing, spacing: 4) {
                 TahoeGlass(radius: 20, tone: .raised) {
-                    Text(msg.body)
+                    Text(ClawdmeterMac_displaySkillInvocations(in: msg.body))
                         .font(TahoeFont.body(bodyFontSize))
                         .foregroundStyle(t.fg)
                         .padding(.horizontal, 16)
@@ -407,26 +407,33 @@ struct ChatItemRowContent: View {
                 HStack(spacing: 6) {
                     TahoeIcon("terminal", size: 10)
                         .foregroundStyle(t.fg3)
-                    Text("Ran \(pairs.count) command\(pairs.count == 1 ? "" : "s")")
-                        .font(TahoeFont.body(11.5, weight: .semibold))
-                        .foregroundStyle(t.fg2)
-                        // `contentTransition(.numericText())` animates the
-                        // digit itself (3 → 4 slides in place) instead of
-                        // fading the whole label.
-                        .contentTransition(.numericText(value: Double(pairs.count)))
-                    if runningStep != nil {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .scaleEffect(0.65)
-                            .frame(width: 12, height: 12)
+                    HStack(spacing: 0) {
+                        Text("Ran ")
+                        Text("\(pairs.count)")
+                            .monospacedDigit()
+                            .frame(width: 20, alignment: .trailing)
+                            .contentTransition(.numericText(value: Double(pairs.count)))
+                            .animation(.easeOut(duration: 0.10), value: pairs.count)
+                        Text(" command")
+                        Text("s")
+                            .opacity(pairs.count == 1 ? 0 : 1)
+                            .transaction { $0.animation = nil }
                     }
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                    .accessibilityLabel(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
+                    ZStack {
+                        if runningStep != nil {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.65)
+                        }
+                    }
+                    .frame(width: 12, height: 12)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(t.hair2, in: Capsule(style: .continuous))
-                // Subtle bounce on count change — implicit animation keyed
-                // off `pairs.count`. No @State, no per-render bookkeeping.
-                .animation(.spring(response: 0.32, dampingFraction: 0.55), value: pairs.count)
                 .contentShape(Rectangle())
             }
             .disclosureGroupStyle(QuietDisclosure())
@@ -690,4 +697,51 @@ func ClawdmeterMac_runningStepSubtitle(forTool toolTitle: String, body: String) 
     }
     let snippet = bodyOneLine.count > 60 ? String(bodyOneLine.prefix(60)) + "…" : bodyOneLine
     return "Running \(title) · \(snippet)"
+}
+
+/// Display-only cleanup for Claude Code skill invocation markers.
+///
+/// Claude persists a called skill as Markdown-ish text:
+/// `[review](/Users/.../review/SKILL.md)`. In the Code tab that reads like
+/// leaked implementation detail. The prompt/transcript body stays unchanged;
+/// views call this helper only for the visible label.
+func ClawdmeterMac_displaySkillInvocations(in text: String) -> String {
+    let pattern = #"\[([^\]\n]+)\]\(([^)\n]*SKILL\.md)\)"#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        return text
+    }
+
+    var result = text
+    let nsText = text as NSString
+    let fullRange = NSRange(location: 0, length: nsText.length)
+    let matches = regex.matches(in: text, range: fullRange)
+
+    for match in matches.reversed() {
+        guard match.numberOfRanges >= 3,
+              let replacementRange = Range(match.range(at: 0), in: result),
+              let skillRange = Range(match.range(at: 1), in: text)
+        else { continue }
+
+        let rawName = String(text[skillRange])
+        result.replaceSubrange(replacementRange, with: "Skill: \(ClawdmeterMac_skillDisplayName(rawName))")
+    }
+
+    return result
+}
+
+private func ClawdmeterMac_skillDisplayName(_ raw: String) -> String {
+    let pieces = raw
+        .split(whereSeparator: { $0 == "-" || $0 == "_" || $0 == " " })
+        .map(String.init)
+
+    guard !pieces.isEmpty else { return "Skill" }
+
+    return pieces
+        .map { piece in
+            if piece.count <= 3 {
+                return piece.uppercased()
+            }
+            return piece.prefix(1).uppercased() + piece.dropFirst().lowercased()
+        }
+        .joined(separator: " ")
 }
