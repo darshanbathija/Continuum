@@ -37,6 +37,20 @@
          </BuildActionEntry>
          <BuildActionEntry
             buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "BA2A76CB7E523FD5B96EE015"
+               BuildableName = "ClawdmeterMacUITests.xctest"
+               BlueprintName = "ClawdmeterMacUITests"
+               ReferencedContainer = "container:Clawdmeter.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
             buildForRunning = "YES"
             buildForProfiling = "YES"
             buildForArchiving = "YES"
@@ -75,6 +89,17 @@
                BlueprintIdentifier = "8B311165646AC3157ECBA650"
                BuildableName = "ClawdmeterMacTests.xctest"
                BlueprintName = "ClawdmeterMacTests"
+               ReferencedContainer = "container:Clawdmeter.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "BA2A76CB7E523FD5B96EE015"
+               BuildableName = "ClawdmeterMacUITests.xctest"
+               BlueprintName = "ClawdmeterMacUITests"
                ReferencedContainer = "container:Clawdmeter.xcodeproj">
             </BuildableReference>
          </TestableReference>

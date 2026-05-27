@@ -17,6 +17,7 @@ struct PermissionModeChip: View {
     /// everything except a stub. Callers pass the eligible list.
     let availableModes: [PermissionMode]
     let onChange: (PermissionMode) -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Menu {
@@ -60,14 +61,16 @@ struct PermissionModeChip: View {
             .frame(minHeight: 32)
             .background(
                 mode == .bypass
-                    ? AnyShapeStyle(Color.yellow.opacity(0.15))
-                    : AnyShapeStyle(Color.secondary.opacity(0.10)),
+                    ? AnyShapeStyle(Color.yellow.opacity(isHovered ? 0.22 : 0.15))
+                    : AnyShapeStyle(Color.secondary.opacity(isHovered ? 0.16 : 0.10)),
                 in: Capsule()
             )
             .overlay(
                 Capsule()
                     .strokeBorder(
-                        mode == .bypass ? Color.yellow.opacity(0.5) : Color.clear,
+                        mode == .bypass
+                            ? Color.yellow.opacity(0.5)
+                            : (isHovered ? Color.secondary.opacity(0.24) : Color.clear),
                         lineWidth: 1
                     )
             )
@@ -77,5 +80,7 @@ struct PermissionModeChip: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Permission mode — ⌘⇧1-4 to switch")
+        .accessibilityIdentifier("code.composer.permission-mode")
+        .onHover { isHovered = $0 }
     }
 }

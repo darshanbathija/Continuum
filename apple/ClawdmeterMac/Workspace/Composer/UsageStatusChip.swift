@@ -30,6 +30,7 @@ struct ModelEffortChip: View {
     let modelSupportsEffort: Bool
 
     @State private var showingPopover = false
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: { showingPopover.toggle() }) {
@@ -47,12 +48,24 @@ struct ModelEffortChip: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .frame(minHeight: 32)
-            .background(Color.secondary.opacity(0.10), in: Capsule())
+            .background(Color.secondary.opacity(isHovered ? 0.16 : 0.10), in: Capsule())
+            .overlay(Capsule().stroke(isHovered ? Color.secondary.opacity(0.24) : Color.clear, lineWidth: 0.75))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
-        .help("Change model or effort")
+        .help("Change model or effort (⌘⌥M)")
+        .accessibilityIdentifier("code.composer.model-effort")
+        .onHover { isHovered = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: .composerOpenModelEffort)) { _ in
+            showingPopover = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .composerCycleEffortNext)) { _ in
+            cycleEffort(direction: 1)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .composerCycleEffortPrevious)) { _ in
+            cycleEffort(direction: -1)
+        }
         .popover(isPresented: $showingPopover, arrowEdge: .top) {
             ModelEffortPopover(
                 catalog: catalog,
@@ -70,6 +83,14 @@ struct ModelEffortChip: View {
         }
         return info.modelDisplay
     }
+
+    private func cycleEffort(direction: Int) {
+        guard modelSupportsEffort else { return }
+        let values: [ReasoningEffort] = [.low, .medium, .high, .xhigh, .max]
+        let currentIndex = selectedEffort.flatMap { values.firstIndex(of: $0) } ?? values.firstIndex(of: .medium) ?? 0
+        let next = (currentIndex + direction + values.count) % values.count
+        selectedEffort = values[next]
+    }
 }
 
 // MARK: - Context + Usage chip
@@ -86,6 +107,7 @@ struct ContextUsageChip: View {
     let info: UsageStatusInfo
 
     @State private var showingPopover = false
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: { showingPopover.toggle() }) {
@@ -97,11 +119,17 @@ struct ContextUsageChip: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            .background(Color.secondary.opacity(0.10), in: Capsule())
+            .background(Color.secondary.opacity(isHovered ? 0.16 : 0.10), in: Capsule())
+            .overlay(Capsule().stroke(isHovered ? Color.secondary.opacity(0.24) : Color.clear, lineWidth: 0.75))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("Context window utilisation — click for plan usage")
+        .help("Context window utilisation — click for plan usage (⌘⌥C)")
+        .accessibilityIdentifier("code.composer.context-usage")
+        .onHover { isHovered = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: .composerOpenContextUsage)) { _ in
+            showingPopover = true
+        }
         .popover(isPresented: $showingPopover, arrowEdge: .top) {
             ContextUsagePopover(info: info)
         }

@@ -25,6 +25,30 @@ final class UIPrimitivesTests: XCTestCase {
         XCTAssertNil(registry.grouped(query: "find")[.session])
     }
 
+    func testDefaultShortcutsHaveUniqueIdsAndChords() {
+        let defaults = ClawdmeterShortcutRegistry.defaults
+        XCTAssertEqual(Set(defaults.map(\.id)).count, defaults.count)
+
+        let chords = defaults.map { "\($0.modifiers.map(\.rawValue).joined(separator: "+")):\($0.key)" }
+        XCTAssertEqual(Set(chords).count, chords.count)
+    }
+
+    func testCodeHoverShortcutDefaultsAreRegistered() {
+        let defaults = Dictionary(uniqueKeysWithValues: ClawdmeterShortcutRegistry.defaults.map { ($0.id, $0) })
+
+        XCTAssertEqual(defaults["code.newChatTab"]?.displayChord, "⌘T")
+        XCTAssertEqual(defaults["code.newChatTab"]?.commandID?.rawValue, "code.newChatTab")
+        XCTAssertEqual(defaults["code.newTerminalTab"]?.displayChord, "⌘⇧T")
+        XCTAssertEqual(defaults["session.new"]?.displayChord, "⌘N")
+        XCTAssertEqual(defaults["composer.attach"]?.displayChord, "⌘U")
+        XCTAssertEqual(defaults["session.rename"]?.displayChord, "⌘⇧R")
+        XCTAssertEqual(defaults["session.archive"]?.displayChord, "⌘⇧A")
+        XCTAssertEqual(defaults["composer.modelEffort"]?.displayChord, "⌘⌥M")
+        XCTAssertEqual(defaults["composer.context"]?.displayChord, "⌘⌥C")
+        XCTAssertEqual(defaults["composer.effortNext"]?.displayChord, "⌘⌥E")
+        XCTAssertEqual(defaults["composer.effortPrevious"]?.displayChord, "⌘⌥⇧E")
+    }
+
     func testSessionPresentationStorePersistsPinsUnreadAndRecents() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

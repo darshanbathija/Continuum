@@ -194,4 +194,33 @@ final class AgentSessionRegistryEventStoreWireTests: XCTestCase {
         let approvedKindRow = rows.last { $0.command.kind == .sessionApproved }
         XCTAssertNotNil(approvedKindRow, "markPlanApproved must emit a .sessionApproved receipt")
     }
+
+    func test_renameTerminalPane_persistsThroughRegistryReplay() async throws {
+        let pane = TerminalPaneRef(id: UUID(), paneId: "%2", title: "Pane 2", isPrimary: false)
+        let sessionId: UUID
+        do {
+            let (reg, store) = try makeRegistry()
+            let session = try await reg.create(
+                repoKey: "/tmp/t", repoDisplayName: "t", agent: .claude, model: "sonnet",
+                goal: nil, worktreePath: "/tmp/t", tmuxWindowId: "@1", tmuxPaneId: "%1",
+                planMode: false, mode: .local
+            )
+            sessionId = session.id
+            try await reg.addTerminalPane(sessionId: session.id, pane: pane)
+            let renamed = try await reg.renameTerminalPane(sessionId: session.id, paneRefId: pane.id, title: "Build logs")
+            XCTAssertEqual(renamed?.title, "Build logs")
+            try await store.checkpoint()
+        }
+
+        try? FileManager.default.removeItem(at: sessionsURL)
+        let (replayed, _) = try makeRegistry()
+        let restored = try XCTUnwrap(replayed.session(id: sessionId))
+        XCTAssertEqual(restored.terminalPanes.first?.title, "Build logs")
+    }
+
+    // #185 also shipped a `test_createCodeSessionCanPersistExplicitRuntimeCwdForSameWorkspaceTabs`
+    // test that called `reg.create(..., runtimeCwd: ...)`. That overload didn't ship on main
+    // (the workspace-tab-aware `create` signature was a separate piece of #185 that overlapped
+    // with #174 and was dropped in the surgical rebase). Dropping the test for now to keep the
+    // file compiling; restore it if/when the same-workspace-tab create overload lands.
 }

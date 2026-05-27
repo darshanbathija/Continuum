@@ -102,11 +102,16 @@ public struct TahoeDashTab: View {
     @Environment(\.tahoe) private var t
     public var label: String
     public var active: Bool
+    public var help: String?
+    public var shortcut: String?
     public var action: () -> Void
+    @State private var isHovered = false
 
-    public init(_ label: String, active: Bool, action: @escaping () -> Void = {}) {
+    public init(_ label: String, active: Bool, help: String? = nil, shortcut: String? = nil, action: @escaping () -> Void = {}) {
         self.label = label
         self.active = active
+        self.help = help
+        self.shortcut = shortcut
         self.action = action
     }
 
@@ -118,20 +123,30 @@ public struct TahoeDashTab: View {
                 .padding(.horizontal, 12)
                 .frame(height: 22)
                 .background {
-                    if active {
+                    if active || isHovered {
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.10) : Color.white)
-                            .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
+                            .fill(active
+                                  ? (t.dark ? Color(.sRGB, white: 1, opacity: 0.10) : Color.white)
+                                  : t.hair2.opacity(t.dark ? 0.9 : 1.15))
+                            .shadow(color: active ? Color.black.opacity(0.10) : .clear, radius: 1, x: 0, y: 1)
                     }
                 }
                 .overlay {
-                    if active {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
-                    }
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(active ? Color.black.opacity(0.08) : (isHovered ? t.hairline : .clear), lineWidth: 0.5)
                 }
         }
         .buttonStyle(.plain)
+        .help(tooltip)
+        .accessibilityIdentifier("dash.tab.\(label.lowercased())")
+        .onHover { isHovered = $0 }
+    }
+
+    private var tooltip: String {
+        if let shortcut, let help {
+            return "\(help) \(shortcut)"
+        }
+        return help ?? shortcut ?? label
     }
 }
 
