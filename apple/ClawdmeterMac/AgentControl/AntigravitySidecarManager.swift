@@ -73,6 +73,39 @@ public final class AntigravitySidecarManager {
         venvRoot.deletingLastPathComponent()
     }
 
+    /// Sandbox-internal home for uv's managed Python downloads. See
+    /// `runUV` for why this can't be the default `$HOME/.local/share/uv/python`.
+    private func uvPythonInstallDir() -> URL {
+        provisioningWorkDirectory.appendingPathComponent("uv-python", isDirectory: true)
+    }
+
+    /// Strip `com.apple.quarantine` recursively under `url`. macOS auto-
+    /// applies that xattr to every file a sandboxed app writes —
+    /// including files uv downloads — and Gatekeeper then refuses to
+    /// exec them with "Operation not permitted (os error 1)". The
+    /// sandboxed app is allowed to xattr-modify files in its own
+    /// container, so we strip the flag between download and exec.
+    private func stripQuarantine(recursivelyAt url: URL) {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: url,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) else { return }
+        // The root URL itself + every descendant.
+        for case let item as URL in enumerator {
+            // removexattr returns -1 with ENOATTR when the file doesn't
+            // have the xattr — ignore (cheap to attempt unconditionally).
+            _ = item.path.withCString { path in
+                removexattr(path, "com.apple.quarantine", 0)
+            }
+        }
+        // Also clear it from the root itself.
+        _ = url.path.withCString { path in
+            removexattr(path, "com.apple.quarantine", 0)
+        }
+    }
+
     private var uvCacheDirectory: URL {
         let cacheRoot = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -166,8 +199,24 @@ public final class AntigravitySidecarManager {
                 try? FileManager.default.removeItem(at: venvRoot)
             }
             if !FileManager.default.fileExists(atPath: venvPython.path) {
+                // Pre-download Python 3.13 in a SEPARATE uv invocation so
+                // we can strip the `com.apple.quarantine` xattr between
+                // download and use. Without this, `uv venv` would try to
+                // exec the freshly-downloaded interpreter in the same
+                // invocation that downloaded it — quarantine'd binaries
+                // can't exec, the venv step fails with "Operation not
+                // permitted (os error 1)", and provisioning aborts.
+                provisioningStep = "Downloading Python 3.13 (~5s)…"
+                try await runUV(uvBinary, args: ["python", "install", "3.13"])
+                stripQuarantine(recursivelyAt: uvPythonInstallDir())
+
                 provisioningStep = "Creating Python 3.13 venv (~10s)…"
                 try await runUV(uvBinary, args: ["venv", "--no-project", "--python", "3.13", venvRoot.path])
+                // Belt-and-suspenders: a separate run could have invoked
+                // a fallback download path; strip quarantine again so the
+                // venv's symlinks back into uv-python/ are guaranteed
+                // exec-clean.
+                stripQuarantine(recursivelyAt: uvPythonInstallDir())
 
                 provisioningStep = "Installing google-antigravity (~5s)…"
                 try await runUV(
@@ -270,9 +319,8 @@ public final class AntigravitySidecarManager {
         // build is OUTSIDE the container — uv hits "Operation not
         // permitted" when it tries to enumerate that directory at
         // `uv venv` time and fails before creating any venv.
-        let uvPythonInstallDir = provisioningWorkDirectory
-            .appendingPathComponent("uv-python", isDirectory: true)
-        try FileManager.default.createDirectory(at: uvPythonInstallDir, withIntermediateDirectories: true)
+        let pythonDir = uvPythonInstallDir()
+        try FileManager.default.createDirectory(at: pythonDir, withIntermediateDirectories: true)
 
         let process = Process()
         process.executableURL = uvBinary
@@ -296,7 +344,7 @@ public final class AntigravitySidecarManager {
         // probes PATH for system Pythons which (a) the sandbox blocks
         // many of, and (b) would defeat the "sealed venv" property the
         // sidecar manager relies on.
-        env["UV_PYTHON_INSTALL_DIR"] = uvPythonInstallDir.path
+        env["UV_PYTHON_INSTALL_DIR"] = pythonDir.path
         env["UV_PYTHON_PREFERENCE"] = "only-managed"
         process.environment = env
 
