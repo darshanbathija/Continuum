@@ -111,24 +111,28 @@ public final class RepoOnboarding {
             throw symlinkError
         }
 
-        // mkdir -p the parent if it doesn't exist yet. Clone fails fast
-        // otherwise; the parent is part of the user-controlled allow-list,
-        // not a path the daemon picked.
+        // Codex R5: parent MUST already exist as a real directory. We
+        // intentionally do NOT auto-mkdir with `withIntermediateDirectories:
+        // true` because that path follows existing symlinks at each
+        // intermediate component — a same-user attacker could race in
+        // `<allowed>/missing -> ~/.ssh` after lstat returned ENOENT,
+        // and mkdir-p would then follow the symlink out of the allow-
+        // list. The user (or Settings on first launch) is expected to
+        // create `~/code/` once; we won't auto-create it.
         var parentIsDir: ObjCBool = false
-        if !FileManager.default.fileExists(atPath: destinationParent, isDirectory: &parentIsDir) {
-            do {
-                try FileManager.default.createDirectory(
-                    atPath: destinationParent,
-                    withIntermediateDirectories: true,
-                    attributes: nil
-                )
-            } catch {
-                throw RepoOnboardingError.persistenceFailed(
-                    message: "Couldn't create parent: \(error.localizedDescription)"
-                )
-            }
-        } else if !parentIsDir.boolValue {
+        guard FileManager.default.fileExists(atPath: destinationParent, isDirectory: &parentIsDir) else {
+            throw RepoOnboardingError.persistenceFailed(
+                message: "Destination parent doesn't exist. Create it first: mkdir -p '\(destinationParent)'"
+            )
+        }
+        guard parentIsDir.boolValue else {
             throw RepoOnboardingError.notADirectory
+        }
+        // Re-confirm the parent isn't a symlink right before we hand
+        // its path to `git clone` (which would follow). Window between
+        // this lstat and the subprocess exec is ~microseconds.
+        if let symlinkError = PathAllowList.confirmNotSymlink(destinationParent) {
+            throw symlinkError
         }
 
         if FileManager.default.fileExists(atPath: destPath) {
@@ -198,25 +202,20 @@ public final class RepoOnboarding {
         case .failure(let err):
             throw err
         }
+        // Codex R5: parent MUST already exist as a real directory. See
+        // `cloneFromGitHub` for the ENOENT/symlink-bypass rationale.
+        var parentIsDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: parent, isDirectory: &parentIsDir) else {
+            throw RepoOnboardingError.persistenceFailed(
+                message: "Parent folder doesn't exist. Create it first: mkdir -p '\(parent)'"
+            )
+        }
+        guard parentIsDir.boolValue else {
+            throw RepoOnboardingError.notADirectory
+        }
+        // Re-confirm the parent isn't a symlink right before we use it.
         if let symlinkError = PathAllowList.confirmNotSymlink(parent) {
             throw symlinkError
-        }
-        // Ensure the parent itself exists (idempotent mkdir).
-        var parentIsDir: ObjCBool = false
-        if !FileManager.default.fileExists(atPath: parent, isDirectory: &parentIsDir) {
-            do {
-                try FileManager.default.createDirectory(
-                    atPath: parent,
-                    withIntermediateDirectories: true,
-                    attributes: nil
-                )
-            } catch {
-                throw RepoOnboardingError.persistenceFailed(
-                    message: "Couldn't create parent: \(error.localizedDescription)"
-                )
-            }
-        } else if !parentIsDir.boolValue {
-            throw RepoOnboardingError.notADirectory
         }
 
         let destPath = (parent as NSString).appendingPathComponent(name)

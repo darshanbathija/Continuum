@@ -441,15 +441,25 @@ extension AgentControlServer {
         // Best-effort: record an idempotency receipt for the failure too,
         // so retries replay the same error rather than re-attempting.
         // payloadHash threaded through so 422 mismatch detection also
-        // works against cached failures (Codex R4 #1 fix).
+        // works against cached failures (R4 #1). Audit-log write too so
+        // restart replay can rehydrate failure receipts (R5 #2).
         if let key = req.idempotencyKey {
-            await mobileCommandOutbox.recordFailure(
+            let entry = await mobileCommandOutbox.recordFailure(
                 key: key,
                 kind: kind,
                 error: "\(error)",
                 responseStatus: status,
                 responseBody: body,
                 payloadHash: payloadHash
+            )
+            await AuditLog.shared.recordMobileCommand(
+                idempotencyKey: key,
+                kind: kind.rawValue,
+                sessionId: nil,
+                sourcePeer: AgentControlServer.endpointString(connection.endpoint),
+                status: entry.receipt.status.rawValue,
+                payloadHash: payloadHash,
+                serverReceiptId: entry.receipt.serverReceiptId
             )
         }
         let resp = AgentControlServer.HTTPResponse(
@@ -515,13 +525,25 @@ extension AgentControlServer {
         connection: NWConnection
     ) async {
         if let key = req.idempotencyKey {
-            await mobileCommandOutbox.record(
+            let entry = await mobileCommandOutbox.record(
                 key: key,
                 kind: .openLocalFolder,
                 responseBody: Data("{}".utf8),
                 responseContentType: "application/json",
                 responseStatus: 204,
                 payloadHash: payloadHash
+            )
+            // Codex R5 #2: persist to audit log so a lost-204 + daemon
+            // restart still replays the cancel instead of re-opening
+            // NSOpenPanel on the user's Mac.
+            await AuditLog.shared.recordMobileCommand(
+                idempotencyKey: key,
+                kind: MobileCommandKind.openLocalFolder.rawValue,
+                sessionId: nil,
+                sourcePeer: AgentControlServer.endpointString(connection.endpoint),
+                status: entry.receipt.status.rawValue,
+                payloadHash: payloadHash,
+                serverReceiptId: entry.receipt.serverReceiptId
             )
         }
         let resp = AgentControlServer.HTTPResponse(
