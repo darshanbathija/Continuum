@@ -190,8 +190,31 @@ public final class SessionChatStore {
         /// ever since. Once a turn settles (no new events for the activity
         /// window) the indicator hides itself, so this property doesn't
         /// need to clamp on turn-complete — `isActive` does.
+        ///
+        /// Synthetic-injection guard: in Anthropic JSONL, a user-role
+        /// frame carrying both `tool_result` AND a sibling `text` block
+        /// (sub-agent output, "Request interrupted", auto-continuation
+        /// markers, etc.) produces adjacent `[.toolResult, .userText]`
+        /// pairs sharing the same line timestamp. Counting those mid-turn
+        /// `.userText` entries as "new prompts" was making the timer reset
+        /// every 5-30s as tool calls completed. Skip any `.userText`
+        /// whose preceding message in the transcript is a `.toolResult` —
+        /// real prompts are preceded by an assistant turn, a plan settle,
+        /// or nothing at all.
         public var currentTurnStartedAt: Date? {
-            messages.last(where: { $0.kind == .userText })?.at
+            var prev: ChatMessage? = nil
+            var realPromptAt: Date? = nil
+            for msg in messages {
+                if msg.kind == .userText, prev?.kind != .toolResult {
+                    realPromptAt = msg.at
+                }
+                prev = msg
+            }
+            if let at = realPromptAt { return at }
+            // Fallback: a session that genuinely has no non-tool-result
+            // user prompt (rare; mostly synthetic preview rows). Use the
+            // last `.userText` we have rather than nothing.
+            return messages.last(where: { $0.kind == .userText })?.at
         }
     }
 

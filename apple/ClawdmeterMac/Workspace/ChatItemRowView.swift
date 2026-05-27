@@ -390,28 +390,74 @@ struct ChatItemRowContent: View {
             get: { payload.isToolRunOpen },
             set: { actions.onToggleToolRun(id, $0) }
         )
-        return DisclosureGroup(isExpanded: isOpen) {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(pairs) { pair in
-                    toolPairRow(pair)
+        // The most recent pair without a result is the in-flight step.
+        // While present, render a subtitle under the chip; once all
+        // pairs have results the subtitle dissolves.
+        let runningStep: ToolPair? = pairs.last(where: { $0.result == nil })
+        return VStack(alignment: .leading, spacing: 3) {
+            DisclosureGroup(isExpanded: isOpen) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(pairs) { pair in
+                        toolPairRow(pair)
+                    }
                 }
+                .padding(.leading, 16)
+                .padding(.top, 4)
+            } label: {
+                HStack(spacing: 6) {
+                    TahoeIcon("terminal", size: 10)
+                        .foregroundStyle(t.fg3)
+                    Text("Ran \(pairs.count) command\(pairs.count == 1 ? "" : "s")")
+                        .font(TahoeFont.body(11.5, weight: .semibold))
+                        .foregroundStyle(t.fg2)
+                        // `contentTransition(.numericText())` animates the
+                        // digit itself (3 → 4 slides in place) instead of
+                        // fading the whole label.
+                        .contentTransition(.numericText(value: Double(pairs.count)))
+                    if runningStep != nil {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .scaleEffect(0.65)
+                            .frame(width: 12, height: 12)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(t.hair2, in: Capsule(style: .continuous))
+                // Subtle bounce on count change — implicit animation keyed
+                // off `pairs.count`. No @State, no per-render bookkeeping.
+                .animation(.spring(response: 0.32, dampingFraction: 0.55), value: pairs.count)
+                .contentShape(Rectangle())
             }
-            .padding(.leading, 16)
-            .padding(.top, 4)
-        } label: {
-            HStack(spacing: 6) {
-                TahoeIcon("terminal", size: 10)
+            .disclosureGroupStyle(QuietDisclosure())
+
+            if let running = runningStep {
+                Text(runningStepSubtitle(running))
+                    .font(TahoeFont.body(10))
                     .foregroundStyle(t.fg3)
-                Text("Ran \(pairs.count) command\(pairs.count == 1 ? "" : "s")")
-                    .font(TahoeFont.body(11.5, weight: .semibold))
-                    .foregroundStyle(t.fg2)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.leading, 18)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(t.hair2, in: Capsule(style: .continuous))
-            .contentShape(Rectangle())
         }
-        .disclosureGroupStyle(QuietDisclosure())
+        .animation(.easeInOut(duration: 0.22), value: runningStep?.id)
+    }
+
+    /// One-liner shown under the "Ran N commands" pill while a tool call
+    /// is in flight. Format: `Running <tool> · <input snippet>`. Snippet
+    /// is clipped to 60 chars and stripped of newlines so it fits a
+    /// single line in narrow chat columns.
+    private func runningStepSubtitle(_ pair: ToolPair) -> String {
+        let title = pair.call.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bodyOneLine = pair.call.body
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if bodyOneLine.isEmpty || bodyOneLine == title {
+            return "Running \(title)…"
+        }
+        let snippet = bodyOneLine.count > 60 ? String(bodyOneLine.prefix(60)) + "…" : bodyOneLine
+        return "Running \(title) · \(snippet)"
     }
 
     private func toolPairRow(_ pair: ToolPair) -> some View {
