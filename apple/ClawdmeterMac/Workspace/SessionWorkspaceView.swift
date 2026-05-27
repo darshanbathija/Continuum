@@ -1288,31 +1288,27 @@ private struct SidebarPane: View {
     private func workspaceSection(_ section: SidebarWorkspaceSection) -> some View {
         let sectionID = "workspace:\(section.id)"
         let isExpanded = isPrioritySectionExpanded(sectionID)
-        // v0.29.28: also render the repo's historical JSONLs underneath
-        // the workspace's Clawdmeter-managed sessions. Filters out any
-        // JSONL the registry already adopted (`ownedJSONLPaths`) so a
-        // session doesn't appear twice. Keeps the count honest.
-        let owned = model.knownOwnedJSONLPaths
-        let recents = section.recentSessions
-            .filter { !owned.contains($0.path) }
-            .sorted { $0.lastModified > $1.lastModified }
-        let totalCount = section.sessions.count + recents.count
+        // v0.29.29: import-a-repo should be a clean slate. Earlier v0.29.28
+        // rendered the repo's historical JSONLs underneath the workspace
+        // header so users wouldn't lose access to past sessions; turns
+        // out the user expects "import" to mean "start fresh here." Only
+        // Clawdmeter-spawned `AgentSession` rows render under Managed
+        // now. Historical JSONLs remain reachable from the History
+        // section at the bottom of the sidebar when the user expands
+        // it — but only when the repo is NOT workspace-managed
+        // (managed repos skip the external/history split entirely so
+        // their recents stay out of sight).
         return VStack(alignment: .leading, spacing: 0) {
             repoHeader(
                 section.repo,
                 isExpanded: isExpanded,
-                sessionCount: totalCount,
+                sessionCount: section.sessions.count,
                 subtitle: workspaceSubtitle(for: section.workspacePath),
                 onToggle: { togglePrioritySection(sectionID) }
             )
             if isExpanded {
                 ForEach(section.sessions) { session in
                     sessionRow(session, isOpen: model.openSessionId == session.id, depth: 0)
-                }
-                if !recents.isEmpty {
-                    ForEach(recents) { recent in
-                        externalRecentButton(recent, repo: section.repo)
-                    }
                 }
             }
         }
