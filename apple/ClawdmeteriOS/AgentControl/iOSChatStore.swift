@@ -12,6 +12,14 @@ private let chatStoreLogger = Logger(subsystem: "com.clawdmeter.ios", category: 
 /// frame on each commit window (~100ms); iOS replaces its `@Published`
 /// snapshot wholesale and SwiftUI re-renders the live chat List.
 ///
+/// **A10 (wire v21) — shell/detail split:** when the paired Mac speaks
+/// `wireVersion >= 21`, the store subscribes with its own wire version
+/// in the envelope and consumes shell + detail event pairs per commit.
+/// The lightweight shell (~80 bytes) updates `shellSummary` for the
+/// activity strip / sidebar immediately; the heavy detail (items + tools
+/// + plan + sources) lands a moment later and bumps the full `snapshot`.
+/// On older Macs (≤ v20), the store stays on the legacy single-frame path.
+///
 /// Failure modes & their handling:
 ///   * Mac is on wireVersion < 5 (chatSubscribeMinimum) — stay on HTTP
 ///     polling so a Mac that hasn't been updated yet keeps working.
@@ -31,6 +39,16 @@ private let chatStoreLogger = Logger(subsystem: "com.clawdmeter.ios", category: 
 @MainActor
 public final class iOSChatStore: ObservableObject {
     @Published public private(set) var snapshot: WireChatSnapshot
+    /// A10 (wire v21): the most-recent `ChatShellEvent` received on the
+    /// `chat-subscribe` WS. Updated independently of `snapshot` so the
+    /// activity strip / sidebar can render lightweight summary state
+    /// (kind subtitle, token counts, turn state) without waiting for the
+    /// heavy `ChatDetailEvent` to arrive and re-publish the full snapshot.
+    ///
+    /// `nil` until the first shell event lands. When the paired Mac is
+    /// on wireVersion ≤ 20 (legacy single-frame path), this field stays
+    /// nil and consumers fall back to `snapshot` for summary data.
+    @Published public private(set) var shellSummary: ChatShellEvent?
     public let sessionId: UUID
 
     private weak var client: AgentControlClient?
@@ -39,6 +57,12 @@ public final class iOSChatStore: ObservableObject {
     private var foregroundObserver: NSObjectProtocol?
     private var wsTask: URLSessionWebSocketTask?
     private var consecutiveWSFailures: Int = 0
+    /// A10: staging slot for a shell event whose paired detail hasn't
+    /// arrived yet. Cleared when the detail lands and `snapshot` is
+    /// rebuilt from the pair, or when a newer shell arrives first
+    /// (drops the stale pending shell so we never stitch across
+    /// sequenceNumbers).
+    private var pendingShell: ChatShellEvent?
 
     /// Time of the last successful frame (WS or HTTP). Used to decide
     /// whether to force a resync on foreground.
@@ -195,21 +219,45 @@ public final class iOSChatStore: ObservableObject {
         // Send the chat-subscribe envelope as the first frame. The Mac
         // daemon's `routeWSSubscription` dispatcher reads this, validates
         // the bearer, looks up the session, and starts pushing snapshots.
+        //
+        // A10 (wire v21): include `wireVersion` so the daemon can pick
+        // the dispatch branch (shell/detail vs legacy snapshot). The
+        // daemon's WSSubscription decoder treats this as optional
+        // (decodeIfPresent), so older daemons that don't know the field
+        // simply ignore it and stay on the legacy path.
         let envelope: [String: Any] = [
             "op": "chat-subscribe",
             "token": token,
-            "sessionId": sessionId.uuidString
+            "sessionId": sessionId.uuidString,
+            "wireVersion": AgentControlWireVersion.current
         ]
         let body = try JSONSerialization.data(withJSONObject: envelope)
         try await task.send(.data(body))
         chatStoreLogger.info("chat-subscribe opened for session \(self.sessionId.uuidString, privacy: .public)")
 
-        // Receive snapshot frames until the connection drops or the task
-        // is cancelled. The daemon sends JSON text frames; the iOS side
-        // applies each one wholesale (full snapshot, no delta encoding in
-        // v1 per Codex D6).
+        // Receive frames until the connection drops or the task is
+        // cancelled. The daemon sends JSON text frames; the iOS side
+        // handles two shapes:
+        //
+        //   1. Legacy `WireChatSnapshot` (when paired Mac is on
+        //      wireVersion <= 20 OR is too old to know about the
+        //      envelope). Applied wholesale to `snapshot`.
+        //
+        //   2. Shell/detail envelope (`ChatStreamFrame`) when paired
+        //      Mac is on wireVersion >= 21. Shell updates
+        //      `shellSummary`; detail combines with the staged shell
+        //      to rebuild `snapshot`.
+        //
+        // The dispatch is per-frame (not per-connection) because we
+        // sniff the first byte for the JSON shape. This handles a
+        // daemon that upgrades mid-stream — the first commit after
+        // upgrade lands on the new path naturally.
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        // Reset shell pairing state when starting a fresh subscribe.
+        // A previous session's pending shell would never reach its
+        // paired detail across reconnects.
+        self.pendingShell = nil
         while !Task.isCancelled {
             let message: URLSessionWebSocketTask.Message
             do {
@@ -226,12 +274,115 @@ public final class iOSChatStore: ObservableObject {
             @unknown default:
                 continue
             }
-            if let fetched = try? decoder.decode(WireChatSnapshot.self, from: data) {
-                if fetched.updateCounter > snapshot.updateCounter || fetched.items != snapshot.items {
-                    self.snapshot = fetched
-                    self.lastFrameAt = Date()
-                }
+            applyIncomingFrame(data, decoder: decoder)
+        }
+    }
+
+    /// A10: decode + dispatch a single WS frame. Tries the v21 envelope
+    /// first; falls back to the legacy `WireChatSnapshot` shape on
+    /// failure. This lets a single connection handle either wire — the
+    /// daemon picks the shape per-connection from our reported
+    /// `wireVersion`, but a future migration could mix shapes within a
+    /// session without breaking the consumer.
+    private func applyIncomingFrame(_ data: Data, decoder: JSONDecoder) {
+        // Try the v21 envelope shape first. Both shell and detail
+        // wrap themselves in a `{ type: "shell"|"detail", ... }`
+        // envelope; the legacy snapshot does NOT.
+        if let frame = try? decoder.decode(ChatStreamFrame.self, from: data) {
+            switch frame {
+            case .shell(let shell):
+                handleShellEvent(shell)
+                return
+            case .detail(let detail):
+                handleDetailEvent(detail)
+                return
+            case .snapshot(let snapshot):
+                // The v21 envelope can carry a legacy snapshot too —
+                // a daemon that wants to bypass split for some commits.
+                applyFullSnapshot(snapshot)
+                return
             }
+        }
+        // Legacy v20 path: raw `WireChatSnapshot` JSON, no envelope.
+        if let fetched = try? decoder.decode(WireChatSnapshot.self, from: data) {
+            applyFullSnapshot(fetched)
+        }
+    }
+
+    private func handleShellEvent(_ shell: ChatShellEvent) {
+        self.shellSummary = shell
+        self.lastFrameAt = Date()
+        // If the previous pendingShell never paired with a detail
+        // (the detail frame was lost / out-of-order), drop it and
+        // stage the new shell. We never stitch across sequence
+        // numbers — that would mix sources from different commit
+        // windows.
+        self.pendingShell = shell
+        // Apply the shell's lightweight fields onto the current
+        // snapshot if the sequence number is newer. This lets
+        // consumers that DON'T migrate to `shellSummary` still get
+        // the new turnState / lastEventAt before the detail lands,
+        // without re-rendering items.
+        if shell.sequenceNumber > snapshot.updateCounter {
+            // Build a partial snapshot using the existing items so the
+            // legacy `.snapshot` consumers see the head update too.
+            // Items / plan / artifacts stay until the detail rebuilds
+            // them in `handleDetailEvent`.
+            let merged = WireChatSnapshot(
+                sessionId: shell.sessionId,
+                items: snapshot.items,
+                planSteps: snapshot.planSteps,
+                sourceEntries: snapshot.sourceEntries,
+                artifactEntries: snapshot.artifactEntries,
+                codexTodos: snapshot.codexTodos,
+                pendingPermissionPrompt: snapshot.pendingPermissionPrompt,
+                totalInputTokens: shell.tokensIn ?? snapshot.totalInputTokens,
+                totalOutputTokens: shell.tokensOut ?? snapshot.totalOutputTokens,
+                cacheReadTokens: snapshot.cacheReadTokens,
+                cacheCreationTokens: snapshot.cacheCreationTokens,
+                lastEventAt: shell.emittedAt ?? snapshot.lastEventAt,
+                updateCounter: shell.sequenceNumber,
+                currentTurnState: shell.turnState
+            )
+            self.snapshot = merged
+        }
+    }
+
+    private func handleDetailEvent(_ detail: ChatDetailEvent) {
+        // Pair with the most-recent pending shell when sequence numbers
+        // match. Otherwise treat the detail's heavy fields as authoritative
+        // and re-derive shell summary from it.
+        let pairedShell: ChatShellEvent
+        if let pending = pendingShell, pending.sequenceNumber == detail.sequenceNumber {
+            pairedShell = pending
+        } else {
+            // Out-of-order detail: synthesize a shell from the detail
+            // itself so the activity strip stays consistent. This
+            // happens when the shell frame was lost or the daemon
+            // sends a detail-only update.
+            pairedShell = ChatShellEvent(
+                sessionId: detail.sessionId,
+                sequenceNumber: detail.sequenceNumber,
+                kind: ChatShellEvent.kind(from: detail.items),
+                emittedAt: snapshot.lastEventAt,
+                tokensIn: detail.totalInputTokens > 0 ? detail.totalInputTokens : nil,
+                tokensOut: detail.totalOutputTokens > 0 ? detail.totalOutputTokens : nil,
+                turnState: shellSummary?.turnState ?? snapshot.currentTurnState
+            )
+            self.shellSummary = pairedShell
+        }
+        let combined = WireChatSnapshot.combine(shell: pairedShell, detail: detail)
+        applyFullSnapshot(combined)
+        // Clear the staged shell on successful pairing.
+        if let pending = pendingShell, pending.sequenceNumber == detail.sequenceNumber {
+            self.pendingShell = nil
+        }
+    }
+
+    private func applyFullSnapshot(_ fetched: WireChatSnapshot) {
+        if fetched.updateCounter > snapshot.updateCounter || fetched.items != snapshot.items {
+            self.snapshot = fetched
+            self.lastFrameAt = Date()
         }
     }
 

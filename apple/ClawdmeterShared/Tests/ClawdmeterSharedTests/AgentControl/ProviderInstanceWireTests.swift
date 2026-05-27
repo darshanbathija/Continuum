@@ -369,7 +369,10 @@ final class ProviderInstanceWireTests: XCTestCase {
 
     /// Codex #10 acceptance: clients on `wireVersion ≤ 19` see only the
     /// primary instance. The capability gate `supportsProviderInstance`
-    /// must return false for v19 and true for v20.
+    /// must return false for v19 and true for v20. The `current` floor
+    /// is asserted >= 20 so that A10's wireVersion-21 bump doesn't
+    /// re-break this gate — providerInstance is now reachable on every
+    /// supported client.
     func test_capabilityGate_supportsProviderInstance() {
         XCTAssertFalse(AgentControlWireVersion.supportsProviderInstance(serverWireVersion: 19))
         XCTAssertFalse(AgentControlWireVersion.supportsProviderInstance(serverWireVersion: 17))
@@ -377,7 +380,7 @@ final class ProviderInstanceWireTests: XCTestCase {
         XCTAssertTrue(AgentControlWireVersion.supportsProviderInstance(serverWireVersion: 20))
         XCTAssertTrue(AgentControlWireVersion.supportsProviderInstance(serverWireVersion: 21))
         XCTAssertEqual(AgentControlWireVersion.providerInstanceMinimum, 20)
-        XCTAssertEqual(AgentControlWireVersion.current, 20)
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 20)
     }
 
     // MARK: - UsageEnvelope dual-shape (v19 ↔ v20 per-instance keys)
