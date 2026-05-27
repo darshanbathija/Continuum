@@ -172,6 +172,32 @@ final class RelayPairingHandshakeTests: XCTestCase {
         XCTAssertNil(RelayPairingBundle.decode(fromURL: url))
     }
 
+    func testAcceptsKnownHostedWorkerRelayURL() throws {
+        let bundle = RelayPairingBundle(
+            sid: makeValidToken(),
+            macTok: makeValidToken(),
+            iosTok: makeValidToken(),
+            ecdhPub: RelayPairingKeyPair().publicKeyBase64URL,
+            ttl: UInt64(Date().timeIntervalSince1970) + 900,
+            relayUrl: "wss://clawdmeter-relay-staging.darshan-1ba.workers.dev"
+        )
+        let url = try bundle.encodeToURL()
+        XCTAssertEqual(RelayPairingBundle.decode(fromURL: url), bundle)
+    }
+
+    func testRejectsUnknownHostedWorkerRelayURL() throws {
+        let bundle = RelayPairingBundle(
+            sid: makeValidToken(),
+            macTok: makeValidToken(),
+            iosTok: makeValidToken(),
+            ecdhPub: RelayPairingKeyPair().publicKeyBase64URL,
+            ttl: UInt64(Date().timeIntervalSince1970) + 900,
+            relayUrl: "wss://clawdmeter-relay-staging.attacker.workers.dev"
+        )
+        let url = try bundle.encodeToURL()
+        XCTAssertNil(RelayPairingBundle.decode(fromURL: url))
+    }
+
     func testRejectsBundleWhereMacAndIosTokensMatch() throws {
         let dupTok = makeValidToken()
         let body: [String: Any] = [

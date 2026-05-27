@@ -44,4 +44,18 @@ public enum RelayEnvironment: String, Codable, Sendable, CaseIterable {
         }
         return env.baseURL
     }
+
+    /// Cloudflare-hosted fallback hosts used before the custom
+    /// `*.clawdmeter.dev` relay routes are available everywhere. Keep this
+    /// intentionally exact; accepting arbitrary `workers.dev` hosts would let
+    /// a malicious QR redirect iOS to an attacker-owned Worker.
+    static func isKnownHostedWorkerHost(_ host: String) -> Bool {
+        switch host {
+        case "clawdmeter-relay-staging.darshan-1ba.workers.dev",
+             "clawdmeter-relay.darshan-1ba.workers.dev":
+            return true
+        default:
+            return false
+        }
+    }
 }

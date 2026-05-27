@@ -64,9 +64,14 @@ public final class RelayPairingService: ObservableObject {
     /// lands; the production path is E3's relay-client first-frame
     /// handler).
     private let pairingStore: RelayPairingStore
+    private let processEnv: [String: String]
 
-    public init(pairingStore: RelayPairingStore = .shared) {
+    public init(
+        pairingStore: RelayPairingStore = .shared,
+        processEnv: [String: String] = ProcessInfo.processInfo.environment
+    ) {
         self.pairingStore = pairingStore
+        self.processEnv = processEnv
     }
 
     // MARK: - Public API
@@ -90,7 +95,7 @@ public final class RelayPairingService: ObservableObject {
         // 15-min TTL per §5b. Persist as absolute Unix seconds so the
         // relay's server-side wall clock compare in §4.1 lines up.
         let ttl = UInt64(Date().timeIntervalSince1970) + 900
-        let relayUrl = RelayEnvironment.resolvedRelayURL(env: environment)
+        let relayUrl = RelayEnvironment.resolvedRelayURL(env: environment, processEnv: processEnv)
 
         let bundle = RelayPairingBundle(
             sid: sid,
