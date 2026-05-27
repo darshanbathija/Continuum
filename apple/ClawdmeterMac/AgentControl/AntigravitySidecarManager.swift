@@ -264,6 +264,16 @@ public final class AntigravitySidecarManager {
         try FileManager.default.createDirectory(at: provisioningWorkDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: uvCacheDirectory, withIntermediateDirectories: true)
 
+        // Sandbox-confined dir for uv's managed Python downloads. Without
+        // redirecting UV_PYTHON_INSTALL_DIR, uv falls back to
+        // `$HOME/.local/share/uv/python`, which for a sandboxed Release
+        // build is OUTSIDE the container — uv hits "Operation not
+        // permitted" when it tries to enumerate that directory at
+        // `uv venv` time and fails before creating any venv.
+        let uvPythonInstallDir = provisioningWorkDirectory
+            .appendingPathComponent("uv-python", isDirectory: true)
+        try FileManager.default.createDirectory(at: uvPythonInstallDir, withIntermediateDirectories: true)
+
         let process = Process()
         process.executableURL = uvBinary
         process.arguments = ["--no-config", "--directory", provisioningWorkDirectory.path] + args
@@ -272,13 +282,22 @@ public final class AntigravitySidecarManager {
         process.standardError = stderr
         process.standardOutput = Pipe() // discard stdout
         var env = ProcessInfo.processInfo.environment
-        // Keep uv fully app-owned. Without this, uv walks up from HOME,
-        // discovers a user pyproject.toml, and sandboxed Release builds
-        // can fail before creating the venv.
-        env["HOME"] = ClawdmeterRealHome.path()
+        // Point HOME at the sandbox container so uv doesn't walk into
+        // the user's real home (which it can't read anyway). The prior
+        // version pointed HOME at the real home, but the sandbox blocks
+        // reads under `~/.local/share/uv/python` and uv would fail.
+        // Container home is writable + readable to the process.
+        env["HOME"] = provisioningWorkDirectory.deletingLastPathComponent().path
         env["UV_NO_CONFIG"] = "1"
         env["UV_NO_PROGRESS"] = "1"
         env["UV_CACHE_DIR"] = uvCacheDirectory.path
+        // Confine managed-Python downloads to the sandbox + tell uv to
+        // ONLY consider managed Pythons. Without `only-managed`, uv also
+        // probes PATH for system Pythons which (a) the sandbox blocks
+        // many of, and (b) would defeat the "sealed venv" property the
+        // sidecar manager relies on.
+        env["UV_PYTHON_INSTALL_DIR"] = uvPythonInstallDir.path
+        env["UV_PYTHON_PREFERENCE"] = "only-managed"
         process.environment = env
 
         logger.info("uv \((process.arguments ?? []).joined(separator: " "), privacy: .public)")
