@@ -52,6 +52,26 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 - Find-bar overlay isolation. The find-bar inside `ChatThreadScroll` shares the parent body, so a transcript append still re-evaluates its body (small cost — TextField + 4 buttons). Full isolation requires extracting `TranscriptFindBarOverlay` as an Equatable child view with on-demand match computation.
 - `@Observable` migration (C2 in the plan) is a separate PR that will re-architect the slices as `@Observable` macro types.
 
+## [0.29.21 build 160] - 2026-05-27 - Generated Markdown document tabs (`darshanbathija/chat-md-render`)
+
+### Added
+
+- **Generated Markdown artifact metadata.** Chat transcripts now carry provider-agnostic generated-artifact metadata for Markdown documents, including Claude/Codex/generic write-like tool payloads, `apply_patch` headers, legacy transcript fallback, uppercase Markdown extensions, and metadata-marked no-extension Markdown paths.
+- **Read-only Markdown document tabs on Mac.** The Code workbench can manually open generated Markdown files into center document tabs beside chat and terminal tabs, deduped by workspace plus standardized absolute path, with native SwiftUI Markdown rendering, explicit missing/permission/too-large/binary states, and Open in Editor / Reveal / Copy Path / Refresh actions.
+- **iOS document-tab parity.** iPhone session detail now exposes the same document-tab model and artifact row action, renders Markdown documents through the shared parser, and keeps tab selection state separate from chat and terminal tabs.
+
+### Fixed
+
+- iOS Markdown document loading now uses the Mac daemon's dedicated `/sessions/:id/markdown-document` endpoint so generated docs under paths like `~/.gstack/projects/...` can open even when they are outside the session worktree.
+- Rapid iOS tab switches now guard async loader generations so cancelled or stale loads cannot overwrite the currently selected document tab.
+
+### Tests
+
+- Added shared generated-artifact detector coverage, shared Markdown document model coverage, Mac session-store/tab/row-action coverage, and iOS document-tab behavior coverage.
+- Verified `swift test`, targeted Mac and iOS XCTest gates, and a Mac scheme build.
+
+Bumps `MARKETING_VERSION` 0.29.20 -> 0.29.21, `CURRENT_PROJECT_VERSION` 159 -> 160.
+
 ## [0.29.16 build 155] - 2026-05-27 - Repo environment variable sets (`darshanbathija/repo-env-vars`)
 
 ### Added
