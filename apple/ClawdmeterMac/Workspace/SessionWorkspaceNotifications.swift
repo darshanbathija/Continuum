@@ -36,6 +36,18 @@ extension Notification.Name {
     // Used by `UsageStatusChip`, `PermissionModeChip`, `SessionStatusBadges`,
     // and `CodeTabHoverShortcutUITests` to wire keyboard chords directly to
     // the open composer without going through the menu bar.
+
+    /// #185 sibling of `clawdmeterOpenWorkspaceChatTab`. Posted by the
+    /// Code-tab `+` menu, the chip / hover-control surface, and the
+    /// `ClawdmeterShortcutRegistry` `⌘T` chord. `SessionWorkspaceView`
+    /// observes both names and routes them to the same
+    /// `openDraftWorkspaceTab` / `spawnSameWorkspaceChatTab` model call,
+    /// so the two posters cannot drift.
+    static let newCodeChatTab = Notification.Name("clawdmeter.workspace.newCodeChatTab")
+    /// #185 sibling of `clawdmeterOpenWorkspaceTerminalTab`. `⌘⇧T` chord
+    /// + terminal hover affordance. Same dual-observer routing.
+    static let newCodeTerminalTab = Notification.Name("clawdmeter.workspace.newCodeTerminalTab")
+
     static let composerAttach = Notification.Name("clawdmeter.workspace.composerAttach")
     static let composerOpenModelEffort = Notification.Name("clawdmeter.workspace.composerOpenModelEffort")
     static let composerOpenContextUsage = Notification.Name("clawdmeter.workspace.composerOpenContextUsage")

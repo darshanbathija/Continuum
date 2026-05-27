@@ -2,6 +2,34 @@ import SwiftUI
 import AppKit
 import ClawdmeterShared
 
+/// Routes both #174's (`clawdmeterOpenWorkspaceChatTab` /
+/// `clawdmeterOpenWorkspaceTerminalTab`) and #185's
+/// (`newCodeChatTab` / `newCodeTerminalTab`) notification posters into the
+/// same two callbacks. Extracted out of `SessionWorkspaceView.body` so the
+/// SwiftUI compiler can type-check the body chain in reasonable time — four
+/// extra `.onReceive` modifiers in `body` tripped the
+/// "compiler is unable to type-check this expression" guard.
+private struct WorkspaceTabSpawnObservers: ViewModifier {
+    let openChat: () -> Void
+    let openTerminal: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenWorkspaceChatTab)) { _ in
+                openChat()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .newCodeChatTab)) { _ in
+                openChat()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenWorkspaceTerminalTab)) { _ in
+                openTerminal()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .newCodeTerminalTab)) { _ in
+                openTerminal()
+            }
+    }
+}
+
 /// G0/G1: three-pane Codex-desktop workspace.
 ///
 /// Layout:
@@ -234,29 +262,10 @@ struct SessionWorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openWorkspaceSwitcher)) { _ in
             showingWorkspaceSwitcher = true
         }
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenWorkspaceChatTab)) { _ in
-            guard let session = model.openSession else { return }
-            model.openDraftWorkspaceTab(
-                from: session,
-                defaults: ComposerStore.ChipDefaults(
-                    agent: session.agent,
-                    modelId: session.model,
-                    effort: session.effort,
-                    mode: session.mode,
-                    planMode: false
-                )
-            )
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clawdmeterOpenWorkspaceTerminalTab)) { _ in
-            if let session = model.openSession {
-                guard model.canOpenWorkspaceTerminalTab(from: session) else { return }
-                Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
-            } else if let draft = model.draftWorkspaceTab,
-                      let sibling = WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
-                        .first(where: { model.canOpenWorkspaceTerminalTab(from: $0) }) {
-                Task { await model.openOrCreateWorkspaceTerminalTab(from: sibling) }
-            }
-        }
+        .modifier(WorkspaceTabSpawnObservers(
+            openChat: openNewWorkspaceChatTab,
+            openTerminal: openNewWorkspaceTerminalTab
+        ))
         .onReceive(NotificationCenter.default.publisher(for: .showRawTerminal)) { note in
             guard let id = note.userInfo?["sessionId"] as? UUID else { return }
             if let open = model.openSession, open.id == id {
@@ -303,6 +312,39 @@ struct SessionWorkspaceView: View {
             return
         }
         model.openSessionId = selected
+    }
+
+    /// Shared helper called by both `clawdmeterOpenWorkspaceChatTab` (#174 menu
+    /// command path) and `newCodeChatTab` (#185 chip / shortcut-registry path).
+    /// Both posters reach the same `openDraftWorkspaceTab` API on the model so
+    /// the two paths cannot drift.
+    private func openNewWorkspaceChatTab() {
+        guard let session = model.openSession else { return }
+        model.openDraftWorkspaceTab(
+            from: session,
+            defaults: ComposerStore.ChipDefaults(
+                agent: session.agent,
+                modelId: session.model,
+                effort: session.effort,
+                mode: session.mode,
+                planMode: false
+            )
+        )
+    }
+
+    /// Shared helper for the terminal-tab posters — `clawdmeterOpenWorkspaceTerminalTab`
+    /// (#174) and `newCodeTerminalTab` (#185). Mirrors the original inline
+    /// fallback that hops onto a sibling session when the foreground tab is a
+    /// chat draft with no terminal of its own.
+    private func openNewWorkspaceTerminalTab() {
+        if let session = model.openSession {
+            guard model.canOpenWorkspaceTerminalTab(from: session) else { return }
+            Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
+        } else if let draft = model.draftWorkspaceTab,
+                  let sibling = WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
+                    .first(where: { model.canOpenWorkspaceTerminalTab(from: $0) }) {
+            Task { await model.openOrCreateWorkspaceTerminalTab(from: sibling) }
+        }
     }
 
     /// Hidden buttons that own Option+Cmd+1..9 + Cmd+Shift+F + Cmd+;

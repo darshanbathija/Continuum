@@ -807,6 +807,47 @@ public final class SessionsModel: ObservableObject {
         draftWorkspaceTab = nil
     }
 
+    /// #185-named convenience over `openDraftWorkspaceTab(from:defaults:)`.
+    ///
+    /// The #185 chip + shortcut-registry surface refers to "spawning a
+    /// same-workspace chat tab" by parent session id. Resolves the parent
+    /// `AgentSession`, copies its chip defaults, and delegates to the same
+    /// underlying `openDraftWorkspaceTab` so the two API names cannot drift.
+    /// Returns the resulting `WorkspaceDraftTab.id` so call sites that want
+    /// to immediately focus the new tab can do so without re-querying.
+    @discardableResult
+    public func spawnSameWorkspaceChatTab(parentId: UUID) -> UUID? {
+        guard let session = registry.sessions.first(where: { $0.id == parentId }),
+              let key = WorkspaceKey.of(session) else { return nil }
+        let defaults = ComposerStore.ChipDefaults(
+            agent: session.agent,
+            modelId: session.model,
+            effort: session.effort,
+            mode: session.mode,
+            planMode: false
+        )
+        openDraftWorkspaceTab(from: session, defaults: defaults)
+        // `openDraftWorkspaceTab` minted a fresh `draftWorkspaceTab` with the
+        // session's workspace key. Return its id when it's the one we just
+        // created (a re-entrant call elsewhere could in principle have raced,
+        // so guard on the workspaceKey match).
+        if let draft = draftWorkspaceTab, draft.workspaceKey == key {
+            return draft.id
+        }
+        return nil
+    }
+
+    /// #185-named convenience around `openOrCreateWorkspaceTerminalTab(from:)`.
+    /// Resolves the parent session by id, validates the terminal-spawn gate,
+    /// and forwards. Returns true iff the spawn was actually issued.
+    @discardableResult
+    public func spawnSameWorkspaceTerminalTab(parentId: UUID) async -> Bool {
+        guard let session = registry.sessions.first(where: { $0.id == parentId }),
+              canOpenWorkspaceTerminalTab(from: session) else { return false }
+        await openOrCreateWorkspaceTerminalTab(from: session)
+        return true
+    }
+
     func workspaceTerminalTabs(in workspaceKey: WorkspaceKey) -> [WorkspaceTerminalTab] {
         workspaceTerminalTabs
             .compactMap { tab -> WorkspaceTerminalTab? in

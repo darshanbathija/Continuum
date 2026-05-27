@@ -315,6 +315,51 @@ final class WorkspaceTabsTests: XCTestCase {
         )
     }
 
+    // MARK: - #185 follow-up: dual-path tab-spawn API
+
+    /// `spawnSameWorkspaceChatTab(parentId:)` is the #185-named convenience over
+    /// `openDraftWorkspaceTab(from:defaults:)`. The two API names must land in
+    /// the same on-screen state (same workspace key, same chip defaults,
+    /// same cleared selection) so the two posters cannot drift.
+    func test_spawnSameWorkspaceChatTabMatchesOpenDraftWorkspaceTab() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("Spawn185Path")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let source = try await registry.create(
+            repoKey: "/repo",
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt-5.5",
+            goal: "src",
+            worktreePath: "/repo/.claude/worktrees/feature",
+            tmuxWindowId: "@1",
+            tmuxPaneId: "%1",
+            planMode: false,
+            mode: .worktree
+        )
+        model.openSession(source)
+
+        let draftId = model.spawnSameWorkspaceChatTab(parentId: source.id)
+
+        XCTAssertNotNil(draftId, "spawnSameWorkspaceChatTab must return the minted draft id")
+        XCTAssertNil(model.openSessionId, "spawn must clear the foreground session selection like openDraftWorkspaceTab")
+        XCTAssertEqual(model.draftWorkspaceTab?.workspaceKey, WorkspaceKey.of(source))
+        XCTAssertEqual(model.draftWorkspaceTab?.id, draftId)
+        XCTAssertEqual(model.draftWorkspaceTab?.agent, source.agent)
+        XCTAssertEqual(model.draftWorkspaceTab?.modelId, source.model)
+        XCTAssertEqual(model.draftWorkspaceTab?.mode, source.mode)
+        XCTAssertEqual(model.registry.sessions.count, 1, "spawn must not persist a new session before first send")
+    }
+
+    /// Unknown parent id returns nil + no side effect.
+    func test_spawnSameWorkspaceChatTabIsNoOpForUnknownParentId() async throws {
+        let (model, _, directory) = try Self.makeIsolatedModel("SpawnNoop")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let before = model.draftWorkspaceTab
+        let result = model.spawnSameWorkspaceChatTab(parentId: UUID())
+        XCTAssertNil(result)
+        XCTAssertEqual(model.draftWorkspaceTab?.id, before?.id)
+    }
+
     private static func makeIsolatedRegistry(_ name: String) throws -> (AgentSessionRegistry, URL) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
