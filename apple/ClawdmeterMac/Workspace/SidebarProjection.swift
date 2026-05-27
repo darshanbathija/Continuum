@@ -58,6 +58,12 @@ struct SidebarWorkspaceSection: Identifiable, Hashable {
     let repo: AgentRepo
     let workspacePath: String
     let sessions: [AgentSession]
+    /// v0.29.28: historical JSONLs that belong to the same canonical
+    /// repo as this workspace. Surfaced under the workspace's header
+    /// so a freshly-added repo doesn't strand its prior sessions in
+    /// "Active outside Clawdmeter" / "History" — they're INSIDE the
+    /// workspace now, just not Clawdmeter-managed.
+    let recentSessions: [RecentSession]
     let latestActivity: Date
 
     var id: String { "\(workspaceKey.repoKey)|\(workspaceKey.workspacePath)" }
@@ -134,10 +140,21 @@ struct SidebarProjectionKey: Equatable {
     let pinnedSet: [UUID]                   // order matters (pin order)
     let ownedJSONLPathsFingerprint: UInt64
     let externalActivityClockBucket: Int
+    /// v0.29.28: Set<String> of normalized repoRoots for every workspace
+    /// registered in `WorkspaceStore`. Workspace-managed repos are
+    /// pulled out of "Active outside" + "History" and folded into the
+    /// Managed section, so the cache must invalidate when the set
+    /// changes (e.g., the user just added a repo).
+    let workspaceRepoKeysFingerprint: UInt64
 }
 
 enum SidebarProjectionBuilder {
-    static let externalActiveWindow: TimeInterval = 10 * 60
+    /// v0.29.28: tightened from 10 min to 5 min so the sidebar's
+    /// "active" categorization matches `RepoIndex.liveNowWindow` (the
+    /// same window that drives the green dot). The two used to disagree
+    /// — a session would lose its live dot at 5 min but still claim a
+    /// spot in "Active outside Clawdmeter" for another 5.
+    static let externalActiveWindow: TimeInterval = 5 * 60
 
     /// Compute the projection. Pure function — no @MainActor isolation
     /// needed because the inputs are value types snapshotted upstream
@@ -162,6 +179,7 @@ enum SidebarProjectionBuilder {
         pinnedSessionIds: [UUID],
         workbenchPRStateBySession: [UUID: String?],
         ownedJSONLPaths: Set<String> = [],
+        workspaceRepoKeys: Set<String> = [],
         now: Date = Date()
     ) -> SidebarProjection {
         let reviewIds = reviewSessionIds(
@@ -183,13 +201,15 @@ enum SidebarProjectionBuilder {
         let workspaceSections = buildWorkspaceSections(
             sessions: firstPartySessions,
             repos: canonicalRepos.repos,
-            keyAliases: canonicalRepos.keyAliases
+            keyAliases: canonicalRepos.keyAliases,
+            workspaceRepoKeys: workspaceRepoKeys
         )
         let external = buildExternalSections(
             repos: canonicalRepos.repos,
             searchQuery: searchQuery,
             statusFilter: statusFilter,
             ownedJSONLPaths: ownedJSONLPaths,
+            workspaceRepoKeys: workspaceRepoKeys,
             now: now
         )
         let priorityVisibleSessions = workspaceSections.flatMap(\.sessions)
@@ -252,6 +272,17 @@ enum SidebarProjectionBuilder {
         var hasher = Hasher()
         for path in paths.sorted() {
             hasher.combine(path)
+        }
+        return UInt64(bitPattern: Int64(hasher.finalize()))
+    }
+
+    /// v0.29.28: invalidates the projection cache when the user adds or
+    /// removes a workspace, so external/managed buckets re-split.
+    static func workspaceRepoKeysFingerprint(_ keys: Set<String>) -> UInt64 {
+        var hasher = Hasher()
+        hasher.combine(keys.count)
+        for key in keys.sorted() {
+            hasher.combine(key)
         }
         return UInt64(bitPattern: Int64(hasher.finalize()))
     }
@@ -340,7 +371,8 @@ enum SidebarProjectionBuilder {
     private static func buildWorkspaceSections(
         sessions: [AgentSession],
         repos: [AgentRepo],
-        keyAliases: [String: String]
+        keyAliases: [String: String],
+        workspaceRepoKeys: Set<String>
     ) -> [SidebarWorkspaceSection] {
         let repoByKey = Dictionary(uniqueKeysWithValues: repos.map { ($0.key, $0) })
         let grouped = Dictionary(grouping: sessions.compactMap { session -> (WorkspaceKey, AgentSession)? in
@@ -348,7 +380,7 @@ enum SidebarProjectionBuilder {
             return (key, session)
         }, by: { $0.0 })
 
-        return grouped.compactMap { key, pairs -> SidebarWorkspaceSection? in
+        var sections: [SidebarWorkspaceSection] = grouped.compactMap { key, pairs -> SidebarWorkspaceSection? in
             let sessions = recencySorted(pairs.map(\.1))
             guard let latest = sessions.map(\.lastEventAt).max() else { return nil }
             let repoKey = keyAliases[key.repoKey] ?? key.repoKey
@@ -362,10 +394,42 @@ enum SidebarProjectionBuilder {
                 repo: repo,
                 workspacePath: key.workspacePath,
                 sessions: sessions,
+                recentSessions: repo.recentSessions,
                 latestActivity: latest
             )
         }
-        .sorted {
+
+        // v0.29.28: emit sections for workspace-registered repos that
+        // have no Clawdmeter-spawned AgentSession yet. The user just
+        // added the repo via the Add-Repo flow — they expect to see it
+        // immediately, with whatever historical JSONLs exist underneath.
+        // Without this, the workspace's Recents would land in "Active
+        // outside Clawdmeter" / "History", which is confusing when the
+        // repo IS managed.
+        let representedKeys = Set(sections.map { keyAliases[$0.workspaceKey.repoKey] ?? $0.workspaceKey.repoKey })
+        for repoKey in workspaceRepoKeys where !representedKeys.contains(repoKey) {
+            let canonicalKey = keyAliases[repoKey] ?? repoKey
+            let repo = repoByKey[canonicalKey] ?? AgentRepo(
+                key: canonicalKey,
+                displayName: RepoIdentity.displayName(for: canonicalKey),
+                hasActiveSessions: false
+            )
+            let workspaceKey = WorkspaceKey(repoKey: canonicalKey, workspacePath: canonicalKey)
+            // Sort recents into the section's slot; the "latest" anchors
+            // ordering against active workspaces.
+            let recents = repo.recentSessions.sorted { $0.lastModified > $1.lastModified }
+            let latest = recents.first?.lastModified ?? .distantPast
+            sections.append(SidebarWorkspaceSection(
+                workspaceKey: workspaceKey,
+                repo: repo,
+                workspacePath: canonicalKey,
+                sessions: [],
+                recentSessions: recents,
+                latestActivity: latest
+            ))
+        }
+
+        return sections.sorted {
             if $0.latestActivity != $1.latestActivity { return $0.latestActivity > $1.latestActivity }
             return $0.id < $1.id
         }
@@ -376,6 +440,7 @@ enum SidebarProjectionBuilder {
         searchQuery: String,
         statusFilter: SessionStatusFilter,
         ownedJSONLPaths: Set<String>,
+        workspaceRepoKeys: Set<String>,
         now: Date
     ) -> (active: [SidebarExternalRepoSection], history: [SidebarHistoryRepoSection]) {
         guard statusFilter == .all || statusFilter == .active else {
@@ -388,6 +453,11 @@ enum SidebarProjectionBuilder {
         var historySections: [SidebarHistoryRepoSection] = []
 
         for repo in repos {
+            // v0.29.28: workspace-registered repos' JSONLs belong to
+            // their workspace section, not "Active outside Clawdmeter"
+            // / "History". `buildWorkspaceSections` already folded the
+            // recents into the matching section above.
+            if workspaceRepoKeys.contains(repo.key) { continue }
             let filtered = repo.recentSessions
                 .filter { !owned.contains(canonicalJSONLPath($0.path)) }
                 .filter { recentMatches($0, repo: repo, query: query) }
