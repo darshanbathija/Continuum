@@ -44,6 +44,38 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 - Find-bar overlay isolation. The find-bar inside `ChatThreadScroll` shares the parent body, so a transcript append still re-evaluates its body (small cost — TextField + 4 buttons). Full isolation requires extracting `TranscriptFindBarOverlay` as an Equatable child view with on-demand match computation.
 - `@Observable` migration (C2 in the plan) is a separate PR that will re-architect the slices as `@Observable` macro types.
 
+## [0.29.14 build 153] - 2026-05-27 - Workspace tabs + Code sidebar active-session priority (`darshanbathija/session-tabs`)
+
+### Added
+
+- **Workspace tab strip for Mac sessions.** Users can open lightweight draft chat tabs with `⌘T`, keep multiple chats in the same workspace row, and promote a draft on first send without creating another worktree.
+- **Opt-in sibling context inheritance.** Draft chats can include selected sibling transcripts as capped digest files, with inherited attachments copied into the promoted session and recorded in an audit manifest.
+- **First-class terminal tabs.** Terminal tabs now live beside chat tabs for tmux-backed sessions, including `⇧⌘T` and menu affordances that avoid opening dead terminal panes for providers without a tmux pane.
+- **iOS workspace tab strip.** iPhone session detail views now show the same workspace tab model, with terminal affordances hidden unless the backing session can actually stream a terminal.
+
+### Changed
+
+- **Code sidebar now prioritizes Clawdmeter-created work.** Managed code sessions and same-workspace tabs appear first, grouped by workspace/repo and ordered by most recent child activity. Pinned state still renders as UI state, but default ordering is recency-first.
+- **External JSONL sessions are split by activity.** Outside-Clawdmeter sessions touched within 10 minutes appear under active repo groups, while older external recents move to a visually separated bottom History section grouped by repo and date. The 30-day `RepoIndex.recentSessions` source and 5-minute live-dot behavior stay unchanged.
+- **Repo rows can start new workspaces.** Repo headers now expose a sibling `+` action that opens the existing new-session/worktree sheet with that repo preselected without also toggling row expansion.
+
+### Fixed
+
+- Same-workspace sessions now track explicit worktree ownership so ending a tab cannot delete a shared checkout it did not create.
+- Inherited attachment staging is isolated per session to prevent sibling Codex sessions in the same checkout from leaking files into each other.
+- First-send promotion revalidates selected sibling sources before inheritance, so archived, stale, or current-session IDs are excluded safely.
+- Archived managed Code sessions no longer leak into normal Date, Agent, None, Repo, or Status views; they are visible only through the Archive filter.
+- Opening an external JSONL read-only no longer creates a duplicate first-party workspace row, and Clawdmeter-owned JSONLs are suppressed from external active/history rows without adding a new wire/schema field.
+- External search now matches recent-session metadata, so filtering by JSONL path, prompt text, alias, or provider still surfaces the relevant external repo/history rows.
+
+### Tests
+
+- Added shared tests for workspace sibling grouping, wire v22 ownership/context fields, and transcript digest rendering caps.
+- Added Mac tests for draft promotion, same-workspace spawning, terminal-tab gating, and inherited attachment copy behavior.
+- Added Mac sidebar projection coverage for managed-session recency, archive hiding, active/history cutoff boundaries, cutoff-clock cache invalidation, external/history exclusivity, grouping leak prevention, repo-row `+` behavior, and external JSONL read-only ownership.
+
+Bumps `MARKETING_VERSION` 0.29.13 -> 0.29.14, `CURRENT_PROJECT_VERSION` 152 -> 153.
+
 ## [0.29.12 build 151] - 2026-05-26 - Code session rename persistence (`darshanbathija/rename-fix`)
 
 ### Fixed

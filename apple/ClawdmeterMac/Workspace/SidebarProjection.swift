@@ -17,9 +17,8 @@ import ClawdmeterShared
 ///
 /// Plan: A11 (Phase 2) — see .claude/plans/study-this-codebase-crystalline-shore.md
 struct SidebarProjection {
-    /// Search-filtered, archive-aware, pinned-first session list. Used
-    /// both as input to the non-repo grouper AND as a cheap pre-filtered
-    /// source for the repo-grouped path's per-repo lookups.
+    /// Search-filtered, archive-aware first-party session list in the
+    /// same recency order as the priority workspace sections.
     let visibleSessions: [AgentSession]
 
     /// Sessions currently in the "in review" bucket (planText != nil, or
@@ -35,6 +34,56 @@ struct SidebarProjection {
     /// Non-repo grouping path: pre-bucketed sections.
     /// nil for the repo grouping path.
     let groups: [SessionSidebarGroup]?
+
+    /// Priority Code sidebar path: Clawdmeter-created code workspaces first.
+    /// Sorted by each workspace's latest child session activity.
+    let workspaceSections: [SidebarWorkspaceSection]
+
+    /// Outside-Clawdmeter JSONLs touched within the active window, grouped
+    /// by repo. These are controllable/readable now, but not first-party
+    /// workspace tabs.
+    let activeExternalSections: [SidebarExternalRepoSection]
+
+    /// Older outside-Clawdmeter JSONLs. Rendered only in the bottom History
+    /// area so old transcripts never compete with active work.
+    let historySections: [SidebarHistoryRepoSection]
+
+    var hasPriorityContent: Bool {
+        !workspaceSections.isEmpty || !activeExternalSections.isEmpty || !historySections.isEmpty
+    }
+}
+
+struct SidebarWorkspaceSection: Identifiable, Hashable {
+    let workspaceKey: WorkspaceKey
+    let repo: AgentRepo
+    let workspacePath: String
+    let sessions: [AgentSession]
+    let latestActivity: Date
+
+    var id: String { "\(workspaceKey.repoKey)|\(workspaceKey.workspacePath)" }
+}
+
+struct SidebarExternalRepoSection: Identifiable, Hashable {
+    let repo: AgentRepo
+    let recents: [RecentSession]
+    let latestActivity: Date
+
+    var id: String { repo.key }
+}
+
+struct SidebarHistoryRepoSection: Identifiable, Hashable {
+    let repo: AgentRepo
+    let dateGroups: [SidebarHistoryDateGroup]
+    let latestActivity: Date
+
+    var id: String { repo.key }
+}
+
+struct SidebarHistoryDateGroup: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let recents: [RecentSession]
+    let latestActivity: Date
 }
 
 /// Cache key bundling everything that, when changed, requires recomputing
@@ -83,9 +132,12 @@ struct SidebarProjectionKey: Equatable {
     let grouping: SessionGrouping
     let sorting: SessionSorting
     let pinnedSet: [UUID]                   // order matters (pin order)
+    let ownedJSONLPathsFingerprint: UInt64
+    let externalActivityClockBucket: Int
 }
 
 enum SidebarProjectionBuilder {
+    static let externalActiveWindow: TimeInterval = 10 * 60
 
     /// Compute the projection. Pure function — no @MainActor isolation
     /// needed because the inputs are value types snapshotted upstream
@@ -109,6 +161,7 @@ enum SidebarProjectionBuilder {
         sorting: SessionSorting,
         pinnedSessionIds: [UUID],
         workbenchPRStateBySession: [UUID: String?],
+        ownedJSONLPaths: Set<String> = [],
         now: Date = Date()
     ) -> SidebarProjection {
         let reviewIds = reviewSessionIds(
@@ -116,16 +169,30 @@ enum SidebarProjectionBuilder {
             workbenchPRStateBySession: workbenchPRStateBySession
         )
 
-        // Apply the archive guard the way SidebarPane.filteredVisibleSessions
-        // did inline before A11: drop archived for non-archive views.
-        let archiveFiltered = searchFilteredSessions.filter { s in
-            if grouping != .status
-                && statusFilter != .archived
-                && !showArchived
-                && s.archivedAt != nil { return false }
-            return true
+        // Archived sessions are hidden in every normal Code sidebar mode.
+        // They re-enter only through the explicit Archive status filter.
+        let archiveFiltered = searchFilteredSessions.filter {
+            passesArchiveGate($0, statusFilter: statusFilter, showArchived: showArchived)
         }
         let pinSorted = pinSorted(archiveFiltered, pinnedSessionIds: pinnedSessionIds)
+        let firstPartySessions = searchFilteredSessions.filter {
+            isFirstPartyCodeSession($0)
+                && passesCodeStatus($0, statusFilter: statusFilter, reviewSessionIds: reviewIds, now: now)
+        }
+        let canonicalRepos = SessionSidebarGrouper.canonicalizeRepos(repos)
+        let workspaceSections = buildWorkspaceSections(
+            sessions: firstPartySessions,
+            repos: canonicalRepos.repos,
+            keyAliases: canonicalRepos.keyAliases
+        )
+        let external = buildExternalSections(
+            repos: canonicalRepos.repos,
+            searchQuery: searchQuery,
+            statusFilter: statusFilter,
+            ownedJSONLPaths: ownedJSONLPaths,
+            now: now
+        )
+        let priorityVisibleSessions = workspaceSections.flatMap(\.sessions)
 
         switch grouping {
         case .repo:
@@ -138,15 +205,18 @@ enum SidebarProjectionBuilder {
             }
             let canonical = SessionSidebarGrouper.canonicalizeRepos(searchFilteredRepos)
             return SidebarProjection(
-                visibleSessions: pinSorted,
+                visibleSessions: priorityVisibleSessions,
                 reviewSessionIds: reviewIds,
                 canonicalRepos: canonical,
-                groups: nil
+                groups: nil,
+                workspaceSections: workspaceSections,
+                activeExternalSections: external.active,
+                historySections: external.history
             )
         case .date, .status, .agent, .none:
             let groups = SessionSidebarGrouper.group(
-                sessions: pinSorted,
-                repos: repos,
+                sessions: priorityVisibleSessions,
+                repos: reposWithoutRecents(repos),
                 grouping: grouping,
                 sorting: sorting,
                 statusFilter: statusFilter,
@@ -154,12 +224,36 @@ enum SidebarProjectionBuilder {
                 now: now
             )
             return SidebarProjection(
-                visibleSessions: pinSorted,
+                visibleSessions: priorityVisibleSessions,
                 reviewSessionIds: reviewIds,
                 canonicalRepos: nil,
-                groups: groups
+                groups: groups,
+                workspaceSections: workspaceSections,
+                activeExternalSections: external.active,
+                historySections: external.history
             )
         }
+    }
+
+    static func externalActivityClockBucket(now: Date, repos: [AgentRepo]) -> Int {
+        let cutoff = now.addingTimeInterval(-externalActiveWindow)
+        var hasher = Hasher()
+        for repo in repos.sorted(by: { $0.key < $1.key }) {
+            hasher.combine(repo.key)
+            for recent in repo.recentSessions.sorted(by: { $0.path < $1.path }) {
+                hasher.combine(recent.path)
+                hasher.combine(recent.lastModified >= cutoff)
+            }
+        }
+        return hasher.finalize()
+    }
+
+    static func ownedJSONLPathsFingerprint(_ paths: Set<String>) -> UInt64 {
+        var hasher = Hasher()
+        for path in paths.sorted() {
+            hasher.combine(path)
+        }
+        return UInt64(bitPattern: Int64(hasher.finalize()))
     }
 
     /// Fingerprint the post-search session list. Used by the cache key
@@ -193,6 +287,221 @@ enum SidebarProjectionBuilder {
             case (nil, nil):   return lhs.lastEventAt > rhs.lastEventAt
             }
         }
+    }
+
+    private static func recencySorted(_ sessions: [AgentSession]) -> [AgentSession] {
+        sessions.sorted {
+            if $0.lastEventAt != $1.lastEventAt { return $0.lastEventAt > $1.lastEventAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
+    private static func isFirstPartyCodeSession(_ session: AgentSession) -> Bool {
+        session.kind == .code && WorkspaceKey.of(session) != nil
+    }
+
+    private static func passesArchiveGate(
+        _ session: AgentSession,
+        statusFilter: SessionStatusFilter,
+        showArchived: Bool
+    ) -> Bool {
+        if statusFilter == .archived {
+            return session.archivedAt != nil
+        }
+        if session.archivedAt != nil {
+            return false
+        }
+        return true
+    }
+
+    private static func passesCodeStatus(
+        _ session: AgentSession,
+        statusFilter: SessionStatusFilter,
+        reviewSessionIds: Set<UUID>,
+        now: Date
+    ) -> Bool {
+        guard passesArchiveGate(session, statusFilter: statusFilter, showArchived: false) else {
+            return false
+        }
+        switch statusFilter {
+        case .all:
+            return true
+        case .active:
+            return SessionSidebarGrouper.bucket(for: session, reviewSessionIds: reviewSessionIds, now: now) == .active
+        case .inReview:
+            return SessionSidebarGrouper.bucket(for: session, reviewSessionIds: reviewSessionIds, now: now) == .inReview
+        case .done:
+            return SessionSidebarGrouper.bucket(for: session, reviewSessionIds: reviewSessionIds, now: now) == .done
+        case .archived:
+            return session.archivedAt != nil
+        }
+    }
+
+    private static func buildWorkspaceSections(
+        sessions: [AgentSession],
+        repos: [AgentRepo],
+        keyAliases: [String: String]
+    ) -> [SidebarWorkspaceSection] {
+        let repoByKey = Dictionary(uniqueKeysWithValues: repos.map { ($0.key, $0) })
+        let grouped = Dictionary(grouping: sessions.compactMap { session -> (WorkspaceKey, AgentSession)? in
+            guard let key = WorkspaceKey.of(session) else { return nil }
+            return (key, session)
+        }, by: { $0.0 })
+
+        return grouped.compactMap { key, pairs -> SidebarWorkspaceSection? in
+            let sessions = recencySorted(pairs.map(\.1))
+            guard let latest = sessions.map(\.lastEventAt).max() else { return nil }
+            let repoKey = keyAliases[key.repoKey] ?? key.repoKey
+            let repo = repoByKey[repoKey] ?? AgentRepo(
+                key: key.repoKey,
+                displayName: RepoIdentity.displayName(for: key.repoKey),
+                hasActiveSessions: true
+            )
+            return SidebarWorkspaceSection(
+                workspaceKey: key,
+                repo: repo,
+                workspacePath: key.workspacePath,
+                sessions: sessions,
+                latestActivity: latest
+            )
+        }
+        .sorted {
+            if $0.latestActivity != $1.latestActivity { return $0.latestActivity > $1.latestActivity }
+            return $0.id < $1.id
+        }
+    }
+
+    private static func buildExternalSections(
+        repos: [AgentRepo],
+        searchQuery: String,
+        statusFilter: SessionStatusFilter,
+        ownedJSONLPaths: Set<String>,
+        now: Date
+    ) -> (active: [SidebarExternalRepoSection], history: [SidebarHistoryRepoSection]) {
+        guard statusFilter == .all || statusFilter == .active else {
+            return ([], [])
+        }
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let activeCutoff = now.addingTimeInterval(-externalActiveWindow)
+        let owned = Set(ownedJSONLPaths.map(canonicalJSONLPath))
+        var activeSections: [SidebarExternalRepoSection] = []
+        var historySections: [SidebarHistoryRepoSection] = []
+
+        for repo in repos {
+            let filtered = repo.recentSessions
+                .filter { !owned.contains(canonicalJSONLPath($0.path)) }
+                .filter { recentMatches($0, repo: repo, query: query) }
+                .sorted { $0.lastModified > $1.lastModified }
+            guard !filtered.isEmpty else { continue }
+
+            let active = filtered.filter { $0.lastModified >= activeCutoff }
+            if let latest = active.first?.lastModified {
+                activeSections.append(SidebarExternalRepoSection(
+                    repo: AgentRepo(
+                        key: repo.key,
+                        displayName: repo.displayName,
+                        hasActiveSessions: repo.hasActiveSessions,
+                        liveSessionCount: repo.liveSessionCount,
+                        recentSessions: active
+                    ),
+                    recents: active,
+                    latestActivity: latest
+                ))
+            }
+
+            let history = filtered.filter { $0.lastModified < activeCutoff }
+            if !history.isEmpty {
+                let groups = historyDateGroups(for: history, now: now)
+                if let latest = history.first?.lastModified {
+                    historySections.append(SidebarHistoryRepoSection(
+                        repo: AgentRepo(
+                            key: repo.key,
+                            displayName: repo.displayName,
+                            hasActiveSessions: repo.hasActiveSessions,
+                            liveSessionCount: repo.liveSessionCount,
+                            recentSessions: history
+                        ),
+                        dateGroups: groups,
+                        latestActivity: latest
+                    ))
+                }
+            }
+        }
+
+        return (
+            activeSections.sorted {
+                if $0.latestActivity != $1.latestActivity { return $0.latestActivity > $1.latestActivity }
+                return $0.repo.displayName < $1.repo.displayName
+            },
+            historySections.sorted {
+                if $0.latestActivity != $1.latestActivity { return $0.latestActivity > $1.latestActivity }
+                return $0.repo.displayName < $1.repo.displayName
+            }
+        )
+    }
+
+    private static func historyDateGroups(
+        for recents: [RecentSession],
+        now: Date
+    ) -> [SidebarHistoryDateGroup] {
+        let calendar = Calendar.current
+        var buckets: [Date: [RecentSession]] = [:]
+        for recent in recents {
+            let day = calendar.startOfDay(for: recent.lastModified)
+            buckets[day, default: []].append(recent)
+        }
+        return buckets.map { day, rows in
+            let sortedRows = rows.sorted { $0.lastModified > $1.lastModified }
+            return SidebarHistoryDateGroup(
+                id: "\(day.timeIntervalSince1970)",
+                title: historyTitle(for: day, calendar: calendar),
+                recents: sortedRows,
+                latestActivity: sortedRows.first?.lastModified ?? day
+            )
+        }
+        .sorted {
+            if $0.latestActivity != $1.latestActivity { return $0.latestActivity > $1.latestActivity }
+            return $0.id < $1.id
+        }
+    }
+
+    private static func reposWithoutRecents(_ repos: [AgentRepo]) -> [AgentRepo] {
+        repos.map {
+            AgentRepo(
+                key: $0.key,
+                displayName: $0.displayName,
+                hasActiveSessions: $0.hasActiveSessions,
+                liveSessionCount: $0.liveSessionCount,
+                recentSessions: []
+            )
+        }
+    }
+
+    private static func recentMatches(_ recent: RecentSession, repo: AgentRepo, query: String) -> Bool {
+        guard !query.isEmpty else { return true }
+        if repo.displayName.lowercased().contains(query) { return true }
+        if recent.path.lowercased().contains(query) { return true }
+        if let title = recent.firstPrompt?.lowercased(), title.contains(query) { return true }
+        if let alias = recent.customName?.lowercased(), alias.contains(query) { return true }
+        if AgentKindUI.displayName(for: recent.provider).lowercased().contains(query) { return true }
+        return false
+    }
+
+    private static func canonicalJSONLPath(_ path: String) -> String {
+        (path as NSString).standardizingPath
+    }
+
+    private static func historyTitle(for day: Date, calendar: Calendar) -> String {
+        if calendar.isDateInToday(day) {
+            return "Today"
+        }
+        if calendar.isDateInYesterday(day) {
+            return "Yesterday"
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: day)
     }
 
     // MARK: - Review-bucket inputs

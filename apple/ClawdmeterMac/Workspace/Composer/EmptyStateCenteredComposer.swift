@@ -13,21 +13,43 @@ struct EmptyStateCenteredComposer: View {
     @ObservedObject var model: SessionsModel
     @ObservedObject var launcher: SessionLauncherModel
     @ObservedObject var presentationStore: SessionPresentationStore
-    @StateObject private var store: ComposerStore = {
-        let s = ComposerStore(mode: .emptyState(repoKey: nil, agent: .claude))
-        s.resetChipsForRepo(nil, defaults: .default)
-        return s
-    }()
+    private let workspaceDraft: WorkspaceDraftTab?
+    @StateObject private var store: ComposerStore
 
-    init(model: SessionsModel, launcher: SessionLauncherModel, presentationStore: SessionPresentationStore) {
+    init(
+        model: SessionsModel,
+        launcher: SessionLauncherModel,
+        presentationStore: SessionPresentationStore,
+        workspaceDraft: WorkspaceDraftTab? = nil
+    ) {
         self.model = model
         self.launcher = launcher
         self.presentationStore = presentationStore
+        self.workspaceDraft = workspaceDraft
+        let s = ComposerStore(mode: .emptyState(repoKey: workspaceDraft?.workspaceKey.repoKey, agent: workspaceDraft?.agent ?? .claude))
+        if let workspaceDraft {
+            s.resetChipsForRepo(
+                workspaceDraft.workspaceKey.repoKey,
+                defaults: ComposerStore.ChipDefaults(
+                    agent: workspaceDraft.agent,
+                    modelId: workspaceDraft.modelId,
+                    effort: workspaceDraft.effort,
+                    mode: workspaceDraft.mode,
+                    planMode: false
+                )
+            )
+        } else {
+            s.resetChipsForRepo(nil, defaults: .default)
+        }
+        _store = StateObject(wrappedValue: s)
     }
 
     var body: some View {
-        VStack(spacing: 18) {
-            Spacer()
+        VStack(spacing: workspaceDraft == nil ? 18 : 14) {
+            Spacer(minLength: workspaceDraft == nil ? 0 : 14)
+            if workspaceDraft != nil {
+                inheritedContextControls
+            }
             VStack(spacing: 6) {
                 Text(headline)
                     .font(.system(size: 22, weight: .semibold, design: .serif))
@@ -69,7 +91,7 @@ struct EmptyStateCenteredComposer: View {
         .padding(.vertical, 18)
         .onAppear {
             // Seed repo to the most recently active one if available.
-            if store.repoKey == nil, let firstRepo = model.repos.first {
+            if workspaceDraft == nil, store.repoKey == nil, let firstRepo = model.repos.first {
                 store.resetChipsForRepo(firstRepo.key, defaults: launcher.chipDefaults(for: .claude))
             }
             launcher.normalize(store)
@@ -85,6 +107,16 @@ struct EmptyStateCenteredComposer: View {
         }
     }
 
+    @ViewBuilder
+    private var inheritedContextControls: some View {
+        if let workspaceDraft {
+            InheritedContextChips(
+                siblings: siblingSessions(for: workspaceDraft),
+                selectedSourceIds: $store.inheritedContextSourceIds
+            )
+        }
+    }
+
     private var headline: String {
         if let repo = store.repoKey, !repo.isEmpty {
             let last = (repo as NSString).lastPathComponent
@@ -97,22 +129,34 @@ struct EmptyStateCenteredComposer: View {
         HStack(spacing: 8) {
             Image(systemName: "folder")
                 .foregroundStyle(.secondary)
-            Picker("Repo", selection: Binding(
-                get: { store.repoKey ?? "" },
-                set: { newKey in
-                    let key = newKey.isEmpty ? nil : newKey
-                    store.resetChipsForRepo(key, defaults: launcher.chipDefaults(for: .claude))
+            if let workspaceDraft {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text((workspaceDraft.workspaceKey.repoKey as NSString).lastPathComponent)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(workspaceDraft.workspaceKey.workspacePath)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-            )) {
-                Text("(custom path)").tag("")
-                ForEach(model.repos, id: \.key) { repo in
-                    Text(repo.displayName).tag(repo.key)
+            } else {
+                Picker("Repo", selection: Binding(
+                    get: { store.repoKey ?? "" },
+                    set: { newKey in
+                        let key = newKey.isEmpty ? nil : newKey
+                        store.resetChipsForRepo(key, defaults: launcher.chipDefaults(for: .claude))
+                    }
+                )) {
+                    Text("(custom path)").tag("")
+                    ForEach(model.repos, id: \.key) { repo in
+                        Text(repo.displayName).tag(repo.key)
+                    }
                 }
+                .labelsHidden()
+                .pickerStyle(.menu)
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
             Spacer()
-            Text("Goal becomes the first user message.")
+            Text(workspaceDraft == nil ? "Goal becomes the first user message." : "New tab stays in this workspace.")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
         }
@@ -134,10 +178,20 @@ struct EmptyStateCenteredComposer: View {
     }
 
     private var lastPrompt: String? {
-        model.registry.sessions
+        let sourceSessions: [AgentSession] = {
+            if let workspaceDraft {
+                return siblingSessions(for: workspaceDraft)
+            }
+            return model.registry.sessions
+        }()
+        return sourceSessions
             .sorted { $0.lastEventAt > $1.lastEventAt }
             .compactMap { $0.goal?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
+    }
+
+    private func siblingSessions(for draft: WorkspaceDraftTab) -> [AgentSession] {
+        WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
     }
 
     private func quickChip(_ title: String, systemImage: String, template: String) -> some View {
@@ -198,33 +252,60 @@ struct EmptyStateCenteredComposer: View {
             AutopilotState.shared.trustRepo(repoKey)
         }
         do {
+            let selectedSourceIds = revalidatedInheritedSourceIds()
+            let unavailableSourceIds = unavailableInheritedSourceIds(validSourceIds: selectedSourceIds)
             // v0.8.1 agy-migration: stage attachments BEFORE spawn so
             // Antigravity 2's `agentapi new-conversation` receives the
             // user's actual full prompt (incl. attachment refs), not the
             // 80-char `goal` slice. tmux-based sessions restage below into
             // the final per-session/worktree directory before /send.
             var stagedPaths: [URL] = []
-            if let dir = AttachmentStaging.emptyStateStagingDir {
+            if !store.attachments.isEmpty || !selectedSourceIds.isEmpty || !unavailableSourceIds.isEmpty {
+                let dir = try AttachmentStaging.makePendingStagingDir()
                 for att in store.attachments {
                     if let staged = try? AttachmentStaging.stage(source: att.sourceURL, into: dir, attachmentId: att.id) {
                         stagedPaths.append(staged)
                     }
                 }
+                stagedPaths.append(contentsOf: try stageInheritedContext(
+                    into: dir,
+                    selectedSourceIds: selectedSourceIds,
+                    unavailableSourceIds: unavailableSourceIds
+                ))
             }
             let initialBody = store.renderPromptBody(attachmentPaths: stagedPaths)
-            let session = try await model.spawnSession(
-                repoPath: repoKey,
-                agent: store.agent,
-                planMode: store.permissionMode == .plan,
-                goal: goal,
-                mode: store.mode,
-                tmux: runtime.tmuxClient,
-                model: store.modelId,
-                effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil,
-                acceptEdits: store.permissionMode == .acceptEdits,
-                autopilot: bypassPicked,
-                initialMessage: initialBody.isEmpty ? nil : initialBody
-            )
+            let session: AgentSession
+            if let workspaceDraft {
+                session = try await model.spawnSessionInExistingWorkspace(
+                    repoPath: workspaceDraft.workspaceKey.repoKey,
+                    workspacePath: workspaceDraft.workspaceKey.workspacePath,
+                    agent: store.agent,
+                    planMode: store.permissionMode == .plan,
+                    goal: goal,
+                    mode: workspaceDraft.mode,
+                    tmux: runtime.tmuxClient,
+                    model: store.modelId,
+                    effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil,
+                    acceptEdits: store.permissionMode == .acceptEdits,
+                    autopilot: bypassPicked,
+                    initialMessage: initialBody.isEmpty ? nil : initialBody,
+                    inheritedContextSourceIds: selectedSourceIds
+                )
+            } else {
+                session = try await model.spawnSession(
+                    repoPath: repoKey,
+                    agent: store.agent,
+                    planMode: store.permissionMode == .plan,
+                    goal: goal,
+                    mode: store.mode,
+                    tmux: runtime.tmuxClient,
+                    model: store.modelId,
+                    effort: launcher.supportsEffort(modelId: store.modelId) ? store.effort : nil,
+                    acceptEdits: store.permissionMode == .acceptEdits,
+                    autopilot: bypassPicked,
+                    initialMessage: initialBody.isEmpty ? nil : initialBody
+                )
+            }
             spawnedSession = session
             // Record the empty-state composer's mode pick on the session
             // so the chip in the bound view reflects it without needing
@@ -242,7 +323,16 @@ struct EmptyStateCenteredComposer: View {
             let isAgentapiSpawn = session.geminiBackend == .agentapi
             // Wait briefly for the pane to be ready, then post the first prompt.
             try await Task.sleep(nanoseconds: 600_000_000)
-            if !isAgentapiSpawn, store.canSend, let port = runtime.agentControlServer.boundPort {
+            if isAgentapiSpawn {
+                if (!selectedSourceIds.isEmpty || !unavailableSourceIds.isEmpty),
+                   let dir = AttachmentStaging.stagingDir(for: session) {
+                    _ = try? stageInheritedContext(
+                        into: dir,
+                        selectedSourceIds: selectedSourceIds,
+                        unavailableSourceIds: unavailableSourceIds
+                    )
+                }
+            } else if store.canSend, let port = runtime.agentControlServer.boundPort {
                 let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
                 // Stage attachments under the new session's dir.
                 stagedPaths.removeAll()
@@ -252,6 +342,11 @@ struct EmptyStateCenteredComposer: View {
                             stagedPaths.append(staged)
                         }
                     }
+                    stagedPaths.append(contentsOf: try stageInheritedContext(
+                        into: dir,
+                        selectedSourceIds: selectedSourceIds,
+                        unavailableSourceIds: unavailableSourceIds
+                    ))
                 }
                 let body = store.renderPromptBody(attachmentPaths: stagedPaths)
                 if !body.isEmpty {
@@ -259,6 +354,7 @@ struct EmptyStateCenteredComposer: View {
                 }
             }
             store.endSend()
+            model.clearDraftWorkspaceTab()
         } catch let err as MacComposerSender.Error {
             let error = ComposerStore.SendError.daemonError(
                 message: "Session started, but the first message did not send: \(err.localizedDescription)"
@@ -301,6 +397,89 @@ struct EmptyStateCenteredComposer: View {
             )
         }
         store.endSend(error: error)
+    }
+
+    @MainActor
+    private func revalidatedInheritedSourceIds() -> [UUID] {
+        guard let workspaceDraft else { return [] }
+        let allowed = Set(
+            WorkspaceKey.siblings(of: workspaceDraft.workspaceKey, in: model.registry.sessions)
+                .map(\.id)
+        )
+        return store.inheritedContextSourceIds
+            .filter { allowed.contains($0) }
+            .sorted { $0.uuidString < $1.uuidString }
+    }
+
+    @MainActor
+    private func unavailableInheritedSourceIds(validSourceIds: [UUID]) -> [UUID] {
+        guard workspaceDraft != nil else { return [] }
+        let valid = Set(validSourceIds)
+        return store.inheritedContextSourceIds
+            .filter { !valid.contains($0) }
+            .sorted { $0.uuidString < $1.uuidString }
+    }
+
+    @MainActor
+    private func stageInheritedContext(
+        into dir: URL,
+        selectedSourceIds: [UUID],
+        unavailableSourceIds: [UUID]
+    ) throws -> [URL] {
+        guard let workspaceDraft,
+              !selectedSourceIds.isEmpty || !unavailableSourceIds.isEmpty
+        else { return [] }
+        var staged: [URL] = []
+        var sourceSessions: [AgentSession] = []
+
+        for sourceId in unavailableSourceIds {
+            let warningURL = dir.appendingPathComponent("inherited-\(sourceId.uuidString).md")
+            try """
+            # Inherited context unavailable
+
+            Source session \(sourceId.uuidString) is no longer available in this workspace.
+            """.write(to: warningURL, atomically: true, encoding: .utf8)
+            staged.append(warningURL)
+        }
+
+        for sourceId in selectedSourceIds {
+            guard let sourceSession = model.registry.session(id: sourceId),
+                  sourceSession.archivedAt == nil,
+                  WorkspaceKey.of(sourceSession) == workspaceDraft.workspaceKey
+            else { continue }
+            sourceSessions.append(sourceSession)
+            let digest = ContextDigest.render(
+                snapshot: wireSnapshot(for: sourceSession),
+                sourceSession: sourceSession
+            )
+            let digestURL = dir.appendingPathComponent("inherited-\(sourceId.uuidString).md")
+            try digest.write(to: digestURL, atomically: true, encoding: .utf8)
+            staged.append(digestURL)
+        }
+
+        staged.append(contentsOf: try InheritedAttachmentStager.stage(sourceSessions: sourceSessions, into: dir))
+        return staged
+    }
+
+    @MainActor
+    private func wireSnapshot(for session: AgentSession) -> WireChatSnapshot {
+        let snapshot = model.chatStore(for: session)?.snapshot
+        return WireChatSnapshot(
+            sessionId: session.id,
+            items: snapshot?.items ?? [],
+            planSteps: snapshot?.planSteps ?? [],
+            sourceEntries: snapshot?.sourceEntries ?? [],
+            artifactEntries: snapshot?.artifactEntries ?? [],
+            codexTodos: snapshot?.codexTodos ?? [],
+            pendingPermissionPrompt: model.chatStore(for: session)?.pendingPermissionPrompt,
+            totalInputTokens: snapshot?.totalInputTokens ?? 0,
+            totalOutputTokens: snapshot?.totalOutputTokens ?? 0,
+            cacheReadTokens: snapshot?.totalCacheReadTokens ?? 0,
+            cacheCreationTokens: snapshot?.totalCacheCreationTokens ?? 0,
+            lastEventAt: snapshot?.lastEventAt ?? session.lastEventAt,
+            updateCounter: snapshot?.updateCounter ?? session.lastEventSeq,
+            currentTurnState: snapshot?.currentTurnState ?? .idle
+        )
     }
 
     private func applyIncomingDraft(note: Notification) {

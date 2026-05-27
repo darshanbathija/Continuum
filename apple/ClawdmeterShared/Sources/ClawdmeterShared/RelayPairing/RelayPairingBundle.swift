@@ -227,6 +227,7 @@ public struct RelayPairingBundle: Codable, Sendable, Equatable {
             // attacker.example would otherwise be a free MITM.
             if host.hasSuffix(".clawdmeter.dev") { return true }
             if host == "clawdmeter.dev" { return true }
+            if RelayEnvironment.isKnownHostedWorkerHost(host) { return true }
             return false
         case "ws":
             // Local-dev convenience: ws://localhost or ws://127.0.0.1

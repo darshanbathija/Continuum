@@ -17,14 +17,14 @@ import ClawdmeterShared
 final class RelayPairingServiceTests: XCTestCase {
 
     func testInitialPhaseIsUnpaired() {
-        let service = RelayPairingService()
+        let service = makeService()
         XCTAssertEqual(service.phase, .unpaired)
         XCTAssertNil(service.bundle)
         XCTAssertNil(service.bundleURL)
     }
 
     func testBeginPairingProducesValidBundle() throws {
-        let service = RelayPairingService()
+        let service = makeService()
         service.beginPairing()
 
         XCTAssertEqual(service.phase, .readyButNotConnected)
@@ -55,7 +55,7 @@ final class RelayPairingServiceTests: XCTestCase {
     }
 
     func testIPhoneCanDeriveMatchingSymmetricKey() throws {
-        let service = RelayPairingService()
+        let service = makeService()
         service.beginPairing()
 
         let macKeypair = try XCTUnwrap(service.keypairForTesting)
@@ -83,7 +83,7 @@ final class RelayPairingServiceTests: XCTestCase {
     }
 
     func testResetReturnsToUnpaired() throws {
-        let service = RelayPairingService()
+        let service = makeService()
         service.beginPairing()
         XCTAssertEqual(service.phase, .readyButNotConnected)
 
@@ -95,7 +95,7 @@ final class RelayPairingServiceTests: XCTestCase {
     }
 
     func testRegeneratingProducesFreshBundle() throws {
-        let service = RelayPairingService()
+        let service = makeService()
         service.beginPairing()
         let first = try XCTUnwrap(service.bundle)
         let firstKey = try XCTUnwrap(service.keypairForTesting).publicKeyBase64URL
@@ -109,5 +109,9 @@ final class RelayPairingServiceTests: XCTestCase {
         XCTAssertNotEqual(first.macTok, second.macTok)
         XCTAssertNotEqual(first.iosTok, second.iosTok)
         XCTAssertNotEqual(firstKey, secondKey)
+    }
+
+    private func makeService() -> RelayPairingService {
+        RelayPairingService(processEnv: [:])
     }
 }

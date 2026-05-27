@@ -26,6 +26,11 @@ extension Notification.Name {
     static let clawdmeterExportSession = Notification.Name("clawdmeter.exportSession")
     static let clawdmeterShowTransientToast = Notification.Name("clawdmeter.showTransientToast")
     static let clawdmeterInsertComposerText = Notification.Name("clawdmeter.insertComposerText")
+    /// App-level workspace tab commands. Kept as notifications so the
+    /// Code workspace can resolve the currently-open session and no app
+    /// command closure needs to reach into `SessionsModel` directly.
+    static let clawdmeterOpenWorkspaceChatTab = Notification.Name("clawdmeter.openWorkspaceChatTab")
+    static let clawdmeterOpenWorkspaceTerminalTab = Notification.Name("clawdmeter.openWorkspaceTerminalTab")
     /// Posted from the titlebar's "Continue Plan" chip to open the
     /// spawn queue modal in MacRootView.
     static let clawdmeterShowPlanQueue = Notification.Name("clawdmeter.showPlanQueue")
@@ -132,6 +137,16 @@ struct ClawdmeterMacApp: App {
                         object: nil
                     )
                 }
+                Button("New Workspace Chat Tab") {
+                    Self.postSwitchTab("code")
+                    NotificationCenter.default.post(name: .clawdmeterOpenWorkspaceChatTab, object: nil)
+                }
+                .keyboardShortcut("t", modifiers: [.command])
+                Button("New Workspace Terminal") {
+                    Self.postSwitchTab("code")
+                    NotificationCenter.default.post(name: .clawdmeterOpenWorkspaceTerminalTab, object: nil)
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Find in Transcript") {
                     NotificationCenter.default.post(name: .transcriptFind, object: nil)
                 }

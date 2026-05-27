@@ -14,5 +14,13 @@ public final class PassthroughSubject<Output, Failure> {
     public init() {}
 
     public func send(_ value: Output) {}
+
+    public func eraseToAnyPublisher() -> AnyPublisher<Output, Failure> {
+        AnyPublisher()
+    }
+}
+
+public final class AnyPublisher<Output, Failure> {
+    public init() {}
 }
 #endif

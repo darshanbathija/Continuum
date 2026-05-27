@@ -3,9 +3,8 @@ import XCTest
 
 final class SessionLifecycleWireTests: XCTestCase {
     func test_wireV19LifecycleGate() {
-        // F3-wire bumped `current` to 20; the lifecycle gate stays at 19
-        // (the minimum the spine ships at — older servers don't expose
-        // the spine, newer servers still do).
+        // Newer wire releases keep advancing `current`; the lifecycle gate
+        // itself stays pinned to the v19 minimum.
         XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 19)
         XCTAssertEqual(AgentControlWireVersion.lifecycleMinimum, 19)
         XCTAssertFalse(AgentControlWireVersion.supportsLifecycle(serverWireVersion: nil))

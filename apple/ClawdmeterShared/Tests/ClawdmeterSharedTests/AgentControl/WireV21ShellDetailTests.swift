@@ -4,7 +4,7 @@ import XCTest
 /// A10 (2026-05-27) — wireVersion 21 shell/detail split tests.
 ///
 /// Verifies:
-///   - `AgentControlWireVersion.current` is 21 (the bump for A10).
+///   - `AgentControlWireVersion.current` is at least 21 (the bump for A10).
 ///   - `shellDetailMinimum = 21` and `supportsShellDetail` capability gate
 ///     returns the right answer at v20 / v21 / nil.
 ///   - Round-trip: a `ChatShellEvent`, a `ChatDetailEvent`, and a
@@ -27,8 +27,8 @@ final class WireV21ShellDetailTests: XCTestCase {
 
     // MARK: - Wire version + capability gate
 
-    func test_currentWireVersionIs21() {
-        XCTAssertEqual(AgentControlWireVersion.current, 21)
+    func test_currentWireVersionIsAtLeast21() {
+        XCTAssertGreaterThanOrEqual(AgentControlWireVersion.current, 21)
     }
 
     func test_shellDetailMinimumIs21() {

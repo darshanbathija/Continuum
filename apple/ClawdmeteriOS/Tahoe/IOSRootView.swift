@@ -183,6 +183,9 @@ public struct IOSRootView: View {
                 sessionId: id,
                 data: code,
                 presentationStore: presentationStore,
+                onOpenSession: { nextId in
+                    pushedScreen = .sessionDetail(nextId)
+                },
                 onBack: { pushedScreen = nil }
             )
         case nil:
