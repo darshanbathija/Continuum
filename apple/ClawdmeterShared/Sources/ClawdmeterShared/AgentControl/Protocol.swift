@@ -167,7 +167,11 @@ public enum AgentControlWireVersion {
     /// `MobileCommandOutbox` so a paired iPhone can clone or quick-start a
     /// repo on the Mac. Older clients 404 the routes; iOS surfaces an
     /// "Update Clawdmeter on the Mac" banner when `serverWireVersion < 23`.
-    public static let current: Int = 23
+    /// v24 (2026-05-27): vendor provisioning endpoints. Adds read-only
+    /// catalog/device checks plus explicit terminal-launched CLI install/auth
+    /// actions and repo-env preview/import routes backed by PR 201's
+    /// `RepoEnvStore` + Keychain custody.
+    public static let current: Int = 24
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -333,6 +337,14 @@ public enum AgentControlWireVersion {
     /// `/wake-mac`, `GET /workspaces/allow-list`.
     public static let workspaceOnboardingMinimum: Int = 23
 
+    /// Minimum wire version that supports vendor CLI/MCP provisioning routes:
+    /// `GET /vendor-provisioning/vendors`,
+    /// `POST /vendor-provisioning/check-device`,
+    /// `/vendor-provisioning/vendors/:id/actions`,
+    /// `/vendor-provisioning/vendors/:id/env/preview`, and
+    /// `/vendor-provisioning/vendors/:id/env/import`.
+    public static let vendorProvisioningMinimum: Int = 24
+
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
     /// compatible*: newer servers (e.g. wire v7) work fine with this
@@ -453,6 +465,12 @@ public enum AgentControlWireVersion {
     public static func supportsWorkspaces(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= workspacesMinimum
+    }
+
+    /// Whether the paired Mac exposes vendor CLI/MCP provisioning routes.
+    public static func supportsVendorProvisioning(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= vendorProvisioningMinimum
     }
 
     /// Whether the paired Mac honors the v16 idempotency key + receipt
