@@ -49,6 +49,7 @@ public final class AgentControlServer {
     /// new sessions with the repo's last-used model/effort/agent so
     /// iOS new-session flow doesn't need to ship explicit defaults.
     let workspaceStore: WorkspaceStore
+    private let repoEnvResolver: RepoEnvRuntimeResolver?
     /// v16 Code V2: bounded LRU receipt cache for iOS write commands.
     /// Wraps the write handlers so a retried request with the same
     /// idempotency key returns the cached response instead of repeating
@@ -58,7 +59,7 @@ public final class AgentControlServer {
     let mobileCommandOutbox: MobileCommandOutbox
     /// v18 Code workbench parity: remote iOS Run/Preview is hosted by the
     /// paired Mac daemon, because iOS cannot execute local repo commands.
-    private let codeRunProfiles = CodeRunProfileService()
+    private let codeRunProfiles: CodeRunProfileService
     /// Prepared checkpoint restore plans are intentionally short-lived:
     /// iOS must preview a restore before it can confirm it.
     private var checkpointRestorePlans: [UUID: CheckpointRestorePlan] = [:]
@@ -214,6 +215,7 @@ public final class AgentControlServer {
         chatStoreRegistry: DaemonChatStoreRegistry? = nil,
         chatFileResolver: SessionFileResolver? = nil,
         workspaceStore: WorkspaceStore? = nil,
+        repoEnvResolver: RepoEnvRuntimeResolver? = nil,
         mobileCommandOutbox: MobileCommandOutbox? = nil,
         listenPortRange: ClosedRange<UInt16> = 21731...21741,
         writesServerMetadata: Bool = true
@@ -231,6 +233,8 @@ public final class AgentControlServer {
         // load + migrate-from-sessions runs without an actor hop. Tests
         // can inject an isolated tmpdir-backed store.
         self.workspaceStore = workspaceStore ?? WorkspaceStore()
+        self.repoEnvResolver = repoEnvResolver
+        self.codeRunProfiles = CodeRunProfileService(repoEnvResolver: repoEnvResolver)
         // v16 Code V2: bounded receipt cache. The replay-from-audit-log
         // call is fire-and-forget — happens on the first request to an
         // idempotent endpoint (see `tryReplayIdempotent`).
@@ -1438,7 +1442,7 @@ public final class AgentControlServer {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
         let oldModel = session.model
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux)
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(
             sessionId: uuid,
             newModel: req.model,
@@ -1473,7 +1477,7 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux)
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(sessionId: uuid, newEffort: .some(req.effort))
         guard isSuccessfulSwap(result) else {
             sendResponse(.internalError, on: connection); return
@@ -1507,7 +1511,7 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSwap, on: connection); return
         }
-        let changer = SessionConfigChanger(registry: registry, tmux: tmux)
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
         let result = await changer.swap(
             sessionId: uuid,
             newPlanMode: req.planMode,
@@ -2109,7 +2113,12 @@ public final class AgentControlServer {
         // outside JSONLs don't carry a worktree.
         do {
             try await tmux.start()
-            let window = try await tmux.newWindow(cwd: req.repoKey, child: argv)
+            let resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: req.repoKey)
+            let window = try await tmux.newWindow(
+                cwd: req.repoKey,
+                child: argv,
+                environment: resolvedEnv?.environment ?? [:]
+            )
             let session = try await registry.create(
                 repoKey: req.repoKey,
                 repoDisplayName: (req.repoKey as NSString).lastPathComponent,
@@ -2120,7 +2129,9 @@ public final class AgentControlServer {
                 tmuxWindowId: window.windowId,
                 tmuxPaneId: window.paneId,
                 planMode: false,
-                ownsWorktree: false
+                ownsWorktree: false,
+                envSetId: resolvedEnv?.set?.id,
+                envSetName: resolvedEnv?.set?.name
             )
             if req.agent == .claude {
                 attachClaudeWiring(for: session, cwd: req.repoKey)
@@ -2162,6 +2173,7 @@ public final class AgentControlServer {
                 sendResponse(.internalError, on: connection)
             }
         } catch {
+            if sendRepoEnvConflict(error, on: connection) { return }
             serverLogger.error("continue-readonly failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
@@ -3682,6 +3694,30 @@ public final class AgentControlServer {
         // surfaces in the OpenCode TUI's session list (which the
         // user can still drive from a terminal if they want).
         let opencodeDirectory = worktreePath ?? req.repoKey
+        let resolvedEnv: RepoEnvResolvedEnvironment?
+        do {
+            resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: opencodeDirectory)
+        } catch {
+            if sendRepoEnvConflict(error, on: connection) {
+                await cleanupUnregisteredWorktree(
+                    repoRoot: req.repoKey,
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    provisionalSessionId: provisionalSessionId,
+                    context: "opencode repo env conflict"
+                )
+                return
+            }
+            sendResponse(.internalError, on: connection)
+            await cleanupUnregisteredWorktree(
+                repoRoot: req.repoKey,
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId,
+                context: "opencode repo env resolve"
+            )
+            return
+        }
         guard var sessionReq = OpencodeProcessManager.shared.makeAuthorizedRequest(
             path: "/session",
             directory: opencodeDirectory
@@ -3768,6 +3804,8 @@ public final class AgentControlServer {
                 mode: worktreePath == nil ? .local : .worktree,
                 effort: req.effort,
                 ownsWorktree: worktreePath != nil,
+                envSetId: resolvedEnv?.set?.id,
+                envSetName: resolvedEnv?.set?.name,
                 id: provisionalSessionId ?? UUID()
             )
         } catch {
@@ -4730,7 +4768,12 @@ public final class AgentControlServer {
         // Spawn into a new tmux window.
         do {
             try await tmux.start()  // idempotent
-            let window = try await tmux.newWindow(cwd: cwd, child: argv)
+            let resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: cwd)
+            let window = try await tmux.newWindow(
+                cwd: cwd,
+                child: argv,
+                environment: resolvedEnv?.environment ?? [:]
+            )
             // Phase 2 simplification: pane id = first pane of the new window.
             // tmux's `list-windows -F '#{pane_id}'` would tell us, but we
             // derive it lazily for now.
@@ -4748,6 +4791,8 @@ public final class AgentControlServer {
                 mode: req.useWorktree ? .worktree : .local,
                 effort: req.effort,
                 ownsWorktree: worktreePath != nil,
+                envSetId: resolvedEnv?.set?.id,
+                envSetName: resolvedEnv?.set?.name,
                 id: provisionalSessionId ?? UUID()
             )
             recordWorkspaceSession(repoRoot: req.repoKey, sessionId: session.id)
@@ -4804,6 +4849,16 @@ public final class AgentControlServer {
                 sendResponse(.internalError, on: connection)
             }
         } catch {
+            if sendRepoEnvConflict(error, on: connection) {
+                await cleanupUnregisteredWorktree(
+                    repoRoot: req.repoKey,
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    provisionalSessionId: provisionalSessionId,
+                    context: "spawn repo env conflict"
+                )
+                return
+            }
             await cleanupUnregisteredWorktree(
                 repoRoot: req.repoKey,
                 worktreePath: worktreePath,
@@ -4846,6 +4901,39 @@ public final class AgentControlServer {
 
     private func filesToCopySettings(forRepoRoot repoRoot: String) -> WorkspaceFilesToCopySettings {
         workspaceStore.workspace(forRepoRoot: repoRoot)?.filesToCopy ?? WorkspaceFilesToCopySettings()
+    }
+
+    private func resolveRepoEnv(repoRoot: String, cwd: String) throws -> RepoEnvResolvedEnvironment? {
+        try repoEnvResolver?.resolveForLaunch(repoRoot: repoRoot, cwd: cwd)
+    }
+
+    private func resolveRepoEnv(session: AgentSession, cwd: String? = nil) throws -> RepoEnvResolvedEnvironment? {
+        try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd)
+    }
+
+    private struct RepoEnvConflictPayload: Encodable {
+        let error: String
+        let detail: String
+        let conflicts: [RepoEnvConflict]
+    }
+
+    @discardableResult
+    private func sendRepoEnvConflict(_ error: Error, on connection: NWConnection) -> Bool {
+        guard case RepoEnvError.manualConflicts(let conflicts) = error else { return false }
+        let payload = RepoEnvConflictPayload(
+            error: "repo_env_conflict",
+            detail: "Manual .env.local values conflict with managed repo env variables.",
+            conflicts: conflicts
+        )
+        let body = (try? JSONEncoder().encode(payload))
+            ?? Data(#"{"error":"repo_env_conflict"}"#.utf8)
+        sendResponse(HTTPResponse(
+            status: 409,
+            reason: "Conflict",
+            contentType: "application/json",
+            body: body
+        ), on: connection)
+        return true
     }
 
     private func recordWorkspaceSession(repoRoot: String, sessionId: UUID) {
@@ -6827,9 +6915,14 @@ public final class AgentControlServer {
             return
         }
         do {
-            try await tmux.killWindow(windowId)
             let cwd = session.effectiveCwd
-            let newWindow = try await tmux.newWindow(cwd: cwd, child: replacementArgv)
+            let resolvedEnv = try resolveRepoEnv(session: session, cwd: cwd)
+            try await tmux.killWindow(windowId)
+            let newWindow = try await tmux.newWindow(
+                cwd: cwd,
+                child: replacementArgv,
+                environment: resolvedEnv?.environment ?? [:]
+            )
             try await registry.updateRuntime(
                 id: uuid,
                 worktreePath: session.worktreePath,
@@ -6872,6 +6965,7 @@ public final class AgentControlServer {
                 on: connection
             )
         } catch {
+            if sendRepoEnvConflict(error, on: connection) { return }
             serverLogger.error("approve-plan failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
         }

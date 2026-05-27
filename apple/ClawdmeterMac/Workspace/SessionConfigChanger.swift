@@ -26,10 +26,16 @@ public final class SessionConfigChanger {
 
     private let registry: AgentSessionRegistry
     private let tmux: TmuxControlClient
+    private let repoEnvResolver: RepoEnvRuntimeResolver?
 
-    public init(registry: AgentSessionRegistry, tmux: TmuxControlClient) {
+    public init(
+        registry: AgentSessionRegistry,
+        tmux: TmuxControlClient,
+        repoEnvResolver: RepoEnvRuntimeResolver? = nil
+    ) {
         self.registry = registry
         self.tmux = tmux
+        self.repoEnvResolver = repoEnvResolver
     }
 
     /// Swap one or more config dimensions on a live session.
@@ -82,6 +88,20 @@ public final class SessionConfigChanger {
         if newArgv.isEmpty {
             return .spawnError(message: "Could not locate agent binary on PATH")
         }
+        // v0.24 env preflight: resolve before touching the running pane. A
+        // manual .env.local conflict should fail the swap, not kill the session.
+        let cwd: String
+        switch newMode ?? session.mode {
+        case .local:    cwd = session.repoKey ?? session.effectiveCwd
+        case .worktree: cwd = session.effectiveCwd
+        case .cloud:    cwd = session.repoKey ?? session.effectiveCwd
+        }
+        let newEnv: [String: String]
+        do {
+            newEnv = try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd)?.environment ?? [:]
+        } catch {
+            return .spawnError(message: error.localizedDescription)
+        }
         // F2-wire: write-ahead failures during config swap can fail the
         // swap outright — the user invoked this synchronously through
         // the UI overlay, so a clean "swap failed, original preserved"
@@ -99,17 +119,7 @@ public final class SessionConfigChanger {
         )
         do {
             try await tmux.killPane(oldPaneId)
-            // v0.8 schema v5: repoKey is optional. Chat sessions never reach
-            // this swap path (they don't expose a Mode chip), so we can fall
-            // back to effectiveCwd which crashes loudly if the daemon ever
-            // hands us a session without any cwd.
-            let cwd: String
-            switch newMode ?? session.mode {
-            case .local:    cwd = session.repoKey ?? session.effectiveCwd
-            case .worktree: cwd = session.effectiveCwd
-            case .cloud:    cwd = session.repoKey ?? session.effectiveCwd  // not supported v1; fall through
-            }
-            let newWindow = try await tmux.newWindow(cwd: cwd, child: newArgv)
+            let newWindow = try await tmux.newWindow(cwd: cwd, child: newArgv, environment: newEnv)
             try await registry.updateRuntime(
                 id: sessionId,
                 worktreePath: session.worktreePath,
@@ -132,7 +142,15 @@ public final class SessionConfigChanger {
             swapLogger.error("Swap failed for session \(sessionId.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
             // D12 resume-fail rescue: try to restore original config in the same window.
             do {
-                let restoreWindow = try await tmux.newWindow(cwd: session.effectiveCwd, child: originalArgv)
+                let env = try repoEnvResolver?.resolveForLaunch(
+                    session: session,
+                    cwd: session.effectiveCwd
+                )?.environment ?? [:]
+                let restoreWindow = try await tmux.newWindow(
+                    cwd: session.effectiveCwd,
+                    child: originalArgv,
+                    environment: env
+                )
                 try await registry.updateRuntime(
                     id: sessionId,
                     worktreePath: session.worktreePath,

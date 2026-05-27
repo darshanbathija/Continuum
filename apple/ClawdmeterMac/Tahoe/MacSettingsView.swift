@@ -139,6 +139,8 @@ public struct MacSettingsView: View {
             providerSettings
         case .workspaces:
             workspaceSettings
+        case .envVariables:
+            envVariablesSettings
         case .devices:
             deviceSettings
         case .diagnostics:
@@ -263,6 +265,15 @@ public struct MacSettingsView: View {
                      sub: "Effective ignored-file patterns copied into new worktrees.") {
             WorkspaceFilesToCopySettingsRows(store: runtime?.workspaceStore)
         }
+    }
+
+    @ViewBuilder
+    private var envVariablesSettings: some View {
+        RepoEnvVariablesSettingsView(
+            workspaceStore: runtime?.workspaceStore,
+            envStore: runtime?.repoEnvStore,
+            resolver: runtime?.repoEnvRuntimeResolver
+        )
     }
 
     @ViewBuilder
@@ -539,6 +550,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case visual
     case providers
     case workspaces
+    case envVariables
     case devices
     case diagnostics
     case notifications
@@ -553,6 +565,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .visual: return "Visual"
         case .providers: return "Providers"
         case .workspaces: return "Workspaces"
+        case .envVariables: return "Env Variables"
         case .devices: return "Devices"
         case .diagnostics: return "Diagnostics"
         case .notifications: return "Notifications"
@@ -570,6 +583,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "External agent runtimes and native SDK modes."
         case .workspaces:
             return "Worktree setup, copied local files, and branch isolation."
+        case .envVariables:
+            return "Named repo env sets, shared variables, and .env.local materialization."
         case .devices:
             return "Quota behavior, iPhone mirroring, Live Activities, and pairing."
         case .diagnostics:
@@ -590,6 +605,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .visual: return "sparkles"
         case .providers: return "terminal"
         case .workspaces: return "folder"
+        case .envVariables: return "command"
         case .devices: return "link"
         case .diagnostics: return "gear"
         case .notifications: return "bell"
@@ -685,6 +701,7 @@ private struct SettingsSidebarRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("settings.section.\(section.rawValue)")
     }
 }
 

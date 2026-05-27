@@ -289,6 +289,8 @@ public final class AgentSessionRegistry: ObservableObject {
         antigravityProjectId: String? = nil,
         inheritedContextSourceIds: [UUID]? = nil,
         ownsWorktree: Bool = false,
+        envSetId: UUID? = nil,
+        envSetName: String? = nil,
         id: UUID = UUID()
     ) async throws -> AgentSession {
         let now = Date()
@@ -325,7 +327,9 @@ public final class AgentSessionRegistry: ObservableObject {
             antigravityConversationId: antigravityConversationId,
             antigravityProjectId: antigravityProjectId,
             inheritedContextSourceIds: inheritedContextSourceIds,
-            ownsWorktree: ownsWorktree
+            ownsWorktree: ownsWorktree,
+            envSetId: envSetId,
+            envSetName: envSetName
         )
         // Write-ahead: receipt lands BEFORE in-memory mutation. If the
         // event store rejects the write, we propagate and the caller
@@ -875,6 +879,8 @@ public final class AgentSessionRegistry: ObservableObject {
         prMirrorState: PRMirrorState?? = nil,
         inheritedContextSourceIds: [UUID]?? = nil,
         ownsWorktree: Bool? = nil,
+        envSetId: UUID?? = nil,
+        envSetName: String?? = nil,
         lastEventSeq: UInt64? = nil,
         frontierGroupId: UUID?? = nil,
         frontierChildIndex: Int?? = nil,
@@ -939,7 +945,9 @@ public final class AgentSessionRegistry: ObservableObject {
             planProgress: Self.resolve(planProgress, fallback: s.planProgress),
             providerInstanceId: s.providerInstanceId,
             inheritedContextSourceIds: Self.resolve(inheritedContextSourceIds, fallback: s.inheritedContextSourceIds),
-            ownsWorktree: ownsWorktree ?? s.ownsWorktree
+            ownsWorktree: ownsWorktree ?? s.ownsWorktree,
+            envSetId: Self.resolve(envSetId, fallback: s.envSetId),
+            envSetName: Self.resolve(envSetName, fallback: s.envSetName)
         )
     }
 

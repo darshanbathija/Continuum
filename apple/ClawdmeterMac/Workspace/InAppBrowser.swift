@@ -161,7 +161,12 @@ struct InAppBrowser: View {
                 .disabled(runProfile.status != .running && runProfile.status != .starting)
                 .help("Stop run profile")
                 Button(action: {
-                    runProfile.restartRun(cwd: session.effectiveCwd)
+                    let result = resolveRunEnvironment()
+                    guard result.ok else {
+                        workbenchState.recordRunProfile(runProfile.stateSnapshot)
+                        return
+                    }
+                    runProfile.restartRun(cwd: session.effectiveCwd, environment: result.environment)
                     workbenchState.recordRunProfile(runProfile.stateSnapshot)
                 }) {
                     Image(systemName: "arrow.clockwise")
@@ -307,8 +312,25 @@ struct InAppBrowser: View {
     }
 
     private func startRun() {
-        runProfile.startRun(cwd: session.effectiveCwd)
+        let result = resolveRunEnvironment()
+        guard result.ok else {
+            workbenchState.recordRunProfile(runProfile.stateSnapshot)
+            return
+        }
+        runProfile.startRun(cwd: session.effectiveCwd, environment: result.environment)
         workbenchState.recordRunProfile(runProfile.stateSnapshot)
+    }
+
+    private func resolveRunEnvironment() -> (ok: Bool, environment: [String: String]?) {
+        guard let resolver = AppDelegate.runtime?.repoEnvRuntimeResolver else {
+            return (true, nil)
+        }
+        do {
+            return (true, try resolver.resolveForLaunch(session: session)?.environment)
+        } catch {
+            runProfile.failRun(error.localizedDescription)
+            return (false, nil)
+        }
     }
 
     private func loadCurrentURL() {

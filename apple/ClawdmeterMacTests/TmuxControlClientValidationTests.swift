@@ -119,4 +119,17 @@ final class TmuxControlClientValidationTests: XCTestCase {
         // beyond what unicodeScalars iteration sees; should pass.
         XCTAssertNoThrow(try TmuxControlClient.validateArgs(["日本語", "🦀 emoji"]))
     }
+
+    func test_environmentArgsUseTmuxNativeEAndStripControlCharacters() {
+        let args = TmuxControlClient.environmentArgs([
+            "API_TOKEN": "secret with spaces\nand\rcontrols"
+        ])
+
+        XCTAssertEqual(args.count, 2)
+        XCTAssertEqual(args[0], "-e")
+        XCTAssertTrue(args[1].hasPrefix("'API_TOKEN="))
+        XCTAssertFalse(args.joined(separator: " ").contains("/usr/bin/env"))
+        XCTAssertFalse(args[1].contains("\n"))
+        XCTAssertFalse(args[1].contains("\r"))
+    }
 }

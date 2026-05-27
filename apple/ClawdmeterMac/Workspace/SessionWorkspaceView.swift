@@ -3568,7 +3568,11 @@ private struct CenterThread: View {
         do {
             try await sender.setAutopilot(sessionId: session.id, enabled: enable)
             composerStore.autopilotEnabled = enable
-            let changer = SessionConfigChanger(registry: model.registry, tmux: runtime.tmuxClient)
+            let changer = SessionConfigChanger(
+                registry: model.registry,
+                tmux: runtime.tmuxClient,
+                repoEnvResolver: runtime.repoEnvRuntimeResolver
+            )
             _ = await changer.swap(sessionId: session.id)
         } catch MacComposerSender.Error.http(let status, _) where status == 403 {
             composerStore.endSend(error: .daemonError(message: "Repo not trusted for autopilot. (You can grant trust from this dialog.)"))

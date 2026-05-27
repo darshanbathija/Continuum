@@ -278,9 +278,15 @@ final class RunProfileManager: ObservableObject {
         }
     }
 
-    func restartRun(cwd runCwd: String) {
+    func restartRun(cwd runCwd: String, environment: [String: String]? = nil) {
         let command = runCommand
-        startRun(command: command, cwd: runCwd)
+        startRun(command: command, cwd: runCwd, environment: environment)
+    }
+
+    func failRun(_ message: String) {
+        stopRun(resetToIdle: false)
+        status = .failed
+        lastError = message
     }
 
     private func resolve(messages: [ChatMessage]) async {

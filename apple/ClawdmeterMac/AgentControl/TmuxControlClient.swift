@@ -347,7 +347,11 @@ public actor TmuxControlClient {
     /// Convenience: create a new window in the control session, running
     /// the given child command in the given cwd. Returns both the new window
     /// id (e.g. "@4") and primary pane id (e.g. "%5").
-    public func newWindow(cwd: String, child: [String]) async throws -> WindowRef {
+    public func newWindow(
+        cwd: String,
+        child: [String],
+        environment: [String: String] = [:]
+    ) async throws -> WindowRef {
         // E4: tmux's `new-window` accepts `-c <cwd>` natively — no shell
         // concat. The child argv is joined for tmux's own parser; tmux
         // then re-tokenizes for execve.
@@ -357,12 +361,14 @@ public actor TmuxControlClient {
         // is the escape for a literal single quote.
         do {
             let quoted = child.map { Self.tmuxQuote($0) }.joined(separator: " ")
+            let envArgs = Self.environmentArgs(environment)
             let result = try await command([
                 "new-window",
                 "-P",  // print the new window + primary pane ids
                 "-F", "'#{window_id} #{pane_id}'",
                 "-t", "control",
                 "-c", Self.tmuxQuote(cwd),
+            ] + envArgs + [
                 "--",
                 quoted,
             ])
@@ -373,11 +379,16 @@ public actor TmuxControlClient {
             throw TmuxError.commandFailed("new-window returned unexpected: \(result.lines.first ?? "")")
         } catch {
             tmuxLogger.warning("control-mode new-window failed; retrying with fresh tmux client: \(String(describing: error), privacy: .public)")
-            return try await newWindowUsingFreshClient(cwd: cwd, child: child)
+            return try await newWindowUsingFreshClient(cwd: cwd, child: child, environment: environment)
         }
     }
 
-    private func newWindowUsingFreshClient(cwd: String, child: [String]) async throws -> WindowRef {
+    private func newWindowUsingFreshClient(
+        cwd: String,
+        child: [String],
+        environment: [String: String]
+    ) async throws -> WindowRef {
+        let envArgs = Self.environmentArgs(environment, quoteForControlMode: false)
         let result = try await ShellRunner.shared.runOrThrow(
             executable: configuration.tmuxBinary,
             arguments: [
@@ -387,6 +398,7 @@ public actor TmuxControlClient {
                 "-F", "#{window_id} #{pane_id}",
                 "-t", "control",
                 "-c", cwd,
+            ] + envArgs + [
                 "--",
             ] + child,
             timeout: 10
@@ -668,6 +680,22 @@ public actor TmuxControlClient {
     /// quotes; literal single quotes are escaped as `'\''`.
     static func tmuxQuote(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    static func environmentArgs(
+        _ environment: [String: String],
+        quoteForControlMode: Bool = true
+    ) -> [String] {
+        environment
+            .sorted { $0.key < $1.key }
+            .flatMap { key, value -> [String] in
+                let safeValue = value
+                    .replacingOccurrences(of: "\n", with: "\\n")
+                    .replacingOccurrences(of: "\r", with: "\\r")
+                    .replacingOccurrences(of: "\u{0000}", with: "")
+                let assignment = "\(key)=\(safeValue)"
+                return ["-e", quoteForControlMode ? tmuxQuote(assignment) : assignment]
+            }
     }
 
     private static func normalizedPaneId(_ paneId: String) -> String {
