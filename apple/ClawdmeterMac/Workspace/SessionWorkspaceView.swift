@@ -543,6 +543,7 @@ private struct SidebarPane: View {
     @State private var showingColorTagAlert = false
     @State private var comparisonPair: SessionComparisonPair?
     @State private var externalActivityNow: Date = Date()
+    @State private var requestedRepoIdentityKeys: Set<String> = []
 
     /// A11: single-slot cache for the sidebar projection. Persists across
     /// body re-evals (reference type held via @State) so SwiftUI ticking
@@ -1851,35 +1852,71 @@ private struct SidebarPane: View {
             sessionContextMenu(session)
         }
         .onAppear {
-            cacheRepoIdentityIfNeeded(repoBadge)
+            resolveRepoIdentityIfNeeded(for: session)
         }
     }
 
     private func repoIdentityBadge(for session: AgentSession) -> RepoIdentityBadge {
-        let key = session.repoKey ?? session.runtimeCwd ?? session.worktreePath ?? session.repoDisplayName
+        let key = repoIdentityKey(for: session)
         if let cached = presentationStore.snapshot.repoIdentityBadges[key] {
             return cached
         }
-        let remoteURL = remoteOriginURL(for: session)
-        return RepoIdentityResolver.badge(repoKey: key, displayName: session.repoDisplayName, remoteURL: remoteURL)
+        return RepoIdentityResolver.badge(repoKey: key, displayName: session.repoDisplayName)
     }
 
-    private func remoteOriginURL(for session: AgentSession) -> String? {
+    private func repoIdentityKey(for session: AgentSession) -> String {
+        session.repoKey ?? session.runtimeCwd ?? session.worktreePath ?? session.repoDisplayName
+    }
+
+    private func resolveRepoIdentityIfNeeded(for session: AgentSession) {
+        let key = repoIdentityKey(for: session)
+        guard presentationStore.snapshot.repoIdentityBadges[key]?.remoteSlug == nil else { return }
+        guard !requestedRepoIdentityKeys.contains(key) else { return }
+        requestedRepoIdentityKeys.insert(key)
+
+        let displayName = session.repoDisplayName
+        let candidateRoots = remoteOriginCandidateRoots(for: session)
+        let store = presentationStore
+        Task.detached(priority: .utility) {
+            guard let remoteURL = Self.gitRemoteOriginURL(candidateRoots: candidateRoots) else { return }
+            let badge = RepoIdentityResolver.badge(
+                repoKey: key,
+                displayName: displayName,
+                remoteURL: remoteURL
+            )
+            await MainActor.run {
+                try? store.cacheRepoIdentity(badge)
+            }
+        }
+    }
+
+    private func remoteOriginCandidateRoots(for session: AgentSession) -> [String] {
+        var roots: [String] = []
+        var seen = Set<String>()
         for raw in [session.effectiveCwd, session.worktreePath, session.runtimeCwd, session.repoKey] {
             guard let root = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !root.isEmpty else { continue }
             let expanded = NSString(string: root).expandingTildeInPath
+            guard !seen.contains(expanded) else { continue }
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory),
                   isDirectory.boolValue
             else { continue }
-            if let remote = Self.gitRemoteOriginURL(repoRoot: expanded) {
+            seen.insert(expanded)
+            roots.append(expanded)
+        }
+        return roots
+    }
+
+    private nonisolated static func gitRemoteOriginURL(candidateRoots: [String]) -> String? {
+        for repoRoot in candidateRoots {
+            if let remote = gitRemoteOriginURL(repoRoot: repoRoot) {
                 return remote
             }
         }
         return nil
     }
 
-    private static func gitRemoteOriginURL(repoRoot: String) -> String? {
+    private nonisolated static func gitRemoteOriginURL(repoRoot: String) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = ["-C", NSString(string: repoRoot).expandingTildeInPath, "config", "--get", "remote.origin.url"]
@@ -1896,11 +1933,6 @@ private struct SidebarPane: View {
         } catch {
             return nil
         }
-    }
-
-    private func cacheRepoIdentityIfNeeded(_ badge: RepoIdentityBadge) {
-        guard presentationStore.snapshot.repoIdentityBadges[badge.repoKey] == nil else { return }
-        try? presentationStore.cacheRepoIdentity(badge)
     }
 
     @ViewBuilder
