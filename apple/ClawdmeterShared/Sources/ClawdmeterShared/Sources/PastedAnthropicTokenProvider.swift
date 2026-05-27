@@ -281,6 +281,19 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
         if addStatus == -34018, recordMissingEntitlementFallback() {
             return writeToKeychain(value: value)
         }
+        // errSecDuplicateItem (-25299): a Keychain item with the same
+        // service name exists in a DIFFERENT access group (typically
+        // left over from a prior Debug/non-sandboxed build that wrote
+        // the item without an accessGroup). The sandboxed app can't
+        // see/update that orphan via the access-group-filtered query,
+        // but the Keychain Services subsystem still treats it as a
+        // collision against the new add. Fall back to local-only
+        // (drop accessGroup + synchronizable) so the add lands in the
+        // namespace that CAN see the orphan, and have it overwrite.
+        if addStatus == errSecDuplicateItem, recordMissingEntitlementFallback() {
+            logger.notice("PastedAnthropicTokenProvider hit errSecDuplicateItem; falling back to local-only Keychain to overwrite the orphan entry")
+            return writeToKeychain(value: value)
+        }
         if addStatus != errSecSuccess {
             logger.error("PastedAnthropicTokenProvider add failed: \(addStatus, privacy: .public) group=\(self.accessGroup ?? "nil", privacy: .public) sync=\(self.synchronizable, privacy: .public) localFallback=\(self.fellBackToLocalKeychain, privacy: .public)")
             return false
