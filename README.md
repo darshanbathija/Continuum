@@ -12,7 +12,7 @@ At a high level, Clawdmeter does three jobs:
 - Runs and controls local coding-agent sessions from Mac, iPhone, Watch, and Linux.
 - Keeps chat, code, usage, device pairing, diagnostics, and provider setup in one app.
 
-Current source version: `0.29.3` (`apple/project.yml` build `142`).
+Current source version: `0.29.21` (`apple/project.yml` build `160`).
 
 ## What ships
 
