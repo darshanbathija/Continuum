@@ -1254,6 +1254,17 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/live-activities/push-token") { [weak self] req, conn, _ in
             await self?.handleRegisterPushToken(request: req, connection: conn)
         }
+        // E6: remote-push device-token registration. iPhone posts here
+        // when its `UIApplicationDelegate.didRegisterForRemoteNotificationsWithDeviceToken`
+        // delivery callback fires. Distinct from the Live Activity push
+        // token (which is per-activity, ephemeral); this one is the
+        // long-lived per-app remote-push token.
+        t.register(method: "POST", pattern: "/devices/apns-token") { [weak self] req, conn, _ in
+            await self?.handleRegisterAPNSDeviceToken(request: req, connection: conn)
+        }
+        t.register(method: "DELETE", pattern: "/devices/apns-token") { [weak self] req, conn, _ in
+            await self?.handleUnregisterAPNSDeviceToken(request: req, connection: conn)
+        }
         // D4 (v0.17): per-provider auto-revive toggle. iOS Live tab
         // fans the per-provider switch through here; the daemon dispatches
         // to the right AppModel.setAutoReviveEnabled. Wire v12.
@@ -3808,6 +3819,55 @@ public final class AgentControlServer {
         sendJSON(["ok": true], on: connection)
     }
 
+    // MARK: - E6: remote-push (gateway) device token
+
+    private struct RegisterAPNSDeviceTokenBody: Codable {
+        /// 64 hex chars (Apple's APNS token format).
+        let deviceToken: String
+        /// iPhone bundle id — used to derive the APNS topic.
+        let bundleId: String
+        /// The pairing session id the iPhone is reporting under. The Mac
+        /// uses this to scope the token under the current pairing.
+        let sessionId: String
+    }
+
+    private struct UnregisterAPNSDeviceTokenBody: Codable {
+        let sessionId: String
+    }
+
+    private func handleRegisterAPNSDeviceToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(RegisterAPNSDeviceTokenBody.self, from: request.body) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        // Basic schema validation — mirrors the Worker's `HEX_64` check
+        // (`infra/apns-gateway/src/schema.ts:49`).
+        let token = req.deviceToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard token.count == 64,
+              token.unicodeScalars.allSatisfy({ ($0.value >= 0x30 && $0.value <= 0x39)
+                                                || ($0.value >= 0x41 && $0.value <= 0x46)
+                                                || ($0.value >= 0x61 && $0.value <= 0x66) }) else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        guard !req.bundleId.isEmpty, !req.sessionId.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        APNSPushDeviceTokenStore.shared.register(
+            sessionId: req.sessionId,
+            deviceToken: token,
+            bundleId: req.bundleId
+        )
+        sendJSON(["ok": true, "registered": true], on: connection)
+    }
+
+    private func handleUnregisterAPNSDeviceToken(request: HTTPRequest, connection: NWConnection) async {
+        guard let req = try? JSONDecoder().decode(UnregisterAPNSDeviceTokenBody.self, from: request.body),
+              !req.sessionId.isEmpty else {
+            sendResponse(.badRequest, on: connection); return
+        }
+        APNSPushDeviceTokenStore.shared.purge(sessionId: req.sessionId)
+        sendJSON(["ok": true], on: connection)
+    }
+
     private func respondWithSession(uuid: UUID, connection: NWConnection) async {
         guard let session = registry.session(id: uuid) else {
             sendResponse(.notFound, on: connection); return
@@ -6292,6 +6352,28 @@ public final class AgentControlServer {
         // Publish the prompt to the store so the Mac UI re-renders.
         if let store = chatStoreRegistry.snapshotStore(for: session) {
             store.setPendingPermissionPrompt(prompt)
+        }
+        // E6: fire an APNS push so the paired iPhone surfaces the
+        // permission card on the lock screen. Best-effort; failure here
+        // doesn't block the user clicking on the Mac.
+        let captureSessionId = session.id
+        let captureTitle = prompt.title
+        let captureHeader = prompt.header ?? "Permission required"
+        Task.detached {
+            let body = APNSPushBody(
+                kind: "permissionPrompt",
+                sessionId: captureSessionId.uuidString,
+                title: captureHeader,
+                body: captureTitle,
+                triggerAt: UInt64(Date().timeIntervalSince1970)
+            )
+            let outcome = await APNSGatewayPushCoordinator.shared.notify(
+                surface: .permissionPrompt,
+                body: body
+            )
+            if let outcome {
+                serverLogger.info("APNS permission-prompt push outcome=\(outcome.response.rawValue, privacy: .public) elapsed=\(outcome.elapsedSeconds, privacy: .public)s")
+            }
         }
         // Await the user's response via the continuation.
         let optionId: String = await withCheckedContinuation { cont in

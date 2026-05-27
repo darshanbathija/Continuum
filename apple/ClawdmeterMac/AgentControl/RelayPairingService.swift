@@ -56,7 +56,18 @@ public final class RelayPairingService: ObservableObject {
     /// keypair. Held until `reset()` or the service is dealloc'd.
     private var keypair: RelayPairingKeyPair?
 
-    public init() {}
+    /// Shared pairing-record store. Used so the Mac's APNS gateway path
+    /// (E6) can find the active pairing without reaching back into this
+    /// service. For E7 the Mac side did not write here; E6 adds the
+    /// `recordPeerHandshake(...)` hook that persists once the iPhone's
+    /// pubkey arrives (currently invoked by E6 tests + by E3 once it
+    /// lands; the production path is E3's relay-client first-frame
+    /// handler).
+    private let pairingStore: RelayPairingStore
+
+    public init(pairingStore: RelayPairingStore = .shared) {
+        self.pairingStore = pairingStore
+    }
 
     // MARK: - Public API
 
@@ -115,6 +126,57 @@ public final class RelayPairingService: ObservableObject {
         relayPairingLogger.info("Bundle minted (sid=\(bundle.sid.prefix(8))…, ttl=\(ttl))")
     }
 
+    /// E6 hook: the relay client (E3) calls this when it receives the
+    /// iPhone's pubkey as the first relay frame. We derive the symmetric
+    /// key, persist a `RelayPairingRecord` to the shared store, and stash
+    /// the symmetric key in the Keychain so `APNSGatewayPushCoordinator`
+    /// can find it on the next push trigger.
+    ///
+    /// Returns the derived key bytes on success, nil if the input was
+    /// invalid. The Mac's symmetric-key value matches the iPhone's by
+    /// construction (X25519 + HKDF — proved by the E7 handshake test).
+    @discardableResult
+    public func recordPeerHandshake(
+        iPhoneEcdhPublicKeyBase64URL: String,
+        now: Date = Date()
+    ) -> Data? {
+        guard let pair = keypair, let bundle else {
+            relayPairingLogger.warning("recordPeerHandshake called with no active bundle")
+            return nil
+        }
+        let derived: Data
+        do {
+            derived = try pair.deriveSharedKey(
+                theirPublicKeyBase64URL: iPhoneEcdhPublicKeyBase64URL,
+                sessionId: bundle.sid
+            )
+        } catch {
+            relayPairingLogger.error("recordPeerHandshake derivation failed: \(error.localizedDescription)")
+            return nil
+        }
+        let record = RelayPairingRecord(
+            sid: bundle.sid,
+            macTok: bundle.macTok,
+            iosTok: bundle.iosTok,
+            theirEcdhPublicKeyBase64URL: iPhoneEcdhPublicKeyBase64URL,
+            ourEcdhPublicKeyBase64URL: pair.publicKeyBase64URL,
+            derivedSymmetricKeyBase64URL: RelayPairingBase64URL.encode(derived),
+            ttl: bundle.ttl,
+            relayUrl: bundle.relayUrl,
+            pairedAtUnixSeconds: UInt64(now.timeIntervalSince1970)
+        )
+        do {
+            try pairingStore.save(record: record, symmetricKey: derived)
+            relayPairingLogger.info("Recorded peer handshake (sid=\(bundle.sid.prefix(8))…) — derived APNS key persisted")
+        } catch {
+            relayPairingLogger.error("recordPeerHandshake persist failed: \(error.localizedDescription)")
+            return nil
+        }
+        self.phase = .keyExchanged
+        self.refreshSummary()
+        return derived
+    }
+
     /// User tapped "Forget" / "Cancel pairing" — wipes the in-memory
     /// keypair + bundle. The QR view falls back to the empty state.
     public func reset() {
@@ -123,6 +185,10 @@ public final class RelayPairingService: ObservableObject {
         bundleURL = nil
         phase = .unpaired
         summary = .initial
+        // Drop the persisted record + symmetric key so the APNS gateway
+        // path stops finding a stale pairing. E3/E4 re-write on next
+        // successful pairing.
+        pairingStore.clear()
         relayPairingLogger.info("Relay pairing state reset to .unpaired")
     }
 
