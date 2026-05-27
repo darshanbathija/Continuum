@@ -67,9 +67,23 @@ final class AppRuntime: ObservableObject {
 
     // E7: relay-session-token pairing UX. Owns the X25519 keypair +
     // bundle the Mac shows in a QR; iPhone scans it to derive the
-    // shared symmetric key. NOT a real WS client yet — E3 brings the
-    // actual relay socket. See RelayPairingService for state machine.
+    // shared symmetric key.
     let relayPairingService: RelayPairingService
+
+    // E3: outbound relay WebSocket client. Opens when paired (E7 bundle
+    // available) and the user has explicitly enabled the relay path —
+    // gate via UserDefaults so dev/staging builds can flip it without
+    // a rebuild. Mac dispatches inbound encrypted frames to the
+    // localhost AgentControlServer via `RelayRequestDispatcher` (same
+    // code path as a Tailscale-routed HTTP request).
+    //
+    // Per E3 acceptance, the relay is purely a transport — no existing
+    // handler logic changes. AgentControlServer still listens on
+    // Tailscale; the relay is an ADDITIONAL path that activates only
+    // when paired.
+    let relayClient: RelayClient
+    private var relayDispatcher: RelayRequestDispatcher?
+    private var relayPairingObserver: AnyCancellable?
 
     // v0.27.0: openFolderInDesign(baseDir:) removed along with the Design tab.
 
@@ -98,6 +112,17 @@ final class AppRuntime: ObservableObject {
         // E7: relay-pairing service. Phase starts `.unpaired`; the user
         // taps "Pair iPhone" in Settings to mint a fresh bundle.
         self.relayPairingService = RelayPairingService()
+
+        // E3: relay client. Constructed unconditionally so we can hand
+        // out a Publisher reference, but it stays `.idle` until a
+        // pairing is configured + start() is called via the observer
+        // below.
+        //
+        // The frame handler is a temporary placeholder — it gets
+        // replaced after `loopbackClient` is constructed (post
+        // agentControlServer.start()) with one backed by the
+        // RelayRequestDispatcher.
+        self.relayClient = RelayClient(frameHandler: { _ in nil })
 
         // Claude polling uses Continuum's own Keychain entry. Importing from
         // Claude Code's third-party Keychain item is now an explicit Settings
@@ -303,6 +328,39 @@ final class AppRuntime: ObservableObject {
                 runtimeLogger.error("MacLoopbackClient construction failed — Mac IDE actions will be disabled this session")
             }
 
+            // E3: install the relay dispatcher now that the loopback
+            // client is up. The relay client uses this to translate
+            // decrypted inbound frames into localhost HTTP requests
+            // against the just-bound AgentControlServer.
+            if let loopback = self.loopbackClient {
+                let dispatcher = RelayRequestDispatcher(loopbackClient: loopback)
+                self.relayDispatcher = dispatcher
+                self.relayClient.frameHandler = { [weak dispatcher] inner in
+                    await dispatcher?.dispatch(inner)
+                }
+            }
+            // E3: bind the relay client's lifecycle to the E7 pairing
+            // service. When `relayPairingService.bundle` becomes non-nil
+            // (the user tapped "Pair iPhone" + the bundle was minted),
+            // we open the relay socket. The relay can't actually carry
+            // useful traffic until the iPhone has scanned + handshaked,
+            // but opening early lets the Mac's first frame fire as soon
+            // as the iPhone joins. UserDefaults gate `clawdmeter.relay.enabled`
+            // lets dev builds force-disable.
+            let relayEnabled = UserDefaults.standard.object(forKey: "clawdmeter.relay.enabled") as? Bool ?? false
+            if relayEnabled {
+                self.relayPairingObserver = self.relayPairingService.$bundle
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] bundle in
+                        guard let self else { return }
+                        Task { @MainActor in
+                            await self.handleRelayPairingChange(bundle: bundle)
+                        }
+                    }
+            } else {
+                runtimeLogger.info("Relay disabled (clawdmeter.relay.enabled UserDefaults flag is false)")
+            }
+
             // A7: defer non-critical subsystems. Strong-capture self in
             // the Task since AppRuntime is an app-lifetime singleton; a
             // weak capture risks the work being dropped if init returns
@@ -367,6 +425,71 @@ final class AppRuntime: ObservableObject {
 
         bootstrapProviderRuntimes()
         runtimeLogger.info("AppRuntime.init COMPLETE instance=\(ObjectIdentifier(self).hashValue)")
+    }
+
+    // MARK: - E3: relay client lifecycle
+
+    /// Called whenever the E7 `RelayPairingService.bundle` changes —
+    /// either `nil` (the user reset) or a freshly-minted bundle.
+    ///
+    /// ## E3 scope: the foundation, not the full handshake
+    ///
+    /// The cross-peer ECDH requires BOTH the Mac's keypair AND the
+    /// iPhone's pubkey to derive the matching symmetric key K. E7's
+    /// `RelayPairingService` mints the Mac's half + ships the QR; the
+    /// iPhone's pubkey arrives via the relay's first inbound frame
+    /// (E4 territory, not in this PR).
+    ///
+    /// Until E4 lands, this handler boots the relay client with a
+    /// **provisional** symmetric key derived from the Mac's own
+    /// keypair + bundle. The client connects to the relay successfully
+    /// (the relay only sees opaque bytes — it doesn't care whether the
+    /// key matches the peer's), but the peer can't actually decrypt
+    /// frames yet. That's fine for the E3 acceptance — we need the
+    /// transport up + the handshake-pump tests green.
+    ///
+    /// E4 will replace the provisional key by reading the iPhone's
+    /// first inbound "ecdh-pubkey" frame, deriving the real K via
+    /// `RelayPairingKeyPair.deriveSharedKey(...)`, and calling
+    /// `relayClient.configure(pairing:)` with a refreshed context.
+    /// The relay socket stays open across the key-replacement — only
+    /// the codec rotates.
+    @MainActor
+    private func handleRelayPairingChange(bundle: RelayPairingBundle?) async {
+        guard let bundle else {
+            relayClient.clearPairing()
+            return
+        }
+        guard let keypair = relayPairingService.keypairForTesting else {
+            runtimeLogger.warning("Relay pairing observed bundle without a keypair; cannot derive K")
+            return
+        }
+        // Provisional K — see doc comment above. The Mac feeds its own
+        // pubkey into the ECDH as a stand-in for the iPhone's pubkey;
+        // this produces a deterministic 32-byte key that's valid for
+        // XChaCha20-Poly1305 but doesn't match what the iPhone will
+        // derive. E4 replaces this when the iPhone's pubkey arrives.
+        let provisionalK: Data
+        do {
+            provisionalK = try keypair.deriveSharedKey(
+                theirPublicKeyBase64URL: bundle.ecdhPub,
+                sessionId: bundle.sid
+            )
+        } catch {
+            runtimeLogger.error("Failed to derive provisional relay K: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        do {
+            let context = try RelayClient.PairingContext.fromMacBundle(
+                bundle: bundle,
+                derivedSymmetricKey: provisionalK
+            )
+            relayClient.configure(pairing: context)
+            relayClient.start()
+            runtimeLogger.info("Relay client started for sid=\(bundle.sid.prefix(8), privacy: .public)… (provisional K; E4 will replace)")
+        } catch {
+            runtimeLogger.error("Relay configure failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func bootstrapProviderRuntimes() {
