@@ -78,7 +78,7 @@ public final class TmuxSupervisor {
                     break  // Phase 4 wires these to registry sync
                 case .serverExited(let reason):
                     supervisorLogger.warning("tmux server exited: \(reason ?? "unknown") — marking sessions degraded")
-                    markAllSessionsDegraded()
+                    await markAllSessionsDegraded()
                     await attemptRestart()
                 }
             }
@@ -89,9 +89,18 @@ public final class TmuxSupervisor {
         }
     }
 
-    private func markAllSessionsDegraded() {
+    private func markAllSessionsDegraded() async {
         for session in registry.sessions where session.status != .degraded {
-            registry.updateStatus(id: session.id, status: .degraded)
+            // F2-wire: write-ahead failures on the supervisor path are
+            // best-effort logged. We can't usefully fail the supervisor
+            // loop (the tmux server is already gone — the right answer
+            // is "mark degraded if we can"). Logging keeps the receipt
+            // breach visible without crashing recovery.
+            do {
+                try await registry.updateStatus(id: session.id, status: .degraded)
+            } catch {
+                supervisorLogger.error("updateStatus(.degraded) write-ahead failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 

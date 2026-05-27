@@ -441,7 +441,9 @@ struct MacRootView: View {
         guard let actionID = toast.actionID else { return }
         if actionID.hasPrefix("unarchive:"),
            let id = UUID(uuidString: String(actionID.dropFirst("unarchive:".count))) {
-            sessionsModel.registry.unarchive(id: id)
+            Task { @MainActor in
+                try? await sessionsModel.registry.unarchive(id: id)
+            }
             transientToast = nil
         }
     }
@@ -636,7 +638,9 @@ struct MacRootView: View {
 
     private func archiveOpenSession() {
         guard let session = sessionsModel.openSession, session.archivedAt == nil else { return }
-        sessionsModel.registry.archive(id: session.id)
+        Task { @MainActor in
+            try? await sessionsModel.registry.archive(id: session.id)
+        }
         showTransientToast(TransientToast(
             title: "Archived \(session.displayLabel)",
             actionTitle: "Undo",

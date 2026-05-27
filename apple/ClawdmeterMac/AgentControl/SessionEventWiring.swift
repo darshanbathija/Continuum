@@ -17,6 +17,13 @@ public final class SessionEventWiring: @unchecked Sendable {
     private let tail: JSONLTail
     private let doneDetector: DoneDetector
     private let planWatcher: PlanModeWatcher
+    /// Daemon-side plan-progress recompute. Owns a small post-approval
+    /// `ChatMessage` buffer and pushes `PlanProgress` snapshots through
+    /// `registry.setPlanProgress(...)` so the sidebar bar advances on
+    /// every approved-plan session — including ones whose Mac chat
+    /// store is currently evicted from the LRU and ones only ever
+    /// opened on a paired iOS client.
+    private let progressTracker: PlanProgressTracker
 
     /// The registry is @MainActor; we hop via Task when calling its mutators.
     private let registry: AgentSessionRegistry
@@ -32,13 +39,23 @@ public final class SessionEventWiring: @unchecked Sendable {
         self.sessionId = sessionId
         self.registry = registry
         self.notifications = notifications
+        self.progressTracker = PlanProgressTracker(sessionId: sessionId, registry: registry)
 
         let captureSessionId = sessionId
         let notificationQueue = notifications
         self.doneDetector = DoneDetector(sessionId: sessionId, goal: goal) { sid, trigger in
             wiringLogger.info("Done fired: session=\(sid.uuidString) trigger=\(trigger)")
             Task { @MainActor in
-                registry.updateStatus(id: sid, status: .done)
+                // F2-wire: write-ahead failures here are best-effort
+                // logged. The done-detector path is fired from a JSONL
+                // tail; failing loud would mean a SQLite hiccup blocks
+                // status transitions from external events. Surface the
+                // breach in logs so telemetry can catch it.
+                do {
+                    try await registry.updateStatus(id: sid, status: .done)
+                } catch {
+                    wiringLogger.error("updateStatus(.done) write-ahead failed for \(sid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
                 AgentEventStream.recordEvent(
                     sessionId: sid,
                     kind: .doneDetected,
@@ -58,7 +75,11 @@ public final class SessionEventWiring: @unchecked Sendable {
         let planNotificationQueue = notifications
         self.planWatcher = PlanModeWatcher(sessionId: sessionId) { sid, planText, _ in
             Task { @MainActor in
-                registry.setPlanText(id: sid, planText: planText)
+                do {
+                    try await registry.setPlanText(id: sid, planText: planText)
+                } catch {
+                    wiringLogger.error("setPlanText write-ahead failed for \(sid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
                 AgentEventStream.recordEvent(
                     sessionId: sid,
                     kind: .planReady,
@@ -77,10 +98,17 @@ public final class SessionEventWiring: @unchecked Sendable {
 
         let doneDetectorRef = doneDetector
         let planWatcherRef = planWatcher
+        let progressTrackerRef = progressTracker
         self.tail = JSONLTail(fileURL: sessionFileURL) { json in
-            // Run both watchers per event; they're independent.
+            // Run all three watchers per event; they're independent.
             doneDetectorRef.feed(json)
             planWatcherRef.feed(json)
+            // Progress tracker only does work post-approval (the recompute
+            // bails when `approvedPlanText` is nil), so feeding every line
+            // is cheap pre-approval and correct post-approval.
+            if let parsed = ParsedLine.from(json: json) {
+                Task { await progressTrackerRef.ingest(parsed) }
+            }
             _ = captureSessionId  // capture-list satisfaction
         }
     }

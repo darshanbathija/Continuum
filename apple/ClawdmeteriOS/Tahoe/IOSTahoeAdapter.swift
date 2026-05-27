@@ -140,7 +140,8 @@ extension AgentControlClient {
             mode: mode,
             subtitle: subtitle,
             runtimePlanText: s.planText,
-            commitBranch: branch
+            commitBranch: branch,
+            planProgress: s.planProgress
         )
     }
 

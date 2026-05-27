@@ -16,7 +16,8 @@ final class WireV11Tests: XCTestCase {
     // MARK: - Wire version constants
 
     func test_currentWireVersionIsTwenty() {
-        // v20 (2026-05-26): adds workspace-tab inherited context metadata.
+        // v20 carries F3 configured-instance fields and workspace-tab
+        // inherited context metadata.
         XCTAssertEqual(AgentControlWireVersion.current, 20)
     }
 

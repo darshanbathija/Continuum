@@ -57,22 +57,138 @@ public enum FeatureFlags {
                        default: false)
     }
 
-    // MARK: - Orchestration event store (F2)
+    /// F1b-wire sibling of `useClaudeAdapter` for the Codex provider.
+    /// When ON, the Codex branch in `SessionChatStore` (chat) and
+    /// `UsageHistoryLoader` (analytics) routes raw Codex JSONL through
+    /// `CodexAdapter.translate(...)` → canonical `ProviderRuntimeEvent`s.
+    ///
+    /// Unlike Claude's adapter, `CodexAdapter` is **stateful** —
+    /// cumulative→delta token math + running `currentCwd` / `currentModel`
+    /// must survive across `translate(line:)` calls within a session.
+    /// The wire owns the per-session lifetime: one adapter per file
+    /// (analytics) / per `response_item` line (chat — `response_item`
+    /// itself is stateless for the adapter, but the bridge constructs a
+    /// fresh adapter per call to keep the contract uniform).
+    ///
+    /// Parity contract enforced by `F1bParityTests`.
+    /// Default OFF; flipped in F1-finalize after all 5 wires merge.
+    public static var useCodexAdapter: Bool {
+        if let override = useCodexAdapterOverride { return override }
+        return resolve(envName: "CLAWDMETER_USE_CODEX_ADAPTER",
+                       userDefaultsKey: "com.clawdmeter.featureFlags.useCodexAdapter",
+                       default: false)
+    }
+
+    /// F1c-wire sibling for OpenCode. When ON, `OpencodeSSEAdapter` (chat)
+    /// and `OpencodeUsageParser` (analytics) route through
+    /// `OpenCodeAdapter.translate(...)` → canonical events. Stateless
+    /// adapter, so the bridge is line-level not file-level.
+    ///
+    /// Parity contract enforced by `F1cWireParityTests` +
+    /// `F1cWireChatParityTests`. Default OFF; flipped in F1-finalize.
+    public static var useOpenCodeAdapter: Bool {
+        if let override = useOpenCodeAdapterOverride { return override }
+        return resolve(envName: "CLAWDMETER_USE_OPENCODE_ADAPTER",
+                       userDefaultsKey: "com.clawdmeter.featureFlags.useOpenCodeAdapter",
+                       default: false)
+    }
+
+    /// F1e-wire sibling for Antigravity. When ON, the Antigravity branch
+    /// in `UsageHistoryLoader` (analytics) routes the per-conversation
+    /// rollup through `AntigravityAdapter.translate(...)` → canonical
+    /// `ProviderRuntimeEvent`, then materializes the downstream
+    /// `UsageRecord` from that event. When OFF, the loader emits the
+    /// legacy `UsageRecord` produced by `AntigravityUsageParser.parse(...)`
+    /// directly — the pre-F1 path.
+    ///
+    /// Antigravity has two on-disk formats — `.db` (Antigravity 2.0.6+,
+    /// macOS/iOS only — gated by `AntigravityDBUsageParser`'s
+    /// `#if os(macOS) || os(iOS)`) and `.pb` (encrypted legacy archive,
+    /// cross-platform byte-÷-4 estimator). The wire calls the matching
+    /// `AntigravityAdapter.translate(...)` overload — `dbUsage:` on
+    /// macOS/iOS (same guard as the adapter's `.db` overload) and
+    /// `legacyRecord:` everywhere. watchOS keeps the legacy byte
+    /// estimator regardless of the flag because the `.db` overload
+    /// doesn't compile there (see PR #154's guard fix).
+    ///
+    /// Parity is the gating contract: with the flag in either state, the
+    /// downstream `[UsageRecord]` arrays produced by a fixed Antigravity
+    /// conversation directory must be identical. The F1eParityTests
+    /// suite enforces this for every fixture shape the legacy parser
+    /// tolerates.
+    ///
+    /// **Default: OFF.** Flip to ON in F1-finalize after all 5 provider
+    /// wires (F1a-wire through F1e-wire) have shipped and parity has
+    /// held on real session data.
+    ///
+    /// **Override (env):** `CLAWDMETER_USE_ANTIGRAVITY_ADAPTER=1`
+    /// **Override (test):** set `useAntigravityAdapterOverride` (auto-cleared
+    /// in tests' `tearDown`).
+    public static var useAntigravityAdapter: Bool {
+        if let override = useAntigravityAdapterOverride { return override }
+        return resolve(envName: "CLAWDMETER_USE_ANTIGRAVITY_ADAPTER",
+                       userDefaultsKey: "com.clawdmeter.featureFlags.useAntigravityAdapter",
+                       default: false)
+    }
+
+    /// F1d-wire sibling for Cursor. When ON, the Cursor analytics
+    /// consumer routes each polled `UsageData` snapshot through
+    /// `CursorAdapter.translate(...)` → canonical `.sessionStarted`
+    /// `ProviderRuntimeEvent` → projected back into the legacy
+    /// `UsageData` shape via `CursorAdapterUsageBridge.project(...)`.
+    /// When OFF, the consumer uses the polled `UsageData` directly —
+    /// the pre-F1 path.
+    ///
+    /// Cursor is structurally different from the other four providers:
+    /// there's no JSONL session log and no per-turn token stream. The
+    /// adapter is a period-summary translator over polled `UsageData`,
+    /// emitting exactly one `.sessionStarted` event per poll. Each event
+    /// carries a stable id (`cursor-{sessionId}-{seq}`) so downstream
+    /// consumers can dedup on poll cadence — no double-counting on
+    /// repeated polls of the same period.
+    ///
+    /// Parity is the gating contract: with the flag in either state,
+    /// the downstream `UsageData` value rendered for Cursor must be
+    /// identical. `F1dParityTests` enforces this for every fixture
+    /// shape we ship (full period, no organizationID, status transitions,
+    /// percent/reset edge cases).
+    ///
+    /// **Default: OFF.** Flip to ON in F1-finalize after all 5 provider
+    /// wires (F1a-wire through F1e-wire) have shipped and parity has
+    /// held on real session data.
+    ///
+    /// **Override (env):** `CLAWDMETER_USE_CURSOR_ADAPTER=1`
+    /// **Override (test):** set `useCursorAdapterOverride` (auto-cleared
+    /// in tests' `tearDown`).
+    public static var useCursorAdapter: Bool {
+        if let override = useCursorAdapterOverride { return override }
+        return resolve(envName: "CLAWDMETER_USE_CURSOR_ADAPTER",
+                       userDefaultsKey: "com.clawdmeter.featureFlags.useCursorAdapter",
+                       default: false)
+    }
+
+    // MARK: - Orchestration event store (F2 / F2-wire)
 
     /// F2 — Orchestration event store with append-only events + WAL +
     /// replay. When true, `AgentSessionRegistry.init` seeds itself by
     /// replaying the event log; every mutation writes a receipt to the
-    /// log before the in-memory state changes. When false (default),
-    /// the registry uses the legacy `sessions.json` snapshot path
-    /// unchanged.
+    /// log before the in-memory state changes. When false, the registry
+    /// uses the legacy `sessions.json` snapshot path unchanged.
     ///
-    /// Default `false` — F2 lands as opt-in. Wire-up PR (`F2-wire`)
-    /// flips the default to `true` once parity is verified on real
-    /// session data.
+    /// **Default `true` since F2-wire.** The foundation PR (F2) shipped
+    /// the store + replay-on-init path behind this flag default-off; the
+    /// F2-wire PR (this one) wires every registry mutation through
+    /// `recordCommand` so the write-ahead-receipt invariant is honored
+    /// at the public API surface. The flag stays in place so a rollback
+    /// PR can flip the default back to `false` without code churn if the
+    /// wired path regresses in production.
+    ///
+    /// Env override remains useful for tests + CI that need the legacy
+    /// path explicitly (e.g. `CLAWDMETER_FF_ORCHESTRATION_EVENT_STORE=0`).
     public static var orchestrationEventStore: Bool {
         resolve(envName: "CLAWDMETER_FF_ORCHESTRATION_EVENT_STORE",
                 userDefaultsKey: "com.clawdmeter.featureFlags.orchestrationEventStore",
-                default: false)
+                default: true)
     }
 
     // MARK: - Test hooks
@@ -81,6 +197,26 @@ public enum FeatureFlags {
     /// to force the wired path regardless of the host environment. Reset
     /// to `nil` after each test (use `defer`).
     nonisolated(unsafe) public static var useClaudeAdapterOverride: Bool?
+
+    /// Per-call override seen by `useCodexAdapter`. Test cases set this
+    /// to force the wired path regardless of the host environment. Reset
+    /// to `nil` after each test (use `defer`).
+    nonisolated(unsafe) public static var useCodexAdapterOverride: Bool?
+
+    /// Per-call override seen by `useOpenCodeAdapter`. Test cases set this
+    /// to force the wired path regardless of the host environment. Reset
+    /// to `nil` after each test (use `defer`).
+    nonisolated(unsafe) public static var useOpenCodeAdapterOverride: Bool?
+
+    /// Per-call override seen by `useAntigravityAdapter`. Test cases set
+    /// this to force the wired path regardless of the host environment.
+    /// Reset to `nil` after each test (use `defer`).
+    nonisolated(unsafe) public static var useAntigravityAdapterOverride: Bool?
+
+    /// Per-call override seen by `useCursorAdapter`. Test cases set this
+    /// to force the wired path regardless of the host environment. Reset
+    /// to `nil` after each test (use `defer`).
+    nonisolated(unsafe) public static var useCursorAdapterOverride: Bool?
 
     // MARK: - Resolution
 

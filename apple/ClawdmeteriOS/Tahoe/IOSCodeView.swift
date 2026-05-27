@@ -10,6 +10,7 @@ import UIKit
 /// root injects daemon-derived bindings via the AgentControlClient adapter.
 public struct IOSCodeView: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private enum StatusScope: String, CaseIterable, Identifiable {
         case all, active, review, done, archived
         var id: String { rawValue }
@@ -476,6 +477,7 @@ private struct IOSDesktopSyncBadge: View {
 
 private struct IOSRepoCard: View {
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var repo: TahoeCodeRepo
     var onOpen: (UUID) -> Void
     /// PR #35: daemon client used by the recent-row tap handler to
@@ -543,6 +545,45 @@ private struct IOSRepoCard: View {
                                         .foregroundStyle(t.fg3)
                                         .lineLimit(1)
                                         .truncationMode(.tail)
+                                }
+                                if let progress = s.planProgress {
+                                    // Defensive clamp (see Mac sessionRow comment).
+                                    let safeCompleted = max(0, min(progress.completed, progress.total))
+                                    let isComplete = safeCompleted >= progress.total && progress.total > 0
+                                    // Use provider.halo so dark-mode + low-luminance
+                                    // providers (Codex / Cursor) stay legible against
+                                    // the popover background. provider.deep collapses
+                                    // to near-black for those, which is invisible.
+                                    let completeTint = s.agent.halo.color
+                                    HStack(spacing: 6) {
+                                        TahoePillBar(
+                                            percent: Double(safeCompleted) /
+                                                      max(1, Double(progress.total)) * 100,
+                                            provider: s.agent,
+                                            height: 6
+                                        )
+                                        .frame(maxWidth: .infinity)
+                                        if isComplete {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .font(.system(size: 11, weight: .bold))
+                                                .foregroundStyle(completeTint)
+                                                .padding(.leading, 2)
+                                                .transition(.scale.combined(with: .opacity))
+                                                .accessibilityHidden(true)
+                                        }
+                                        Text("\(safeCompleted)/\(progress.total)")
+                                            .font(TahoeFont.body(11.5, weight: isComplete ? .bold : .semibold))
+                                            .monospacedDigit()
+                                            .foregroundStyle(isComplete ? completeTint : t.fg2)
+                                            .frame(minWidth: 48, alignment: .trailing)
+                                            .contentTransition(reduceMotion ? .identity : .numericText())
+                                    }
+                                    .padding(.top, 4)
+                                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: isComplete)
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityLabel("Plan progress")
+                                    .accessibilityValue("\(safeCompleted) of \(progress.total) steps complete")
+                                    .accessibilityHint(isComplete ? "Plan complete" : "")
                                 }
                                 statusBadges(for: s)
                             }

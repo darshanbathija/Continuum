@@ -63,6 +63,42 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
         synchronizable: true
     )
 
+    /// F3-wire (Codex eng-review #10): per-instance Keychain partition.
+    /// Returns a fresh provider scoped to the instance's
+    /// `keychainAccessGroupOverride`, so credentials for instance A's
+    /// Keychain partition are invisible to instance B (the underlying
+    /// `SecItem*` API treats access group as part of the lookup primary
+    /// key — a query with one group's value cannot read the other
+    /// group's entries).
+    ///
+    /// For the back-compat primary instance (no override), returns the
+    /// shared singleton (same identity as `shared()`). Non-primary
+    /// instances get a fresh provider — they don't share the cache
+    /// with the primary, which is the entire point of partitioning.
+    ///
+    /// Per-instance service name disambiguation: when the access-group
+    /// override is set, the service name is also suffixed with the
+    /// instance's wireId. This double-bind (group + service) means a
+    /// dev who copies the wrong entitlement (forgetting to add the
+    /// per-instance access group) still can't accidentally read the
+    /// other instance's entries — the service name mismatches as well.
+    public static func forInstance(_ instance: ProviderInstanceId) -> PastedAnthropicTokenProvider {
+        if instance.isPrimary, instance.keychainAccessGroupOverride == nil {
+            return _shared
+        }
+        let group = instance.keychainAccessGroupOverride ?? sharedAccessGroup
+        let service = "\(defaultService).\(instance.wireId)"
+        return PastedAnthropicTokenProvider(
+            serviceName: service,
+            accessGroup: group,
+            // iCloud sync stays on for the primary; per-instance
+            // partitions default to device-local so credential rotation
+            // doesn't fan out to sibling devices that may not yet have
+            // the matching access-group entitlement.
+            synchronizable: false
+        )
+    }
+
     public var currentAccessToken: String? {
         lock.lock(); defer { lock.unlock() }
         if let cached { return cached }

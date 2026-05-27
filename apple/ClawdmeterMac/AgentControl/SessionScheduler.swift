@@ -96,7 +96,14 @@ public final class SessionScheduler {
               let pane = session.tmuxPaneId ?? session.tmuxWindowId
         else {
             schedulerLogger.warning("fire: session or pane missing — dropping follow-up")
-            registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+            // F2-wire: write-ahead failure on the scheduler path is
+            // best-effort logged; a failed receipt write still leaves
+            // the follow-up in the queue (will retry on next tick).
+            do {
+                try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+            } catch {
+                schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            }
             return
         }
         guard let followUp = session.scheduledFollowUps.first(where: { $0.id == followUpId }) else {
@@ -109,6 +116,10 @@ public final class SessionScheduler {
         } catch {
             schedulerLogger.error("Failed to paste follow-up: \(error.localizedDescription, privacy: .public)")
         }
-        registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+        do {
+            try await registry.markFollowUpFired(sessionId: sessionId, followUpId: followUpId)
+        } catch {
+            schedulerLogger.error("markFollowUpFired write-ahead failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }

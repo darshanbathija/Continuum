@@ -3,89 +3,158 @@ import CoreImage.CIFilterBuiltins
 import ClawdmeterShared
 
 /// iOS Pairing flow — QR viewport with halo brackets + paste URL row +
-/// Scan QR button. Ports `ios-other.jsx::IOSPairing`. Renders a real QR
-/// via CoreImage (vs the JSX FakeQR).
+/// Scan QR button. Ports `ios-other.jsx::IOSPairing`.
 ///
-/// D3 (v1.0 polish, 2026-05-22): replaces the legacy `PairingFlow`
-/// surface. Buttons now wire to `AgentControlClient.setPairing(...)`
-/// — Scan QR presents `PairingScannerView` as a sheet, Paste URL
-/// presents a paste sheet that parses the clawdmeter:// URL via
-/// `PairingScannerView.parse(urlString:)`. Either path lands on
-/// `applyChallenge(...)` which mirrors `PairingFlow`'s wire (so
-/// behavior is preserved exactly while the visual chrome upgrades to
-/// Tahoe).
+/// **E7 rewrite (Gate 3 GTM launch blocker).** The primary path is now
+/// the relay-session-token flow via `PairingScanView` →
+/// `IOSRelayPairingService.handleScannedURL(_:)`. The legacy Tailscale
+/// `PairingScannerView` is preserved behind an "Advanced" affordance
+/// so users on a Tailnet can still pair the old way.
+///
+/// Success states:
+///   - relay path lands the user in `.readyButNotConnected` (E4 brings
+///     the actual WS open)
+///   - legacy path lands the user in the existing AgentControlClient
+///     `setPairing(...)` configured state (Tailscale-direct)
 public struct IOSPairingView: View {
     @Environment(\.tahoe) private var t
     var onClose: () -> Void
 
-    /// Daemon client — used to commit the pairing once a QR scans or a
-    /// pasted URL parses. The wire is `setPairing(host:httpPort:wsPort:token:)`
-    /// followed by `refreshAll()` (identical to the legacy PairingFlow).
+    /// Daemon client — used by the legacy Tailscale path. The relay
+    /// path doesn't touch this; it persists into `RelayPairingStore`
+    /// directly.
     @ObservedObject private var client: AgentControlClient
 
-    @State private var scannerPresented: Bool = false
-    @State private var pasteSheetPresented: Bool = false
+    @ObservedObject private var relayService: IOSRelayPairingService
+
+    @State private var relayScanPresented: Bool = false
+    @State private var relayPastePresented: Bool = false
+    @State private var legacyScanPresented: Bool = false
+    @State private var legacyPastePresented: Bool = false
+    @State private var showAdvanced: Bool = false
 
     public init(client: AgentControlClient, onClose: @escaping () -> Void) {
         self.client = client
         self.onClose = onClose
+        self.relayService = .shared
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                Button(action: onClose) {
-                    TahoeIcon("x", size: 15).foregroundStyle(t.fg)
-                        .frame(width: 40, height: 38)
-                        .background { Capsule().fill(t.glassTintHi) }
-                        .overlay { Capsule().stroke(t.hairline, lineWidth: 0.5) }
-                }
-                .buttonStyle(.plain)
-                Spacer()
-                Text("Pair to Mac")
-                    .font(TahoeFont.body(15, weight: .bold))
-                    .foregroundStyle(t.fg)
-                Spacer()
-                Color.clear.frame(width: 40, height: 38)
+            header
+            scrim
+            Spacer(minLength: 0)
+            ctaSection
+        }
+        // Relay scan (primary).
+        .fullScreenCover(isPresented: $relayScanPresented) {
+            PairingScanView(service: relayService) { result in
+                relayScanPresented = false
+                if case .success = result { onClose() }
             }
-            .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 14)
-
-            ZStack {
-                RoundedRectangle(cornerRadius: 50, style: .continuous)
-                    .fill(RadialGradient(colors: [t.accentGlow.color(opacity: 0.30), .clear],
-                                         center: .center, startRadius: 0, endRadius: 220))
-                    .blur(radius: 10).padding(-30).allowsHitTesting(false)
-
-                TahoeGlass(radius: 28, tone: .raised) {
-                    VStack(spacing: 10) {
-                        TahoeIcon("qr", size: 54).foregroundStyle(t.fg4)
-                        Text("Mac QR only")
-                            .font(TahoeFont.body(14, weight: .bold))
-                            .foregroundStyle(t.fg2)
-                        Text("Scan the live code shown by Clawdmeter on your Mac.")
-                            .font(TahoeFont.body(11.5))
-                            .foregroundStyle(t.fg3)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 170)
-                    }
-                    .padding(28)
+        }
+        // Relay paste (accessibility / simulator fallback).
+        .sheet(isPresented: $relayPastePresented) {
+            PairingPasteURLSheet(
+                isPresented: $relayPastePresented,
+                onAccept: { url in
+                    let ok = relayService.handleScannedURL(url)
+                    if ok { onClose() }
                 }
-                .frame(width: 280, height: 280)
+            )
+        }
+        // Legacy Tailscale scan.
+        .sheet(isPresented: $legacyScanPresented) {
+            NavigationStack {
+                PairingScannerView { challenge in
+                    applyLegacyChallenge(challenge)
+                    legacyScanPresented = false
+                }
+                .navigationTitle("Scan legacy QR")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Cancel") { legacyScanPresented = false }
+                    }
+                }
+            }
+        }
+        // Legacy Tailscale paste.
+        .sheet(isPresented: $legacyPastePresented) {
+            LegacyPasteURLSheet(
+                isPresented: $legacyPastePresented,
+                onAccept: { challenge in applyLegacyChallenge(challenge) }
+            )
+        }
+    }
 
-                bracket(.topLeading)
-                bracket(.topTrailing)
-                bracket(.bottomLeading)
-                bracket(.bottomTrailing)
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(spacing: 0) {
+            Button(action: onClose) {
+                TahoeIcon("x", size: 15).foregroundStyle(t.fg)
+                    .frame(width: 40, height: 38)
+                    .background { Capsule().fill(t.glassTintHi) }
+                    .overlay { Capsule().stroke(t.hairline, lineWidth: 0.5) }
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Text("Pair to Mac")
+                .font(TahoeFont.body(15, weight: .bold))
+                .foregroundStyle(t.fg)
+            Spacer()
+            Color.clear.frame(width: 40, height: 38)
+        }
+        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 14)
+    }
+
+    // MARK: - Scrim (the always-visible viewfinder hint)
+
+    private var scrim: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 50, style: .continuous)
+                .fill(RadialGradient(colors: [t.accentGlow.color(opacity: 0.30), .clear],
+                                     center: .center, startRadius: 0, endRadius: 220))
+                .blur(radius: 10).padding(-30).allowsHitTesting(false)
+
+            TahoeGlass(radius: 28, tone: .raised) {
+                VStack(spacing: 10) {
+                    TahoeIcon("qr", size: 54).foregroundStyle(t.fg4)
+                    Text("Scan the live QR")
+                        .font(TahoeFont.body(14, weight: .bold))
+                        .foregroundStyle(t.fg2)
+                    Text(relayService.hasActivePairing
+                         ? "Already paired. Scan again to re-pair with a different Mac."
+                         : "Scan the live code shown by Clawdmeter on your Mac.")
+                        .font(TahoeFont.body(11.5))
+                        .foregroundStyle(t.fg3)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 200)
+                }
+                .padding(28)
             }
             .frame(width: 280, height: 280)
-            .padding(.top, 12)
 
+            bracket(.topLeading)
+            bracket(.topTrailing)
+            bracket(.bottomLeading)
+            bracket(.bottomTrailing)
+        }
+        .frame(width: 280, height: 280)
+        .padding(.top, 12)
+    }
+
+    // MARK: - CTAs
+
+    private var ctaSection: some View {
+        VStack(spacing: 10) {
             VStack(spacing: 6) {
                 Text("Point your camera at the QR")
                     .font(TahoeFont.rounded(18, weight: .heavy))
                     .tracking(-0.3)
                     .foregroundStyle(t.fg)
-                Text("Open Continuum on your Mac → Pair with iPhone. Both devices need to be on the same Tailnet.")
+                Text("Open Clawdmeter on your Mac → Settings → Sessions → Pair iPhone, then point this camera at the relay QR.")
                     .font(TahoeFont.body(14))
                     .foregroundStyle(t.fg3)
                     .multilineTextAlignment(.center)
@@ -93,16 +162,12 @@ public struct IOSPairingView: View {
             }
             .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 12)
 
-            Spacer()
-
             VStack(spacing: 10) {
-                Button {
-                    pasteSheetPresented = true
-                } label: {
+                Button { relayPastePresented = true } label: {
                     TahoeGlass(radius: 14, tone: .chip) {
                         HStack(spacing: 10) {
                             TahoeIcon("link", size: 15).foregroundStyle(t.fg3)
-                            Text("clwd://pairing-url")
+                            Text("clawdmeter-pair://v1/…")
                                 .font(TahoeFont.mono(13))
                                 .foregroundStyle(t.fg3)
                                 .lineLimit(1)
@@ -117,9 +182,7 @@ public struct IOSPairingView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Paste pairing URL")
 
-                Button {
-                    scannerPresented = true
-                } label: {
+                Button { relayScanPresented = true } label: {
                     TahoeAccentButton(size: .l) {
                         HStack(spacing: 6) {
                             TahoeIcon("qr", size: 14)
@@ -130,48 +193,57 @@ public struct IOSPairingView: View {
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
                 .accessibilityLabel("Scan pairing QR")
+
+                advancedDisclosure
             }
             .padding(.horizontal, 16).padding(.bottom, 20)
         }
-        .sheet(isPresented: $scannerPresented) {
-            // D3: present the existing PairingScannerView and pipe its
-            // detected challenge through applyChallenge. The scanner
-            // emits a callback once per successful scan.
-            NavigationStack {
-                PairingScannerView { challenge in
-                    applyChallenge(challenge)
-                    scannerPresented = false
+    }
+
+    // MARK: - Advanced: legacy Tailscale path
+
+    private var advancedDisclosure: some View {
+        VStack(spacing: 8) {
+            Button(action: { showAdvanced.toggle() }) {
+                HStack(spacing: 6) {
+                    Image(systemName: showAdvanced ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Advanced: legacy Tailscale pairing")
+                        .font(TahoeFont.body(12, weight: .semibold))
                 }
-                .navigationTitle("Scan pairing QR")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Cancel") { scannerPresented = false }
+                .foregroundStyle(t.fg3)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Expand for legacy LAN/Tailscale pairing")
+
+            if showAdvanced {
+                VStack(spacing: 6) {
+                    Text("Legacy `clawdmeter://` URLs from older Mac builds.")
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(t.fg3)
+                    HStack(spacing: 6) {
+                        Button("Scan legacy QR") { legacyScanPresented = true }
+                            .controlSize(.small)
+                        Button("Paste legacy URL") { legacyPastePresented = true }
+                            .controlSize(.small)
                     }
                 }
+                .padding(.vertical, 6)
             }
-        }
-        .sheet(isPresented: $pasteSheetPresented) {
-            PasteURLSheet(
-                isPresented: $pasteSheetPresented,
-                onAccept: { challenge in applyChallenge(challenge) }
-            )
         }
     }
 
-    /// D3: commit a parsed challenge through the client. Mirrors
-    /// `PairingFlow.applyChallenge` so behavior is byte-for-byte
-    /// identical to the retired surface.
-    private func applyChallenge(_ challenge: PairingChallenge) {
+    // MARK: - Legacy apply (Tailscale)
+
+    private func applyLegacyChallenge(_ challenge: PairingChallenge) {
         client.setPairing(
             host: challenge.host,
             httpPort: challenge.port,
             wsPort: challenge.wsPort,
             token: challenge.token
         )
-        // v0.27.0: setDesignPairing call removed along with the Design
-        // tab + DesignPortForwarder. PairingChallenge no longer exposes
-        // designPort/designToken fields.
         Task { @MainActor in
             await client.refreshAll()
         }
@@ -199,13 +271,12 @@ public struct IOSPairingView: View {
     }
 }
 
-// MARK: - Paste URL sheet (D3)
+// MARK: - Legacy Tailscale paste sheet
 
-/// D3 (v1.0 polish): paste-URL form lifted out of the legacy PairingFlow
-/// so it can stand alone behind IOSPairingView's "Paste URL" affordance.
-/// Parses the clawdmeter:// URL via PairingScannerView.parse and surfaces
-/// errors inline.
-private struct PasteURLSheet: View {
+/// Kept for the "Advanced: legacy Tailscale pairing" affordance only.
+/// The primary relay flow uses `PairingPasteURLSheet` (different
+/// scheme + different success path).
+private struct LegacyPasteURLSheet: View {
     @Binding var isPresented: Bool
     var onAccept: (PairingChallenge) -> Void
 
@@ -215,7 +286,7 @@ private struct PasteURLSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Open Continuum on your Mac → Settings → Sessions → Copy pairing URL. Then paste it below.")
+                Text("Legacy Tailscale pairing — paste a `clawdmeter://` URL from an older Mac build.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -233,7 +304,7 @@ private struct PasteURLSheet: View {
                         .foregroundStyle(.red)
                         .font(.caption)
                 }
-                Button("Pair") {
+                Button("Pair (legacy)") {
                     let trimmed = pastedURL.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard let challenge = PairingScannerView.parse(urlString: trimmed) else {
                         pasteError = "Not a valid clawdmeter:// URL"
@@ -248,7 +319,7 @@ private struct PasteURLSheet: View {
                 Spacer()
             }
             .padding(20)
-            .navigationTitle("Paste pairing URL")
+            .navigationTitle("Paste legacy URL")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -256,32 +327,5 @@ private struct PasteURLSheet: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - QR rendering
-
-private struct QRView: View {
-    @Environment(\.tahoe) private var t
-    var content: String
-
-    var body: some View {
-        if let image = generateQR(content: content) {
-            Image(decorative: image, scale: 1)
-                .interpolation(.none)
-                .resizable()
-                .scaledToFit()
-        } else {
-            Color.gray
-        }
-    }
-
-    private func generateQR(content: String) -> CGImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.setValue(content.data(using: .utf8), forKey: "inputMessage")
-        guard let output = filter.outputImage else { return nil }
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        let ctx = CIContext()
-        return ctx.createCGImage(scaled, from: scaled.extent)
     }
 }

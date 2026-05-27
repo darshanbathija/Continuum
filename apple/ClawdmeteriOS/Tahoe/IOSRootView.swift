@@ -33,12 +33,20 @@ public struct IOSRootView: View {
     /// was per-WindowGroup-scene on iPad — multiple windows each got
     /// their own outbox, racing on the persisted `outbox.json`.
     @ObservedObject private var outbox: MobileCommandOutbox
+    /// E7: relay pairing service. Drives `unpaired → scanning →
+    /// readyButNotConnected`. The unpaired banner now considers
+    /// EITHER the legacy AgentControlClient config (Tailscale) OR a
+    /// persisted relay record — a user paired via relay still gets
+    /// the connected experience even though `agentClient.isConfigured`
+    /// stays false until E4 lands the actual relay transport.
+    @ObservedObject private var relayService: IOSRelayPairingService
     private let screenshotDemo: Bool
 
     public init(usageModel: UsageModel, agentClient: AgentControlClient, outbox: MobileCommandOutbox) {
         self.usageModel = usageModel
         self.agentClient = agentClient
         self.outbox = outbox
+        self.relayService = .shared
         let args = ProcessInfo.processInfo.arguments
         let demo = args.contains("--ios-code-demo")
         self.screenshotDemo = demo
@@ -71,7 +79,15 @@ public struct IOSRootView: View {
         // pairing. Was: only LiveGaugesHeader (inside Analytics tab)
         // surfaced a CTA — Chat/Code tabs left users staring at a
         // blank "not connected" screen with no flow forward.
-        let isUnpaired = !screenshotDemo && !agentClient.isConfigured
+        //
+        // E7: also hide the banner once the user has a relay pairing
+        // record — even though the relay socket itself is E4's job,
+        // the pairing UX is "done" the moment the keys exchanged. UI
+        // surfaces should treat both transports as "paired" for the
+        // empty-state banner purpose.
+        let isUnpaired = !screenshotDemo
+            && !agentClient.isConfigured
+            && !relayService.hasActivePairing
         // Extra bottom clearance when banner is visible so content
         // doesn't slide under it.
         let bottomClearance: CGFloat = isUnpaired ? 168 : 92

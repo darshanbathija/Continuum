@@ -5,17 +5,23 @@ import ClawdmeterShared
 @MainActor
 final class WorkspaceTabsTests: XCTestCase {
 
-    func test_openDraftWorkspaceTabDoesNotPersistSessionOrChangeWorktree() {
-        let registryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("WorkspaceTabsTests-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: registryURL) }
-        let registry = AgentSessionRegistry(storeURL: registryURL)
+    private static func makeIsolatedRegistry(_ name: String) throws -> (AgentSessionRegistry, URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let registryURL = directory.appendingPathComponent("sessions.json")
+        return (AgentSessionRegistry(storeURL: registryURL), directory)
+    }
+
+    func test_openDraftWorkspaceTabDoesNotPersistSessionOrChangeWorktree() async throws {
+        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTabsTests")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
             supervisor: TmuxSupervisor(tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")), registry: registry)
         )
-        let source = registry.create(
+        let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
             agent: .claude,
@@ -46,13 +52,12 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.draftWorkspaceTab?.workspaceKey.workspacePath, "/repo/.claude/worktrees/kolkata")
     }
 
-    func test_registryPersistsInheritedContextSources() throws {
-        let registryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("WorkspaceTabsRegistry-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: registryURL) }
-        let registry = AgentSessionRegistry(storeURL: registryURL)
+    func test_registryPersistsInheritedContextSources() async throws {
+        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTabsRegistry")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let registryURL = directory.appendingPathComponent("sessions.json")
         let sourceId = UUID()
-        let session = registry.create(
+        let session = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
             agent: .claude,
@@ -93,18 +98,16 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertNil(paths.worktreePath)
     }
 
-    func test_registryRuntimeCwdCanRepresentGeminiAndOpencodeSameWorkspaceSessions() {
-        let registryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("WorkspaceTabsRuntimeCwd-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: registryURL) }
-        let registry = AgentSessionRegistry(storeURL: registryURL)
+    func test_registryRuntimeCwdCanRepresentGeminiAndOpencodeSameWorkspaceSessions() async throws {
+        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTabsRuntimeCwd")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let paths = SessionsModel.existingWorkspaceRecordPaths(
             repoPath: "/repo",
             workspacePath: "/repo/.claude/worktrees/kolkata",
             mode: .worktree
         )
 
-        let gemini = registry.create(
+        let gemini = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
             agent: .gemini,
@@ -116,7 +119,7 @@ final class WorkspaceTabsTests: XCTestCase {
             planMode: false,
             mode: .worktree
         )
-        let opencode = registry.create(
+        let opencode = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
             agent: .opencode,
@@ -139,17 +142,15 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertFalse(opencode.ownsWorktree)
     }
 
-    func test_openWorkspaceTerminalTabUsesExistingSessionWithoutCreatingWorktree() {
-        let registryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("WorkspaceTerminalTabs-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: registryURL) }
-        let registry = AgentSessionRegistry(storeURL: registryURL)
+    func test_openWorkspaceTerminalTabUsesExistingSessionWithoutCreatingWorktree() async throws {
+        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTerminalTabs")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
             supervisor: TmuxSupervisor(tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")), registry: registry)
         )
-        let source = registry.create(
+        let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
             agent: .codex,
@@ -172,17 +173,15 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.selectedWorkspaceTerminalTab?.workspaceKey, WorkspaceKey.of(source))
     }
 
-    func test_openWorkspaceTerminalTabRejectsSessionsWithoutTmuxPane() {
-        let registryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("WorkspaceTerminalNoPane-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: registryURL) }
-        let registry = AgentSessionRegistry(storeURL: registryURL)
+    func test_openWorkspaceTerminalTabRejectsSessionsWithoutTmuxPane() async throws {
+        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTerminalNoPane")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
             supervisor: TmuxSupervisor(tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")), registry: registry)
         )
-        let source = registry.create(
+        let source = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
             agent: .opencode,
@@ -203,17 +202,15 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(source)!).count, 0)
     }
 
-    func test_workspaceTerminalTabsAreScopedAndIgnoreMissingPaneRefs() {
-        let registryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("WorkspaceTerminalScope-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: registryURL) }
-        let registry = AgentSessionRegistry(storeURL: registryURL)
+    func test_workspaceTerminalTabsAreScopedAndIgnoreMissingPaneRefs() async throws {
+        let (registry, directory) = try Self.makeIsolatedRegistry("WorkspaceTerminalScope")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
             supervisor: TmuxSupervisor(tmux: TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false")), registry: registry)
         )
-        let first = registry.create(
+        let first = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
             agent: .codex,
@@ -225,7 +222,7 @@ final class WorkspaceTabsTests: XCTestCase {
             planMode: false,
             mode: .worktree
         )
-        let second = registry.create(
+        let second = try await registry.create(
             repoKey: "/repo",
             repoDisplayName: "repo",
             agent: .claude,
@@ -238,11 +235,11 @@ final class WorkspaceTabsTests: XCTestCase {
             mode: .worktree
         )
         let pane = TerminalPaneRef(paneId: "%3", title: "Logs", isPrimary: false)
-        registry.addTerminalPane(sessionId: first.id, pane: pane)
+        try await registry.addTerminalPane(sessionId: first.id, pane: pane)
 
         model.openWorkspaceTerminalTab(from: first, paneRefId: pane.id, createdAt: Date(timeIntervalSince1970: 2))
         model.openWorkspaceTerminalTab(from: second, createdAt: Date(timeIntervalSince1970: 1))
-        registry.removeTerminalPane(sessionId: first.id, paneRefId: pane.id)
+        try await registry.removeTerminalPane(sessionId: first.id, paneRefId: pane.id)
 
         XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(first)!).count, 0)
         XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(second)!).map(\.sessionId), [second.id])

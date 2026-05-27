@@ -31,6 +31,24 @@ final class AppRuntime: ObservableObject {
     let cursorModel: AppModel
     let usageHistoryStore: UsageHistoryStore
 
+    /// F3-wire (Codex eng-review #10): one `AppModel` per registered
+    /// `ProviderInstanceId`, keyed by `wireId`. The four per-kind
+    /// properties above are back-compat shortcuts that resolve to the
+    /// primary instance for each kind — every call site that knows only
+    /// `AgentKind` still works without modification.
+    ///
+    /// Instance-aware call sites (multi-account UI, daemon spawn paths,
+    /// `/usage` envelope assembly) read through `appModel(for:)` to
+    /// pick the right per-instance model.
+    ///
+    /// **Population:** seeded with the primaries at init via
+    /// `providerInstanceRegistry.allInstances()`. Custom instances added
+    /// later (via Settings → Providers → Add Account) call
+    /// `addInstance(_:)` which spawns a fresh `AppModel` and stores it
+    /// here.
+    let providerInstanceRegistry: ProviderInstanceRegistry
+    private var modelsByInstanceWireId: [String: AppModel] = [:]
+
     // Sessions feature (Phase 1 + 2 + supervisor):
     let repoIndex: RepoIndex
     let agentSessionRegistry: AgentSessionRegistry
@@ -46,6 +64,12 @@ final class AppRuntime: ObservableObject {
     // chip opens a popover with release notes + "Download in Browser"
     // CTA. Sparkle one-click install is parked in TODOS.md as phase 2.
     let updateCoordinator: UpdateCoordinator
+
+    // E7: relay-session-token pairing UX. Owns the X25519 keypair +
+    // bundle the Mac shows in a QR; iPhone scans it to derive the
+    // shared symmetric key. NOT a real WS client yet — E3 brings the
+    // actual relay socket. See RelayPairingService for state machine.
+    let relayPairingService: RelayPairingService
 
     // v0.27.0: openFolderInDesign(baseDir:) removed along with the Design tab.
 
@@ -70,6 +94,10 @@ final class AppRuntime: ObservableObject {
         // schedules its first check 8s out so logs don't interleave
         // with the rest of AppRuntime's init.
         self.updateCoordinator = UpdateCoordinator()
+
+        // E7: relay-pairing service. Phase starts `.unpaired`; the user
+        // taps "Pair iPhone" in Settings to mint a fresh bundle.
+        self.relayPairingService = RelayPairingService()
 
         // Claude polling uses Continuum's own Keychain entry. Importing from
         // Claude Code's third-party Keychain item is now an explicit Settings
@@ -119,6 +147,25 @@ final class AppRuntime: ObservableObject {
             source: CursorSource(tokenProvider: cursorTokenProvider),
             tokenProvider: cursorTokenProvider
         )
+
+        // F3-wire (Codex eng-review #10): seed the provider-instance
+        // registry with the primary for every kind and map each kind's
+        // primary wireId to the AppModel we just constructed. Custom
+        // instances added later (via Settings → Providers → Add
+        // Account → assigns a `homePathOverride` + optional
+        // `keychainAccessGroupOverride`) plug into the same map via
+        // `addInstance(_:)`.
+        self.providerInstanceRegistry = ProviderInstanceRegistry()
+        self.modelsByInstanceWireId = [
+            ProviderInstanceId.primary(kind: .claude).wireId: self.claudeModel,
+            ProviderInstanceId.primary(kind: .codex).wireId:  self.codexModel,
+            ProviderInstanceId.primary(kind: .gemini).wireId: self.geminiModel,
+            ProviderInstanceId.primary(kind: .cursor).wireId: self.cursorModel,
+            // `.opencode` and `.unknown` don't have a per-kind AppModel
+            // (OpenCode runs as a long-lived `opencode serve` daemon,
+            // unknown is forward-compat sentinel only); they resolve
+            // through the registry but never have a model entry.
+        ]
 
         // Don't forward objectWillChange — it was saturating main thread with
         // SwiftUI invalidations and starving the per-poller main-queue hops
@@ -283,7 +330,18 @@ final class AppRuntime: ObservableObject {
                     for s in self.agentSessionRegistry.sessions
                         where s.kind == .chat && s.archivedAt == nil && s.lastEventAt < cutoff
                     {
-                        self.agentSessionRegistry.archive(id: s.id)
+                        // F2-wire: write-ahead failures on the idle
+                        // archive sweep are best-effort logged. We
+                        // don't want a SQLite hiccup to break the
+                        // 60-second sweeper.
+                        do {
+                            try await self.agentSessionRegistry.archive(id: s.id)
+                        } catch {
+                            // No registry logger in this scope —
+                            // print is non-ideal but the sweep is
+                            // best-effort by design.
+                            print("chatIdle archive failed: \(error.localizedDescription)")
+                        }
                     }
                 }
             }
@@ -317,12 +375,145 @@ final class AppRuntime: ObservableObject {
         }
         Task(priority: .utility) { @MainActor in
             if CodexSDKManager.shared.sdkModeActive {
-                runtimeLogger.info("Codex SDK mode is enabled; deferring sidecar probe until first SDK session")
+                // Sidecar probe is deferred to first SDK session start
+                // (see CodexSubscriptionRelay.start lazy-probe block).
+                // Launch-time probe was removed in PR #136 because it
+                // wakes Codex.app and triggers macOS's protected app-data
+                // prompt even when the user only opened Clawdmeter.
+                runtimeLogger.info("Codex SDK mode is enabled; sidecar probe deferred to first SDK session start")
             }
             if AntigravitySidecarManager.shared.sdkModeActive {
                 _ = await AntigravitySidecarManager.shared.enableSDKMode()
             }
             await ChatProviderProbe.shared.invalidate()
+        }
+    }
+
+    // MARK: - F3-wire instance-aware accessors (Codex eng-review #10)
+
+    /// Resolve the `AppModel` for the given configured `ProviderInstanceId`.
+    /// Returns `nil` when the instance hasn't been added yet (caller
+    /// surfaces a clean error / falls back to the primary as appropriate).
+    ///
+    /// **Back-compat:** the primary instance for each kind always
+    /// resolves to the existing per-kind `AppModel` (claudeModel,
+    /// codexModel, …). Custom instances added via `addInstance(_:)`
+    /// each get a fresh `AppModel` keyed by their `wireId`.
+    func appModel(for instance: ProviderInstanceId) -> AppModel? {
+        modelsByInstanceWireId[instance.wireId]
+    }
+
+    /// Back-compat convenience: resolve by `AgentKind`, returning the
+    /// primary instance's model. Equivalent to
+    /// `appModel(for: .primary(kind: kind))`.
+    func appModel(for kind: AgentKind) -> AppModel? {
+        modelsByInstanceWireId[ProviderInstanceId.primary(kind: kind).wireId]
+    }
+
+    /// All `AppModel` instances the runtime currently owns, indexed by
+    /// `ProviderInstanceId.wireId`. Used by the daemon's `/usage`
+    /// envelope assembler to populate the v20 per-instance dict.
+    var allAppModelsByWireId: [String: AppModel] {
+        modelsByInstanceWireId
+    }
+
+    /// Register a freshly configured non-primary instance and spawn its
+    /// dedicated `AppModel`. Called from Settings → Providers → Add
+    /// Account when the user finishes the new-instance flow.
+    ///
+    /// The new `AppModel` uses a token provider scoped to the
+    /// instance's `keychainAccessGroupOverride` so its credentials
+    /// can't bleed into sibling instances (see
+    /// `PastedAnthropicTokenProvider.forInstance(_:)`).
+    ///
+    /// Returns `true` when the instance was registered + a model
+    /// constructed; `false` if the registry rejected the instance
+    /// (invalid name / masquerader) or the kind has no supported
+    /// per-kind config (currently `.opencode` / `.unknown`).
+    @discardableResult
+    func addInstance(_ instance: ProviderInstanceId) async -> Bool {
+        guard instance.isValidName else { return false }
+        guard let config = providerConfig(for: instance.kind) else { return false }
+        // Reject re-add of an existing wireId — caller should remove
+        // first if they want to swap the underlying model.
+        if modelsByInstanceWireId[instance.wireId] != nil { return false }
+        guard await providerInstanceRegistry.upsert(instance) != nil else { return false }
+        let model = makeInstanceAwareModel(config: config, instance: instance)
+        model.start()
+        modelsByInstanceWireId[instance.wireId] = model
+        let redactedHome = instance.homePathOverride == nil
+            ? "nil"
+            : ProviderInstanceLogRedaction.homeToken(for: instance)
+        runtimeLogger.info(
+            "AppRuntime.addInstance wireId=\(instance.wireId, privacy: .public) home=\(redactedHome, privacy: .public)"
+        )
+        return true
+    }
+
+    /// Spawn an `AppModel` for `instance` using the per-kind config and
+    /// a token provider scoped to the instance's Keychain partition.
+    /// Currently only Claude wires the per-instance token provider
+    /// (PastedAnthropicTokenProvider.forInstance) — other kinds still
+    /// use the shared provider until each one grows a per-instance
+    /// constructor. Tracked in TODOS.md as F3-wire phase 2.
+    private func makeInstanceAwareModel(
+        config: ProviderConfig,
+        instance: ProviderInstanceId
+    ) -> AppModel {
+        switch instance.kind {
+        case .claude:
+            let tokenProvider = PastedAnthropicTokenProvider.forInstance(instance)
+            return AppModel(
+                config: config,
+                source: AnthropicSource(tokenProvider: tokenProvider),
+                tokenProvider: tokenProvider
+            )
+        case .codex:
+            // Codex auth lives on disk (~/.codex/auth.json) — when
+            // HOME is overridden, the provider naturally lands at
+            // the override's ~/.codex/auth.json. No access-group
+            // wiring needed here today; keychain partitioning kicks
+            // in only if/when CodexTokenProvider grows a Keychain
+            // path (currently file-based).
+            let tokenProvider = CodexTokenProvider()
+            return AppModel(
+                config: config,
+                source: CodexSource(tokenProvider: tokenProvider),
+                tokenProvider: tokenProvider
+            )
+        case .gemini:
+            let tokenProvider = GeminiTokenProvider()
+            return AppModel(
+                config: config,
+                source: AntigravitySource(
+                    tokenProvider: tokenProvider,
+                    lsQuotaProbe: { @Sendable in await AntigravityLSQuotaProbe.probe() }
+                ),
+                tokenProvider: tokenProvider
+            )
+        case .cursor:
+            let tokenProvider = CursorTokenProvider()
+            return AppModel(
+                config: config,
+                source: CursorSource(tokenProvider: tokenProvider),
+                tokenProvider: tokenProvider
+            )
+        case .opencode, .unknown:
+            // Caller should not reach this — guarded by `providerConfig`
+            // returning nil for these kinds.
+            preconditionFailure(
+                "AppRuntime.makeInstanceAwareModel called for unsupported kind \(instance.kind)"
+            )
+        }
+    }
+
+    private func providerConfig(for kind: AgentKind) -> ProviderConfig? {
+        switch kind {
+        case .claude: return .claude
+        case .codex:  return .codex
+        case .gemini: return .gemini
+        case .cursor: return .cursor
+        case .opencode, .unknown: return nil
         }
     }
 

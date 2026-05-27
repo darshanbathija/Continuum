@@ -8,6 +8,7 @@ final class SessionLifecycleWireTests: XCTestCase {
         XCTAssertFalse(AgentControlWireVersion.supportsLifecycle(serverWireVersion: nil))
         XCTAssertFalse(AgentControlWireVersion.supportsLifecycle(serverWireVersion: 18))
         XCTAssertTrue(AgentControlWireVersion.supportsLifecycle(serverWireVersion: 19))
+        XCTAssertTrue(AgentControlWireVersion.supportsLifecycle(serverWireVersion: 20))
     }
 
     func test_snapshotRoundTripsWithEvidenceBlockersAndCapabilities() throws {

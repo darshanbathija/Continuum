@@ -94,6 +94,15 @@ public enum OpencodeUsageParser {
         var records: [UsageRecord] = []
         records.reserveCapacity(256)
 
+        // F1c-wire (strangler-fig per D23): when the feature flag is on,
+        // route the raw JSON blob through OpenCodeAdapter → canonical
+        // ProviderRuntimeEvent → UsageRecord. When off, use the legacy
+        // OpencodeUsageParser.decode directly. Both paths must produce
+        // identical UsageRecord arrays for the same input — enforced by
+        // F1cParityTests. The flag is read once per parse() invocation
+        // (not per row) so a mid-loop UserDefaults change can't tear the
+        // result.
+        let useAdapter = FeatureFlags.useOpenCodeAdapter
         while sqlite3_step(stmt) == SQLITE_ROW {
             // id (text PK)
             guard let idCStr = sqlite3_column_text(stmt, 0) else { continue }
@@ -106,11 +115,11 @@ public enum OpencodeUsageParser {
             // data (text JSON blob)
             guard let dataCStr = sqlite3_column_text(stmt, 2) else { continue }
             let dataStr = String(cString: dataCStr)
-            guard let blob = dataStr.data(using: .utf8),
-                  let record = self.decode(jsonBlob: blob, messageId: id, timestamp: timestamp)
-            else {
-                continue
-            }
+            guard let blob = dataStr.data(using: .utf8) else { continue }
+            let record: UsageRecord? = useAdapter
+                ? OpenCodeAdapterUsageBridge.decode(jsonBlob: blob, messageId: id, timestamp: timestamp)
+                : self.decode(jsonBlob: blob, messageId: id, timestamp: timestamp)
+            guard let record else { continue }
             records.append(record)
         }
         return records

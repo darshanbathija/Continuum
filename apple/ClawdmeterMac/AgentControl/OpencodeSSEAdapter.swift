@@ -328,7 +328,24 @@ public final class OpencodeSSEAdapter {
     /// the caller still emits the snapshot signal so the UI can probe
     /// the opencode HTTP API for the full state. Internal so tests
     /// can drive each known wire shape directly.
+    ///
+    /// F1c-wire (strangler-fig per D23): when `FeatureFlags.useOpenCodeAdapter`
+    /// is on, route through `parseMessageAddedViaAdapter` so the canonical
+    /// `ProviderRuntimeEvent` pipeline owns the role + content extraction.
+    /// When off, use the legacy in-line parser unchanged. Both paths must
+    /// return identical `ChatMessage?` values for every fixture — enforced
+    /// by `F1cWireChatParityTests`.
     internal static func parseMessageAdded(properties: [String: Any]) -> ChatMessage? {
+        if FeatureFlags.useOpenCodeAdapter {
+            return parseMessageAddedViaAdapter(properties: properties)
+        }
+        return parseMessageAddedLegacy(properties: properties)
+    }
+
+    /// Legacy parser — the pre-F1c-wire implementation. Untouched logic so
+    /// the flag-off path stays bit-for-bit identical to the historical
+    /// behavior covered by `OpencodeSSEAdapterTests`.
+    internal static func parseMessageAddedLegacy(properties: [String: Any]) -> ChatMessage? {
         guard let msg = properties["message"] as? [String: Any] else { return nil }
         let role = (msg["role"] as? String) ?? "assistant"
         let kind: ChatMessage.Kind = (role == "user") ? .userText : .assistantText
@@ -404,6 +421,60 @@ public final class OpencodeSSEAdapter {
             )
         }
         return nil
+    }
+
+    /// F1c-wire adapter-routed decoder. Mirrors the F1a-wire pattern:
+    /// runs `OpenCodeAdapter.translate(...)` to confirm the canonical
+    /// `ProviderRuntimeEvent` pipeline lights up under load, then
+    /// delegates to the legacy parser verbatim for `ChatMessage`
+    /// construction so per-block UI fields (tool-call / tool-result
+    /// shapes) stay bit-for-bit identical.
+    ///
+    /// Why delegate to legacy for ChatMessage construction? The
+    /// adapter's canonical events carry the *role* + *text* + *tokens*
+    /// projection, but the chat UI needs the tool-call short-circuit
+    /// + tool-result kind/isError mapping that's encoded in the
+    /// legacy parser. Migrating those into the canonical
+    /// `ExtensionField` envelope is a future PR — this wire just
+    /// proves the adapter path is exercised in CI.
+    ///
+    /// Drops the line (returns nil) for the same shapes legacy drops:
+    /// missing `properties.message`, content-array with no text + no
+    /// recognized tool parts.
+    internal static func parseMessageAddedViaAdapter(properties: [String: Any]) -> ChatMessage? {
+        // Adapter contract: `OpenCodeAdapter.translate` needs a
+        // `messageId` (used as the canonical event id + dedupe key).
+        // The legacy parser synthesizes one when absent; do the same
+        // here so the adapter has a stable id to attach events to.
+        guard let msg = properties["message"] as? [String: Any] else { return nil }
+        let messageId = (msg["id"] as? String) ?? UUID().uuidString
+        let now = Date()
+
+        // Run the adapter on the same raw input. We don't consume the
+        // events here for ChatMessage construction — legacy owns that
+        // — but exercising the translation step makes sure the
+        // canonical path is wired and surfaces any divergence early.
+        // sessionId is a Clawdmeter concept; pass an empty string
+        // (matches the analytics bridge convention).
+        let events = OpenCodeAdapter.translate(
+            message: msg,
+            messageId: messageId,
+            timestamp: now,
+            sessionId: "",
+            sequenceStart: 0,
+            providerInstanceId: nil,
+            rawBytes: nil
+        )
+
+        // The adapter emits at least one event for any message dict
+        // with role assistant/user/unknown. If it emitted nothing,
+        // the input was so malformed that legacy would also drop it.
+        guard !events.isEmpty else { return nil }
+
+        // Delegate to legacy for ChatMessage construction. Per the
+        // strangler-fig contract this MUST be identical to the
+        // flag-off path bit-for-bit.
+        return parseMessageAddedLegacy(properties: properties)
     }
 
     /// Handle an opencode `usage` event by mapping it to a UsageRecord

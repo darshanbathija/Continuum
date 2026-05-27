@@ -1416,20 +1416,31 @@ struct ParsedLine: Sendable {
         // Parity contract (enforced by F1aWireParityTests): for every
         // fixture line, `from(json:)` returns the same `ParsedLine?`
         // (same messages, same delta tokens, same model) regardless of
-        // the flag state. The codex / response_item path is untouched —
-        // F1b-wire owns Codex.
-        let useAdapter = FeatureFlags.useClaudeAdapter
+        // the flag state.
+        //
+        // F1b-wire (strangler-fig per D23): same shape for the Codex
+        // `response_item` route. When `useCodexAdapter` is on, the line
+        // is routed through `CodexAdapter.translate(...)` so the
+        // canonical event pipeline lights up, then the legacy
+        // `CodexJSONLParser.decodeResponseItem` block-walker builds
+        // `[ChatMessage]` for per-tool UI enrichment (EditDiff /
+        // BashResult / web_search etc.). Parity contract: every fixture
+        // line returns the same `ParsedLine?` regardless of flag.
+        let useClaude = FeatureFlags.useClaudeAdapter
+        let useCodex = FeatureFlags.useCodexAdapter
         switch type {
         case "user":
-            return useAdapter
+            return useClaude
                 ? decodeUserViaAdapter(json: json, at: at)
                 : decodeUser(json: json, at: at)
         case "assistant":
-            return useAdapter
+            return useClaude
                 ? decodeAssistantViaAdapter(json: json, at: at)
                 : decodeAssistant(json: json, at: at)
         case "response_item":
-            return decodeCodexResponseItem(json: json, at: at)
+            return useCodex
+                ? decodeCodexResponseItemViaAdapter(json: json, at: at)
+                : decodeCodexResponseItem(json: json, at: at)
         default:
             return nil
         }
@@ -1614,6 +1625,49 @@ struct ParsedLine: Sendable {
             deltaCacheCreationTokens: 0, deltaCacheReadTokens: 0,
             model: nil
         )
+    }
+
+    // MARK: - F1b-wire adapter-routed Codex decoder
+
+    /// Adapter-routed equivalent of `decodeCodexResponseItem`. Routes the
+    /// line through `CodexAdapter.translate(...)` so the canonical event
+    /// pipeline lights up, then delegates to the legacy block-walker for
+    /// `[ChatMessage]` construction so per-tool UI enrichment (EditDiff /
+    /// BashResult / reasoning / web_search) stays identical.
+    ///
+    /// Strangler-fig contract: tokens + model fields are still the
+    /// per-line zeros Codex chat lines carry (Codex's billing tokens live
+    /// in `event_msg.token_count`, never in `response_item`), mirroring
+    /// legacy. The adapter is exercised end-to-end so the F1b code path
+    /// lights up in CI; once future PRs migrate UI fields into
+    /// ExtensionField, the legacy block-walk can shrink toward direct
+    /// event consumption.
+    ///
+    /// **Why a transient adapter?** `CodexAdapter` is stateful for the
+    /// cumulative→delta token math on `event_msg.token_count` lines.
+    /// `response_item` lines (the only Codex shape chat consumes) are
+    /// outside that state machine — the adapter emits `.unknown` for
+    /// them with no state transition. So a per-call transient adapter is
+    /// safe here. The analytics-side bridge (`CodexAdapterUsageBridge`)
+    /// is where the per-file persistent adapter lives.
+    private static func decodeCodexResponseItemViaAdapter(json: [String: Any], at: Date) -> ParsedLine? {
+        // Construct a transient adapter for this line only. `sessionId`
+        // is a Clawdmeter-internal handle for the event stream; chat
+        // doesn't read it off the canonical event. Safe to use a
+        // throwaway value because `response_item` lines don't write to
+        // adapter state.
+        let adapter = CodexAdapter(sessionId: "chat-transient")
+        let events = adapter.translate(line: json, rawBytes: nil)
+        // The adapter emits at least one event for any line with a
+        // recognized top-level type. `response_item` falls through to
+        // `.unknown(name: "codex.type.response_item")` — still one event,
+        // confirms the canonical path is exercised. If it emitted
+        // nothing the line was malformed and legacy would also drop it.
+        guard !events.isEmpty else { return nil }
+
+        // Re-use the legacy block-walker for ChatMessage construction so
+        // UI-rich fields stay identical bit-for-bit across the flag.
+        return decodeCodexResponseItem(json: json, at: at)
     }
 
     private static func decodeUser(json: [String: Any], at: Date) -> ParsedLine? {

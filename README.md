@@ -79,6 +79,28 @@ Refresh pricing with:
 ./tools/refresh-pricing.sh
 ```
 
+## Security and privacy
+
+Three reference documents describe what Clawdmeter trusts, what it
+sends over the network, and what isn't built yet:
+
+- [`docs/security.md`](docs/security.md) — trust model, cryptographic
+  primitives, key lifecycle, per-peer bearer auth, APNS device-token
+  egress controls, F3 HOME isolation, audit log scope, kill-switch +
+  rate limit, and a pointer to the 14-scenario threat model.
+- [`docs/privacy.md`](docs/privacy.md) — every data egress path: the
+  relay, the APNS gateway, pricing snapshot fetch, provider CLI
+  telemetry, and the update check. Also covers what stays local,
+  backup posture, and the GDPR / CCPA deletion story.
+- [`docs/known-limitations.md`](docs/known-limitations.md) — what's
+  NOT yet shipped: the Mac/iOS clients for the secure cloud relay
+  and APNS gateway, the Swift CryptoKit XChaCha20 gap, F3 daemon
+  wire-up, the C2 `@Observable` migration, watchOS / iOS launch
+  Tahoe-debt, and Mac Code-tab density follow-ups.
+
+The full normative design for the secure relay + APNS gateway lives
+at [`docs/design/secure-relay-apns-2026-05-26.md`](docs/design/secure-relay-apns-2026-05-26.md).
+
 ## Building Apple targets
 
 Apple project source of truth is `apple/project.yml`; regenerate the Xcode

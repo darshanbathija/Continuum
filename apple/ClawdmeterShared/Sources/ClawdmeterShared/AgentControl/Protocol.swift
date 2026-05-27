@@ -125,7 +125,24 @@ public enum AgentControlWireVersion {
     /// and provider default endpoints (`GET /provider-defaults`,
     /// `PUT /provider-defaults/:vendor`). v18 `AgentSession.status`
     /// remains the compatibility status for older clients.
-    /// v20 (2026-05-26): workspace session tabs. `AgentSession` gains
+    /// v20 (2026-05-26, F3-wire): adds optional `providerInstanceId: String?`
+    /// to `NewSessionRequest`, `ChangeModelRequest`, `ChangeModeRequest`,
+    /// `ChangeEffortRequest`, and `AgentSession` so chats and sessions can
+    /// pin to a specific configured `ProviderInstanceId` (claude_personal
+    /// vs claude_work; codex_pro vs codex_oss). `UsageEnvelope.usage` now
+    /// keys by `ProviderInstanceId.wireId` (e.g. `claude/__primary__`,
+    /// `claude/work`) alongside the existing `AgentKind.rawValue` keys —
+    /// dual-shape so v19 clients reading a v20 server still see their
+    /// primary-keyed data, and v20 clients reading a v19 server fall back
+    /// to the legacy key. **Codex eng-review #10 security wire-up:**
+    /// daemon HOME isolation + Keychain access-group partitioning +
+    /// env scrubbing for per-instance child processes. The plan reference
+    /// for the wire-only counterpart (without the daemon enforcement) is
+    /// a future task; this PR ships both the wire and the enforcement
+    /// together so older v19 clients always degrade safely to the
+    /// primary instance (Codex #10 acceptance: clients on `wireVersion
+    /// < providerInstanceMinimum` only ever see/select the primary).
+    /// v20 also carries workspace session tabs: `AgentSession` gains
     /// optional `inheritedContextSourceIds` so a newly-created code tab
     /// can audit which sibling transcripts seeded its first prompt, plus
     /// `ownsWorktree` so same-workspace tabs can share a cwd without
@@ -251,6 +268,23 @@ public enum AgentControlWireVersion {
 
     /// Minimum wire version that exposes durable per-provider defaults.
     public static let providerDefaultsMinimum: Int = 19
+
+    /// Minimum wire version that exposes configured-instance fields
+    /// (`ProviderInstanceId.wireId`) on session DTOs + the `UsageEnvelope`
+    /// `usage` dict's per-instance keys. F3-wire (2026-05-26).
+    ///
+    /// Clients on `wireVersion < providerInstanceMinimum` (i.e. ≤ 19)
+    /// still receive the legacy single-instance payloads and only ever
+    /// see/select the primary instance for each `AgentKind`. The
+    /// `providerInstanceId` field is `decodeIfPresent` so a v19 server
+    /// reading a v20 client's request also degrades cleanly (the
+    /// daemon falls back to `ProviderInstanceId.primary(kind:)`).
+    ///
+    /// Codex eng-review #10 acceptance: this gate is what guarantees the
+    /// security wire-up (HOME isolation, Keychain partitioning, env
+    /// scrubbing) never strands a too-old client in a half-configured
+    /// multi-instance state.
+    public static let providerInstanceMinimum: Int = 20
 
     /// Minimum wire version that exposes workspace-tab inherited context
     /// metadata on `AgentSession`.
@@ -413,6 +447,16 @@ public enum AgentControlWireVersion {
     public static func supportsProviderDefaults(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= providerDefaultsMinimum
+    }
+
+    /// Whether the paired Mac honors the `providerInstanceId` field on
+    /// session DTOs and exposes per-instance keys on the `UsageEnvelope`
+    /// `usage` dict. Older Macs ignore the field and resolve every
+    /// request to `ProviderInstanceId.primary(kind:)` — the back-compat
+    /// default. F3-wire (Codex eng-review #10).
+    public static func supportsProviderInstance(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= providerInstanceMinimum
     }
 
     /// Whether the paired Mac includes workspace-tab inherited context
@@ -2119,6 +2163,12 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// with write access. Kept separate from `planText` so approval can clear
     /// pending CTA state without losing the reviewable plan file.
     public let approvedPlanText: String?
+    /// Daemon-computed progress against `approvedPlanText`. `nil` until the
+    /// daemon's first recompute after approval, or whenever the plan has
+    /// no extractable step markers. Optional + decoder-tolerant so older
+    /// persisted sessions decode cleanly (same pattern as the schema v5/v6
+    /// additions below).
+    public let planProgress: PlanProgress?
     /// Wall-clock when the session was created (server's local time, UTC).
     public let createdAt: Date
     /// Most recent event the server observed (heartbeat / message / tool call).
@@ -2271,7 +2321,7 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// Defaults to false on older sessions.
     public let deepResearch: Bool
 
-    // MARK: - Schema v8 additions (v0.27 workspace session tabs, wire v20)
+    // MARK: - Schema v8 additions (wire v20)
 
     /// Sibling code-session ids whose transcript digests were inserted
     /// into this session's first user turn. Nil/empty means no inherited
@@ -2283,6 +2333,14 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// `WorktreeManager.add` and may therefore remove it when the session is
     /// ended. Same-workspace tabs can run in a worktree without owning it.
     public let ownsWorktree: Bool
+
+    /// `ProviderInstanceId.wireId` this session is pinned to (e.g.
+    /// `"claude/__primary__"`, `"claude/personal"`, `"codex/work"`).
+    /// `nil` for any session created before F3-wire — those resolve to
+    /// the primary instance at lookup time. Pinned at spawn-time so
+    /// respawn / restore / retry preserves the per-instance HOME /
+    /// Keychain / env scrubbing posture.
+    public let providerInstanceId: String?
 
     public init(
         id: UUID,
@@ -2324,7 +2382,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         antigravityProjectId: String? = nil,
         deepResearch: Bool = false,
         inheritedContextSourceIds: [UUID]? = nil,
-        ownsWorktree: Bool = false
+        ownsWorktree: Bool = false,
+        planProgress: PlanProgress? = nil,
+        providerInstanceId: String? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -2366,6 +2426,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.deepResearch = deepResearch
         self.inheritedContextSourceIds = inheritedContextSourceIds
         self.ownsWorktree = ownsWorktree
+        self.planProgress = planProgress
+        self.providerInstanceId = providerInstanceId
     }
 
     public init(from decoder: Decoder) throws {
@@ -2448,6 +2510,16 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         } else {
             self.ownsWorktree = false
         }
+        // Plan-progress schema addition: optional + decoder-tolerant so
+        // every pre-existing sessions.json decodes cleanly with this nil.
+        // The daemon populates it on the first SessionChatStore snapshot
+        // after `approvedPlanText` is set.
+        self.planProgress = (try? c.decodeIfPresent(PlanProgress.self, forKey: .planProgress)) ?? nil
+        // F3-wire schema v8 addition (wire v20): providerInstanceId.
+        // Optional + decoder-tolerant; any pre-F3-wire sessions.json
+        // decodes with this nil, resolving at lookup time to
+        // `ProviderInstanceId.primary(kind: agent)`.
+        self.providerInstanceId = (try? c.decodeIfPresent(String.self, forKey: .providerInstanceId)) ?? nil
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -2498,7 +2570,27 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              // v0.27 schema v8 (workspace session tabs).
              inheritedContextSourceIds,
              // v0.27 schema v9 (worktree ownership).
-             ownsWorktree
+             ownsWorktree,
+             // Plan-progress schema addition (daemon-side).
+             planProgress,
+             // F3-wire schema v8 (configured-instance pin).
+             providerInstanceId
+    }
+
+    /// Resolve `providerInstanceId` (a `ProviderInstanceId.wireId` string)
+    /// against the daemon's `ProviderInstanceRegistry`. Returns the
+    /// registered instance when found, else falls back to
+    /// `ProviderInstanceId.primary(kind: agent)` (the back-compat default).
+    ///
+    /// F3-wire (Codex eng-review #10): every spawn / token / log call
+    /// site that needs the configured instance for this session funnels
+    /// through here so the back-compat path is a single line.
+    public func resolveProviderInstance(in registry: ProviderInstanceRegistry) async -> ProviderInstanceId {
+        if let wireId = providerInstanceId,
+           let instance = await registry.lookup(wireId: wireId) {
+            return instance
+        }
+        return ProviderInstanceId.primary(kind: agent)
     }
 }
 
@@ -2542,6 +2634,20 @@ public struct NewSessionRequest: Codable, Sendable {
     /// Phase 7 dmux feature.
     public let abPair: AgentKind?
 
+    /// Configured provider instance to pin this session to (F3-wire,
+    /// wire v20). `nil` resolves to `ProviderInstanceId.primary(kind:)`
+    /// — the back-compat default — so clients on `wireVersion <
+    /// providerInstanceMinimum` continue to land on the single-instance
+    /// daemon path without modification. Format: `ProviderInstanceId.wireId`,
+    /// e.g. `"claude/__primary__"`, `"claude/personal"`, `"codex/work"`.
+    ///
+    /// Daemon contract: when set, the daemon spawns the child process
+    /// with `HOME=<instance.homePathOverride ?? userHome>` and scrubs
+    /// any inherited provider-namespaced env vars (`CLAUDE_*`, `CODEX_*`,
+    /// …) so credentials from a sibling instance can't leak into this
+    /// spawn. See `ProviderInstanceEnvironment.buildEnv(for:)`.
+    public let providerInstanceId: String?
+
     public init(
         repoKey: String,
         agent: AgentKind,
@@ -2551,7 +2657,8 @@ public struct NewSessionRequest: Codable, Sendable {
         useWorktree: Bool = true,
         baseBranch: String? = nil,
         effort: ReasoningEffort? = nil,
-        abPair: AgentKind? = nil
+        abPair: AgentKind? = nil,
+        providerInstanceId: String? = nil
     ) {
         self.repoKey = repoKey
         self.agent = agent
@@ -2562,6 +2669,7 @@ public struct NewSessionRequest: Codable, Sendable {
         self.baseBranch = baseBranch
         self.effort = effort
         self.abPair = abPair
+        self.providerInstanceId = providerInstanceId
     }
 
     // Custom decoder to tolerate v2 requests missing the new fields.
@@ -2579,10 +2687,14 @@ public struct NewSessionRequest: Codable, Sendable {
         self.baseBranch = try c.decodeIfPresent(String.self, forKey: .baseBranch)
         self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
         self.abPair = try c.decodeIfPresent(AgentKind.self, forKey: .abPair)
+        // F3-wire (v20). decodeIfPresent so v19 clients omitting the
+        // field deserialize cleanly — the server treats nil as
+        // "primary instance for this kind".
+        self.providerInstanceId = try c.decodeIfPresent(String.self, forKey: .providerInstanceId)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case repoKey, agent, model, planMode, goal, useWorktree, baseBranch, effort, abPair
+        case repoKey, agent, model, planMode, goal, useWorktree, baseBranch, effort, abPair, providerInstanceId
     }
 }
 
@@ -3590,12 +3702,50 @@ public struct UsageEnvelope: Codable, Sendable {
             // Both directions resolve cleanly.
             if providerID == "gemini",      let snapshot = dict["antigravity"] { return snapshot }
             if providerID == "antigravity", let snapshot = dict["gemini"]      { return snapshot }
+            // F3-wire (v20) per-instance dual-key bridge. v20+ servers
+            // populate `usage[<wireId>]` for every configured instance
+            // (e.g. `claude/__primary__`, `claude/personal`); v19
+            // clients ask for the bare kind (`"claude"`) and still
+            // resolve to the primary instance via the wireId lookup.
+            // Symmetric: a v20 client asking for `"claude/__primary__"`
+            // reading a v19 server's dict (which only has `"claude"`)
+            // resolves through the primary suffix-strip.
+            let primarySuffix = "/\(ProviderInstanceId.primaryName)"
+            if providerID.hasSuffix(primarySuffix) {
+                let kindOnly = String(providerID.dropLast(primarySuffix.count))
+                if let snapshot = dict[kindOnly] { return snapshot }
+            }
+            if !providerID.contains("/") {
+                if let snapshot = dict["\(providerID)\(primarySuffix)"] { return snapshot }
+            }
         }
-        switch providerID {
+        // Strip any per-instance suffix before the legacy-field fallback —
+        // legacy `claude`/`codex` fields only ever carry the primary
+        // instance's snapshot.
+        let kindOnly: String = {
+            if let slash = providerID.firstIndex(of: "/") {
+                return String(providerID[..<slash])
+            }
+            return providerID
+        }()
+        switch kindOnly {
         case "claude": return claude
         case "codex":  return codex
         default:       return nil
         }
+    }
+
+    /// F3-wire (v20) per-instance read. Resolves to the dict entry keyed
+    /// by `instance.wireId`, falling back through the
+    /// `usageData(for:)` ladder for back-compat. Primary instances
+    /// resolve to the legacy `claude` / `codex` fields when a v19
+    /// server populated only those.
+    public func usageData(for instance: ProviderInstanceId) -> UsageData? {
+        if let snapshot = usageData(for: instance.wireId) { return snapshot }
+        if instance.isPrimary {
+            return usageData(for: instance.kind.rawValue)
+        }
+        return nil
     }
 
     private enum CodingKeys: String, CodingKey {

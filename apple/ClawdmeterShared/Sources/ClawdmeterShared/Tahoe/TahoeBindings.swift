@@ -171,6 +171,12 @@ public struct TahoeCodeSession: Identifiable, Hashable, Sendable {
     /// Optional branch name where the agent will commit. Real sessions
     /// derive this from worktree path; demo sessions render the JSX literal.
     public var commitBranch: String?
+    /// Daemon-computed progress against the approved plan. Mirror of
+    /// `AgentSession.planProgress`. Nil for sessions without an approved
+    /// plan, before the daemon's first recompute after approval, or when
+    /// the plan has no extractable step markers — UI consumers treat all
+    /// three the same and hide the bar.
+    public var planProgress: PlanProgress?
 
     public enum Status: String, Hashable, Sendable {
         case running, paused, done, planning, degraded
@@ -179,11 +185,13 @@ public struct TahoeCodeSession: Identifiable, Hashable, Sendable {
     public init(id: UUID, title: String, agent: TahoeProvider, model: String,
                 status: Status, mode: String, subtitle: String,
                 runtimePlanText: String? = nil,
-                commitBranch: String? = nil) {
+                commitBranch: String? = nil,
+                planProgress: PlanProgress? = nil) {
         self.id = id; self.title = title; self.agent = agent
         self.model = model; self.status = status; self.mode = mode; self.subtitle = subtitle
         self.runtimePlanText = runtimePlanText
         self.commitBranch = commitBranch
+        self.planProgress = planProgress
     }
 }
 
