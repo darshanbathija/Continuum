@@ -1690,34 +1690,65 @@ public final class AgentControlClient: ObservableObject {
 
     // MARK: - v16 PR + merge
 
+    /// Outcome of a daemon PR-status probe. `.sessionUnknown` is the
+    /// signal PRCoordinator uses to switch from daemon polling to the
+    /// chat-scanning `PRMirror` fallback (synthetic preview sessions
+    /// opened from an external JSONL row aren't in the daemon registry
+    /// and would otherwise 404 forever).
+    public enum PRStatusOutcome: Sendable {
+        case found(PRStatus)
+        case noPR
+        case sessionUnknown
+        case unavailable(String)
+    }
+
     /// `GET /sessions/:id/pr`. Returns nil when the daemon reports no PR
     /// for the session's current branch.
     @MainActor
     public func getPRStatus(sessionId: UUID) async -> PRStatus? {
+        switch await getPRStatusOutcome(sessionId: sessionId) {
+        case .found(let status): return status
+        case .noPR, .sessionUnknown, .unavailable: return nil
+        }
+    }
+
+    /// Typed variant of `getPRStatus` that distinguishes "daemon doesn't
+    /// know this session" from "no PR found." See `PRStatusOutcome` for
+    /// the rationale.
+    @MainActor
+    public func getPRStatusOutcome(sessionId: UUID) async -> PRStatusOutcome {
         #if DEBUG
         if let fixture = codeTabVerificationPRStatus(sessionId: sessionId) {
-            return fixture
+            return .found(fixture)
         }
         #endif
-        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/pr") else { return nil }
+        guard let request = makeRequest(path: "/sessions/\(sessionId.uuidString)/pr") else {
+            return .unavailable("daemon URL unavailable")
+        }
         do {
             let data = try await sendChecked(request)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             if let status = try? decoder.decode(PRStatus.self, from: data) {
                 self.lastError = nil
-                return status
+                return .found(status)
             }
             if let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                dict["pr"] is NSNull {
                 self.lastError = nil
-                return nil
+                return .noPR
             }
             self.lastError = "couldn't parse PR status"
-            return nil
+            return .unavailable("couldn't parse PR status")
+        } catch ClientHTTPError.badStatus(404, _) {
+            // Don't pollute lastError — sessionUnknown is a normal state
+            // for synthetic preview sessions, and the caller is expected
+            // to swap to the local fallback path.
+            self.lastError = nil
+            return .sessionUnknown
         } catch {
             self.lastError = error.localizedDescription
-            return nil
+            return .unavailable(error.localizedDescription)
         }
     }
 
