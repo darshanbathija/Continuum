@@ -206,9 +206,7 @@ struct SessionActivityStrip: View {
         return now.timeIntervalSince(stamp) < Self.activityWindow
     }
 
-    private var claudeOrange: Color {
-        Color(red: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255)
-    }
+    private var claudeOrange: Color { SessionsV2Theme.accent }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
         let total = Int(seconds)

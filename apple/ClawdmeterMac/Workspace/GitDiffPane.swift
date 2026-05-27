@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import OSLog
+import ClawdmeterShared
 
 private let diffLogger = Logger(subsystem: "com.clawdmeter.mac", category: "GitDiffPane")
 
@@ -985,7 +986,5 @@ struct GitDiffPane: View {
         .frame(minWidth: 420)
     }
 
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var terraCotta: Color { SessionsV2Theme.accent }
 }

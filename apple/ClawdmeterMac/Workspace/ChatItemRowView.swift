@@ -616,20 +616,22 @@ struct ChatItemRowContent: View {
     }
 
     private func toolTint(_ name: String) -> Color {
+        // Generic-tool tints. Avoid the AI-slop purple — `.web` is just a
+        // network fetch, not a provider identity. Route through the Codex
+        // blue token so the palette stays consistent with the rest of the
+        // app's tool chrome.
         switch ToolPresentationCatalog.presentation(for: name).tone {
-        case .read: return .blue
+        case .read: return SessionsV2Theme.codexBlue
         case .write: return terraCotta
-        case .shell: return .green
-        case .web: return .purple
-        case .agent: return .orange
-        case .warning: return .red
+        case .shell: return SessionsV2Theme.success
+        case .web: return SessionsV2Theme.codexBlue
+        case .agent: return SessionsV2Theme.warn
+        case .warning: return SessionsV2Theme.danger
         case .neutral: return .secondary
         }
     }
 
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var terraCotta: Color { SessionsV2Theme.accent }
 }
 
 // MARK: - Path-link strip shim

@@ -430,13 +430,9 @@ struct iOSComposerBar: View {
         Color(.tertiarySystemBackground)
     }
 
-    private var borderColor: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0).opacity(0.5)
-    }
+    private var borderColor: Color { SessionsV2Theme.accent.opacity(0.5) }
 
-    private var accent: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var accent: Color { SessionsV2Theme.accent }
 
     @MainActor
     private func performSend() async {

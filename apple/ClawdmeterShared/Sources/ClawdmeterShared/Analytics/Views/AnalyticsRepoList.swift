@@ -358,9 +358,7 @@ private struct RepoRow: View {
         }
     }
 
-    private var claudeColor: Color {
-        Color(red: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255)
-    }
+    private var claudeColor: Color { SessionsV2Theme.accent }
     private var codexColor: Color {
         Color.accentColor
     }
