@@ -33,6 +33,26 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 - Find-bar overlay isolation. The find-bar inside `ChatThreadScroll` shares the parent body, so a transcript append still re-evaluates its body (small cost — TextField + 4 buttons). Full isolation requires extracting `TranscriptFindBarOverlay` as an Equatable child view with on-demand match computation.
 - `@Observable` migration (C2 in the plan) is a separate PR that will re-architect the slices as `@Observable` macro types.
 
+## [0.29.12 build 151] - 2026-05-27 - Workspace session tabs + opt-in context inheritance (`darshanbathija/session-tabs`)
+
+### Added
+
+- **Workspace tab strip for Mac sessions.** Users can open lightweight draft chat tabs with `⌘T`, keep multiple chats in the same workspace row, and promote a draft on first send without creating another worktree.
+- **Opt-in sibling context inheritance.** Draft chats can include selected sibling transcripts as capped digest files, with inherited attachments copied into the promoted session and recorded in an audit manifest.
+- **First-class terminal tabs.** Terminal tabs now live beside chat tabs for tmux-backed sessions, including `⇧⌘T` and menu affordances that avoid opening dead terminal panes for providers without a tmux pane.
+- **iOS workspace tab strip.** iPhone session detail views now show the same workspace tab model, with terminal affordances hidden unless the backing session can actually stream a terminal.
+
+### Fixed
+
+- Same-workspace sessions now track explicit worktree ownership so ending a tab cannot delete a shared checkout it did not create.
+- Inherited attachment staging is isolated per session to prevent sibling Codex sessions in the same checkout from leaking files into each other.
+- First-send promotion revalidates selected sibling sources before inheritance, so archived, stale, or current-session IDs are excluded safely.
+
+### Tests
+
+- Added shared tests for workspace sibling grouping, wire v20 ownership/context fields, and transcript digest rendering caps.
+- Added Mac tests for draft promotion, same-workspace spawning, terminal-tab gating, and inherited attachment copy behavior.
+
 ## [0.29.11 build 150] - 2026-05-26 - Rebrand sweep + OpenCode status pill + design polish (`fix/v0.29.11-rebrand-bleed-and-opencode-badge`)
 
 Verifier loop on v0.29.9 surfaced two classes of leftover work from the Continuum rebrand and the new OpenCode CLI auth row. Folded both into a single follow-up.
