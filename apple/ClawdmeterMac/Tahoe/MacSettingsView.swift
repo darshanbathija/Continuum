@@ -137,6 +137,8 @@ public struct MacSettingsView: View {
             visualSettings
         case .providers:
             providerSettings
+        case .workspaces:
+            workspaceSettings
         case .devices:
             deviceSettings
         case .diagnostics:
@@ -252,6 +254,14 @@ public struct MacSettingsView: View {
         SettingsCard(title: "Provider defaults",
                      sub: "Default model and effort for new chat and code sessions.") {
             ProviderDefaultsSettingsRows(client: runtime?.loopbackClient)
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceSettings: some View {
+        SettingsCard(title: "Files to copy",
+                     sub: "Effective ignored-file patterns copied into new worktrees.") {
+            WorkspaceFilesToCopySettingsRows(store: runtime?.workspaceStore)
         }
     }
 
@@ -528,6 +538,7 @@ private struct SettingsUnavailableBadge: View {
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case visual
     case providers
+    case workspaces
     case devices
     case diagnostics
     case notifications
@@ -541,6 +552,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .visual: return "Visual"
         case .providers: return "Providers"
+        case .workspaces: return "Workspaces"
         case .devices: return "Devices"
         case .diagnostics: return "Diagnostics"
         case .notifications: return "Notifications"
@@ -556,6 +568,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "Theme, glass surface, wallpaper, and accent color."
         case .providers:
             return "External agent runtimes and native SDK modes."
+        case .workspaces:
+            return "Worktree setup, copied local files, and branch isolation."
         case .devices:
             return "Quota behavior, iPhone mirroring, Live Activities, and pairing."
         case .diagnostics:
@@ -575,6 +589,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .visual: return "sparkles"
         case .providers: return "terminal"
+        case .workspaces: return "folder"
         case .devices: return "link"
         case .diagnostics: return "gear"
         case .notifications: return "bell"
@@ -794,6 +809,93 @@ private struct SettingsRow<Control: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             control
         }
+    }
+}
+
+private struct WorkspaceFilesToCopySettingsRows: View {
+    @Environment(\.tahoe) private var t
+    let store: WorkspaceStore?
+    @State private var records: [CodeWorkspaceRecord] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if records.isEmpty {
+                Text("No repository workspaces have been recorded yet.")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(t.fg3)
+            } else {
+                ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
+                    workspaceRow(record)
+                    if index != records.count - 1 {
+                        TahoeHair()
+                    }
+                }
+            }
+        }
+        .task { refresh() }
+    }
+
+    @ViewBuilder
+    private func workspaceRow(_ record: CodeWorkspaceRecord) -> some View {
+        let effective = effectivePatterns(for: record)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(record.repoDisplayName)
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Text(effective.sourceLabel)
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(effective.readOnly ? t.accent : t.fg3)
+                Spacer(minLength: 0)
+                Text("max \(record.filesToCopy.maxFiles) files")
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg4)
+            }
+
+            Text(effective.display)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg2)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("per file \(Self.bytes(record.filesToCopy.maxBytesPerFile)) · total \(Self.bytes(record.filesToCopy.maxTotalBytes)) · directories \(record.filesToCopy.allowDirectories ? "allowed" : "files only")")
+                .font(TahoeFont.body(11))
+                .foregroundStyle(t.fg4)
+                .lineLimit(2)
+        }
+    }
+
+    private func effectivePatterns(for record: CodeWorkspaceRecord) -> (sourceLabel: String, display: String, readOnly: Bool) {
+        let includeURL = URL(fileURLWithPath: record.repoRoot, isDirectory: true)
+            .appendingPathComponent(".worktreeinclude")
+        if let text = try? String(contentsOf: includeURL, encoding: .utf8) {
+            return (
+                ".worktreeinclude read-only",
+                text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).joined(separator: ", "),
+                true
+            )
+        }
+        if !record.filesToCopy.enabled {
+            return ("disabled", "(disabled)", false)
+        }
+        let isDefault = record.filesToCopy.mode == .allIgnored
+            && record.filesToCopy.patterns == WorkspaceFilesToCopySettings.defaultPatterns
+            && record.filesToCopy.maxFiles == WorkspaceFilesToCopySettings.defaultMaxFiles
+            && record.filesToCopy.maxBytesPerFile == WorkspaceFilesToCopySettings.defaultMaxBytesPerFile
+            && record.filesToCopy.maxTotalBytes == WorkspaceFilesToCopySettings.defaultMaxTotalBytes
+            && record.filesToCopy.allowDirectories == true
+        let display = record.filesToCopy.mode == .allIgnored
+            ? "all ignored files, directories, dependencies, build artifacts, and local databases"
+            : record.filesToCopy.patterns.joined(separator: ", ")
+        return (isDefault ? "default" : "settings", display, false)
+    }
+
+    private func refresh() {
+        records = store?.all().sorted { $0.repoDisplayName.lowercased() < $1.repoDisplayName.lowercased() } ?? []
+    }
+
+    private static func bytes(_ value: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
     }
 }
 

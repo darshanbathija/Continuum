@@ -79,6 +79,7 @@ public final class WorkspaceStore: ObservableObject {
                 runtimeCwd: record.runtimeCwd,
                 chatCwd: record.chatCwd,
                 providerDefaults: record.providerDefaults,
+                filesToCopy: record.filesToCopy,
                 activeSessionIds: record.activeSessionIds,
                 branchName: record.branchName,
                 prMirrorState: record.prMirrorState,
@@ -115,6 +116,39 @@ public final class WorkspaceStore: ObservableObject {
             runtimeCwd: existing.runtimeCwd,
             chatCwd: existing.chatCwd,
             providerDefaults: defaults,
+            filesToCopy: existing.filesToCopy,
+            activeSessionIds: existing.activeSessionIds,
+            branchName: existing.branchName,
+            prMirrorState: existing.prMirrorState,
+            archiveMetadata: existing.archiveMetadata,
+            createdAt: existing.createdAt,
+            updatedAt: Date()
+        )
+        workspaces[idx] = updated
+        save()
+        return updated
+    }
+
+    /// Partially updates workspace defaults. Omitted fields are preserved.
+    @discardableResult
+    public func updateDefaults(
+        id: UUID,
+        providerDefaults: WorkspaceProviderDefaults? = nil,
+        filesToCopy: WorkspaceFilesToCopySettings? = nil
+    ) -> CodeWorkspaceRecord? {
+        guard let idx = workspaces.firstIndex(where: { $0.id == id }) else { return nil }
+        let existing = workspaces[idx]
+        let updated = CodeWorkspaceRecord(
+            id: existing.id,
+            projectId: existing.projectId,
+            repoRoot: existing.repoRoot,
+            repoDisplayName: existing.repoDisplayName,
+            defaultBranch: existing.defaultBranch,
+            worktreeRoot: existing.worktreeRoot,
+            runtimeCwd: existing.runtimeCwd,
+            chatCwd: existing.chatCwd,
+            providerDefaults: providerDefaults ?? existing.providerDefaults,
+            filesToCopy: filesToCopy ?? existing.filesToCopy,
             activeSessionIds: existing.activeSessionIds,
             branchName: existing.branchName,
             prMirrorState: existing.prMirrorState,
@@ -146,6 +180,7 @@ public final class WorkspaceStore: ObservableObject {
             runtimeCwd: existing.runtimeCwd,
             chatCwd: existing.chatCwd,
             providerDefaults: existing.providerDefaults,
+            filesToCopy: existing.filesToCopy,
             activeSessionIds: existing.activeSessionIds,
             branchName: existing.branchName,
             prMirrorState: existing.prMirrorState,
@@ -177,6 +212,7 @@ public final class WorkspaceStore: ObservableObject {
                 runtimeCwd: existing.runtimeCwd,
                 chatCwd: existing.chatCwd,
                 providerDefaults: existing.providerDefaults,
+                filesToCopy: existing.filesToCopy,
                 activeSessionIds: sessionIds,
                 branchName: existing.branchName,
                 prMirrorState: existing.prMirrorState,
@@ -199,6 +235,7 @@ public final class WorkspaceStore: ObservableObject {
                 repoDisplayName: Self.displayName(forRepoRoot: repoRoot),
                 runtimeCwd: repoRoot,
                 providerDefaults: WorkspaceProviderDefaults(),
+                filesToCopy: WorkspaceFilesToCopySettings(),
                 activeSessionIds: sessionIds
             )
             workspaces.append(record)
@@ -271,6 +308,7 @@ public final class WorkspaceStore: ObservableObject {
                 runtimeCwd: runtimeCwd,
                 chatCwd: chatCwd,
                 providerDefaults: providerDefaults,
+                filesToCopy: WorkspaceFilesToCopySettings(),
                 activeSessionIds: activeIds,
                 branchName: nil,
                 prMirrorState: newest.prMirrorState,

@@ -80,6 +80,15 @@ final class AgentSpawnerGeminiArgvTests: XCTestCase {
         XCTAssertEqual(argv, [binary, "--resume", "abc-123-uuid", "-m", "gemini-3-flash"])
     }
 
+    func test_trustWorkspace_emitsSkipTrustBeforeModel() {
+        let argv = GeminiArgvBuilder.argv(
+            geminiBinary: binary,
+            model: "gemini-3-flash",
+            trustWorkspace: true
+        )
+        XCTAssertEqual(argv, [binary, "--skip-trust", "-m", "gemini-3-flash"])
+    }
+
     /// No flags → just the binary path.
     func test_emptyInvocation_returnsBinaryOnly() {
         let argv = GeminiArgvBuilder.argv(geminiBinary: binary)

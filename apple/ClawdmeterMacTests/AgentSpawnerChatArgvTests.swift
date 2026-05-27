@@ -45,7 +45,11 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
         )
     }
 
-    private func makeCodeSession(agent: AgentKind, model: String? = nil) -> AgentSession {
+    private func makeCodeSession(
+        agent: AgentKind,
+        model: String? = nil,
+        worktreePath: String? = nil
+    ) -> AgentSession {
         AgentSession(
             id: UUID(),
             repoKey: "/Users/foo/repo",
@@ -53,7 +57,7 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
             agent: agent,
             model: model,
             goal: nil,
-            worktreePath: nil,
+            worktreePath: worktreePath,
             tmuxWindowId: nil,
             tmuxPaneId: nil,
             status: .running,
@@ -122,6 +126,20 @@ final class AgentSpawnerChatArgvTests: XCTestCase {
         let argv = AgentSpawner.argv(for: session)
         XCTAssertTrue(argv.isEmpty,
                       "Gemini chat is deferred to v0.9 — argv contract is empty in v0.8")
+    }
+
+    func test_codeCodexPassesPreparedWorkingDirectory() throws {
+        try XCTSkipIf(ShellRunner.locateBinary("codex") == nil,
+                      "codex binary unavailable on PATH; CI skip")
+        let session = makeCodeSession(
+            agent: .codex,
+            model: "gpt-5.5",
+            worktreePath: "/Users/foo/repo/.claude/worktrees/oslo"
+        )
+        let argv = AgentSpawner.argv(for: session)
+        XCTAssertFalse(argv.isEmpty)
+        XCTAssertTrue(argv.containsInOrder(["-C", "/Users/foo/repo/.claude/worktrees/oslo"]))
+        XCTAssertTrue(argv.containsInOrder(["--model", "gpt-5.5"]))
     }
 
     // MARK: - Code sessions unchanged

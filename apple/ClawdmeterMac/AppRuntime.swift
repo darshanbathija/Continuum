@@ -52,6 +52,7 @@ final class AppRuntime: ObservableObject {
     // Sessions feature (Phase 1 + 2 + supervisor):
     let repoIndex: RepoIndex
     let agentSessionRegistry: AgentSessionRegistry
+    let workspaceStore: WorkspaceStore
     let tmuxClient: TmuxControlClient
     let tmuxSupervisor: TmuxSupervisor
     let agentControlServer: AgentControlServer
@@ -204,6 +205,7 @@ final class AppRuntime: ObservableObject {
         // `UserDefaults.clawdmeter.sessions.enabled`. Default on in v1.
         self.repoIndex = RepoIndex()
         self.agentSessionRegistry = AgentSessionRegistry()
+        self.workspaceStore = WorkspaceStore()
         self.tmuxClient = TmuxControlClient()
         self.tmuxSupervisor = TmuxSupervisor(
             tmux: self.tmuxClient,
@@ -216,7 +218,8 @@ final class AppRuntime: ObservableObject {
             repoIndex: self.repoIndex,
             registry: self.agentSessionRegistry,
             tmux: self.tmuxClient,
-            notifications: self.notificationDispatcher
+            notifications: self.notificationDispatcher,
+            workspaceStore: self.workspaceStore
         )
         // Hand the daemon refs to the live-usage publishers + analytics
         // store so the iPhone's `/usage` and `/analytics` endpoints can
@@ -232,7 +235,8 @@ final class AppRuntime: ObservableObject {
         self.sessionsModel = SessionsModel(
             repoIndex: self.repoIndex,
             registry: self.agentSessionRegistry,
-            supervisor: self.tmuxSupervisor
+            supervisor: self.tmuxSupervisor,
+            workspaceStore: self.workspaceStore
         )
         self.sessionScheduler = SessionScheduler(
             registry: self.agentSessionRegistry,

@@ -2014,6 +2014,11 @@ private struct ReviewPane: View {
 
             TahoeHair()
 
+            if let provisioning = agentSession()?.provisioning {
+                filesToCopyAudit(provisioning.filesToCopy)
+                TahoeHair()
+            }
+
             ScrollView {
                 Group {
                     switch tab {
@@ -2027,6 +2032,43 @@ private struct ReviewPane: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func filesToCopyAudit(_ summary: WorktreeFileCopySummary) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                TahoeIcon("folder", size: 11, weight: .semibold)
+                    .foregroundStyle(t.accent)
+                Text("Files to copy")
+                    .font(TahoeFont.body(11, weight: .bold))
+                    .foregroundStyle(t.fg)
+                Text(summary.source.rawValue)
+                    .font(TahoeFont.body(10, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                Spacer(minLength: 0)
+                Text("\(summary.copiedFileCount) files · \(summary.copiedDirectoryCount) dirs · \(summary.skippedFileCount) skipped")
+                    .font(TahoeFont.body(10))
+                    .foregroundStyle(t.fg4)
+            }
+            Text(filesToCopyDescription(summary))
+                .font(TahoeFont.body(10.5))
+                .foregroundStyle(t.fg3)
+                .lineLimit(2)
+            if let failure = summary.failureSummary, !failure.isEmpty {
+                Text(failure)
+                    .font(TahoeFont.body(10.5))
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            } else if let manifest = summary.manifestPath {
+                Text("manifest: \(manifest)")
+                    .font(TahoeFont.body(10))
+                    .foregroundStyle(t.fg4)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Real-view embeds (PR #24b D9 + X1, + v0.22.31 JSONL preview wires)
@@ -2043,6 +2085,14 @@ private struct ReviewPane: View {
         } else {
             ReviewPlan(session: session, isDemo: isDemo)
         }
+    }
+
+    private func filesToCopyDescription(_ summary: WorktreeFileCopySummary) -> String {
+        if summary.source == .disabled { return "(disabled)" }
+        if summary.mode == .allIgnored {
+            return "all ignored files, directories, dependencies, build artifacts, and local databases"
+        }
+        return summary.patterns.isEmpty ? "(no patterns)" : summary.patterns.joined(separator: ", ")
     }
 
     @ViewBuilder

@@ -113,6 +113,7 @@ public final class SessionConfigChanger {
             try await registry.updateRuntime(
                 id: sessionId,
                 worktreePath: session.worktreePath,
+                runtimeCwd: .some(cwd),
                 tmuxWindowId: newWindow.windowId,
                 tmuxPaneId: newWindow.paneId,
                 mode: newMode ?? session.mode
@@ -135,6 +136,7 @@ public final class SessionConfigChanger {
                 try await registry.updateRuntime(
                     id: sessionId,
                     worktreePath: session.worktreePath,
+                    runtimeCwd: .some(session.effectiveCwd),
                     tmuxWindowId: restoreWindow.windowId,
                     tmuxPaneId: restoreWindow.paneId,
                     mode: session.mode

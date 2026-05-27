@@ -229,9 +229,15 @@ public final class OpencodeProcessManager {
     /// Build a URLRequest for the running server, authorized via the
     /// per-launch password. Returns nil when the server isn't running —
     /// callers fall back to either ensureRunning() or a 503 response.
-    public func makeAuthorizedRequest(path: String) -> URLRequest? {
+    public func makeAuthorizedRequest(path: String, directory: String? = nil) -> URLRequest? {
         guard let port = serverPort, let password = serverPassword else { return nil }
-        guard let url = URL(string: "http://127.0.0.1:\(port)\(path)") else { return nil }
+        guard var components = URLComponents(string: "http://127.0.0.1:\(port)\(path)") else { return nil }
+        if let directory, !directory.isEmpty {
+            components.queryItems = (components.queryItems ?? []) + [
+                URLQueryItem(name: "directory", value: directory)
+            ]
+        }
+        guard let url = components.url else { return nil }
         var req = URLRequest(url: url)
         let credentials = Data("opencode:\(password)".utf8).base64EncodedString()
         req.setValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")

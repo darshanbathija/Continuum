@@ -1976,16 +1976,18 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
-    /// `PATCH /workspaces/:id`. Updates provider defaults; returns the
-    /// updated record on success.
+    /// `PATCH /workspaces/:id`. Partially updates workspace defaults;
+    /// omitted fields are preserved by the Mac daemon.
     @MainActor
     public func updateWorkspaceDefaults(
         workspaceId: UUID,
-        defaults: WorkspaceProviderDefaults,
+        defaults: WorkspaceProviderDefaults? = nil,
+        filesToCopy: WorkspaceFilesToCopySettings? = nil,
         idempotencyKey: String? = nil
     ) async -> CodeWorkspaceRecord? {
         let req = UpdateWorkspaceDefaultsRequest(
             providerDefaults: defaults,
+            filesToCopy: filesToCopy,
             idempotencyKey: idempotencyKey
         )
         let encoded = (try? JSONEncoder().encode(req)) ?? Data()

@@ -399,6 +399,83 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         _ = try? await requestRaw(path: "/sessions/\(session.id.uuidString)", method: "DELETE", timeout: 20)
     }
 
+    func test_liveCodeProviderSmoke_createsOwnedWorktreesWithoutPermissionPrompts() async throws {
+        try requireLiveCodeProviderSmoke()
+
+        let repo = try makeHomeSmokeRepo()
+        var created: [AgentSession] = []
+        var failures: [String] = []
+        let workspacePrefix = WorktreeManager.defaultWorkspaceStorageRoot() + "/"
+
+        for agent in [AgentKind.claude, .codex, .cursor, .opencode, .gemini] {
+            do {
+                let response = try await postJSON(
+                    "/sessions",
+                    NewSessionRequest(
+                        repoKey: repo.path,
+                        agent: agent,
+                        goal: "Clawdmeter live \(agent.rawValue) smoke \(UUID().uuidString.prefix(8))",
+                        useWorktree: true
+                    ),
+                    timeout: agent == .opencode ? 40 : 30
+                )
+                guard response.status == 200 else {
+                    failures.append("\(agent.rawValue): HTTP \(response.status) \(bodySnippet(response.data))")
+                    continue
+                }
+
+                let session = try decode(AgentSession.self, from: response.data)
+                created.append(session)
+
+                guard let worktreePath = session.worktreePath else {
+                    failures.append("\(agent.rawValue): session did not record a worktreePath")
+                    continue
+                }
+                XCTAssertTrue(
+                    worktreePath.hasPrefix(workspacePrefix),
+                    "\(agent.rawValue) worktree should live under \(workspacePrefix), got \(worktreePath)"
+                )
+                XCTAssertFalse(worktreePath.contains("/conductor/workspaces/"))
+                XCTAssertFalse(worktreePath.contains("/.claude/worktrees/"))
+                XCTAssertEqual(session.mode, .worktree)
+                XCTAssertEqual(session.provisioning?.storageRoot, WorktreeManager.defaultWorkspaceStorageRoot())
+                XCTAssertEqual(session.provisioning?.filesToCopy.mode, .allIgnored)
+                XCTAssertTrue(
+                    FileManager.default.fileExists(atPath: (worktreePath as NSString).appendingPathComponent(".env.local")),
+                    "\(agent.rawValue) did not copy ignored .env.local"
+                )
+                XCTAssertTrue(
+                    FileManager.default.fileExists(atPath: (worktreePath as NSString).appendingPathComponent("node_modules/pkg/index.js")),
+                    "\(agent.rawValue) did not copy ignored dependency directory"
+                )
+                XCTAssertTrue(
+                    FileManager.default.fileExists(atPath: (worktreePath as NSString).appendingPathComponent("cache/empty")),
+                    "\(agent.rawValue) did not copy ignored empty directory"
+                )
+                XCTAssertGreaterThan(
+                    session.provisioning?.filesToCopy.copiedFileCount ?? 0,
+                    0,
+                    "\(agent.rawValue) did not report copied ignored files"
+                )
+
+                if let prompt = try await pendingPermissionPrompt(sessionId: session.id, timeout: 8) {
+                    failures.append("\(agent.rawValue): permission prompt appeared: \(prompt.title)")
+                }
+            } catch {
+                failures.append("\(agent.rawValue): \(error.localizedDescription)")
+            }
+        }
+
+        for session in created.reversed() {
+            _ = try? await requestRaw(path: "/sessions/\(session.id.uuidString)", method: "DELETE", timeout: 20)
+        }
+        try? FileManager.default.removeItem(at: repo)
+
+        if !failures.isEmpty {
+            XCTFail(failures.joined(separator: "\n"))
+        }
+    }
+
     private struct RawResponse {
         let status: Int
         let data: Data
@@ -501,5 +578,113 @@ final class AgentControlServerChatRouteTests: XCTestCase {
             url = next
         }
         return false
+    }
+
+    private func requireLiveCodeProviderSmoke() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["CLAWDMETER_LIVE_PROVIDER_SMOKE"] == "1"
+                || liveCodeProviderSmokeSentinelExists(),
+            "Set CLAWDMETER_LIVE_PROVIDER_SMOKE=1 or create .context/run-live-code-provider-smoke to run live code-session provider smoke tests"
+        )
+    }
+
+    private func liveCodeProviderSmokeSentinelExists() -> Bool {
+        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<8 {
+            let marker = url
+                .appendingPathComponent(".context", isDirectory: true)
+                .appendingPathComponent("run-live-code-provider-smoke")
+            if FileManager.default.fileExists(atPath: marker.path) {
+                return true
+            }
+            let next = url.deletingLastPathComponent()
+            if next.path == url.path {
+                break
+            }
+            url = next
+        }
+        return false
+    }
+
+    private func makeHomeSmokeRepo() throws -> URL {
+        let root = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent("Clawdmeter/smoke-sources", isDirectory: true)
+        let repo = root.appendingPathComponent("live-provider-smoke-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try git(["init"], cwd: repo)
+        try git(["config", "user.email", "tests@example.com"], cwd: repo)
+        try git(["config", "user.name", "Clawdmeter Tests"], cwd: repo)
+        try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
+        try write(".env*\nnode_modules/\ncache/\n*.sqlite*\n", to: repo.appendingPathComponent(".gitignore"))
+        try git(["add", "tracked.txt", ".gitignore"], cwd: repo)
+        try git(["commit", "-m", "initial"], cwd: repo)
+        try write("SECRET=1\n", to: repo.appendingPathComponent(".env.local"))
+        try write("module\n", to: repo.appendingPathComponent("node_modules/pkg/index.js"))
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent("cache/empty", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try write("sqlite\n", to: repo.appendingPathComponent("dev.sqlite"))
+        try write("wal\n", to: repo.appendingPathComponent("dev.sqlite-wal"))
+        try write("shm\n", to: repo.appendingPathComponent("dev.sqlite-shm"))
+        return repo
+    }
+
+    private func pendingPermissionPrompt(
+        sessionId: UUID,
+        timeout: TimeInterval
+    ) async throws -> PendingPermissionPrompt? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let response = try await requestRaw(
+                path: "/sessions/\(sessionId.uuidString)/chat-snapshot",
+                method: "GET",
+                timeout: 8
+            )
+            if response.status == 200 {
+                let snapshot = try decode(WireChatSnapshot.self, from: response.data)
+                if let prompt = snapshot.pendingPermissionPrompt {
+                    return prompt
+                }
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return nil
+    }
+
+    private func write(_ text: String, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(text.utf8).write(to: url)
+    }
+
+    private func git(_ args: [String], cwd: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + args
+        process.currentDirectoryURL = cwd
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let out = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let err = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            throw NSError(
+                domain: "AgentControlServerChatRouteTests.git",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: "git \(args.joined(separator: " ")) failed: \(out)\(err)"]
+            )
+        }
+    }
+
+    private func bodySnippet(_ data: Data) -> String {
+        let text = String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: "\n", with: " ")
+        return String(text.prefix(300))
     }
 }

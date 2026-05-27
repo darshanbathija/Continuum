@@ -98,6 +98,7 @@ public enum AgentSpawner {
         autopilot: Bool = false,
         acceptEdits: Bool = false,
         resumeSessionId: String? = nil,
+        workspacePath: String? = nil,
         extraArgs: [String] = []
     ) -> [String]? {
         // `acceptEdits` is a no-op on Codex — `workspace-write` is the
@@ -109,6 +110,9 @@ public enum AgentSpawner {
         var argv = [codex]
         if let resumeSessionId, !resumeSessionId.isEmpty {
             argv += ["resume", resumeSessionId]
+        }
+        if let workspacePath, !workspacePath.isEmpty {
+            argv += ["-C", workspacePath]
         }
         if let model, !model.isEmpty {
             argv += ["--model", model]
@@ -152,6 +156,7 @@ public enum AgentSpawner {
         autopilot: Bool = false,
         acceptEdits: Bool = false,
         resumeSessionId: String? = nil,
+        trustWorkspace: Bool = false,
         extraArgs: [String] = []
     ) -> [String]? {
         // Effort is encoded in the model name (per-high / pro-low), not
@@ -165,6 +170,7 @@ public enum AgentSpawner {
             autopilot: autopilot,
             acceptEdits: acceptEdits,
             resumeSessionId: resumeSessionId,
+            trustWorkspace: trustWorkspace,
             extraArgs: extraArgs
         )
     }
@@ -273,14 +279,16 @@ public enum AgentSpawner {
                 model: request.model,
                 planMode: request.planMode,
                 effort: request.effort,
-                autopilot: autopilot
+                autopilot: autopilot,
+                workspacePath: workspacePath ?? request.repoKey
             ) ?? []
         case .gemini:
             return geminiArgv(
                 model: request.model,
                 planMode: request.planMode,
                 effort: request.effort,
-                autopilot: autopilot
+                autopilot: autopilot,
+                trustWorkspace: request.useWorktree && workspacePath != nil && workspacePath != request.repoKey
             ) ?? []
         case .opencode:
             // PR #29: OpenCode sessions don't use tmux argv. The Mac
@@ -350,14 +358,16 @@ public enum AgentSpawner {
                 model: session.model,
                 planMode: true,
                 effort: session.effort,
-                autopilot: false
+                autopilot: false,
+                workspacePath: session.effectiveCwd
             ) ?? []
         case (.codex, .code):
             return codexArgv(
                 model: session.model,
                 planMode: planMode,
                 effort: session.effort,
-                autopilot: chatAutopilot
+                autopilot: chatAutopilot,
+                workspacePath: session.effectiveCwd
             ) ?? []
         case (.gemini, .chat):
             // v0.8: Gemini chat returns 501 at the route handler.
@@ -368,7 +378,8 @@ public enum AgentSpawner {
                 model: session.model,
                 planMode: planMode,
                 effort: session.effort,
-                autopilot: chatAutopilot
+                autopilot: chatAutopilot,
+                trustWorkspace: session.provisioning != nil
             ) ?? []
         case (.opencode, _):
             // PR #29: opencode sessions don't take a tmux argv.
@@ -425,7 +436,8 @@ public enum AgentSpawner {
                 effort: effort,
                 autopilot: autopilot,
                 acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId
+                resumeSessionId: resumeSessionId,
+                workspacePath: workspacePath
             ) ?? []
         case .gemini:
             return geminiArgv(

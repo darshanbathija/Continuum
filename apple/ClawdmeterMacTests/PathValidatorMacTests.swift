@@ -67,6 +67,33 @@ final class PathValidatorMacTests: XCTestCase {
         )
     }
 
+    func test_safeNewChildPath_rejectsSymlinkParentEscape() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PathValidatorMacTests-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("root", isDirectory: true)
+        let outside = base.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let safeParent = root.appendingPathComponent("safe", isDirectory: true)
+        try FileManager.default.createDirectory(at: safeParent, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createSymbolicLink(
+            at: link,
+            withDestinationURL: outside
+        )
+
+        XCTAssertTrue(PathValidator.isSafeNewChildPath(
+            safeParent.appendingPathComponent("new.env").path,
+            root: root.path
+        ))
+        XCTAssertFalse(PathValidator.isSafeNewChildPath(
+            link.appendingPathComponent("new.env").path,
+            root: root.path
+        ))
+    }
+
     // MARK: - isValidJsonlPath
 
     func test_isValidJsonlPath_rejectsRelativeAndTraversal() {

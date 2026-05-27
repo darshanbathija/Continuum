@@ -12,6 +12,19 @@
 > placements with both Keychain keys — no scheme produced plausible
 > plaintext). Deferred items below.
 
+## Conductor parity — setup scripts (2026-05-26)
+
+### Optional setup/run scripts for prepared worktrees
+- **What**: Conductor can run repository setup and run scripts inside each
+  workspace after the Git worktree exists. Clawdmeter now creates the branch,
+  writes the ownership marker, and copies configured ignored files first, but
+  it does not execute `conductor.json` setup/run scripts.
+- **Why deferred**: the no-popup session path needs branch/file-copy parity
+  without adding a new execution surface that can hang, prompt, or mutate
+  dependencies unexpectedly.
+- **Expected shape**: add an explicit opt-in script runner with timeout,
+  streaming audit output, cancellation, and no blocking modal prompts.
+
 ## Antigravity analytics — open follow-ups (2026-05-23)
 
 ### .pb decryption — DEFERRED indefinitely
