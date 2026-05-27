@@ -105,6 +105,30 @@ final class F1aWireChatParityTests: XCTestCase {
         XCTAssertNil(on, "Adapter path must also drop empty content")
     }
 
+    /// F1-finalize legacy-compat shim coverage: older Claude JSONL fixtures
+    /// (and the in-process JSONL the `SessionChatStore` chat tail emits in
+    /// tests like `SessionSidebarGrouperTests` /
+    /// `SessionChatStoreSlicePublishingTests`) carry `type: "user"` at the
+    /// top level but omit `message.role`. Legacy `decodeUser` reads
+    /// `message.content` directly without inspecting role; the adapter
+    /// switches on role and falls through to `.unknown` when missing.
+    /// `decodeUserViaAdapter`'s `normalizeUserLineForLegacyCompat` shim
+    /// synthesizes `role: "user"` so the adapter takes the user branch.
+    /// Both paths must produce the same `ParsedLine` for this shape.
+    func test_parity_user_missingRole_legacyCompatShim() {
+        let (off, on) = parseBoth("""
+        {"type":"user","uuid":"line-7","timestamp":"2026-05-15T10:00:00Z","message":{"content":"hello"}}
+        """)
+        assertParsedLineEqual(off, on)
+    }
+
+    func test_parity_user_missingRole_contentBlocks_legacyCompatShim() {
+        let (off, on) = parseBoth("""
+        {"type":"user","uuid":"line-8","timestamp":"2026-05-15T10:00:00Z","message":{"content":[{"type":"text","text":"hi"}]}}
+        """)
+        assertParsedLineEqual(off, on)
+    }
+
     // MARK: - Assistant lines
 
     func test_parity_assistant_textOnly_withUsage() {

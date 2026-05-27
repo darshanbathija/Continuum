@@ -17,10 +17,15 @@
 //
 // Env lets CI / shell scripts force a value without mutating user prefs.
 // UserDefaults lets the in-app settings panel toggle without a relaunch.
-// The compiled default is the safe rollback target (legacy behavior).
+// The compiled default is the canonical (post-migration) behavior.
 //
-// All flags here MUST default to the legacy behavior so A/B rollback is a
-// matter of flipping the default back to `false` and rebuilding.
+// All five F1*-wire adapter flags (`useClaudeAdapter`, `useCodexAdapter`,
+// `useOpenCodeAdapter`, `useAntigravityAdapter`, `useCursorAdapter`) and
+// the `orchestrationEventStore` flag default to **ON** since F1-finalize
+// (#152, #165, #164, #171, #169 shipped + parity held). A/B rollback is
+// a matter of flipping the env override to `=0` — the legacy parser /
+// snapshot path stays in place behind the flag dispatch so the rollback
+// is a one-flag flip, not a rebuild + revert.
 
 import Foundation
 
@@ -43,18 +48,20 @@ public enum FeatureFlags {
     /// fixed JSONL input must be identical. The F1aWireParityTests suite
     /// enforces this for every fixture shape we ship.
     ///
-    /// **Default: OFF.** Flip to ON in F1-finalize after all 5 provider
-    /// wires (F1a-wire through F1e-wire) have shipped and parity has
-    /// held on real session data.
+    /// **Default: ON.** Flipped in F1-finalize after all 5 provider
+    /// wires (F1a-wire through F1e-wire) shipped (#152, #165, #164, #171,
+    /// #169) and parity held on real session data. The env/UserDefaults
+    /// override paths remain live as a rollback escape hatch — flip
+    /// `CLAWDMETER_USE_CLAUDE_ADAPTER=0` to revert without rebuilding.
     ///
-    /// **Override (env):** `CLAWDMETER_USE_CLAUDE_ADAPTER=1`
+    /// **Override (env):** `CLAWDMETER_USE_CLAUDE_ADAPTER=0|1`
     /// **Override (test):** set `useClaudeAdapterOverride` (auto-cleared
     /// in tests' `tearDown`).
     public static var useClaudeAdapter: Bool {
         if let override = useClaudeAdapterOverride { return override }
         return resolve(envName: "CLAWDMETER_USE_CLAUDE_ADAPTER",
                        userDefaultsKey: "com.clawdmeter.featureFlags.useClaudeAdapter",
-                       default: false)
+                       default: true)
     }
 
     /// F1b-wire sibling of `useClaudeAdapter` for the Codex provider.
@@ -71,12 +78,14 @@ public enum FeatureFlags {
     /// fresh adapter per call to keep the contract uniform).
     ///
     /// Parity contract enforced by `F1bParityTests`.
-    /// Default OFF; flipped in F1-finalize after all 5 wires merge.
+    /// **Default: ON.** Flipped in F1-finalize after all 5 wires merged
+    /// (#152, #165, #164, #171, #169). The env/UserDefaults override
+    /// paths remain live as a rollback escape hatch.
     public static var useCodexAdapter: Bool {
         if let override = useCodexAdapterOverride { return override }
         return resolve(envName: "CLAWDMETER_USE_CODEX_ADAPTER",
                        userDefaultsKey: "com.clawdmeter.featureFlags.useCodexAdapter",
-                       default: false)
+                       default: true)
     }
 
     /// F1c-wire sibling for OpenCode. When ON, `OpencodeSSEAdapter` (chat)
@@ -84,13 +93,16 @@ public enum FeatureFlags {
     /// `OpenCodeAdapter.translate(...)` → canonical events. Stateless
     /// adapter, so the bridge is line-level not file-level.
     ///
-    /// Parity contract enforced by `F1cWireParityTests` +
-    /// `F1cWireChatParityTests`. Default OFF; flipped in F1-finalize.
+    /// Parity contract enforced by `F1cParityTests` +
+    /// `F1cWireChatParityTests`. **Default: ON.** Flipped in F1-finalize
+    /// after all 5 wires merged (#152, #165, #164, #171, #169). The
+    /// env/UserDefaults override paths remain live as a rollback escape
+    /// hatch.
     public static var useOpenCodeAdapter: Bool {
         if let override = useOpenCodeAdapterOverride { return override }
         return resolve(envName: "CLAWDMETER_USE_OPENCODE_ADAPTER",
                        userDefaultsKey: "com.clawdmeter.featureFlags.useOpenCodeAdapter",
-                       default: false)
+                       default: true)
     }
 
     /// F1e-wire sibling for Antigravity. When ON, the Antigravity branch
@@ -117,18 +129,20 @@ public enum FeatureFlags {
     /// suite enforces this for every fixture shape the legacy parser
     /// tolerates.
     ///
-    /// **Default: OFF.** Flip to ON in F1-finalize after all 5 provider
-    /// wires (F1a-wire through F1e-wire) have shipped and parity has
-    /// held on real session data.
+    /// **Default: ON.** Flipped in F1-finalize after all 5 provider
+    /// wires (F1a-wire through F1e-wire) shipped (#152, #165, #164,
+    /// #171, #169) and parity held on real session data. The
+    /// env/UserDefaults override paths remain live as a rollback escape
+    /// hatch.
     ///
-    /// **Override (env):** `CLAWDMETER_USE_ANTIGRAVITY_ADAPTER=1`
+    /// **Override (env):** `CLAWDMETER_USE_ANTIGRAVITY_ADAPTER=0|1`
     /// **Override (test):** set `useAntigravityAdapterOverride` (auto-cleared
     /// in tests' `tearDown`).
     public static var useAntigravityAdapter: Bool {
         if let override = useAntigravityAdapterOverride { return override }
         return resolve(envName: "CLAWDMETER_USE_ANTIGRAVITY_ADAPTER",
                        userDefaultsKey: "com.clawdmeter.featureFlags.useAntigravityAdapter",
-                       default: false)
+                       default: true)
     }
 
     /// F1d-wire sibling for Cursor. When ON, the Cursor analytics
@@ -153,18 +167,20 @@ public enum FeatureFlags {
     /// shape we ship (full period, no organizationID, status transitions,
     /// percent/reset edge cases).
     ///
-    /// **Default: OFF.** Flip to ON in F1-finalize after all 5 provider
-    /// wires (F1a-wire through F1e-wire) have shipped and parity has
-    /// held on real session data.
+    /// **Default: ON.** Flipped in F1-finalize after all 5 provider
+    /// wires (F1a-wire through F1e-wire) shipped (#152, #165, #164,
+    /// #171, #169) and parity held on real session data. The
+    /// env/UserDefaults override paths remain live as a rollback escape
+    /// hatch.
     ///
-    /// **Override (env):** `CLAWDMETER_USE_CURSOR_ADAPTER=1`
+    /// **Override (env):** `CLAWDMETER_USE_CURSOR_ADAPTER=0|1`
     /// **Override (test):** set `useCursorAdapterOverride` (auto-cleared
     /// in tests' `tearDown`).
     public static var useCursorAdapter: Bool {
         if let override = useCursorAdapterOverride { return override }
         return resolve(envName: "CLAWDMETER_USE_CURSOR_ADAPTER",
                        userDefaultsKey: "com.clawdmeter.featureFlags.useCursorAdapter",
-                       default: false)
+                       default: true)
     }
 
     // MARK: - Orchestration event store (F2 / F2-wire)

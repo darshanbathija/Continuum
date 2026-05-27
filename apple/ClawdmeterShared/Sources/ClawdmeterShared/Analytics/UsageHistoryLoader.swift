@@ -573,12 +573,15 @@ public actor UsageHistoryLoader {
         var unpriced: [String: TokenTotals] = [:]
 
         let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
-        // F1a-wire (strangler-fig per D23): when the feature flag is on,
-        // route the raw JSONL line through ClaudeAdapter → canonical
-        // ProviderRuntimeEvent → UsageRecord. When off, use the legacy
-        // ClaudeUsageParser directly. Both paths must produce identical
-        // UsageRecord arrays for the same input — enforced by
-        // F1aWireParityTests.
+        // F1a-wire shipped in #152 and is now the default-ON path: every
+        // raw JSONL line flows through `ClaudeAdapter` (via the bridge)
+        // → canonical `ProviderRuntimeEvent` → `UsageRecord`. The
+        // `FeatureFlags.useClaudeAdapter` env/UserDefaults override
+        // remains live as a rollback escape hatch — flip the env to
+        // `CLAWDMETER_USE_CLAUDE_ADAPTER=0` and the legacy
+        // `ClaudeUsageParser` path lights back up. Parity is enforced by
+        // `F1aParityTests`; the legacy parser stays in place precisely
+        // so that suite + the rollback path keep working.
         let useAdapter = FeatureFlags.useClaudeAdapter
         for rawLine in lines {
             let lineData = Data(rawLine)
@@ -608,18 +611,19 @@ public actor UsageHistoryLoader {
     }
 
     private nonisolated static func parseCodexFile(at url: URL) throws -> PerFileResult {
-        // F1b-wire (strangler-fig per D23): when the feature flag is on,
-        // route the file through CodexAdapter → canonical
-        // ProviderRuntimeEvent → UsageRecord. When off, use the legacy
-        // CodexUsageParser directly. Both paths must produce identical
-        // UsageRecord arrays for the same input — enforced by
-        // F1bParityTests.
+        // F1b-wire shipped in #165 and is now the default-ON path: every
+        // Codex JSONL file flows through `CodexAdapter` (via the bridge)
+        // → canonical `ProviderRuntimeEvent` → `UsageRecord`. The
+        // `FeatureFlags.useCodexAdapter` env/UserDefaults override
+        // remains live as a rollback escape hatch — flip the env to
+        // `CLAWDMETER_USE_CODEX_ADAPTER=0` and the legacy
+        // `CodexUsageParser` path lights back up.
         //
         // CodexAdapter is stateful (cumulative→delta math + running
         // model/cwd), so the bridge constructs one adapter per file and
         // walks lines in order. The legacy parser owns its own internal
         // state machine of the same shape — the bridge is a behavioral
-        // identity over it.
+        // identity over it. Parity enforced by `F1bParityTests`.
         let records: [UsageRecord] = FeatureFlags.useCodexAdapter
             ? try CodexAdapterUsageBridge.parseFile(at: url)
             : try CodexUsageParser.parse(file: url)
@@ -659,15 +663,17 @@ public actor UsageHistoryLoader {
         // The file itself is encrypted at rest (see ConversationProtoParser);
         // tokens are estimated from the matching brain dir's metadata.
         //
-        // F1e-wire (strangler-fig per D23): when the feature flag is on,
-        // route through the canonical adapter via
-        // `AntigravityAdapterUsageBridge` → `AntigravityAdapter` → canonical
-        // `ProviderRuntimeEvent` → `UsageRecord`. When off, use the
-        // legacy `AntigravityUsageParser` directly. Both paths MUST
-        // produce identical `[UsageRecord]` arrays — enforced by
-        // F1eParityTests. The bridge mirrors the existing PR #154 OS
-        // guard for the `.db` overload; watchOS / tvOS always falls back
-        // to the byte-estimator path regardless of the flag.
+        // F1e-wire shipped in #169 and is now the default-ON path: every
+        // Antigravity conversation flows through the canonical adapter
+        // via `AntigravityAdapterUsageBridge` → `AntigravityAdapter` →
+        // canonical `ProviderRuntimeEvent` → `UsageRecord`. The
+        // `FeatureFlags.useAntigravityAdapter` env/UserDefaults override
+        // remains live as a rollback escape hatch — flip the env to
+        // `CLAWDMETER_USE_ANTIGRAVITY_ADAPTER=0` and the legacy
+        // `AntigravityUsageParser` path lights back up. Parity enforced
+        // by `F1eParityTests`. The bridge mirrors the existing PR #154
+        // OS guard for the `.db` overload; watchOS / tvOS always falls
+        // back to the byte-estimator path regardless of the flag.
         let records: [UsageRecord]
         if FeatureFlags.useAntigravityAdapter {
             records = try AntigravityAdapterUsageBridge.parse(
@@ -760,11 +766,14 @@ public actor UsageHistoryLoader {
         // file skip/accept heuristic.
         if !result.dedupKeys.isDisjoint(with: dedup) {
             if let data = try? Data(contentsOf: URL(fileURLWithPath: result.path)) {
-                // F1a-wire (D23): mirror the strangler-fig flag check used
-                // in `parseClaudeFile` so the cross-file reparse path stays
-                // consistent with the per-file path. Without this, a parity
-                // test that exercises duplicate-dedupkey behavior would see
-                // legacy records on the reparse leg even with the flag on.
+                // F1-finalize: mirror the strangler-fig flag check used in
+                // `parseClaudeFile` so the cross-file reparse path stays
+                // consistent with the per-file path. With the default
+                // flipped to ON in F1-finalize, the canonical adapter
+                // path is the default; the env override
+                // (`CLAWDMETER_USE_CLAUDE_ADAPTER=0`) still threads
+                // through here so a rollback reparses lines via the
+                // legacy parser too — keeping both legs identical.
                 let useAdapter = FeatureFlags.useClaudeAdapter
                 for rawLine in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
                     let lineData = Data(rawLine)

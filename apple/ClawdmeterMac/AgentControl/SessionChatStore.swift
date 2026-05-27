@@ -1487,27 +1487,23 @@ struct ParsedLine: Sendable {
             return decodeGeminiLine(json: json, at: at)
         }
 
-        // F1a-wire (strangler-fig per D23): when the feature flag is on,
-        // route Claude user/assistant lines through `ClaudeAdapter` so the
-        // canonical `ProviderRuntimeEvent` pipeline owns text + usage +
-        // model fields. Per-block UI enrichment (EditStats / EditDiff /
-        // BashResult / AskUserQuestion) stays in the legacy block-walk
-        // path for this PR — future wires migrate those fields into the
-        // canonical extension envelope.
+        // F1a-wire shipped in #152 and F1b-wire shipped in #165. Both are
+        // now default-ON per F1-finalize: every Claude user/assistant
+        // line and every Codex `response_item` line routes through the
+        // canonical `ProviderRuntimeEvent` pipeline. Per-block UI
+        // enrichment (EditStats / EditDiff / BashResult /
+        // AskUserQuestion / reasoning / web_search) still happens in the
+        // legacy block-walk path — that's the back-compat shim each wire
+        // PR documented (the canonical extension envelope doesn't carry
+        // those fields yet; future PRs migrate them).
         //
-        // Parity contract (enforced by F1aWireParityTests): for every
-        // fixture line, `from(json:)` returns the same `ParsedLine?`
-        // (same messages, same delta tokens, same model) regardless of
-        // the flag state.
+        // The `useClaudeAdapter` / `useCodexAdapter` env/UserDefaults
+        // overrides remain live as rollback escape hatches; flip the
+        // env to `=0` and the legacy block-walk decoders light back up.
         //
-        // F1b-wire (strangler-fig per D23): same shape for the Codex
-        // `response_item` route. When `useCodexAdapter` is on, the line
-        // is routed through `CodexAdapter.translate(...)` so the
-        // canonical event pipeline lights up, then the legacy
-        // `CodexJSONLParser.decodeResponseItem` block-walker builds
-        // `[ChatMessage]` for per-tool UI enrichment (EditDiff /
-        // BashResult / web_search etc.). Parity contract: every fixture
-        // line returns the same `ParsedLine?` regardless of flag.
+        // Parity contracts (enforced by `F1aWireChatParityTests` /
+        // `F1bWireChatParityTests`): every fixture line returns the
+        // same `ParsedLine?` regardless of flag state.
         let useClaude = FeatureFlags.useClaudeAdapter
         let useCodex = FeatureFlags.useCodexAdapter
         switch type {
@@ -1542,9 +1538,22 @@ struct ParsedLine: Sendable {
     /// is exercised end-to-end so the F1a code path lights up in CI;
     /// once future PRs migrate UI fields into ExtensionField, the legacy
     /// block-walk can shrink toward direct event consumption.
+    ///
+    /// Legacy-compat shim (F1-finalize): the legacy `decodeUser` ignores
+    /// `message.role` and reads `message.content` directly. The adapter
+    /// switches on role and falls through to `.unknown` when role is
+    /// missing — which would silently drop user-text lines whose shape
+    /// is "type:user + message.content" without a `role` field (older
+    /// JSONL fixtures and the test corpus in `SessionSidebarGrouperTests`
+    /// both rely on this shape). Synthesize `role: "user"` when the
+    /// outer `type == "user"` so the adapter takes the user branch.
+    /// Same pattern as `ClaudeAdapterUsageBridge.normalizeForLegacyCompat`
+    /// for the analytics side; the shim lives at the chat-pipeline
+    /// boundary so the adapter's role-driven contract stays unchanged.
     private static func decodeUserViaAdapter(json: [String: Any], at: Date) -> ParsedLine? {
+        let normalized = normalizeUserLineForLegacyCompat(json)
         let events = ClaudeAdapter.translate(
-            line: json,
+            line: normalized,
             sessionId: "",
             sequenceStart: 0,
             providerInstanceId: nil,
@@ -1558,6 +1567,25 @@ struct ParsedLine: Sendable {
             return false
         }) else { return nil }
         return decodeUser(json: json, at: at)
+    }
+
+    /// Insert a synthetic `role: "user"` into the message envelope when
+    /// the outer `type == "user"` but `message.role` is missing. The
+    /// legacy parser ignores role entirely; the adapter requires it.
+    /// Mirrors the analytics-side
+    /// `ClaudeAdapterUsageBridge.normalizeForLegacyCompat` shim — same
+    /// strangler-fig pattern, different surface.
+    ///
+    /// Returns the input unchanged when role is already present or when
+    /// the message dict is missing entirely.
+    private static func normalizeUserLineForLegacyCompat(_ json: [String: Any]) -> [String: Any] {
+        guard var message = json["message"] as? [String: Any],
+              (message["role"] as? String) == nil
+        else { return json }
+        message["role"] = "user"
+        var copy = json
+        copy["message"] = message
+        return copy
     }
 
     /// Adapter-routed equivalent of `decodeAssistant`. Same shape as
