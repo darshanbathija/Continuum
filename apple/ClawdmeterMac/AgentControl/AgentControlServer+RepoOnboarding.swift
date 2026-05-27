@@ -211,22 +211,20 @@ extension AgentControlServer {
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
 
-        // Two-step wake strategy. Both are best-effort; we report success
-        // if either fires. iOS surfaces "Wake signal sent" in the banner
-        // — that's all we promise. A locked screen still requires user
-        // interaction; we don't pretend otherwise.
-        var triedAny = false
-        var lastError: String? = nil
+        // Two-step wake strategy. Track `sentWake` separately from "we
+        // tried a binary" — we report success ONLY when at least one
+        // wake command actually exited 0. Reporting success on "binary
+        // exists but exited non-zero" would let iOS show "Wake signal
+        // sent" when nothing was sent.
+        var sentWake = false
+        var attempts: [String] = []
+        var errors: [String] = []
 
         // 1. Tailscale wake — wakes a tailnet peer via Wake-on-LAN if
-        //    the user has it set up. The hostname is the local Mac's
-        //    Tailscale name. `tailscale wake <self>` is a no-op when
-        //    we're already awake (this endpoint runs in-process, so
-        //    "fully asleep" can't even reach us — but a LAN-side wake
-        //    signal still helps if a sibling Mac on the tailnet is the
-        //    one actually asleep).
+        //    the user has it set up. `tailscale status --self --json`
+        //    must succeed AND the wake command must exit 0 to count.
         if let tailscale = ShellRunner.locateBinary("tailscale") {
-            triedAny = true
+            attempts.append("tailscale")
             if let hostname = await currentTailscaleHostname() {
                 do {
                     let result = try await ShellRunner.shared.run(
@@ -234,44 +232,64 @@ extension AgentControlServer {
                         arguments: ["wake", hostname],
                         timeout: 5
                     )
-                    if result.exitStatus != 0 {
-                        lastError = "tailscale wake exit \(result.exitStatus): \(result.stderrString.prefix(200))"
+                    if result.exitStatus == 0 {
+                        sentWake = true
+                    } else {
+                        errors.append("tailscale wake exit \(result.exitStatus): \(result.stderrString.prefix(200))")
                     }
                 } catch {
-                    lastError = "tailscale wake failed: \(error.localizedDescription)"
+                    errors.append("tailscale wake failed: \(error.localizedDescription)")
                 }
+            } else {
+                errors.append("tailscale status --self --json unavailable")
             }
         }
 
         // 2. Local caffeinate — nudges the display awake on a screen-
-        //    dimmed-but-still-running Mac. Doesn't unlock a locked
-        //    screen, but does bring the display back so NSOpenPanel
-        //    is visible after the user types their password.
+        //    dimmed-but-still-running Mac. Counts as a wake only if
+        //    the binary actually exits 0.
         if let caffeinate = ShellRunner.locateBinary("caffeinate") {
-            triedAny = true
+            attempts.append("caffeinate")
             do {
                 let result = try await ShellRunner.shared.run(
                     executable: caffeinate,
                     arguments: ["-u", "-t", "5"],
                     timeout: 10
                 )
-                if result.exitStatus != 0 {
-                    lastError = "caffeinate exit \(result.exitStatus): \(result.stderrString.prefix(200))"
+                if result.exitStatus == 0 {
+                    sentWake = true
+                } else {
+                    errors.append("caffeinate exit \(result.exitStatus): \(result.stderrString.prefix(200))")
                 }
             } catch {
-                lastError = "caffeinate failed: \(error.localizedDescription)"
+                errors.append("caffeinate failed: \(error.localizedDescription)")
             }
         }
 
-        if !triedAny {
+        if attempts.isEmpty {
             sendResponse(
                 serviceUnavailable(reason: "neither tailscale nor caffeinate is installed"),
                 on: connection
             )
             return
         }
+        if !sentWake {
+            // Every wake attempt failed. Return 503 with the collected
+            // errors so iOS doesn't claim "wake signal sent" when no
+            // signal was sent.
+            let combined = errors.joined(separator: "; ")
+            sendResponse(
+                serviceUnavailable(reason: "all wake attempts failed: \(combined)"),
+                on: connection
+            )
+            return
+        }
         await sendCommandResponse(
-            body: ["ok": true, "lastError": lastError ?? "none"],
+            body: [
+                "ok": true,
+                "attempted": attempts.joined(separator: ","),
+                "errors": errors.joined(separator: "; "),
+            ],
             key: req.idempotencyKey,
             kind: MobileCommandKind.wakeMac,
             sessionId: nil as UUID?,
@@ -477,8 +495,11 @@ extension AgentControlServer {
     }
 
     private func defaultParentOrFallback() -> String {
+        // Real home, not NSHomeDirectory() — sandboxed builds resolve the
+        // latter to the container, which would then mismatch PathAllowList's
+        // real-home allow-list and the daemon would reject its own default.
         UserDefaults.standard.string(forKey: PathAllowList.defaultParentKey)
-            ?? (NSHomeDirectory() as NSString).appendingPathComponent("code")
+            ?? (ClawdmeterRealHome.path() as NSString).appendingPathComponent("code")
     }
 
     /// NSOpenPanel-as-async with a hard timeout to prevent zombie modals

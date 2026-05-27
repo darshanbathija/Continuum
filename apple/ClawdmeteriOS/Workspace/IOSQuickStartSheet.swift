@@ -14,9 +14,11 @@ struct IOSQuickStartSheet: View {
     @State private var parent: String = ""
     @State private var isCreating: Bool = false
     @State private var errorMessage: String? = nil
-    /// Stable idempotency key for the sheet's lifetime — see
-    /// `IOSCloneRepoSheet` for the rationale.
-    @State private var idempotencyKey: String = UUID().uuidString
+    /// Persisted idempotency key for the Quick Start flow. Survives app
+    /// kill via `RepoOnboardingIdempotencyStore` so a retry after the
+    /// daemon completed `mkdir + git init` replays the cached response
+    /// instead of failing with "folder already exists".
+    @State private var idempotencyKey: String = RepoOnboardingIdempotencyStore.currentKey(for: .quickStart)
 
     var body: some View {
         NavigationStack {
@@ -90,6 +92,7 @@ struct IOSQuickStartSheet: View {
             return
         }
         if let record = result.record {
+            RepoOnboardingIdempotencyStore.clear(.quickStart)
             onSuccess(record)
             dismiss()
             return
@@ -97,9 +100,11 @@ struct IOSQuickStartSheet: View {
         if let err = result.error {
             switch err {
             case .alreadyRegistered:
+                RepoOnboardingIdempotencyStore.clear(.quickStart)
                 _ = await client.refreshWorkspaces()
                 dismiss()
             default:
+                RepoOnboardingIdempotencyStore.clear(.quickStart)
                 errorMessage = iosFriendlyMessage(for: err)
             }
         } else {

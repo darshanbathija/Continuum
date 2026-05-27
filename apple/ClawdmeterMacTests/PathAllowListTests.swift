@@ -177,6 +177,43 @@ final class PathAllowListTests: XCTestCase {
         }
     }
 
+    /// R2-P0: Walking up >256 nonexistent components used to give up and
+    /// return the standardized (NOT symlink-resolved) path, so an
+    /// attacker with a symlink near the allow-list root could dodge
+    /// resolution by submitting a very deep path. Fix: cap-fail-closed —
+    /// any submission deeper than the cap rejects rather than slipping
+    /// past unresolved.
+    func test_validate_rejectsExtremelyDeepPath() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("plal-deep-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let allowedRoot = tempDir.appendingPathComponent("allowed")
+        let outsideTarget = tempDir.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: allowedRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideTarget, withIntermediateDirectories: true)
+        let symlink = allowedRoot.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: outsideTarget)
+
+        defaults.set(allowedRoot.path, forKey: PathAllowList.defaultParentKey)
+
+        // Build a path with 300 nonexistent trailing components — exceeds
+        // both the explicit 256-component validate() pre-check and the
+        // symlink resolver's hop cap. The string still prefix-matches
+        // the allowed root via the symlink, so the OLD code would have
+        // accepted it. The new code must reject.
+        let deep = (0..<300).map { _ in "a" }.joined(separator: "/")
+        let target = symlink.appendingPathComponent(deep).path
+        let result = PathAllowList.validate(target, userDefaults: defaults)
+        switch result {
+        case .failure(.pathNotAllowed):
+            break // expected
+        default:
+            XCTFail("Pathologically deep submission must reject; got \(result)")
+        }
+    }
+
     // MARK: - P0b: real-home expansion (sandbox-aware)
 
     /// In sandboxed Release builds, `NSHomeDirectory()` returns the

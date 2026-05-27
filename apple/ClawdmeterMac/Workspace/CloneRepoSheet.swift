@@ -219,6 +219,8 @@ struct CloneRepoSheet: View {
     }
 
     private func defaultParentFallback() -> String {
-        (NSHomeDirectory() as NSString).appendingPathComponent("code")
+        // Real home — sandboxed builds otherwise default into the
+        // container, which clashes with PathAllowList's real-home roots.
+        (ClawdmeterRealHome.path() as NSString).appendingPathComponent("code")
     }
 }

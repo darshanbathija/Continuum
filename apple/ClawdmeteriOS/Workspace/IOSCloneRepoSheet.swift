@@ -15,11 +15,12 @@ struct IOSCloneRepoSheet: View {
     @State private var isCloning: Bool = false
     @State private var errorMessage: String? = nil
     @State private var showAuthBanner: Bool = false
-    /// Stable idempotency key for this sheet's lifetime. Generated once at
-    /// mount; reused on every Clone tap so a lost response retried with
-    /// the same key replays the cached server result instead of
-    /// re-executing the clone (which would 409 with "destination exists").
-    @State private var idempotencyKey: String = UUID().uuidString
+    /// Persisted idempotency key for the Clone flow. Survives app kill
+    /// via `RepoOnboardingIdempotencyStore` — if iOS dies between the
+    /// daemon's clone completion and the response being observed, the
+    /// retried tap reuses the same key and replays the daemon's cached
+    /// response instead of re-executing the clone.
+    @State private var idempotencyKey: String = RepoOnboardingIdempotencyStore.currentKey(for: .clone)
 
     var body: some View {
         NavigationStack {
@@ -105,6 +106,9 @@ struct IOSCloneRepoSheet: View {
             return
         }
         if let record = result.record {
+            // Successful clone — clear the persisted key so the next
+            // Clone sheet starts fresh.
+            RepoOnboardingIdempotencyStore.clear(.clone)
             onSuccess(record)
             dismiss()
             return
@@ -112,12 +116,22 @@ struct IOSCloneRepoSheet: View {
         if let err = result.error {
             switch err {
             case .ghAuthFailed:
+                // Auth-failed is retryable after the user runs `gh auth
+                // login`; keep the key so the immediate retry replays
+                // the cached failure. The daemon's LRU TTL will retire
+                // the slot before the user fixes auth and retries.
                 showAuthBanner = true
             case .alreadyRegistered:
-                // Refresh + close — workspace is now in client.workspaces.
+                // Final outcome — clear the persisted key. The workspace
+                // is already in client.workspaces via the daemon's
+                // onWorkspaceRegistered callback.
+                RepoOnboardingIdempotencyStore.clear(.clone)
                 _ = await client.refreshWorkspaces()
                 dismiss()
             default:
+                // Final error — clear the persisted key so retry with
+                // edited inputs gets a fresh slot.
+                RepoOnboardingIdempotencyStore.clear(.clone)
                 errorMessage = iosFriendlyMessage(for: err)
             }
         } else {

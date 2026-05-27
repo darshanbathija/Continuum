@@ -78,9 +78,24 @@ public enum PathAllowList {
         _ path: String,
         userDefaults: UserDefaults = .standard
     ) -> Result<String, RepoOnboardingError> {
+        // Reject suspiciously deep paths up-front. A 1000-component path
+        // is not a real Quick Start parent. This bound complements the
+        // symlink resolver's own cap so attackers can't dodge resolution
+        // by submitting a path deeper than the resolver walks.
+        let componentDepth = path.split(separator: "/").count
+        if componentDepth > 256 {
+            return .failure(.pathNotAllowed(reason: "path too deep (\(componentDepth) components)"))
+        }
         let canonical = canonicalize(path)
         if canonical.isEmpty {
             return .failure(.pathNotAllowed(reason: "empty path"))
+        }
+        // If canonicalize couldn't fully resolve symlinks (hit its hop cap),
+        // fail closed. Returning the unresolved path would let an attacker
+        // submit `<allowed>/link/a/a/.../a` (very deep) and bypass the
+        // allow-list because the resolver gave up before reaching `link`.
+        if canonical.hasPrefix(unresolvedSentinel) {
+            return .failure(.pathNotAllowed(reason: "could not resolve symlinks (path too complex)"))
         }
         // Deny-list check is unconditional — even if a denied subpath is
         // also under an allowed root, deny wins.
@@ -97,6 +112,12 @@ public enum PathAllowList {
         }
         return .failure(.pathNotAllowed(reason: "path is not under any allow-listed root"))
     }
+
+    /// Returned from `resolveSymlinksOnExistingPrefix` when the hop cap is
+    /// exhausted before any ancestor exists. `validate()` checks this
+    /// prefix and fail-closes rather than letting an unresolved path
+    /// slip through the allow-list check.
+    private static let unresolvedSentinel = "\0unresolved-symlink-chain\0"
 
     // MARK: - Private
 
@@ -156,16 +177,25 @@ public enum PathAllowList {
     /// the remaining non-existing components. This is the only sound way
     /// to defend against symlink-bypass for paths that don't exist yet
     /// (Quick Start case).
+    ///
+    /// **Fail-closed cap.** If walking up `safety` iterations finds no
+    /// existing ancestor, return the sentinel string `unresolvedSentinel`
+    /// so `validate()` rejects the path. Returning the unresolved path
+    /// would let an attacker submit `<allowed>/link/a/a/.../a` deeper
+    /// than the cap and dodge symlink resolution. Real Quick Start
+    /// paths have <10 components from the user's home; 256 is a generous
+    /// safety bound that still rejects pathological inputs.
     private static func resolveSymlinksOnExistingPrefix(_ path: String) -> String {
         let fm = FileManager.default
         // Fast path: the full path exists. realpath() it directly.
         if fm.fileExists(atPath: path) {
             return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
         }
-        // Walk up. Cap at 64 iterations to bound pathological inputs.
+        // Walk up. 256 iterations covers every realistic path; deeper
+        // submissions are rejected fail-closed.
         var ancestor = (path as NSString).deletingLastPathComponent
         var trailing = [(path as NSString).lastPathComponent]
-        var safety = 64
+        var safety = 256
         while !ancestor.isEmpty && ancestor != "/" && safety > 0 {
             if fm.fileExists(atPath: ancestor) {
                 let resolvedAncestor = URL(fileURLWithPath: ancestor).resolvingSymlinksInPath().path
@@ -176,11 +206,13 @@ public enum PathAllowList {
             ancestor = (ancestor as NSString).deletingLastPathComponent
             safety -= 1
         }
-        // Nothing along the chain exists. Return the standardized path
-        // as-is — the operation will fail downstream when it tries to
-        // mkdir / write, and the validate() prefix check still uses the
-        // canonicalized form against the resolved roots.
-        return path
+        // Final fallback: check root itself (`/`). If even root doesn't
+        // resolve, we can't validate — fail closed via sentinel.
+        if ancestor == "/" && fm.fileExists(atPath: "/") {
+            let trailingPath = trailing.reversed().joined(separator: "/")
+            return "/" + trailingPath
+        }
+        return unresolvedSentinel + path
     }
 
     /// True if `path` equals `root` or lives under it. Uses path component
