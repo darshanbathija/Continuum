@@ -167,12 +167,12 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertEqual(builderCalls, 1, "builder must not re-run on identical keys")
         XCTAssertEqual(cache.hitCount, 5)
 
-        // Sanity-check the projection covers the full status-grouping input.
-        // Status grouping keeps archived rows so the Archived bucket can
-        // render; non-status groupings apply the archive guard.
+        // Sanity-check the projection covers the normal first-party input.
+        // Archived rows are now visible only through the explicit Archive
+        // status filter, never through default Status grouping.
         XCTAssertEqual(
             first.visibleSessions.count,
-            sessions.count
+            sessions.filter { $0.archivedAt == nil }.count
         )
     }
 
@@ -389,6 +389,317 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertEqual(cache.hitCount, 2)
     }
 
+    // MARK: - Active Code sidebar projection
+
+    func test_priorityWorkspaceSectionsOrderByRecencyAndPinsDoNotOverride() {
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let repoKey = "/Users/dev/clawdmeter"
+        let oldA = Self.makeSession(
+            index: 1,
+            repoKey: repoKey,
+            workspacePath: "\(repoKey)/.claude/worktrees/a",
+            lastEventAt: now.addingTimeInterval(-20)
+        )
+        let newA = Self.makeSession(
+            index: 2,
+            repoKey: repoKey,
+            workspacePath: "\(repoKey)/.claude/worktrees/a",
+            lastEventAt: now.addingTimeInterval(-10)
+        )
+        let newestB = Self.makeSession(
+            index: 3,
+            repoKey: repoKey,
+            workspacePath: "\(repoKey)/.claude/worktrees/b",
+            lastEventAt: now
+        )
+        let oldC = Self.makeSession(
+            index: 4,
+            repoKey: repoKey,
+            workspacePath: "\(repoKey)/.claude/worktrees/c",
+            lastEventAt: now.addingTimeInterval(-30)
+        )
+
+        let projection = Self.buildProjection(
+            sessions: [oldA, newA, newestB, oldC],
+            repos: [Self.repo(key: repoKey)],
+            pinnedSessionIds: [oldC.id, oldA.id],
+            now: now
+        )
+
+        XCTAssertEqual(
+            projection.workspaceSections.map { ($0.workspacePath as NSString).lastPathComponent },
+            ["b", "a", "c"],
+            "Pinned sessions may show indicators/actions, but default workspace ordering must stay recency-based."
+        )
+        let aSection = projection.workspaceSections.first {
+            ($0.workspacePath as NSString).lastPathComponent == "a"
+        }
+        XCTAssertEqual(aSection?.sessions.map(\.id), [newA.id, oldA.id])
+        XCTAssertEqual(projection.visibleSessions.map(\.id), [newestB.id, newA.id, oldA.id, oldC.id])
+    }
+
+    func test_priorityProjectionHidesArchivedInNormalStatusAndShowsOnlyArchiveFilter() {
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let repoKey = "/Users/dev/clawdmeter"
+        let active = Self.makeSession(
+            index: 10,
+            repoKey: repoKey,
+            workspacePath: "\(repoKey)/.claude/worktrees/active",
+            lastEventAt: now
+        )
+        let archived = Self.makeSession(
+            index: 11,
+            repoKey: repoKey,
+            workspacePath: "\(repoKey)/.claude/worktrees/archive",
+            lastEventAt: now.addingTimeInterval(10),
+            archivedAt: now
+        )
+
+        let normal = Self.buildProjection(
+            sessions: [active, archived],
+            repos: [Self.repo(key: repoKey)],
+            statusFilter: .all,
+            grouping: .status,
+            now: now
+        )
+        XCTAssertEqual(normal.workspaceSections.flatMap(\.sessions).map(\.id), [active.id])
+        XCTAssertFalse((normal.groups ?? []).flatMap(\.sessions).contains { $0.id == archived.id })
+
+        let archiveOnly = Self.buildProjection(
+            sessions: [active, archived],
+            repos: [Self.repo(key: repoKey)],
+            statusFilter: .archived,
+            grouping: .status,
+            now: now
+        )
+        XCTAssertEqual(archiveOnly.workspaceSections.flatMap(\.sessions).map(\.id), [archived.id])
+        XCTAssertEqual((archiveOnly.groups ?? []).flatMap(\.sessions).map(\.id), [archived.id])
+        XCTAssertTrue(archiveOnly.activeExternalSections.isEmpty)
+        XCTAssertTrue(archiveOnly.historySections.isEmpty)
+    }
+
+    func test_externalSessionsUseTenMinuteActiveCutoffBoundaries() {
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let repoKey = "/Users/dev/clawdmeter"
+        let activeAt959 = Self.recent(path: "/tmp/active-959.jsonl", lastModified: now.addingTimeInterval(-599))
+        let activeAt1000 = Self.recent(path: "/tmp/active-1000.jsonl", lastModified: now.addingTimeInterval(-600))
+        let historyAt1001 = Self.recent(path: "/tmp/history-1001.jsonl", lastModified: now.addingTimeInterval(-601))
+
+        let projection = Self.buildProjection(
+            sessions: [],
+            repos: [Self.repo(key: repoKey, recents: [historyAt1001, activeAt1000, activeAt959])],
+            now: now
+        )
+
+        XCTAssertEqual(
+            projection.activeExternalSections.flatMap(\.recents).map(\.path),
+            [activeAt959.path, activeAt1000.path]
+        )
+        XCTAssertEqual(
+            projection.historySections.flatMap { $0.dateGroups.flatMap(\.recents) }.map(\.path),
+            [historyAt1001.path]
+        )
+    }
+
+    func test_projectionCacheInvalidatesWhenExternalRecentCrossesCutoffWithinSameMinute() {
+        let sessions: [AgentSession] = []
+        let firstNow = Date(timeIntervalSince1970: 1_900_000_000)
+        let repos = [
+            Self.repo(
+                key: "/Users/dev/clawdmeter",
+                recents: [Self.recent(path: "/tmp/external.jsonl", lastModified: firstNow.addingTimeInterval(-599))]
+            )
+        ]
+        let cache = SingleSlotProjectionCache<SidebarProjectionKey, SidebarProjection>()
+        var builderCalls = 0
+
+        func body(now: Date) -> SidebarProjection {
+            let key = makeKey(
+                sessions: sessions,
+                searchFiltered: sessions,
+                repos: repos,
+                query: "",
+                grouping: .repo,
+                now: now
+            )
+            return cache.value(for: key) {
+                builderCalls += 1
+                return Self.buildProjection(sessions: sessions, repos: repos, now: now)
+            }
+        }
+
+        _ = body(now: firstNow)
+        _ = body(now: firstNow)
+        _ = body(now: firstNow.addingTimeInterval(2))
+
+        XCTAssertEqual(builderCalls, 2)
+        XCTAssertEqual(cache.hitCount, 1)
+        XCTAssertEqual(cache.missCount, 2)
+    }
+
+    func test_externalRecentNeverAppearsInBothActiveAndHistory() {
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let repoKey = "/Users/dev/clawdmeter"
+        let recents = [
+            Self.recent(path: "/tmp/active-a.jsonl", lastModified: now.addingTimeInterval(-120)),
+            Self.recent(path: "/tmp/active-b.jsonl", lastModified: now.addingTimeInterval(-600)),
+            Self.recent(path: "/tmp/history-a.jsonl", lastModified: now.addingTimeInterval(-601)),
+            Self.recent(path: "/tmp/history-b.jsonl", lastModified: now.addingTimeInterval(-3_600)),
+        ]
+
+        let projection = Self.buildProjection(
+            sessions: [],
+            repos: [Self.repo(key: repoKey, recents: recents)],
+            now: now
+        )
+        let active = Set(projection.activeExternalSections.flatMap(\.recents).map(\.path))
+        let history = Set(projection.historySections.flatMap { $0.dateGroups.flatMap(\.recents) }.map(\.path))
+
+        XCTAssertTrue(active.isDisjoint(with: history))
+        XCTAssertEqual(active.union(history), Set(recents.map(\.path)))
+    }
+
+    func test_nonRepoGroupingsDoNotLeakOldRecentsIntoActiveSections() {
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let repoKey = "/Users/dev/clawdmeter"
+        let oldRecent = Self.recent(path: "/tmp/old-external.jsonl", lastModified: now.addingTimeInterval(-3_600))
+
+        for grouping in [SessionGrouping.date, .agent, .none] {
+            let projection = Self.buildProjection(
+                sessions: [],
+                repos: [Self.repo(key: repoKey, recents: [oldRecent])],
+                grouping: grouping,
+                now: now
+            )
+
+            XCTAssertTrue(projection.activeExternalSections.isEmpty)
+            XCTAssertEqual(
+                projection.historySections.flatMap { $0.dateGroups.flatMap(\.recents) }.map(\.path),
+                [oldRecent.path]
+            )
+            XCTAssertTrue((projection.groups ?? []).allSatisfy { $0.recents.isEmpty })
+        }
+    }
+
+    func test_ownedJSONLPathsAreExcludedFromExternalActiveAndHistory() {
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let repoKey = "/Users/dev/clawdmeter"
+        let ownedActive = Self.recent(path: "/tmp/owned-active.jsonl", lastModified: now.addingTimeInterval(-120))
+        let ownedHistory = Self.recent(path: "/tmp/owned-history.jsonl", lastModified: now.addingTimeInterval(-3_600))
+        let external = Self.recent(path: "/tmp/external.jsonl", lastModified: now.addingTimeInterval(-60))
+
+        let projection = Self.buildProjection(
+            sessions: [],
+            repos: [Self.repo(key: repoKey, recents: [ownedActive, ownedHistory, external])],
+            ownedJSONLPaths: [ownedActive.path, ownedHistory.path],
+            now: now
+        )
+
+        XCTAssertEqual(projection.activeExternalSections.flatMap(\.recents).map(\.path), [external.path])
+        XCTAssertTrue(projection.historySections.isEmpty)
+    }
+
+    @MainActor
+    func test_openingExternalJSONLReadOnlyDoesNotCreateFirstPartyWorkspaceRow() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SidebarProjectionExternal-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let registry = AgentSessionRegistry(storeURL: directory.appendingPathComponent("sessions.json"))
+        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
+        let model = SessionsModel(
+            repoIndex: RepoIndex(),
+            registry: registry,
+            supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
+        )
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let jsonlURL = directory.appendingPathComponent("read-only-external.jsonl")
+        try! Data().write(to: jsonlURL)
+        let recent = Self.recent(path: jsonlURL.path, lastModified: now)
+        let repoKey = "/Users/dev/clawdmeter"
+
+        model.openOutsideSession(
+            recent: recent,
+            repoKey: repoKey,
+            repoDisplayName: "Clawdmeter"
+        )
+
+        let opened = model.openSession
+        XCTAssertNotNil(opened)
+        XCTAssertTrue(model.openSessionIsReadOnly)
+        XCTAssertNil(opened?.repoKey)
+        XCTAssertEqual(opened?.effectiveCwd, repoKey)
+        XCTAssertNil(opened.flatMap { WorkspaceKey.of($0) })
+        if let opened {
+            XCTAssertNotNil(model.chatStore(for: opened))
+        }
+        XCTAssertFalse(model.knownOwnedJSONLPaths.contains((recent.path as NSString).standardizingPath))
+
+        let projection = Self.buildProjection(
+            sessions: opened.map { [$0] } ?? [],
+            repos: [Self.repo(key: repoKey, recents: [recent])],
+            ownedJSONLPaths: model.knownOwnedJSONLPaths,
+            now: now
+        )
+        XCTAssertTrue(projection.workspaceSections.isEmpty)
+        XCTAssertEqual(projection.activeExternalSections.flatMap(\.recents).map(\.path), [recent.path])
+    }
+
+    @MainActor
+    func test_filteredReposSearchMatchesExternalRecentMetadata() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SidebarProjectionExternalSearch-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let registry = AgentSessionRegistry(storeURL: directory.appendingPathComponent("sessions.json"))
+        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
+        let model = SessionsModel(
+            repoIndex: RepoIndex(),
+            registry: registry,
+            supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
+        )
+        let recent = Self.recent(
+            path: directory.appendingPathComponent("outside-session.jsonl").path,
+            lastModified: Date(timeIntervalSince1970: 1_900_000_000),
+            provider: .codex,
+            firstPrompt: "Repair active sidebar projection"
+        )
+        let repo = Self.repo(key: "/Users/dev/clawdmeter", displayName: "Clawdmeter", recents: [recent])
+        model.repos = [repo]
+        model.searchQuery = "sidebar projection"
+
+        XCTAssertEqual(model.filteredRepos.map(\.key), [repo.key])
+
+        model.searchQuery = "codex"
+        XCTAssertEqual(model.filteredRepos.map(\.key), [repo.key])
+    }
+
+    @MainActor
+    func test_prepareNewSessionPreselectsRepoWithoutTogglingExpansion() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SidebarProjectionPrepare-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let registry = AgentSessionRegistry(storeURL: directory.appendingPathComponent("sessions.json"))
+        let tmux = TmuxControlClient(configuration: .init(tmuxBinary: "/usr/bin/false"))
+        let model = SessionsModel(
+            repoIndex: RepoIndex(),
+            registry: registry,
+            supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
+        )
+        model.expandedRepoKeys = ["/Users/dev/existing"]
+
+        model.prepareNewSession(in: "/Users/dev/clawdmeter")
+
+        XCTAssertEqual(model.selectedRepoKey, "/Users/dev/clawdmeter")
+        XCTAssertTrue(model.showingNewSessionSheet)
+        XCTAssertEqual(model.expandedRepoKeys, ["/Users/dev/existing"])
+
+        model.prepareNewSession(in: nil)
+        XCTAssertNil(model.selectedRepoKey)
+        XCTAssertEqual(model.expandedRepoKeys, ["/Users/dev/existing"])
+    }
+
     // MARK: - Gate 4: timing budget (informational)
 
     /// XCTest `measure` block — first run records the baseline; subsequent
@@ -440,7 +751,10 @@ final class SidebarProjectionCacheTests: XCTestCase {
         repos: [AgentRepo],
         query: String,
         grouping: SessionGrouping,
-        pins: [UUID] = []
+        pins: [UUID] = [],
+        statusFilter: SessionStatusFilter = .all,
+        ownedJSONLPaths: Set<String> = [],
+        now: Date = Date(timeIntervalSince1970: 1_715_000_000)
     ) -> SidebarProjectionKey {
         SidebarProjectionKey(
             registryFingerprint: SidebarProjectionBuilder.registryFingerprint(sessions),
@@ -449,10 +763,100 @@ final class SidebarProjectionCacheTests: XCTestCase {
             searchFilteredFingerprint: SidebarProjectionBuilder.searchFilteredFingerprint(searchFiltered),
             query: query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             archiveFilter: false,
-            statusFilter: .all,
+            statusFilter: statusFilter,
             grouping: grouping,
             sorting: .recency,
-            pinnedSet: pins
+            pinnedSet: pins,
+            ownedJSONLPathsFingerprint: SidebarProjectionBuilder.ownedJSONLPathsFingerprint(ownedJSONLPaths),
+            externalActivityClockBucket: SidebarProjectionBuilder.externalActivityClockBucket(now: now, repos: repos)
+        )
+    }
+
+    private static func buildProjection(
+        sessions: [AgentSession],
+        repos: [AgentRepo],
+        statusFilter: SessionStatusFilter = .all,
+        grouping: SessionGrouping = .repo,
+        pinnedSessionIds: [UUID] = [],
+        ownedJSONLPaths: Set<String> = [],
+        now: Date
+    ) -> SidebarProjection {
+        SidebarProjectionBuilder.build(
+            searchFilteredSessions: sessions,
+            repos: repos,
+            searchQuery: "",
+            showArchived: false,
+            statusFilter: statusFilter,
+            grouping: grouping,
+            sorting: .recency,
+            pinnedSessionIds: pinnedSessionIds,
+            workbenchPRStateBySession: [:],
+            ownedJSONLPaths: ownedJSONLPaths,
+            now: now
+        )
+    }
+
+    private static func makeSession(
+        index: Int,
+        repoKey: String,
+        repoDisplayName: String? = nil,
+        workspacePath: String,
+        lastEventAt: Date,
+        status: AgentSessionStatus = .running,
+        archivedAt: Date? = nil,
+        kind: SessionKind = .code
+    ) -> AgentSession {
+        AgentSession(
+            id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012x", index))!,
+            repoKey: repoKey,
+            repoDisplayName: repoDisplayName ?? (repoKey as NSString).lastPathComponent,
+            agent: .claude,
+            model: nil,
+            goal: "Session \(index)",
+            worktreePath: workspacePath,
+            tmuxWindowId: nil,
+            tmuxPaneId: nil,
+            status: status,
+            planText: nil,
+            createdAt: lastEventAt.addingTimeInterval(-60),
+            lastEventAt: lastEventAt,
+            lastEventSeq: UInt64(index),
+            mode: .worktree,
+            archivedAt: archivedAt,
+            runtimeCwd: workspacePath,
+            kind: kind,
+            ownsWorktree: true
+        )
+    }
+
+    private static func repo(
+        key: String,
+        displayName: String? = nil,
+        liveSessionCount: Int = 0,
+        recents: [RecentSession] = []
+    ) -> AgentRepo {
+        AgentRepo(
+            key: key,
+            displayName: displayName ?? (key as NSString).lastPathComponent,
+            hasActiveSessions: liveSessionCount > 0,
+            liveSessionCount: liveSessionCount,
+            recentSessions: recents
+        )
+    }
+
+    private static func recent(
+        path: String,
+        lastModified: Date,
+        provider: AgentKind = .claude,
+        firstPrompt: String? = nil,
+        customName: String? = nil
+    ) -> RecentSession {
+        RecentSession(
+            path: path,
+            lastModified: lastModified,
+            provider: provider,
+            firstPrompt: firstPrompt,
+            customName: customName
         )
     }
 

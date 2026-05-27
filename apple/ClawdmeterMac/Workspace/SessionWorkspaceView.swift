@@ -533,6 +533,7 @@ private struct SidebarPane: View {
     @State private var renameJSONLInput: String = ""
     @State private var showingRenameJSONLAlert: Bool = false
     @State private var collapsedStatusGroupIDs: Set<String> = []
+    @State private var collapsedPrioritySectionIDs: Set<String> = []
     @State private var sidebarViewportHeight: CGFloat = 0
     @State private var sidebarContentHeight: CGFloat = 0
     @State private var hoveredSessionId: UUID?
@@ -541,6 +542,7 @@ private struct SidebarPane: View {
     @State private var colorTagInput: String = ""
     @State private var showingColorTagAlert = false
     @State private var comparisonPair: SessionComparisonPair?
+    @State private var externalActivityNow: Date = Date()
 
     /// A11: single-slot cache for the sidebar projection. Persists across
     /// body re-evals (reference type held via @State) so SwiftUI ticking
@@ -652,6 +654,10 @@ private struct SidebarPane: View {
         .sheet(item: $comparisonPair) { pair in
             SessionComparisonSheet(pair: pair, model: model)
         }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now in
+            guard model.repos.contains(where: { !$0.recentSessions.isEmpty }) else { return }
+            externalActivityNow = now
+        }
     }
 
     private var sidebarHeader: some View {
@@ -667,7 +673,7 @@ private struct SidebarPane: View {
                 ProgressView().controlSize(.mini)
             }
             filterMenu
-            Button(action: { model.showingNewSessionSheet = true }) {
+            Button(action: { model.prepareNewSession(in: nil) }) {
                 TahoeIcon("folderPlus", size: 12)
                     .foregroundStyle(t.fg3)
                     .frame(width: 24, height: 24)
@@ -874,19 +880,10 @@ private struct SidebarPane: View {
             let projection = currentProjection
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if grouping == .repo, let canonical = projection.canonicalRepos {
-                        // Legacy repo-grouped path — preserves the existing
-                        // expand/collapse + "Recent (last 30 days)" + empty-
-                        // state CTA chrome that's threaded through SessionsModel.
-                        ForEach(canonical.repos, id: \.key) { repo in
-                            repoSection(repo, keyAliases: canonical.keyAliases)
-                        }
-                    } else if let groups = projection.groups {
-                        // Date / Status / Agent / None — flatten across repos
-                        // and let the grouper bucket by the chosen field.
-                        ForEach(groups) { group in
-                            groupSection(group)
-                        }
+                    if projection.hasPriorityContent {
+                        prioritySidebarContent(projection)
+                    } else {
+                        filteredEmptyState
                     }
                 }
                 .padding(.vertical, 6)
@@ -953,6 +950,8 @@ private struct SidebarPane: View {
         let sessions = model.registry.sessions
         let searchFiltered = model.filter(sessions: sessions)
         let repos = model.filteredRepos
+        let now = externalActivityNow
+        let ownedJSONLPaths = model.knownOwnedJSONLPaths
         let prSnapshot = workbenchState.snapshot.prCache
         let workbenchPRStateBySession: [UUID: String?] = prSnapshot.reduce(into: [:]) { acc, kv in
             acc[kv.key] = kv.value.state
@@ -967,7 +966,9 @@ private struct SidebarPane: View {
             statusFilter: statusFilter,
             grouping: grouping,
             sorting: sorting,
-            pinnedSet: presentationStore.snapshot.pinnedSessionIds
+            pinnedSet: presentationStore.snapshot.pinnedSessionIds,
+            ownedJSONLPathsFingerprint: SidebarProjectionBuilder.ownedJSONLPathsFingerprint(ownedJSONLPaths),
+            externalActivityClockBucket: SidebarProjectionBuilder.externalActivityClockBucket(now: now, repos: repos)
         )
         return projectionCache.value(for: key) {
             SidebarProjectionBuilder.build(
@@ -979,7 +980,9 @@ private struct SidebarPane: View {
                 grouping: grouping,
                 sorting: sorting,
                 pinnedSessionIds: presentationStore.snapshot.pinnedSessionIds,
-                workbenchPRStateBySession: workbenchPRStateBySession
+                workbenchPRStateBySession: workbenchPRStateBySession,
+                ownedJSONLPaths: ownedJSONLPaths,
+                now: now
             )
         }
     }
@@ -990,6 +993,164 @@ private struct SidebarPane: View {
 
     private var reviewSessionIds: Set<UUID> {
         currentProjection.reviewSessionIds
+    }
+
+    @ViewBuilder
+    private func prioritySidebarContent(_ projection: SidebarProjection) -> some View {
+        if !projection.workspaceSections.isEmpty {
+            priorityLabel("Managed")
+            ForEach(projection.workspaceSections) { section in
+                workspaceSection(section)
+            }
+        }
+        if !projection.activeExternalSections.isEmpty {
+            priorityLabel("Active outside Clawdmeter")
+            ForEach(projection.activeExternalSections) { section in
+                externalRepoSection(section)
+            }
+        }
+        if !projection.historySections.isEmpty {
+            historyDivider
+            priorityLabel("History")
+            ForEach(projection.historySections) { section in
+                historyRepoSection(section)
+            }
+        }
+    }
+
+    private func priorityLabel(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 10, weight: .bold))
+                .textCase(.uppercase)
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 3)
+    }
+
+    private var historyDivider: some View {
+        Rectangle()
+            .fill(t.hairline)
+            .frame(height: 1)
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+    }
+
+    private var filteredEmptyState: some View {
+        VStack(spacing: 7) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 20))
+                .foregroundStyle(.secondary)
+            Text("No matching sessions")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text("Try a different search or status filter.")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 24)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func workspaceSection(_ section: SidebarWorkspaceSection) -> some View {
+        let sectionID = "workspace:\(section.id)"
+        let isExpanded = isPrioritySectionExpanded(sectionID)
+        return VStack(alignment: .leading, spacing: 0) {
+            repoHeader(
+                section.repo,
+                isExpanded: isExpanded,
+                sessionCount: section.sessions.count,
+                subtitle: workspaceSubtitle(for: section.workspacePath),
+                onToggle: { togglePrioritySection(sectionID) }
+            )
+            if isExpanded {
+                ForEach(section.sessions) { session in
+                    sessionRow(session, isOpen: model.openSessionId == session.id, depth: 0)
+                }
+            }
+        }
+    }
+
+    private func externalRepoSection(_ section: SidebarExternalRepoSection) -> some View {
+        let sectionID = "external:\(section.repo.key)"
+        let isExpanded = isPrioritySectionExpanded(sectionID)
+        return VStack(alignment: .leading, spacing: 0) {
+            repoHeader(
+                section.repo,
+                isExpanded: isExpanded,
+                sessionCount: section.recents.count,
+                subtitle: "Active in the last 10 min",
+                onToggle: { togglePrioritySection(sectionID) }
+            )
+            if isExpanded {
+                ForEach(section.recents) { recent in
+                    externalRecentButton(recent, repo: section.repo)
+                }
+            }
+        }
+    }
+
+    private func historyRepoSection(_ section: SidebarHistoryRepoSection) -> some View {
+        let sectionID = "history:\(section.repo.key)"
+        let isExpanded = isPrioritySectionExpanded(sectionID)
+        let count = section.dateGroups.reduce(0) { $0 + $1.recents.count }
+        return VStack(alignment: .leading, spacing: 0) {
+            repoHeader(
+                section.repo,
+                isExpanded: isExpanded,
+                sessionCount: count,
+                subtitle: "Older external sessions",
+                onToggle: { togglePrioritySection(sectionID) }
+            )
+            if isExpanded {
+                ForEach(section.dateGroups) { dateGroup in
+                    Text(dateGroup.title)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .padding(.leading, 28)
+                        .padding(.top, 5)
+                    ForEach(dateGroup.recents) { recent in
+                        externalRecentButton(recent, repo: section.repo)
+                    }
+                }
+            }
+        }
+    }
+
+    private func externalRecentButton(_ recent: RecentSession, repo: AgentRepo) -> some View {
+        Button(action: {
+            model.openOutsideSession(
+                recent: recent,
+                repoKey: repo.key,
+                repoDisplayName: repo.displayName
+            )
+        }) {
+            recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func isPrioritySectionExpanded(_ id: String) -> Bool {
+        !collapsedPrioritySectionIDs.contains(id)
+    }
+
+    private func togglePrioritySection(_ id: String) {
+        if collapsedPrioritySectionIDs.contains(id) {
+            collapsedPrioritySectionIDs.remove(id)
+        } else {
+            collapsedPrioritySectionIDs.insert(id)
+        }
+    }
+
+    private func workspaceSubtitle(for workspacePath: String) -> String {
+        let last = (workspacePath as NSString).lastPathComponent
+        return last.isEmpty ? workspacePath : "Workspace \(last)"
     }
 
     /// Pin-aware sort used by the legacy repo-grouped path's per-repo
@@ -1170,8 +1331,7 @@ private struct SidebarPane: View {
                 }
                 if visibleSessions.isEmpty && recentSessions.isEmpty {
                     Button(action: {
-                        model.selectedRepoKey = repo.key
-                        model.showingNewSessionSheet = true
+                        model.prepareNewSession(in: repo.key)
                     }) {
                         HStack(spacing: 6) {
                             Image(systemName: "plus.circle")
@@ -1386,45 +1546,83 @@ private struct SidebarPane: View {
         }
     }
 
-    private func repoHeader(_ repo: AgentRepo, isExpanded: Bool, sessionCount: Int) -> some View {
-        Button(action: {
-            if isExpanded { model.expandedRepoKeys.remove(repo.key) }
-            else { model.expandedRepoKeys.insert(repo.key) }
-        }) {
-            HStack(spacing: 8) {
-                TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
-                    .foregroundStyle(t.fg3)
-                    .frame(width: 10)
-                projectGlyph(repo)
-                Text(repo.displayName)
-                    .font(TahoeFont.body(13, weight: .semibold))
-                    .foregroundStyle(t.fg)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-                if sessionCount > 0 {
-                    Text("\(sessionCount)")
-                        .font(TahoeFont.body(10.5, weight: .semibold))
+    private func repoHeader(
+        _ repo: AgentRepo,
+        isExpanded: Bool,
+        sessionCount: Int,
+        subtitle: String? = nil,
+        onToggle: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Button(action: onToggle) {
+                HStack(spacing: 8) {
+                    TahoeIcon(isExpanded ? "chevD" : "chevR", size: 10)
                         .foregroundStyle(t.fg3)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(t.hair2, in: Capsule())
-                }
-                if repo.liveSessionCount > 0 {
-                    HStack(spacing: 2) {
-                        Circle().fill(.green).frame(width: 4, height: 4)
-                        Text("\(repo.liveSessionCount)")
-                            .font(TahoeFont.body(9, weight: .bold))
-                            .foregroundStyle(.green)
+                        .frame(width: 10)
+                    projectGlyph(repo)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(repo.displayName)
+                            .font(TahoeFont.body(13, weight: .semibold))
+                            .foregroundStyle(t.fg)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if let subtitle, !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(TahoeFont.body(10))
+                                .foregroundStyle(t.fg3)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
-                    .help("\(repo.liveSessionCount) live JSONL — Conductor / Cursor / Terminal-launched agents writing now.")
                 }
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            if sessionCount > 0 {
+                Text("\(sessionCount)")
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(t.hair2, in: Capsule())
+            }
+            if repo.liveSessionCount > 0 {
+                HStack(spacing: 2) {
+                    Circle().fill(.green).frame(width: 4, height: 4)
+                    Text("\(repo.liveSessionCount)")
+                        .font(TahoeFont.body(9, weight: .bold))
+                        .foregroundStyle(.green)
+                }
+                .help("\(repo.liveSessionCount) live JSONL — Conductor / Cursor / Terminal-launched agents writing now.")
+            }
+            Button {
+                model.prepareNewSession(in: repo.key)
+            } label: {
+                TahoeIcon("plus", size: 11, weight: .bold)
+                    .foregroundStyle(t.fg3)
+                    .frame(width: 22, height: 22)
+                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .help("New workspace")
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, subtitle == nil ? 6 : 5)
+    }
+
+    private func repoHeader(_ repo: AgentRepo, isExpanded: Bool, sessionCount: Int) -> some View {
+        repoHeader(
+            repo,
+            isExpanded: isExpanded,
+            sessionCount: sessionCount,
+            onToggle: {
+                if isExpanded { model.expandedRepoKeys.remove(repo.key) }
+                else { model.expandedRepoKeys.insert(repo.key) }
+            }
+        )
     }
 
     private func projectGlyph(_ repo: AgentRepo) -> some View {
@@ -1451,8 +1649,7 @@ private struct SidebarPane: View {
         let reasons = attentionReasons(for: session)
         let repoBadge = repoIdentityBadge(for: session)
         return Button(action: {
-            model.openSessionId = session.id
-            model.openOutsideJSONLPath = nil
+            model.openSession(session)
             try? presentationStore.markUnread(session.id, unread: false)
         }) {
             HStack(alignment: .top, spacing: 8) {
@@ -1956,7 +2153,7 @@ private struct SidebarPane: View {
     }
 
     private var footer: some View {
-        Button(action: { model.showingNewSessionSheet = true }) {
+        Button(action: { model.prepareNewSession(in: nil) }) {
             HStack(spacing: 6) {
                 TahoeIcon("plus", size: 12, weight: .bold)
                 Text("New session")

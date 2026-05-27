@@ -445,7 +445,7 @@ public final class SessionChatStore {
     /// composer's drain helper when a replay attempt fails part-way
     /// through). Preserves FIFO ordering of remaining items relative to
     /// any in-flight queue entries, and honours the offline-queue cap
-    /// by dropping the oldest re-enqueued entries first (the cap is a
+    /// by dropping the oldest tail entries first (the cap is a
     /// hard memory bound, so trimming here is preferable to silent
     /// unbounded growth on repeated daemon flaps).
     public func requeueOfflinePending(_ entries: [PendingMessage]) {

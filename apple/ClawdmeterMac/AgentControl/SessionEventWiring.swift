@@ -19,6 +19,7 @@ private let wiringLogger = Logger(subsystem: "com.clawdmeter.mac", category: "Se
 public final class SessionEventWiring: @unchecked Sendable {
 
     public let sessionId: UUID
+    public let sessionFileURL: URL
 
     private let tail: JSONLTail
     private let doneDetector: DoneDetector
@@ -52,6 +53,7 @@ public final class SessionEventWiring: @unchecked Sendable {
         startedAt: Date = Date()
     ) {
         self.sessionId = sessionId
+        self.sessionFileURL = sessionFileURL
         self.registry = registry
         self.notifications = notifications
         self.pushCoordinator = pushCoordinator

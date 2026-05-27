@@ -316,6 +316,10 @@ public final class SessionsModel: ObservableObject {
     /// exact JSONL instead of falling back to `resolveSessionFileURL`'s
     /// newest-wins logic.
     private var forcedChatStoreURLs: [UUID: URL] = [:]
+    /// JSONL paths opened as read-only external sessions. These use the
+    /// same forced tailing path as first-party pinned stores, but must not
+    /// count as Clawdmeter-owned for sidebar dedupe.
+    private var externalForcedJSONLPaths: Set<String> = []
 
     /// Sidebar search query (G6). Filters repos + sessions by displayName,
     /// goal, and message body substring. Empty = no filter.
@@ -375,11 +379,12 @@ public final class SessionsModel: ObservableObject {
             openOutsideJSONLPath = path
             openSessionId = nil
             forcedChatStoreURLs[existing.id] = url
+            externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
             return
         }
         let synth = AgentSession(
             id: UUID(),
-            repoKey: repoKey,
+            repoKey: nil,
             repoDisplayName: repoDisplayName,
             agent: recent.provider,
             model: nil,
@@ -391,10 +396,12 @@ public final class SessionsModel: ObservableObject {
             planText: nil,
             createdAt: recent.lastModified,
             lastEventAt: recent.lastModified,
-            lastEventSeq: 0
+            lastEventSeq: 0,
+            runtimeCwd: repoKey
         )
         syntheticOutsideSessions[path] = synth
         forcedChatStoreURLs[synth.id] = url
+        externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
         draftWorkspaceTab = nil
         selectedWorkspaceTerminalTabId = nil
         openOutsideJSONLPath = path
@@ -405,6 +412,11 @@ public final class SessionsModel: ObservableObject {
         openSessionId = nil
         selectedWorkspaceTerminalTabId = nil
         openOutsideJSONLPath = nil
+    }
+
+    public func prepareNewSession(in repoKey: String?) {
+        selectedRepoKey = repoKey
+        showingNewSessionSheet = true
     }
 
     /// Persist a user-facing code-session label through the registry-backed
@@ -556,6 +568,35 @@ public final class SessionsModel: ObservableObject {
         return store
     }
 
+    public var knownOwnedJSONLPaths: Set<String> {
+        var paths = Set<String>()
+        for url in forcedChatStoreURLs.values {
+            let path = Self.canonicalJSONLPath(url.path)
+            if !externalForcedJSONLPaths.contains(path) {
+                paths.insert(path)
+            }
+        }
+        for store in chatStores.values where !store.isSDKOnly {
+            let path = Self.canonicalJSONLPath(store.currentFileURL.path)
+            if !externalForcedJSONLPaths.contains(path) {
+                paths.insert(path)
+            }
+        }
+        if let daemonPaths = AppDelegate.runtime?.agentControlServer.ownedSessionJSONLPaths {
+            for daemonPath in daemonPaths {
+                let path = Self.canonicalJSONLPath(daemonPath)
+                if !externalForcedJSONLPaths.contains(path) {
+                    paths.insert(path)
+                }
+            }
+        }
+        return paths
+    }
+
+    private nonisolated static func canonicalJSONLPath(_ path: String) -> String {
+        (path as NSString).standardizingPath
+    }
+
     /// LRU bump: move `id` to the tail (most-recently-used position).
     private func touchLRU(_ id: UUID) {
         if let idx = chatStoreLRU.firstIndex(of: id) {
@@ -663,9 +704,21 @@ public final class SessionsModel: ObservableObject {
         guard !q.isEmpty else { return repos }
         return repos.filter { repo in
             if repo.displayName.lowercased().contains(q) { return true }
+            if repo.recentSessions.contains(where: { Self.recentMatchesSearch($0, repo: repo, query: q) }) {
+                return true
+            }
             let matches = filter(sessions: sessions(for: repo.key, includeArchived: showArchived))
             return !matches.isEmpty
         }
+    }
+
+    private nonisolated static func recentMatchesSearch(_ recent: RecentSession, repo: AgentRepo, query: String) -> Bool {
+        if repo.displayName.lowercased().contains(query) { return true }
+        if recent.path.lowercased().contains(query) { return true }
+        if let title = recent.firstPrompt?.lowercased(), title.contains(query) { return true }
+        if let alias = recent.customName?.lowercased(), alias.contains(query) { return true }
+        if AgentKindUI.displayName(for: recent.provider).lowercased().contains(query) { return true }
+        return false
     }
 
     /// G8 keyboard nav: flat list of sessions visible in the sidebar, in
@@ -1595,10 +1648,11 @@ public final class SessionsModel: ObservableObject {
             // X3: forward-compat unknown kind — no JSONL parser plumbed.
             return nil
         }
-        // Outside-JSONL continuation is a code-session-only path; chat
-        // sessions never reach here (no JSONL outside-source). Skip if
-        // somehow the synthetic has no repoKey to keep types honest.
-        guard let syntheticRepoKey = synthetic.repoKey else { return nil }
+        // Synthetic outside sessions keep repoKey nil so WorkspaceKey never
+        // treats them as first-party, but runtimeCwd still carries the repo
+        // path needed to resume the CLI.
+        let syntheticRepoKey = synthetic.effectiveCwd
+        guard !syntheticRepoKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         do {
             let session = try await spawnSession(
                 repoPath: syntheticRepoKey,
