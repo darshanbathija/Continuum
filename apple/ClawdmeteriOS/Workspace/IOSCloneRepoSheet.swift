@@ -113,13 +113,26 @@ struct IOSCloneRepoSheet: View {
             dismiss()
             return
         }
+        if result.replayedWithoutRecord {
+            // Daemon replayed a receipt-only entry from after-restart
+            // audit-log recovery. The clone already happened on the
+            // Mac. Refresh the workspace list and dismiss — no point
+            // re-firing.
+            RepoOnboardingIdempotencyStore.clear(.clone)
+            _ = await client.refreshWorkspaces()
+            dismiss()
+            return
+        }
         if let err = result.error {
             switch err {
             case .ghAuthFailed:
-                // Auth-failed is retryable after the user runs `gh auth
-                // login`; keep the key so the immediate retry replays
-                // the cached failure. The daemon's LRU TTL will retire
-                // the slot before the user fixes auth and retries.
+                // Clear the persisted key. Codex R3 #5: keeping the key
+                // means a retry AFTER the user runs `gh auth login`
+                // would replay the cached 401 (the daemon's outbox
+                // recorded the failure). Fresh key on retry forces the
+                // daemon to re-execute against the now-authenticated
+                // gh, which is the user's actual intent.
+                RepoOnboardingIdempotencyStore.clear(.clone)
                 showAuthBanner = true
             case .alreadyRegistered:
                 // Final outcome — clear the persisted key. The workspace

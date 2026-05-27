@@ -97,6 +97,12 @@ struct IOSQuickStartSheet: View {
             dismiss()
             return
         }
+        if result.replayedWithoutRecord {
+            RepoOnboardingIdempotencyStore.clear(.quickStart)
+            _ = await client.refreshWorkspaces()
+            dismiss()
+            return
+        }
         if let err = result.error {
             switch err {
             case .alreadyRegistered:

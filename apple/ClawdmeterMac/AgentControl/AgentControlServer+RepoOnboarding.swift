@@ -30,8 +30,12 @@ extension AgentControlServer {
     func handleOpenLocalFolder(request: HTTPRequest, connection: NWConnection) async {
         let req = (try? JSONDecoder().decode(OpenLocalFolderRequest.self, from: request.body))
             ?? OpenLocalFolderRequest()
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        if await !claimInFlight(key: req.idempotencyKey, on: connection) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
 
         // A3-A: refuse if the Mac can't visibly bring NSOpenPanel forward.
         let liveness = cgSession.state
@@ -98,8 +102,12 @@ extension AgentControlServer {
         guard let req = try? JSONDecoder().decode(CloneFromGitHubRequest.self, from: request.body) else {
             sendResponse(AgentControlServer.HTTPResponse.badRequest, on: connection); return
         }
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        if await !claimInFlight(key: req.idempotencyKey, on: connection) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
 
         // A9-B: gate the destination parent against the allow-list.
         let parent = req.destinationParent ?? defaultParentOrFallback()
@@ -154,8 +162,12 @@ extension AgentControlServer {
         guard let req = try? JSONDecoder().decode(QuickStartRepoRequest.self, from: request.body) else {
             sendResponse(AgentControlServer.HTTPResponse.badRequest, on: connection); return
         }
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        if await !claimInFlight(key: req.idempotencyKey, on: connection) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
 
         let parent = req.parent ?? defaultParentOrFallback()
         let validated: String
@@ -208,8 +220,12 @@ extension AgentControlServer {
     func handleWakeMac(request: HTTPRequest, connection: NWConnection) async {
         let req = (try? JSONDecoder().decode(WakeMacRequest.self, from: request.body))
             ?? WakeMacRequest()
-        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection, payloadHash: payloadHash) { return }
+        if await !claimInFlight(key: req.idempotencyKey, on: connection) { return }
+        defer { Task { [outbox = mobileCommandOutbox, key = req.idempotencyKey] in
+            if let key { await outbox.releaseInFlight(key) }
+        } }
 
         // Two-step wake strategy. Track `sentWake` separately from "we
         // tried a binary" — we report success ONLY when at least one
@@ -333,6 +349,30 @@ extension AgentControlServer {
         sendCodableValue(response, on: connection)
     }
 
+    /// Try to reserve the `key` in `MobileCommandOutbox.inFlight`. Returns
+    /// true on success (caller proceeds with work + must release via the
+    /// defer above). Returns false AND emits a `409 Conflict` if another
+    /// concurrent request is already processing this key. nil/empty key
+    /// always wins reservation (no dedup possible).
+    private func claimInFlight(key: String?, on connection: NWConnection) async -> Bool {
+        guard let key, !key.isEmpty else { return true }
+        let reserved = await mobileCommandOutbox.tryReserveInFlight(key)
+        if !reserved {
+            let body = Data(#"{"error":"another-request-with-same-idempotency-key-is-in-flight"}"#.utf8)
+            sendResponse(
+                AgentControlServer.HTTPResponse(
+                    status: 409,
+                    reason: "Conflict",
+                    contentType: "application/json",
+                    body: body
+                ),
+                on: connection
+            )
+            return false
+        }
+        return true
+    }
+
     // MARK: - Response helpers
 
     /// Common return path for write endpoints. Encodes the record as JSON
@@ -416,6 +456,13 @@ extension AgentControlServer {
 
     /// 423 Locked response for `/workspaces/open-local` when CGSession
     /// reports a non-awake state.
+    ///
+    /// **Do NOT cache 423 in the outbox.** A locked Mac is a transient
+    /// condition: iOS calls `/workspaces/wake-mac`, the user unlocks,
+    /// and the SAME idempotency key should produce a different outcome
+    /// (the picker actually opens). Caching the 423 would make every
+    /// retry-after-wake replay the 423 forever until the 24h TTL or a
+    /// daemon restart — defeating the wake flow.
     private func respondLocked(
         req: OpenLocalFolderRequest,
         payloadHash: String,
@@ -428,15 +475,6 @@ extension AgentControlServer {
             "wakeEndpoint": "/workspaces/wake-mac",
         ]
         let bytes = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
-        if let key = req.idempotencyKey {
-            await mobileCommandOutbox.recordFailure(
-                key: key,
-                kind: .openLocalFolder,
-                error: "mac-not-awake:\(state.rawValue)",
-                responseStatus: 423,
-                responseBody: bytes
-            )
-        }
         let resp = AgentControlServer.HTTPResponse(
             status: 423,
             reason: "Locked",

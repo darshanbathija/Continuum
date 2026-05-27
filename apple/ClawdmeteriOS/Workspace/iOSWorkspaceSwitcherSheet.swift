@@ -198,6 +198,16 @@ struct iOSWorkspaceSwitcherSheet: View {
             openLocalIdempotencyKey = RepoOnboardingIdempotencyStore.currentKey(for: .openLocal)
             return
         }
+        if result.replayedWithoutRecord {
+            // Daemon-restart replay: the open-local picker already
+            // completed before the restart wiped its in-memory cache.
+            // Refresh workspaces + rotate the key.
+            await client.refreshWorkspaces()
+            openLocalMessage = "Open Project was already completed earlier — workspace list refreshed."
+            RepoOnboardingIdempotencyStore.clear(.openLocal)
+            openLocalIdempotencyKey = RepoOnboardingIdempotencyStore.currentKey(for: .openLocal)
+            return
+        }
         if let err = result.error {
             openLocalMessage = iosFriendlyMessage(for: err)
             RepoOnboardingIdempotencyStore.clear(.openLocal)

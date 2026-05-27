@@ -532,8 +532,29 @@ public final class AgentControlClient: ObservableObject {
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        req.timeoutInterval = 8
+        req.timeoutInterval = Self.timeoutForPath(path)
         return req
+    }
+
+    /// Per-endpoint timeout. Default is 8s for fast HTTP queries.
+    /// Workspace-onboarding endpoints can take MUCH longer:
+    /// `/workspaces/open-local` blocks while the user finds + picks a
+    /// folder on the Mac (the daemon's 5-min zombie cap is the actual
+    /// upper bound); `/workspaces/from-github` runs `gh repo clone`
+    /// which can take a minute on a large repo. Without these per-path
+    /// timeouts the URLSession would time out at 8s, surface the
+    /// transport error to the sheet, the sheet would clear the
+    /// idempotency key, and the user's retry would re-execute the
+    /// clone (which then 409s with "destination exists").
+    private static func timeoutForPath(_ path: String) -> TimeInterval {
+        switch path {
+        case "/workspaces/open-local":   return 300  // matches daemon's NSOpenPanel cap
+        case "/workspaces/from-github":  return 300  // matches ShellRunner gh-clone cap
+        case "/workspaces/quick-start":  return 30   // mkdir + git init
+        case "/workspaces/wake-mac":     return 15   // tailscale wake + caffeinate
+        case "/workspaces/allow-list":   return 5    // pure read
+        default:                         return 8    // existing default
+        }
     }
 
     /// Wrap raw IPv6 literals in brackets so `URL(string:)` parses the
@@ -2059,17 +2080,26 @@ public final class AgentControlClient: ObservableObject {
         public let error: RepoOnboardingError?
         public let macLocked: Bool
         public let unsupportedServer: Bool
+        /// Daemon replayed a receipt-only entry (the original response
+        /// body wasn't preserved across daemon restart — see
+        /// `MobileCommandOutbox.entry`'s audit-log replay path). The
+        /// operation completed on the Mac at some prior point; the
+        /// sheet should refresh the workspace list + dismiss rather
+        /// than show "unknown failure" or re-fire the operation.
+        public let replayedWithoutRecord: Bool
 
         public init(
             record: CodeWorkspaceRecord? = nil,
             error: RepoOnboardingError? = nil,
             macLocked: Bool = false,
-            unsupportedServer: Bool = false
+            unsupportedServer: Bool = false,
+            replayedWithoutRecord: Bool = false
         ) {
             self.record = record
             self.error = error
             self.macLocked = macLocked
             self.unsupportedServer = unsupportedServer
+            self.replayedWithoutRecord = replayedWithoutRecord
         }
     }
 
@@ -2196,6 +2226,16 @@ public final class AgentControlClient: ObservableObject {
                     }
                     return WorkspaceOnboardingResult(record: record)
                 }
+                // Daemon-restart replay path: body is `{"receipt": ..., "replay": true}`
+                // because the audit log only carries the receipt, not the
+                // original CodeWorkspaceRecord. The operation already
+                // completed on the Mac at some prior point — surface this
+                // so the sheet can refresh + dismiss instead of stranding
+                // the user on "unknown failure".
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let replay = json["replay"] as? Bool, replay {
+                    return WorkspaceOnboardingResult(replayedWithoutRecord: true)
+                }
                 return WorkspaceOnboardingResult()
             case 204:
                 // User cancelled the picker; not an error.
@@ -2213,17 +2253,27 @@ public final class AgentControlClient: ObservableObject {
                 }
                 return WorkspaceOnboardingResult(error: .pathMissing)
             case 409:
-                // alreadyRegistered. Decode the RepoOnboardingError body
-                // so iOS sheets can hit their .alreadyRegistered branch
-                // and refresh + dismiss instead of falling through to
-                // "unknown reason". The daemon's onWorkspaceRegistered
-                // callback already fired for the existing record, so the
-                // workspace list will refresh on the next /workspaces poll.
+                // Two 409 shapes share the status code:
+                //   1. alreadyRegistered (RepoOnboardingError body) —
+                //      surface via the typed error so iOS sheets hit
+                //      their .alreadyRegistered branch.
+                //   2. In-flight reservation conflict (plain JSON
+                //      `{"error":"another-request-with-same-idempotency-key-is-in-flight"}`)
+                //      — surface as .persistenceFailed so the sheet
+                //      shows a retryable banner.
                 if let decoded = try? decoder.decode(RepoOnboardingError.self, from: data) {
                     return WorkspaceOnboardingResult(error: decoded)
                 }
                 return WorkspaceOnboardingResult(
-                    error: .alreadyRegistered(workspaceId: UUID())
+                    error: .persistenceFailed(message: "Another request with the same idempotency key is already in flight — try again in a moment.")
+                )
+            case 422:
+                // Payload mismatch: same idempotency key reused with
+                // edited request body. iOS should clear the persisted
+                // key + tell the user to retry; the next attempt gets
+                // a fresh slot.
+                return WorkspaceOnboardingResult(
+                    error: .persistenceFailed(message: "Idempotency key was reused with a different request. Try again — a new key will be generated.")
                 )
             case 423:
                 return WorkspaceOnboardingResult(macLocked: true)

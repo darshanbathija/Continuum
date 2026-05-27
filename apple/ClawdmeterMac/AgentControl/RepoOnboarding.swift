@@ -89,6 +89,22 @@ public final class RepoOnboarding {
         let lastComponent = String(normalized[normalized.index(after: lastSlash)...])
         let destPath = (destinationParent as NSString).appendingPathComponent(lastComponent)
 
+        // TOCTOU mitigation (Codex R3 #6): the daemon handler validated
+        // `destinationParent` against PathAllowList, but the parent
+        // could have been replaced with a symlink in the window between
+        // that check and this filesystem call. Re-validate immediately
+        // before mkdir narrows the window from ~hundreds of ms (handler
+        // → service hop) down to microseconds. Doesn't fully close
+        // TOCTOU (the true fix is openat(O_NOFOLLOW) at the syscall
+        // level, which Swift doesn't expose cleanly), but blocks all
+        // practical local-user attacks.
+        switch PathAllowList.validate(destinationParent) {
+        case .success:
+            break
+        case .failure(let err):
+            throw err
+        }
+
         // mkdir -p the parent if it doesn't exist yet. Clone fails fast
         // otherwise; the parent is part of the user-controlled allow-list,
         // not a path the daemon picked.
@@ -167,6 +183,14 @@ public final class RepoOnboarding {
         in parent: String
     ) async throws -> CodeWorkspaceRecord {
         try Self.validateQuickStartName(name)
+        // TOCTOU mitigation: re-validate `parent` immediately before
+        // we touch the filesystem. See `cloneFromGitHub` for rationale.
+        switch PathAllowList.validate(parent) {
+        case .success:
+            break
+        case .failure(let err):
+            throw err
+        }
         // Ensure the parent itself exists (idempotent mkdir).
         var parentIsDir: ObjCBool = false
         if !FileManager.default.fileExists(atPath: parent, isDirectory: &parentIsDir) {

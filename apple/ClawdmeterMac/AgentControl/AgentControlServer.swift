@@ -7325,13 +7325,43 @@ public final class AgentControlServer {
     /// side effect (send to tmux, swap model, merge PR) doesn't repeat.
     /// `kind` is recorded into the audit log but is not strictly required
     /// for the lookup itself — keys are globally unique by construction.
+    ///
+    /// `payloadHash` (optional) enables the payload-mismatch gate. When
+    /// supplied AND the cached entry has a stored hash that DIFFERS, the
+    /// daemon sends `422 Unprocessable` instead of replaying — protects
+    /// against an iOS retry that reused the persisted key but edited
+    /// the request body (e.g. user edited the GitHub spec between
+    /// taps). Callers without a hash skip the check (back-compat).
     @discardableResult
     func tryReplayIdempotent(
         key: String?,
-        on connection: NWConnection
+        on connection: NWConnection,
+        payloadHash: String? = nil
     ) async -> Bool {
         guard let key, !key.isEmpty else { return false }
         guard let cached = await mobileCommandOutbox.entry(forKey: key) else { return false }
+        // Payload-mismatch gate. Cached entries without a stored hash
+        // (audit-log replay seeds, old entries from before this field)
+        // skip the check — we can't distinguish a real mismatch from a
+        // missing-record without the hash, and we'd rather replay than
+        // surface a spurious 422.
+        if let incoming = payloadHash,
+           let stored = cached.payloadHash,
+           !stored.isEmpty,
+           incoming != stored {
+            let body = Data(#"{"error":"idempotency-key-reused-with-different-payload"}"#.utf8)
+            sendResponse(
+                HTTPResponse(
+                    status: 422,
+                    reason: "Unprocessable",
+                    contentType: "application/json",
+                    body: body
+                ),
+                on: connection
+            )
+            serverLogger.warning("idempotent payload mismatch (key=\(key.prefix(8), privacy: .public)…)")
+            return true
+        }
         // Re-emit the cached response bytes. When the cache only carried
         // the receipt (audit-log replay path, no body), synthesize a
         // minimal JSON body that still carries the receipt so iOS can
@@ -7388,7 +7418,8 @@ public final class AgentControlServer {
                 kind: kind,
                 error: errorMessage ?? "unknown",
                 responseStatus: responseStatus,
-                responseBody: responseBody
+                responseBody: responseBody,
+                payloadHash: payloadHash
             )
         } else {
             entry = await mobileCommandOutbox.record(
@@ -7396,7 +7427,8 @@ public final class AgentControlServer {
                 kind: kind,
                 responseBody: responseBody,
                 responseContentType: responseContentType,
-                responseStatus: responseStatus
+                responseStatus: responseStatus,
+                payloadHash: payloadHash
             )
         }
         await AuditLog.shared.recordMobileCommand(
