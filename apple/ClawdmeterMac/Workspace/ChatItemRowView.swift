@@ -458,9 +458,14 @@ struct ChatItemRowContent: View {
                         .foregroundStyle(t.fg3)
                     HStack(spacing: 0) {
                         Text("Ran ")
+                        // v0.29.27: dropped the trailing-aligned 20pt
+                        // frame around the count. `.monospacedDigit()`
+                        // already keeps the digits tabular, so we don't
+                        // need a fixed-width slot — the slot was just
+                        // padding single-digit counts with ~18pt of
+                        // leading whitespace ("Ran    2 commands").
                         Text("\(pairs.count)")
                             .monospacedDigit()
-                            .frame(width: 20, alignment: .trailing)
                             .contentTransition(.numericText(value: Double(pairs.count)))
                             .animation(.easeOut(duration: 0.10), value: pairs.count)
                         Text(" command")
