@@ -1892,6 +1892,15 @@ private struct ClaudeCLIProviderRow: View {
     @State private var authMessage: String?
     @State private var authFailed: Bool = false
     @State private var pastedTokenDraft: String = ""
+    /// Mirrors `clawdmeter.codex.sdkMode`'s shape. Default OFF; flips ON
+    /// automatically the first time the user successfully clicks
+    /// Authenticate so subsequent launches re-import silently. When ON,
+    /// `AppRuntime.init` reads Claude Code's third-party Keychain item at
+    /// every launch and mirrors the latest refresh token into Continuum's
+    /// own shared Keychain entry. macOS may show a one-time password
+    /// prompt the first time the app accesses that Keychain item; once
+    /// "Always Allow" is granted, subsequent launches are silent.
+    @AppStorage("clawdmeter.claude.autoImportFromClaudeCode") private var autoImportAtLaunch: Bool = false
 
     enum ProbeState: Equatable {
         case pending
@@ -1941,6 +1950,22 @@ private struct ClaudeCLIProviderRow: View {
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg2)
                 }
+                HStack(spacing: 8) {
+                    Toggle(isOn: $autoImportAtLaunch) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-import from Claude Code at launch")
+                                .font(TahoeFont.body(12, weight: .semibold))
+                                .foregroundStyle(t.fg)
+                            Text("Mirrors Claude Code's refreshed token into Continuum's Keychain every launch. macOS may ask for your password the first time; click \"Always Allow\".")
+                                .font(TahoeFont.body(11))
+                                .foregroundStyle(t.fg3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
+                .padding(.top, 4)
             }
             Spacer()
             actionButton
@@ -2094,6 +2119,11 @@ private struct ClaudeCLIProviderRow: View {
 
             authFailed = false
             authMessage = "Authenticated. Continuum will use its own Keychain copy from now on."
+            // Successful read of Claude Code's Keychain means macOS granted
+            // (or the user "Always Allowed") access; opt the user into
+            // silent auto-import at every launch from here on. They can
+            // flip the toggle back off in Settings if they prefer manual.
+            autoImportAtLaunch = true
             await refreshProbe()
             claudeModel.forcePoll()
         }
