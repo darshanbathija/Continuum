@@ -1217,12 +1217,15 @@ public final class AgentControlClient: ObservableObject {
     /// different remote directories don't collide. If the cached file
     /// already exists, the function returns it without re-fetching.
     @MainActor
-    public func downloadArtifact(sessionId: UUID, remotePath: String) async throws -> URL {
+    public func downloadArtifact(sessionId: UUID, remotePath: String, forceRefresh: Bool = false) async throws -> URL {
         guard let host, let token else { throw ArtifactError.notPaired }
         let cacheDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("clawdmeter-artifacts/\(sessionId.uuidString)")
         try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         let localURL = cacheDir.appendingPathComponent(Self.cacheFilename(forRemotePath: remotePath))
+        if forceRefresh, FileManager.default.fileExists(atPath: localURL.path) {
+            try? FileManager.default.removeItem(at: localURL)
+        }
         // Cache hit — return without round-tripping the daemon. Comment
         // in the previous shape claimed this was already happening; now
         // the code matches the claim.
@@ -1234,6 +1237,40 @@ public final class AgentControlClient: ObservableObject {
         comps.host = host
         comps.port = httpPort
         comps.path = "/sessions/\(sessionId.uuidString)/artifact"
+        comps.queryItems = [URLQueryItem(name: "path", value: remotePath)]
+        guard let url = comps.url else { throw ArtifactError.ioError("bad URL") }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 30
+        let (data, response) = try await runRequest(req)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw ArtifactError.badStatus(http.statusCode)
+        }
+        try data.write(to: localURL, options: .atomic)
+        return localURL
+    }
+
+    /// Fetch a read-only Markdown document for iOS Code document tabs.
+    /// Unlike `/artifact`, the daemon route may serve Markdown outside the
+    /// session worktree, but only after Markdown-specific size and text checks.
+    @MainActor
+    public func downloadMarkdownDocument(sessionId: UUID, remotePath: String, forceRefresh: Bool = false) async throws -> URL {
+        guard let host, let token else { throw ArtifactError.notPaired }
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clawdmeter-markdown-documents/\(sessionId.uuidString)")
+        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let localURL = cacheDir.appendingPathComponent(Self.cacheFilename(forRemotePath: remotePath))
+        if forceRefresh, FileManager.default.fileExists(atPath: localURL.path) {
+            try? FileManager.default.removeItem(at: localURL)
+        }
+        if FileManager.default.fileExists(atPath: localURL.path) {
+            return localURL
+        }
+        var comps = URLComponents()
+        comps.scheme = "http"
+        comps.host = host
+        comps.port = httpPort
+        comps.path = "/sessions/\(sessionId.uuidString)/markdown-document"
         comps.queryItems = [URLQueryItem(name: "path", value: remotePath)]
         guard let url = comps.url else { throw ArtifactError.ioError("bad URL") }
         var req = URLRequest(url: url)

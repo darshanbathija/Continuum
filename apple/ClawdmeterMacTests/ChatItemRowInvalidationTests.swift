@@ -85,6 +85,21 @@ final class ChatItemRowInvalidationTests: XCTestCase {
             "Two ChatItemRowView instances with the same payload must compare equal so SwiftUI can skip body re-eval.")
     }
 
+    func test_equatable_ignoresMarkdownOpenClosure() {
+        let payload = makeMessagePayload(id: "m1", body: "hello", isStreamingTail: false)
+        let a = ChatItemRowView(
+            payload: payload,
+            actions: makeNoopActions(onOpenMarkdownDocument: { _ in })
+        )
+        let b = ChatItemRowView(
+            payload: payload,
+            actions: makeNoopActions(onOpenMarkdownDocument: { _ in XCTFail("closure should not participate in equality") })
+        )
+
+        XCTAssertEqual(a, b,
+            "Markdown document opening must stay on ChatItemRowActions; putting it in the payload would make identical rows compare unequal.")
+    }
+
     /// Body-changing payloads must compare unequal — otherwise SwiftUI
     /// would erroneously skip re-rendering when the message body grows.
     func test_equatable_changedBody_compareUnequal() {
@@ -271,7 +286,7 @@ final class ChatItemRowInvalidationTests: XCTestCase {
         )
     }
 
-    private func makeNoopActions() -> ChatItemRowActions {
+    private func makeNoopActions(onOpenMarkdownDocument: @escaping (String) -> Void = { _ in }) -> ChatItemRowActions {
         ChatItemRowActions(
             onToggleToolRun: { _, _ in },
             onToggleToolPair: { _, _ in },
@@ -279,7 +294,8 @@ final class ChatItemRowInvalidationTests: XCTestCase {
             onAnswerAsk: { _ in },
             onCopy: { _ in },
             onQuoteReply: { _ in },
-            onToggleBookmark: { _ in }
+            onToggleBookmark: { _ in },
+            onOpenMarkdownDocument: onOpenMarkdownDocument
         )
     }
 }
@@ -426,7 +442,8 @@ private struct ChatTranscriptBurstHarness: View {
             onAnswerAsk: { _ in },
             onCopy: { _ in },
             onQuoteReply: { _ in },
-            onToggleBookmark: { _ in }
+            onToggleBookmark: { _ in },
+            onOpenMarkdownDocument: { _ in }
         )
     }
 }

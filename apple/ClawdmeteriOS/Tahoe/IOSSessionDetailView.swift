@@ -101,6 +101,8 @@ public struct IOSSessionDetailView: View {
     @State private var chatPanePinned: Bool = true
     @State private var attachments: [ComposerAttachment] = []
     @State private var photoPickerItems: [PhotosPickerItem] = []
+    @State private var documentTabs: [IOSWorkspaceDocumentTab] = []
+    @State private var selectedDocumentTabId: UUID?
     @StateObject private var chatStore: iOSChatStore
     #if DEBUG && canImport(UIKit)
     @StateObject private var scrollPerfProbe = IOSScrollPerformanceProbe()
@@ -250,12 +252,20 @@ public struct IOSSessionDetailView: View {
                     sessions: agentClient.sessions,
                     activeSessionId: realAgentSession.id,
                     terminalAvailable: !(realAgentSession.tmuxPaneId?.isEmpty ?? true),
-                    onOpenSession: { id in onOpenSession(id) },
+                    documentTabs: documentTabs,
+                    activeDocumentTabId: selectedDocumentTab?.id,
+                    onOpenSession: { id in
+                        selectedDocumentTabId = nil
+                        onOpenSession(id)
+                    },
                     onOpenTerminal: {
+                        selectedDocumentTabId = nil
                         if visibleTabs.contains(.terminal) {
                             selectTab(.terminal)
                         }
-                    }
+                    },
+                    onSelectDocument: { selectDocumentTab($0) },
+                    onCloseDocument: { closeDocumentTab($0) }
                 )
                 .padding(.bottom, 6)
             }
@@ -263,20 +273,32 @@ public struct IOSSessionDetailView: View {
             // The workbench tabs are real panes, not a hidden menu item:
             // Plan, Run, PR, and Terminal are directly reachable from the
             // detail screen and preserve their existing daemon-backed views.
-            tabChipStrip
-                .padding(.bottom, 8)
+            if selectedDocumentTab == nil {
+                tabChipStrip
+                    .padding(.bottom, 8)
+            }
 
             // v16 tab body. Each branch renders the pane for the current
             // tab. Chat keeps its custom thread + composer; the other
             // five wrap the standalone pane views that previously
             // existed but were never embedded.
-            tabContent
+            if let documentTab = selectedDocumentTab {
+                IOSMarkdownDocumentTabView(
+                    tab: documentTab,
+                    sessionId: documentTab.sessionId,
+                    client: agentClient
+                )
+                .id(documentTab.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                tabContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
 
             // Composer — only relevant in the Chat tab. Other tabs have
             // their own write actions (plan: approve; PR: merge;
             // terminal: keystroke; artifacts: download).
-            if selectedTab == .chat {
+            if selectedDocumentTab == nil && selectedTab == .chat {
                 if !queuedDrafts.isEmpty {
                     queuedDraftsPanel
                         .padding(.horizontal, 12)
@@ -408,6 +430,11 @@ public struct IOSSessionDetailView: View {
     }
 
     // MARK: - Tab UI
+
+    private var selectedDocumentTab: IOSWorkspaceDocumentTab? {
+        guard let id = selectedDocumentTabId else { return nil }
+        return documentTabs.first { $0.id == id }
+    }
 
     private var sessionMenuButton: some View {
         Menu {
@@ -561,11 +588,73 @@ public struct IOSSessionDetailView: View {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
+                selectedDocumentTabId = nil
                 selectedTab = tab
             }
         } else {
             withAnimation(.snappy(duration: 0.18)) {
+                selectedDocumentTabId = nil
                 selectedTab = tab
+            }
+        }
+    }
+
+    private func selectDocumentTab(_ tab: IOSWorkspaceDocumentTab) {
+        if reduceMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                selectedDocumentTabId = tab.id
+            }
+        } else {
+            withAnimation(.snappy(duration: 0.18)) {
+                selectedDocumentTabId = tab.id
+            }
+        }
+    }
+
+    private func openMarkdownDocument(_ path: String) {
+        guard let realAgentSession else { return }
+        if reduceMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                _ = IOSWorkspaceDocumentTabs.open(
+                    tabs: &documentTabs,
+                    selectedId: &selectedDocumentTabId,
+                    session: realAgentSession,
+                    path: path
+                )
+            }
+        } else {
+            withAnimation(.snappy(duration: 0.18)) {
+                _ = IOSWorkspaceDocumentTabs.open(
+                    tabs: &documentTabs,
+                    selectedId: &selectedDocumentTabId,
+                    session: realAgentSession,
+                    path: path
+                )
+            }
+        }
+    }
+
+    private func closeDocumentTab(_ tab: IOSWorkspaceDocumentTab) {
+        let wasSelected = selectedDocumentTabId == tab.id
+        if reduceMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                IOSWorkspaceDocumentTabs.close(tabs: &documentTabs, selectedId: &selectedDocumentTabId, tab: tab)
+                if wasSelected {
+                    selectedTab = .chat
+                }
+            }
+        } else {
+            withAnimation(.snappy(duration: 0.18)) {
+                IOSWorkspaceDocumentTabs.close(tabs: &documentTabs, selectedId: &selectedDocumentTabId, tab: tab)
+                if wasSelected {
+                    selectedTab = .chat
+                }
             }
         }
     }
@@ -618,7 +707,12 @@ public struct IOSSessionDetailView: View {
             }
         case .artifacts:
             if let s = realAgentSession {
-                iOSArtifactsPane(client: agentClient, session: s, chatStore: chatStore)
+                iOSArtifactsPane(
+                    client: agentClient,
+                    session: s,
+                    chatStore: chatStore,
+                    onOpenMarkdownDocument: openMarkdownDocument
+                )
             } else {
                 emptyState(title: "No session", body: "Session unavailable.")
             }
@@ -712,7 +806,8 @@ public struct IOSSessionDetailView: View {
                                     item: item,
                                     sessionId: sessionId,
                                     provider: session?.agent ?? .claude,
-                                    presentationStore: presentationStore
+                                    presentationStore: presentationStore,
+                                    onOpenMarkdownDocument: openMarkdownDocument
                                 )
                             }
                             if !planSteps.isEmpty {
@@ -1309,6 +1404,7 @@ private struct IOSWireChatItemRow: View {
     var sessionId: UUID
     var provider: TahoeProvider
     @ObservedObject var presentationStore: SessionPresentationStore
+    var onOpenMarkdownDocument: (String) -> Void
 
     var body: some View {
         switch item {
@@ -1316,6 +1412,9 @@ private struct IOSWireChatItemRow: View {
             messageRow(message)
         case .toolRun(_, let pairs):
             VStack(alignment: .leading, spacing: 6) {
+                ForEach(markdownArtifacts(in: pairs)) { artifact in
+                    markdownArtifactButton(path: artifact.path)
+                }
                 ForEach(pairs) { pair in
                     HStack(spacing: 8) {
                         TahoeIcon("doc", size: 11).foregroundStyle(t.fg3)
@@ -1353,23 +1452,33 @@ private struct IOSWireChatItemRow: View {
             case .assistantText:
                 HStack(alignment: .top, spacing: 9) {
                     TahoeProviderGlyph(provider: provider, size: 24)
-                    Text(message.body)
-                        .font(TahoeFont.body(14))
-                        .foregroundStyle(t.fg)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(message.body)
+                            .font(TahoeFont.body(14))
+                            .foregroundStyle(t.fg)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ForEach(markdownArtifacts(in: message)) { artifact in
+                            markdownArtifactButton(path: artifact.path)
+                        }
+                    }
                     Spacer()
                 }
             case .toolCall, .toolResult:
-                HStack(spacing: 8) {
-                    TahoeIcon(message.kind == .toolCall ? "doc" : "check", size: 11).foregroundStyle(t.fg3)
-                    Text(message.title)
-                        .font(TahoeFont.body(11.5, weight: .semibold))
-                        .foregroundStyle(t.fg2)
-                    Text(message.body)
-                        .font(TahoeFont.mono(11))
-                        .foregroundStyle(message.isError ? .red : t.fg3)
-                        .lineLimit(2)
-                    Spacer()
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        TahoeIcon(message.kind == .toolCall ? "doc" : "check", size: 11).foregroundStyle(t.fg3)
+                        Text(message.title)
+                            .font(TahoeFont.body(11.5, weight: .semibold))
+                            .foregroundStyle(t.fg2)
+                        Text(message.body)
+                            .font(TahoeFont.mono(11))
+                            .foregroundStyle(message.isError ? .red : t.fg3)
+                            .lineLimit(2)
+                        Spacer()
+                    }
+                    ForEach(markdownArtifacts(in: message)) { artifact in
+                        markdownArtifactButton(path: artifact.path)
+                    }
                 }
                 .padding(.horizontal, 4).padding(.vertical, 4)
             case .meta:
@@ -1399,6 +1508,79 @@ private struct IOSWireChatItemRow: View {
                     .joined(separator: "\n")
             }
         }
+    }
+
+    private func markdownArtifacts(in pairs: [ToolPair]) -> [GeneratedArtifact] {
+        var seen = Set<String>()
+        var out: [GeneratedArtifact] = []
+        for artifact in pairs.flatMap({ $0.call.generatedArtifacts }) where artifact.kind == .markdownDocument {
+            guard !seen.contains(artifact.path) else { continue }
+            seen.insert(artifact.path)
+            out.append(artifact)
+        }
+        return out
+    }
+
+    private func markdownArtifacts(in message: ChatMessage) -> [GeneratedArtifact] {
+        var artifacts = message.generatedArtifacts.filter { $0.kind == .markdownDocument }
+        if artifacts.isEmpty {
+            artifacts = GeneratedArtifactDetector.artifactsFromDisplay(
+                title: message.title,
+                body: message.body,
+                detail: message.detail
+            )
+        }
+        if artifacts.isEmpty {
+            artifacts = GeneratedArtifactDetector.artifactsFromDisplay(
+                title: "write_file",
+                body: message.body,
+                detail: message.detail
+            )
+        }
+        var seen = Set<String>()
+        var out: [GeneratedArtifact] = []
+        for artifact in artifacts {
+            guard !seen.contains(artifact.path) else { continue }
+            seen.insert(artifact.path)
+            out.append(artifact)
+        }
+        return out
+    }
+
+    private func markdownArtifactButton(path: String) -> some View {
+        Button {
+            onOpenMarkdownDocument(path)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.richtext")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text((path as NSString).lastPathComponent.isEmpty ? path : (path as NSString).lastPathComponent)
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1)
+                    Text("Open in Code tab")
+                        .font(TahoeFont.body(10.5, weight: .medium))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                TahoeIcon("chevR", size: 10)
+                    .foregroundStyle(t.fg4)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(t.glassTintHi, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(t.hairline, lineWidth: 0.5)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Open \(path) in Code tab"))
     }
 }
 

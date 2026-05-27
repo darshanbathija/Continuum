@@ -1895,13 +1895,18 @@ struct ParsedLine: Sendable {
                     let askUserQuestion: AskUserQuestion? = (name == "AskUserQuestion")
                         ? AskUserQuestion.fromToolInput(block["input"])
                         : nil
+                    let generatedArtifacts = GeneratedArtifactDetector.artifacts(
+                        fromToolInput: block["input"],
+                        toolName: name
+                    )
                     out.append(ChatMessage(
                         id: "call:\(toolUseId)", kind: .toolCall, title: name,
                         body: inputSummary, detail: inputDetail, at: at,
                         editStats: editStats,
                         askUserQuestion: askUserQuestion,
                         editDiff: editDiff,
-                        bashResult: bashResult
+                        bashResult: bashResult,
+                        generatedArtifacts: generatedArtifacts
                     ))
                 default:
                     break
@@ -2290,18 +2295,21 @@ actor StagingParser {
             }
         case .toolCall:
             let trimmed = msg.body.trimmingCharacters(in: .whitespaces)
+            ingestGeneratedArtifacts(msg.generatedArtifacts)
+            ingestArtifactCandidates(
+                GeneratedArtifactDetector.artifactsFromDisplay(
+                    title: msg.title,
+                    body: msg.body,
+                    detail: msg.detail
+                ).map(\.path)
+            )
             guard !trimmed.isEmpty else { return }
             switch msg.title {
             case "Read", "Edit":
                 fileCounts[trimmed, default: 0] += 1
             case "Write":
                 fileCounts[trimmed, default: 0] += 1
-                let ext = (trimmed as NSString).pathExtension.lowercased()
-                if Self.artifactExtensions.contains(ext),
-                   !seenArtifactPaths.contains(trimmed) {
-                    seenArtifactPaths.insert(trimmed)
-                    artifactPaths.append(trimmed)
-                }
+                ingestArtifactCandidates([trimmed])
             case "Glob", "Grep":
                 fileCounts[trimmed, default: 0] += 1
             // v0.23 (Chat V2 — T12): provider-specific tool names for
@@ -2318,6 +2326,30 @@ actor StagingParser {
             }
         case .userText, .toolResult, .meta:
             break
+        }
+    }
+
+    private func ingestArtifactCandidates(_ paths: [String]) {
+        for raw in paths {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let ext = (trimmed as NSString).pathExtension.lowercased()
+            guard Self.artifactExtensions.contains(ext),
+                  !seenArtifactPaths.contains(trimmed)
+            else { continue }
+            seenArtifactPaths.insert(trimmed)
+            artifactPaths.append(trimmed)
+        }
+    }
+
+    private func ingestGeneratedArtifacts(_ artifacts: [GeneratedArtifact]) {
+        for artifact in artifacts where artifact.kind == .markdownDocument {
+            let path = artifact.path.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !path.isEmpty,
+                  !seenArtifactPaths.contains(path)
+            else { continue }
+            seenArtifactPaths.insert(path)
+            artifactPaths.append(path)
         }
     }
 
@@ -2415,7 +2447,7 @@ actor StagingParser {
         "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
         "png", "jpg", "jpeg", "gif", "svg", "webp", "tiff",
         "mp4", "mov", "mp3", "wav",
-        "csv", "tsv",
+        "csv", "tsv", "md", "markdown", "mdown",
         "zip", "tar", "gz",
     ]
 

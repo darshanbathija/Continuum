@@ -16,13 +16,28 @@ struct TranscriptPathLinkStrip: View {
 
     let links: [ResolvablePathLink]
     @ObservedObject var presentationStore: SessionPresentationStore
+    let onOpenMarkdownDocument: ((String) -> Void)?
+
+    init(
+        links: [ResolvablePathLink],
+        presentationStore: SessionPresentationStore,
+        onOpenMarkdownDocument: ((String) -> Void)? = nil
+    ) {
+        self.links = links
+        self.presentationStore = presentationStore
+        self.onOpenMarkdownDocument = onOpenMarkdownDocument
+    }
 
     var body: some View {
         if !links.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(links) { link in
-                        TranscriptPathLinkButton(link: link, presentationStore: presentationStore)
+                        TranscriptPathLinkButton(
+                            link: link,
+                            presentationStore: presentationStore,
+                            onOpenMarkdownDocument: onOpenMarkdownDocument
+                        )
                     }
                 }
                 .padding(.top, 4)
@@ -41,6 +56,7 @@ struct TranscriptPathLinkButton: View {
 
     let link: ResolvablePathLink
     @ObservedObject var presentationStore: SessionPresentationStore
+    let onOpenMarkdownDocument: ((String) -> Void)?
 
     private var exists: Bool {
         FileManager.default.fileExists(atPath: link.absolutePath)
@@ -51,6 +67,10 @@ struct TranscriptPathLinkButton: View {
             return "\(link.lineStart)-\(end)"
         }
         return "\(link.lineStart)"
+    }
+
+    private var isMarkdown: Bool {
+        GeneratedArtifactDetector.isMarkdownPath(link.absolutePath)
     }
 
     var body: some View {
@@ -74,9 +94,15 @@ struct TranscriptPathLinkButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!exists)
-        .help(exists ? "Open \(link.path) at line \(lineLabel)" : "File not found: \(link.path)")
+        .help(exists ? helpText : "File not found: \(link.path)")
         .accessibilityLabel(exists ? "Open \(link.path) line \(lineLabel)" : "File not found \(link.path)")
         .contextMenu {
+            if isMarkdown, let onOpenMarkdownDocument {
+                Button("Open in Code Tab") { onOpenMarkdownDocument(link.absolutePath) }
+                    .disabled(!exists)
+                Button("Open External Editor") { openExternal() }
+                    .disabled(!exists)
+            }
             Button("Copy Relative Path") { copy(link.path) }
             Button("Copy Absolute Path") { copy(link.absolutePath) }
             Button("Reveal in Finder") { reveal() }
@@ -85,6 +111,16 @@ struct TranscriptPathLinkButton: View {
     }
 
     private func open() {
+        guard exists else { return }
+        if isMarkdown, let onOpenMarkdownDocument {
+            try? presentationStore.recordPathAction(link.path)
+            onOpenMarkdownDocument(link.absolutePath)
+            return
+        }
+        openExternal()
+    }
+
+    private func openExternal() {
         guard exists else { return }
         try? presentationStore.recordPathAction(link.path)
         let preference = presentationStore.snapshot.externalEditorIdentifier ?? "xed"
@@ -120,5 +156,12 @@ struct TranscriptPathLinkButton: View {
     private func copy(_ value: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    private var helpText: String {
+        if isMarkdown, onOpenMarkdownDocument != nil {
+            return "Open \(link.path) in Code tab"
+        }
+        return "Open \(link.path) at line \(lineLabel)"
     }
 }

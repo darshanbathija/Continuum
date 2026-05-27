@@ -288,6 +288,33 @@ struct WorkspaceTerminalTab: Identifiable, Equatable {
     }
 }
 
+struct WorkspaceDocumentTab: Identifiable, Equatable {
+    let id: UUID
+    let sessionId: UUID
+    let workspaceKey: WorkspaceKey
+    let path: String
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        workspaceKey: WorkspaceKey,
+        path: String,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.workspaceKey = workspaceKey
+        self.path = path
+        self.createdAt = createdAt
+    }
+
+    var title: String {
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        return name.isEmpty ? "Markdown" : name
+    }
+}
+
 // MARK: - Model
 
 @MainActor
@@ -305,6 +332,8 @@ public final class SessionsModel: ObservableObject {
     @Published var draftWorkspaceTab: WorkspaceDraftTab?
     @Published var workspaceTerminalTabs: [WorkspaceTerminalTab] = []
     @Published var selectedWorkspaceTerminalTabId: UUID?
+    @Published var workspaceDocumentTabs: [WorkspaceDocumentTab] = []
+    @Published var selectedWorkspaceDocumentTabId: UUID?
 
     /// When the user opens an outside-Clawdmeter session (any JSONL in the
     /// recent-activity window), we synthesize a read-only AgentSession.
@@ -367,6 +396,17 @@ public final class SessionsModel: ObservableObject {
         return tab
     }
 
+    var selectedWorkspaceDocumentTab: WorkspaceDocumentTab? {
+        guard let id = selectedWorkspaceDocumentTabId,
+              let tab = workspaceDocumentTabs.first(where: { $0.id == id }),
+              let session = registry.session(id: tab.sessionId),
+              session.archivedAt == nil,
+              let sessionKey = WorkspaceKey.of(session),
+              sessionKey == tab.workspaceKey
+        else { return nil }
+        return tab
+    }
+
     /// Open a specific outside-Clawdmeter JSONL as a read-only chat. Each
     /// JSONL gets its own synthetic AgentSession, so flipping between
     /// recent rows in the sidebar doesn't share state.
@@ -376,6 +416,7 @@ public final class SessionsModel: ObservableObject {
         if let existing = syntheticOutsideSessions[path] {
             draftWorkspaceTab = nil
             selectedWorkspaceTerminalTabId = nil
+            selectedWorkspaceDocumentTabId = nil
             openOutsideJSONLPath = path
             openSessionId = nil
             forcedChatStoreURLs[existing.id] = url
@@ -404,6 +445,7 @@ public final class SessionsModel: ObservableObject {
         externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
         draftWorkspaceTab = nil
         selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = path
         openSessionId = nil
     }
@@ -411,6 +453,7 @@ public final class SessionsModel: ObservableObject {
     public func closeChatView() {
         openSessionId = nil
         selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
     }
 
@@ -884,6 +927,7 @@ public final class SessionsModel: ObservableObject {
         let session = visibleSessions[index - 1]
         draftWorkspaceTab = nil
         selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
         openSessionId = session.id
     }
@@ -891,6 +935,7 @@ public final class SessionsModel: ObservableObject {
     public func openSession(_ session: AgentSession) {
         draftWorkspaceTab = nil
         selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
         openSessionId = session.id
     }
@@ -901,6 +946,7 @@ public final class SessionsModel: ObservableObject {
     ) {
         guard let key = WorkspaceKey.of(session) else { return }
         selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
         draftWorkspaceTab = WorkspaceDraftTab(
             workspaceKey: key,
             mode: session.mode,
@@ -978,6 +1024,23 @@ public final class SessionsModel: ObservableObject {
             }
     }
 
+    func workspaceDocumentTabs(in workspaceKey: WorkspaceKey) -> [WorkspaceDocumentTab] {
+        workspaceDocumentTabs
+            .compactMap { tab -> WorkspaceDocumentTab? in
+                guard tab.workspaceKey == workspaceKey,
+                      let session = registry.session(id: tab.sessionId),
+                      session.archivedAt == nil,
+                      let sessionKey = WorkspaceKey.of(session),
+                      sessionKey == workspaceKey
+                else { return nil }
+                return tab
+            }
+            .sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+    }
+
     func canOpenWorkspaceTerminalTab(from session: AgentSession) -> Bool {
         guard session.archivedAt == nil,
               WorkspaceKey.of(session) != nil,
@@ -996,6 +1059,7 @@ public final class SessionsModel: ObservableObject {
         draftWorkspaceTab = nil
         openOutsideJSONLPath = nil
         openSessionId = tab.sessionId
+        selectedWorkspaceDocumentTabId = nil
         selectedWorkspaceTerminalTabId = tab.id
     }
 
@@ -1053,6 +1117,68 @@ public final class SessionsModel: ObservableObject {
                 openSessionId = tab.sessionId
             }
         }
+    }
+
+    func selectWorkspaceDocumentTab(_ tab: WorkspaceDocumentTab) {
+        guard let session = registry.session(id: tab.sessionId),
+              session.archivedAt == nil,
+              let sessionKey = WorkspaceKey.of(session),
+              sessionKey == tab.workspaceKey
+        else { return }
+        draftWorkspaceTab = nil
+        openOutsideJSONLPath = nil
+        openSessionId = tab.sessionId
+        selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = tab.id
+    }
+
+    func openWorkspaceDocumentTab(
+        from session: AgentSession,
+        path rawPath: String,
+        createdAt: Date = Date()
+    ) {
+        guard let workspaceKey = WorkspaceKey.of(session),
+              let path = Self.standardizedDocumentPath(rawPath, relativeTo: session)
+        else { return }
+        if let existing = workspaceDocumentTabs.first(where: {
+            $0.workspaceKey == workspaceKey && $0.path == path
+        }) {
+            selectWorkspaceDocumentTab(existing)
+            return
+        }
+        let tab = WorkspaceDocumentTab(
+            sessionId: session.id,
+            workspaceKey: workspaceKey,
+            path: path,
+            createdAt: createdAt
+        )
+        workspaceDocumentTabs.append(tab)
+        selectWorkspaceDocumentTab(tab)
+    }
+
+    func closeWorkspaceDocumentTab(_ tab: WorkspaceDocumentTab) {
+        workspaceDocumentTabs.removeAll { $0.id == tab.id }
+        if selectedWorkspaceDocumentTabId == tab.id {
+            selectedWorkspaceDocumentTabId = nil
+            selectedWorkspaceTerminalTabId = nil
+            if registry.session(id: tab.sessionId) != nil {
+                openSessionId = tab.sessionId
+            }
+        }
+    }
+
+    private static func standardizedDocumentPath(_ rawPath: String, relativeTo session: AgentSession) -> String? {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let expanded = NSString(string: trimmed).expandingTildeInPath
+        let url: URL
+        if expanded.hasPrefix("/") {
+            url = URL(fileURLWithPath: expanded, isDirectory: false)
+        } else {
+            url = URL(fileURLWithPath: session.effectiveCwd, isDirectory: true)
+                .appendingPathComponent(expanded, isDirectory: false)
+        }
+        return url.standardizedFileURL.path
     }
 
     public func refresh() async {

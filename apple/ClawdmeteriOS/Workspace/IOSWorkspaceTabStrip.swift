@@ -8,11 +8,19 @@ struct IOSWorkspaceTabStrip: View {
     let sessions: [AgentSession]
     let activeSessionId: UUID
     let terminalAvailable: Bool
+    let documentTabs: [IOSWorkspaceDocumentTab]
+    let activeDocumentTabId: UUID?
     let onOpenSession: (UUID) -> Void
     let onOpenTerminal: () -> Void
+    let onSelectDocument: (IOSWorkspaceDocumentTab) -> Void
+    let onCloseDocument: (IOSWorkspaceDocumentTab) -> Void
 
     private var workspaceSessions: [AgentSession] {
         WorkspaceKey.siblings(of: workspaceKey, in: sessions)
+    }
+
+    private var workspaceDocumentTabs: [IOSWorkspaceDocumentTab] {
+        IOSWorkspaceDocumentTabs.tabs(in: workspaceKey, all: documentTabs)
     }
 
     var body: some View {
@@ -47,6 +55,10 @@ struct IOSWorkspaceTabStrip: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(Text("Open Terminal tab"))
                 }
+
+                ForEach(workspaceDocumentTabs) { tab in
+                    documentChip(tab)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 2)
@@ -57,7 +69,7 @@ struct IOSWorkspaceTabStrip: View {
 
     @ViewBuilder
     private func sessionChip(_ session: AgentSession) -> some View {
-        let active = session.id == activeSessionId
+        let active = activeDocumentTabId == nil && session.id == activeSessionId
         HStack(spacing: 8) {
             TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 18)
             VStack(alignment: .leading, spacing: 1) {
@@ -90,6 +102,57 @@ struct IOSWorkspaceTabStrip: View {
         }
     }
 
+    private func documentChip(_ tab: IOSWorkspaceDocumentTab) -> some View {
+        let active = activeDocumentTabId == tab.id
+        return HStack(spacing: 4) {
+            Button {
+                onSelectDocument(tab)
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "doc.richtext")
+                        .font(.system(size: 12, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(tab.title)
+                            .font(TahoeFont.body(11.5, weight: active ? .bold : .semibold))
+                            .lineLimit(1)
+                        Text("Document")
+                            .font(TahoeFont.body(9.5, weight: .medium))
+                            .lineLimit(1)
+                            .opacity(0.72)
+                    }
+                    .frame(maxWidth: 118, alignment: .leading)
+                }
+                .foregroundStyle(active ? .white : t.fg)
+                .padding(.leading, 9)
+                .padding(.trailing, 6)
+                .frame(height: 34)
+                .background(active ? t.accent : t.glassTintHi, in: Capsule(style: .continuous))
+                .overlay {
+                    Capsule(style: .continuous)
+                        .stroke(active ? .clear : t.hairline, lineWidth: 0.5)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(active ? "\(tab.title), current document tab" : "Open \(tab.title) document tab"))
+
+            Button {
+                onCloseDocument(tab)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(active ? Color.white.opacity(0.88) : t.fg3)
+                    .frame(width: 24, height: 34)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Close \(tab.title) document tab"))
+        }
+        .background(active ? t.accent : t.glassTintHi, in: Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous)
+                .stroke(active ? .clear : t.hairline, lineWidth: 0.5)
+        }
+    }
+
     private func title(for session: AgentSession) -> String {
         if let custom = session.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !custom.isEmpty {
@@ -111,7 +174,7 @@ struct IOSWorkspaceTabStrip: View {
     }
 
     private func tabAccessibilityLabel(for session: AgentSession) -> String {
-        if session.id == activeSessionId {
+        if activeDocumentTabId == nil && session.id == activeSessionId {
             return "\(title(for: session)), current workspace tab"
         }
         return "Open \(title(for: session)) workspace tab"

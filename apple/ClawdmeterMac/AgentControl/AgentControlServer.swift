@@ -1180,6 +1180,9 @@ public final class AgentControlServer {
         t.register(method: "GET", pattern: "/sessions/:id/artifact") { [weak self] req, conn, params in
             await self?.handleGetArtifact(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
+        t.register(method: "GET", pattern: "/sessions/:id/markdown-document") { [weak self] req, conn, params in
+            await self?.handleGetMarkdownDocument(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
         // v0.6.0 wire v7: Antigravity Plan endpoint. Returns
         // AntigravityPlanSnapshot for a Gemini session — task.md + steps
         // + annotations + token usage estimate. Empty/awaitingFirstTurn
@@ -3382,6 +3385,103 @@ public final class AgentControlServer {
             sendResponse(.internalError, on: connection); return
         }
         sendResponse(.ok(contentType: contentType(for: url), body: data), on: connection)
+    }
+
+    /// GET /sessions/:id/markdown-document?path=<relative-or-abs>
+    ///
+    /// Read-only Markdown document fetch for iOS Code document tabs. This is
+    /// intentionally separate from `/artifact`: artifact reads stay scoped to
+    /// the session worktree, while generated review/plan Markdown often lives
+    /// under `~/.gstack/projects/...` outside the workspace. The route still
+    /// keeps document-specific guardrails so it cannot serve large, binary, or
+    /// non-text files.
+    private func handleGetMarkdownDocument(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), let session = registry.session(id: uuid) else {
+            sendResponse(.notFound, on: connection); return
+        }
+        guard let comps = URLComponents(string: request.path),
+              let pathArg = comps.queryItems?.first(where: { $0.name == "path" })?.value,
+              !pathArg.isEmpty else {
+            sendResponse(.badRequest(detail: "missing document path"), on: connection); return
+        }
+        guard let path = Self.standardizedMarkdownDocumentPath(pathArg, relativeTo: session.effectiveCwd) else {
+            sendResponse(.badRequest(detail: "invalid document path"), on: connection); return
+        }
+        let ext = (path as NSString).pathExtension
+        guard ext.isEmpty || GeneratedArtifactDetector.isMarkdownPath(path) else {
+            sendResponse(HTTPResponse(
+                status: 415,
+                reason: "Unsupported Media Type",
+                contentType: "text/plain",
+                body: Data("document path is not Markdown\n".utf8)
+            ), on: connection)
+            return
+        }
+
+        let resolved = (path as NSString).resolvingSymlinksInPath
+        let fd = open(resolved, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else {
+            let code: Int
+            let reason: String
+            let body: String
+            switch errno {
+            case EACCES, EPERM, ELOOP:
+                code = 403
+                reason = "Forbidden"
+                body = "document path is not readable\n"
+            default:
+                code = 404
+                reason = "Not Found"
+                body = "document not found\n"
+            }
+            sendResponse(HTTPResponse(
+                status: code,
+                reason: reason,
+                contentType: "text/plain",
+                body: Data(body.utf8)
+            ), on: connection)
+            return
+        }
+        defer { close(fd) }
+
+        var st = stat()
+        guard fstat(fd, &st) == 0 else {
+            sendResponse(.internalError, on: connection); return
+        }
+        guard (st.st_mode & S_IFMT) == S_IFREG else {
+            sendResponse(HTTPResponse(
+                status: 403,
+                reason: "Forbidden",
+                contentType: "text/plain",
+                body: Data("document path is not a regular file\n".utf8)
+            ), on: connection)
+            return
+        }
+        let size = Int(st.st_size)
+        guard size <= Self.markdownDocumentMaxBytes else {
+            sendResponse(HTTPResponse(
+                status: 413,
+                reason: "Payload Too Large",
+                contentType: "text/plain",
+                body: Data("document is larger than 2 MB\n".utf8)
+            ), on: connection)
+            return
+        }
+
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        guard let data = try? handle.readToEnd() else {
+            sendResponse(.internalError, on: connection); return
+        }
+        guard !data.contains(0), String(data: data, encoding: .utf8) != nil else {
+            sendResponse(HTTPResponse(
+                status: 415,
+                reason: "Unsupported Media Type",
+                contentType: "text/plain",
+                body: Data("document is not readable UTF-8 Markdown text\n".utf8)
+            ), on: connection)
+            return
+        }
+        sendResponse(.ok(contentType: "text/markdown; charset=utf-8", body: data), on: connection)
     }
 
     private func contentType(for url: URL) -> String {
@@ -7355,6 +7455,29 @@ public final class AgentControlServer {
         // v0.7.7: delegated to PathValidator. Allowlist of agent project
         // directories lives in the shared helper now.
         PathValidator.isValidJsonlPath(path, homeDirectory: ClawdmeterRealHome.path())
+    }
+
+    static let markdownDocumentMaxBytes = 2 * 1024 * 1024
+
+    static func standardizedMarkdownDocumentPath(_ rawPath: String, relativeTo cwd: String) -> String? {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !PathValidator.isEmpty(trimmed),
+              !PathValidator.containsControlBytes(trimmed),
+              !PathValidator.containsTraversal(trimmed)
+        else { return nil }
+        let expanded = NSString(string: trimmed).expandingTildeInPath
+        let absolute: String
+        if expanded.hasPrefix("/") {
+            absolute = expanded
+        } else {
+            guard !cwd.isEmpty,
+                  cwd.hasPrefix("/"),
+                  !PathValidator.containsControlBytes(cwd),
+                  !PathValidator.containsTraversal(cwd)
+            else { return nil }
+            absolute = (cwd as NSString).appendingPathComponent(expanded)
+        }
+        return (absolute as NSString).standardizingPath
     }
 
     // v0.27.0: isSafeDesignImportBase(_:) removed along with the Design

@@ -121,7 +121,11 @@ struct SessionWorkspaceView: View {
                 TahoeGlass(radius: 20, tone: .panel) {
                     HStack(spacing: 0) {
                         ZStack(alignment: .bottom) {
-                            if let terminalTab = model.selectedWorkspaceTerminalTab,
+                            if let documentTab = model.selectedWorkspaceDocumentTab,
+                               let documentSession = model.registry.session(id: documentTab.sessionId) {
+                                centerDocument(documentTab, session: documentSession)
+                                    .id(documentTab.id)
+                            } else if let terminalTab = model.selectedWorkspaceTerminalTab,
                                let terminalSession = model.registry.session(id: terminalTab.sessionId) {
                                 centerTerminal(terminalTab, session: terminalSession)
                                     .id(terminalTab.id)
@@ -153,7 +157,8 @@ struct SessionWorkspaceView: View {
                             // PermissionPromptCard + MacPermissionResponder.
                             // Replaces the deleted LegacyMacPermissionPromptCard
                             // that used to live in ChatSoloView.swift.
-                            if model.selectedWorkspaceTerminalTab == nil,
+                            if model.selectedWorkspaceDocumentTab == nil,
+                               model.selectedWorkspaceTerminalTab == nil,
                                let session = model.openSession,
                                let store = model.chatStore(for: session),
                                let prompt = store.pendingPermissionPrompt {
@@ -433,6 +438,8 @@ struct SessionWorkspaceView: View {
                 draftTab: draft,
                 terminalTabs: model.workspaceTerminalTabs(in: draft.workspaceKey),
                 activeTerminalTabId: nil,
+                documentTabs: model.workspaceDocumentTabs(in: draft.workspaceKey),
+                activeDocumentTabId: model.selectedWorkspaceDocumentTab?.id,
                 terminalAvailable: WorkspaceKey.siblings(of: draft.workspaceKey, in: model.registry.sessions)
                     .contains(where: { model.canOpenWorkspaceTerminalTab(from: $0) }),
                 onNewChat: {},
@@ -443,7 +450,9 @@ struct SessionWorkspaceView: View {
                     }
                 },
                 onSelectTerminal: { model.selectWorkspaceTerminalTab($0) },
-                onCloseTerminal: { tab in Task { await model.closeWorkspaceTerminalTab(tab) } }
+                onCloseTerminal: { tab in Task { await model.closeWorkspaceTerminalTab(tab) } },
+                onSelectDocument: { model.selectWorkspaceDocumentTab($0) },
+                onCloseDocument: { model.closeWorkspaceDocumentTab($0) }
             )
             EmptyStateCenteredComposer(
                 model: model,
@@ -465,6 +474,8 @@ struct SessionWorkspaceView: View {
                 draftTab: model.draftWorkspaceTab,
                 terminalTabs: model.workspaceTerminalTabs(in: tab.workspaceKey),
                 activeTerminalTabId: tab.id,
+                documentTabs: model.workspaceDocumentTabs(in: tab.workspaceKey),
+                activeDocumentTabId: model.selectedWorkspaceDocumentTab?.id,
                 terminalAvailable: model.canOpenWorkspaceTerminalTab(from: session),
                 onNewChat: {
                     model.openDraftWorkspaceTab(
@@ -484,7 +495,9 @@ struct SessionWorkspaceView: View {
                 onSelectTerminal: { model.selectWorkspaceTerminalTab($0) },
                 onCloseTerminal: { terminalTab in
                     Task { await model.closeWorkspaceTerminalTab(terminalTab) }
-                }
+                },
+                onSelectDocument: { model.selectWorkspaceDocumentTab($0) },
+                onCloseDocument: { model.closeWorkspaceDocumentTab($0) }
             )
             if let runtime = AppDelegate.runtime,
                let port = runtime.agentControlServer.boundWsPort {
@@ -502,6 +515,45 @@ struct SessionWorkspaceView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+    }
+
+    private func centerDocument(_ tab: WorkspaceDocumentTab, session: AgentSession) -> some View {
+        VStack(spacing: 0) {
+            WorkspaceTabStrip(
+                model: model,
+                workspaceKey: tab.workspaceKey,
+                activeSession: session,
+                activeSessionId: session.id,
+                draftTab: model.draftWorkspaceTab,
+                terminalTabs: model.workspaceTerminalTabs(in: tab.workspaceKey),
+                activeTerminalTabId: model.selectedWorkspaceTerminalTab?.id,
+                documentTabs: model.workspaceDocumentTabs(in: tab.workspaceKey),
+                activeDocumentTabId: tab.id,
+                terminalAvailable: model.canOpenWorkspaceTerminalTab(from: session),
+                onNewChat: {
+                    model.openDraftWorkspaceTab(
+                        from: session,
+                        defaults: ComposerStore.ChipDefaults(
+                            agent: session.agent,
+                            modelId: session.model,
+                            effort: session.effort,
+                            mode: session.mode,
+                            planMode: false
+                        )
+                    )
+                },
+                onNewTerminal: {
+                    Task { await model.openOrCreateWorkspaceTerminalTab(from: session) }
+                },
+                onSelectTerminal: { model.selectWorkspaceTerminalTab($0) },
+                onCloseTerminal: { terminalTab in
+                    Task { await model.closeWorkspaceTerminalTab(terminalTab) }
+                },
+                onSelectDocument: { model.selectWorkspaceDocumentTab($0) },
+                onCloseDocument: { model.closeWorkspaceDocumentTab($0) }
+            )
+            MarkdownDocumentTabView(tab: tab)
         }
     }
 
@@ -2490,10 +2542,12 @@ private struct CenterThread: View {
                     activeSession: session,
                     activeSessionId: session.id,
                     draftTab: model.draftWorkspaceTab,
-                terminalTabs: model.workspaceTerminalTabs(in: workspaceKey),
-                activeTerminalTabId: nil,
-                terminalAvailable: model.canOpenWorkspaceTerminalTab(from: session),
-                onNewChat: {
+                    terminalTabs: model.workspaceTerminalTabs(in: workspaceKey),
+                    activeTerminalTabId: nil,
+                    documentTabs: model.workspaceDocumentTabs(in: workspaceKey),
+                    activeDocumentTabId: model.selectedWorkspaceDocumentTab?.id,
+                    terminalAvailable: model.canOpenWorkspaceTerminalTab(from: session),
+                    onNewChat: {
                         model.openDraftWorkspaceTab(from: session, defaults: workspaceDraftDefaults)
                     },
                     onNewTerminal: {
@@ -2502,7 +2556,9 @@ private struct CenterThread: View {
                     onSelectTerminal: { model.selectWorkspaceTerminalTab($0) },
                     onCloseTerminal: { terminalTab in
                         Task { await model.closeWorkspaceTerminalTab(terminalTab) }
-                    }
+                    },
+                    onSelectDocument: { model.selectWorkspaceDocumentTab($0) },
+                    onCloseDocument: { model.closeWorkspaceDocumentTab($0) }
                 )
             }
             header
@@ -4296,6 +4352,8 @@ private struct ChatThreadScroll: View {
         let askBinding = $askUserQuestionSelections
         let presentationStore = self.presentationStore
         let sessionId = session.id
+        let session = self.session
+        let model = self.model
         return ChatItemRowActions(
             onToggleToolRun: { runId, shouldOpen in
                 let key = "run:\(runId)"
@@ -4332,6 +4390,9 @@ private struct ChatThreadScroll: View {
             },
             onToggleBookmark: { messageId in
                 try? presentationStore.toggleMessageBookmark(sessionId: sessionId, messageId: messageId)
+            },
+            onOpenMarkdownDocument: { path in
+                model.openWorkspaceDocumentTab(from: session, path: path)
             }
         )
     }

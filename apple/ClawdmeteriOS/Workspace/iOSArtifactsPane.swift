@@ -11,6 +11,7 @@ struct iOSArtifactsPane: View {
     @ObservedObject var client: AgentControlClient
     let session: AgentSession
     @ObservedObject var chatStore: iOSChatStore
+    var onOpenMarkdownDocument: ((String) -> Void)? = nil
 
     @State private var previewURL: URL?
     @State private var downloading: String?
@@ -49,7 +50,7 @@ struct iOSArtifactsPane: View {
             Text("No artifacts yet")
                 .font(TahoeFont.body(14, weight: .semibold))
                 .foregroundStyle(t.fg2)
-            Text("When the agent writes a PDF, image, or spreadsheet, it'll appear here.")
+            Text("When the agent writes a document, PDF, image, or spreadsheet, it'll appear here.")
                 .font(TahoeFont.body(12))
                 .foregroundStyle(t.fg3)
                 .multilineTextAlignment(.center)
@@ -61,7 +62,11 @@ struct iOSArtifactsPane: View {
     private func row(for entry: ArtifactEntry) -> some View {
         let isDownloading = downloading == entry.path
         return Button {
-            Task { await open(entry) }
+            if isMarkdown(entry), let onOpenMarkdownDocument {
+                onOpenMarkdownDocument(entry.path)
+            } else {
+                Task { await open(entry) }
+            }
         } label: {
             TahoeGlass(radius: 14, tone: .chip, solid: t.dark ? true : nil) {
                 HStack(spacing: 12) {
@@ -100,7 +105,7 @@ struct iOSArtifactsPane: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(entry.filename)
         .accessibilityValue(isDownloading ? "Downloading" : entry.path)
-        .accessibilityHint("Double-tap to preview.")
+        .accessibilityHint(isMarkdown(entry) && onOpenMarkdownDocument != nil ? "Double-tap to open in the Code tab." : "Double-tap to preview.")
     }
 
     private func icon(for filename: String) -> String {
@@ -116,6 +121,10 @@ struct iOSArtifactsPane: View {
         case "html": return "globe"
         default: return "doc"
         }
+    }
+
+    private func isMarkdown(_ entry: ArtifactEntry) -> Bool {
+        GeneratedArtifactDetector.isMarkdownPath(entry.path)
     }
 
     private func open(_ entry: ArtifactEntry) async {
