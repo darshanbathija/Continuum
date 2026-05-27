@@ -57,7 +57,10 @@ public final class PRMirror: ObservableObject {
     public func attach(chatStore: SessionChatStore) {
         self.chatStore = chatStore
         snapshotSubscription?.cancel()
-        snapshotSubscription = chatStore.$snapshot
+        // C2 — was `chatStore.$snapshot` pre-C2 when SessionChatStore
+        // was `@Published`. With the store now `@Observable` the
+        // daemon-side Combine bridge is `snapshotPublisher`.
+        snapshotSubscription = chatStore.snapshotPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.maybeDetectURL()

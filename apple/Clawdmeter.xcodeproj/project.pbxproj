@@ -93,6 +93,7 @@
 		490356C50E6D9478834E1622 /* WSChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA0A2EA3B5F097F12B28E4B /* WSChannel.swift */; };
 		4A027F14FB57C10128699164 /* ClaudeLogo.svg in Resources */ = {isa = PBXBuildFile; fileRef = 989678078117646A9327BB0B /* ClaudeLogo.svg */; };
 		4A6A3F38F1CB6817604CD4D0 /* SessionChatStoreSlicePublishingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0672BC594F855CA5AF14EFA1 /* SessionChatStoreSlicePublishingTests.swift */; };
+		C24F00A1A09210C2A6B0A001 /* SessionChatStoreObservableBurstTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C24F00A1A09210C2A6B0A002 /* SessionChatStoreObservableBurstTests.swift */; };
 		4B4863CAE9854CDB98817D4A /* PlanCompletionSurfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B1A00A70CD4E6DD901790A3 /* PlanCompletionSurfaces.swift */; };
 		4C436A59A55714D7AAEC990B /* ClawdmeterShared in Frameworks */ = {isa = PBXBuildFile; productRef = 5717DB5CEB2C2698CCE9613D /* ClawdmeterShared */; };
 		4E1DF0B9137F68A4E16D74DF /* RunProfileManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9A32B81B3ECE2D51B5D057C /* RunProfileManagerTests.swift */; };
@@ -380,6 +381,7 @@
 		063A99FE19DBEB6CBE38A400 /* ClawdmeterMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClawdmeterMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0654B9694B446225AC792A03 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		0672BC594F855CA5AF14EFA1 /* SessionChatStoreSlicePublishingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStoreSlicePublishingTests.swift; sourceTree = "<group>"; };
+		C24F00A1A09210C2A6B0A002 /* SessionChatStoreObservableBurstTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStoreObservableBurstTests.swift; sourceTree = "<group>"; };
 		07E588070BA9CBA723BA60EC /* ClawdmeterMacWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClawdmeterMacWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		082C9ACB265F5683E2F5645E /* OpencodeSendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeSendTests.swift; sourceTree = "<group>"; };
 		08A7E1550F933A4D19DC48D9 /* MacTahoeAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTahoeAdapter.swift; sourceTree = "<group>"; };
@@ -1033,6 +1035,7 @@
 				B9A32B81B3ECE2D51B5D057C /* RunProfileManagerTests.swift */,
 				9757A0C3F17F56F77A6B3C94 /* SessionChatStorePendingTests.swift */,
 				0672BC594F855CA5AF14EFA1 /* SessionChatStoreSlicePublishingTests.swift */,
+				C24F00A1A09210C2A6B0A002 /* SessionChatStoreObservableBurstTests.swift */,
 				6D5E977D2DDE8E1370DA49A6 /* SessionExportBundleWriterTests.swift */,
 				82E485D80575BAE609E437A3 /* SessionLauncherModelTests.swift */,
 				044B37D86860F63D469721AA /* SessionLifecycleReducerTests.swift */,
@@ -1653,6 +1656,7 @@
 				4E1DF0B9137F68A4E16D74DF /* RunProfileManagerTests.swift in Sources */,
 				B602C3EE08EDA0DB0656CC63 /* SessionChatStorePendingTests.swift in Sources */,
 				4A6A3F38F1CB6817604CD4D0 /* SessionChatStoreSlicePublishingTests.swift in Sources */,
+				C24F00A1A09210C2A6B0A001 /* SessionChatStoreObservableBurstTests.swift in Sources */,
 				AAF41D5370E2C47E6BFF58D8 /* SessionExportBundleWriterTests.swift in Sources */,
 				7338DDD72403E26DF8AF281A /* SessionLauncherModelTests.swift in Sources */,
 				FFD59D04A8D35DC460F5CFC2 /* SessionLifecycleReducerTests.swift in Sources */,

@@ -6,7 +6,13 @@ import ClawdmeterShared
 @available(macOS 13, *)
 struct AnalyticsView: View {
 
-    @ObservedObject var store: UsageHistoryStore
+    // C2 — was `@ObservedObject` pre-C2. With `UsageHistoryStore`
+    // now `@Observable`, `@Bindable` is the `@Observable` analogue
+    // that gives us `$store.activeWindow`-style two-way bindings
+    // (used by the Picker below). Reads outside the Picker still
+    // get per-keypath tracking via SwiftUI's
+    // `withObservationTracking`.
+    @Bindable var store: UsageHistoryStore
     @Environment(\.colorScheme) private var colorScheme
 
     /// Per-section window for the by-repo list. Independent of `store.activeWindow`

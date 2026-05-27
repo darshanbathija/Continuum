@@ -189,7 +189,10 @@ final class RunProfileManager: ObservableObject {
 
     func start() {
         subscription?.cancel()
-        subscription = chatStore?.$snapshot
+        // C2 — was `chatStore?.$snapshot` pre-C2. With SessionChatStore
+        // migrated to `@Observable`, the daemon-side Combine bridge is
+        // `snapshotPublisher`.
+        subscription = chatStore?.snapshotPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.refresh()

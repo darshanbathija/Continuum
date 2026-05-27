@@ -85,7 +85,11 @@ public final class FrontierWebSocketChannel: WSChannel {
             // debounced push. We bump `updateCounter` and emit a fresh
             // aggregate envelope — slightly chatty if all 3 stream in
             // parallel, but the debounce collapses the burst.
-            let cancellable = store.$snapshot
+            //
+            // C2 — was `store.$snapshot` pre-C2. With SessionChatStore
+            // migrated to `@Observable`, the daemon-side Combine
+            // bridge is `snapshotPublisher`.
+            let cancellable = store.snapshotPublisher
                 .removeDuplicates { $0.updateCounter == $1.updateCounter }
                 .debounce(
                     for: .milliseconds(Self.coalesceWindowMs),
