@@ -94,11 +94,12 @@ public struct IOSPairingView: View {
         HStack(spacing: 0) {
             Button(action: onClose) {
                 TahoeIcon("x", size: 15).foregroundStyle(t.fg)
-                    .frame(width: 40, height: 38)
+                    .frame(width: 44, height: 44)
                     .background { Capsule().fill(t.glassTintHi) }
                     .overlay { Capsule().stroke(t.hairline, lineWidth: 0.5) }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Cancel pairing")
             Spacer()
             Text("Pair to Mac")
                 .font(TahoeFont.body(15, weight: .bold))

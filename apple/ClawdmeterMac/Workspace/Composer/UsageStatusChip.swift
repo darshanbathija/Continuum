@@ -186,8 +186,8 @@ struct ContextUsageChip: View {
     }
 
     private func ringColor(_ fraction: CGFloat) -> Color {
-        if fraction >= 0.95 { return .red }
-        if fraction >= 0.75 { return .orange }
+        if fraction >= 0.95 { return SessionsV2Theme.danger }
+        if fraction >= 0.75 { return SessionsV2Theme.warn }
         return SessionsV2Theme.accent
     }
 }
@@ -429,8 +429,8 @@ struct ContextUsagePopover: View {
     }
 
     private func planTint(pct: Int) -> Color {
-        if pct >= 95 { return .red }
-        if pct >= 75 { return .orange }
+        if pct >= 95 { return SessionsV2Theme.danger }
+        if pct >= 75 { return SessionsV2Theme.warn }
         return SessionsV2Theme.accent
     }
 

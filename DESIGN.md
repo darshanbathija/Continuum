@@ -132,6 +132,18 @@ The redesign expands beyond the original terra-cotta-on-black gauge language, bu
 | Strong white | `#ffffff` | Button text on accent fills, QR cells in dark mode |
 | Strong black | `#000000` | QR cells in light mode and high-contrast dark surfaces |
 
+### Session Status
+
+Sessions render a 5-7px dot that maps state to the semantic palette. Running sessions add a 6px glow on the dot so they read at a glance from the sidebar.
+
+| Status | Color | Notes |
+| --- | --- | --- |
+| running | `#28c840` (success) | 6px glow on the dot |
+| planning | foreground 3 (muted) | no glow |
+| paused | `#febc2e` (warn) | no glow |
+| done | active accent | no glow |
+| degraded | `#ff5f57` (danger) | no glow |
+
 ## Glass And Surfaces
 
 ### Glass Model
@@ -157,6 +169,7 @@ The prototype uses a global glass intensity slider:
 - Glass shadow:
   - dark: `0 12px 40px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.06) inset`
   - light: `0 12px 40px rgba(15,17,22,0.10), 0 1px 0 rgba(255,255,255,0.5) inset`
+- Hairline thickness: `0.5px` — the opacity tokens above determine color; the line width is always 0.5px.
 
 ### Radius Scale
 
@@ -245,8 +258,11 @@ Avoid color orbs on Graphite, Studio, and Code. The prototype intentionally supp
 ### iPhone
 
 - Prototype device frame is `402 x 874` inside 420 x 910 artboards.
-- Use status bar, large titles, glass tab bar, and iOS bottom-safe-area spacing.
-- Tab items: Chat, Live, Analytics, Code.
+- Outer phone radius: 52px. Dynamic Island: 126 × 37 at top center.
+- Use status bar, large titles, glass tab bar, and iOS bottom-safe-area spacing. Status bar sits inside top 56px of safe area; tab bar reserves 92px from bottom (38px when hidden).
+- Tab bar: floating capsule at `bottom: 24, left/right: 16`, glass `radius 999, padding 6`. Tab buttons are `flex: 1, height: 44, radius 999, font-size 13` (active weight 700, idle 600), icon size 16, gap 6.
+- Tab items: Chat, Live, Analytics, Code (the `sessions` key in the prototype labels as `Code`).
+- Home indicator: 139 × 5 capsule, 34px reserved zone, padding-bottom 8.
 - iPhone should feel like a companion control plane, not a read-only mirror.
 
 ### iPhone Chat
@@ -294,10 +310,15 @@ Live demo values from the prototype:
 ### iPhone Pairing
 
 - Title: Pair to Mac.
-- Primary visual: 280 x 280 QR glass block with accent halo and corner brackets.
-- Secondary action: paste pairing URL.
-- Primary CTA: Scan QR.
+- Primary visual: 280 × 280 QR glass block.
+  - Outer halo: `position: absolute, inset: -30, border-radius: 50, radial-gradient(60% 60% at 50% 50%, accentGlow @ 30%, transparent 70%), filter: blur(10px)`.
+  - Glass: `raised` tone, `radius: 28, padding: 28`. Inner FakeQR renders at 224px.
+  - Corner brackets: four 32×32 L-shapes at each outer corner (`top/bottom: -6, left/right: -6`). Stroke `3px solid accent`, shadow `0 0 10px accent@50%`. Asymmetric `border-radius` so each bracket bends inward (`10px 0 10px 0` on TL/BR, `0 10px 0 10px` on TR/BL).
+- Title row beneath QR: 18px weight 800 letter-spacing -0.3 rounded font ("Point your camera at the QR"), then 14px fg3 sub-copy.
+- Secondary action: paste pairing URL surfaced as a glass chip — `radius 14, padding 12 14`, link icon (15px) + mono URL preview + accent "Paste URL" label.
+- Primary CTA: AccentButton size `l`, full width: "Scan QR" with QR icon.
 - The prototype QR is fake. Product implementation must use real pairing payloads.
+- The Mac surface should match: QR popover at 280×280 with the same halo + bracket spec; the Settings → Pairing pane uses the same dimensions (do not shrink to 160×160 or 200×200).
 
 ## Components
 
@@ -314,11 +335,20 @@ Glass must support solid and translucent modes. Do not duplicate one-off translu
 ### Pills And Buttons
 
 - **Pill:** passive or low-emphasis label/button, 999px radius.
-- **AccentButton:** primary action, gradient from accent base to accent deep.
-- **GhostButton:** low-emphasis action on glass.
-- **Icon button:** square or circular, normally 38px to 40px on iPhone and 30px to 38px on Mac.
-- **Mac active titlebar tab:** 22px high, 7px radius, 12px text.
-- **Segmented controls:** pill track with active segment fill and shadow.
+- **AccentButton:** primary action, gradient from accent base to accent deep, full pill (999px). Sizes:
+  - small: 28px high, 12px label
+  - medium: 32px high, 13px label
+  - large: 38px high, 14px label
+  - Horizontal padding is `height × 0.5` on every size.
+  - Shadow: `0 0 0 0.5px accentDeep, 0 4px 12px accentDeep@30%, inset 0 1px 0 white@16%, inset 0 -1px 0 black@15%`.
+- **GhostButton:** low-emphasis action on glass, 999px radius. Sizes:
+  - small: 26px high, 12px label
+  - medium: 30px high, 12.5px label
+  - large: 36px high, 13px label
+  - Active state tints the border `accent`, fills with `accent @ dark 0.15 / light 0.10`.
+- **Icon button:** square or circular. iPhone uses 38px (`IOSRoundIconBtn`); Mac uses 30-38px. Sidebar inline icon buttons are 24px (e.g. RepoSection `+`, filter, folderPlus).
+- **Mac active titlebar tab:** 22px high, 7px radius, 12px text (active weight 700, idle 600). Active background: `white@10%` (dark) / `#fff` (light) with `0 1px 2px black@10%, 0 0 0 0.5px black@8%` shadow.
+- **Segmented controls:** pill track with active segment fill and shadow. iOS active state on the *provider* segmented control uses `accent@(dark 0.42 / light 0.28) × tintMul` — for Codex, set `tintMul = 2.6` because Codex's brand chroma is near-neutral and the default tint reads as transparent.
 
 ### Provider Glyphs
 
@@ -341,10 +371,13 @@ Glyphs appear in chat headers, reply cards, provider segmented controls, session
 ### Charts
 
 - Stacked bars, not area charts.
-- Provider order in stacks: Antigravity top, Codex middle, Claude bottom.
+- **Vertical stacks** (Mac "Spend over time", iOS "Mini spend chart"): provider order top-to-bottom is **Antigravity → Codex → Claude**. Bars render bottom-up so Claude is the foundation and Antigravity sits on top.
+- **Horizontal stacks** (Mac + iOS "By repo"): provider order left-to-right is **Claude → Codex → Antigravity**. This is intentional and differs from the vertical stack — keep both in sync with this rule.
 - Use dashed or hairline grid lines.
 - Use monospace for y-axis and precise dollar values.
-- Range selector is required for Mac analytics.
+- Range selector is required for Mac analytics. Mac: `24h / 7d / 30d / 90d / All time`. iPhone: `Today / 7d / 30d / All`.
+- Per-provider bar fill is always `linear-gradient(180deg, provider.glow, provider.base)` with a 50% provider-base box-shadow.
+- When a provider has $0 cost across the active window (e.g. Antigravity from CLI logs), render a zero-height slice — do not exclude the provider from the stack — so the legend stays honest. A separate request-count panel is acceptable as an auxiliary surface but does not replace the cost stack.
 
 ### Toggles
 
@@ -359,11 +392,18 @@ Glyphs appear in chat headers, reply cards, provider segmented controls, session
 ### Composer
 
 - Composer is a raised glass surface, not a plain text field.
+- Mac composer: glass `radius: 18`, inner text padding `14px 16px 6px`, chip row padding `6px 10px 10px`.
+- iPhone composer: glass `radius: 22`, padding `10px 8px 10px 14px`.
+- Three states: **idle** (default chrome), **running** (text dims to 55%, accent rim pulses 1.8s, send replaced by LiveTicker), **plan** (text dims, send disabled, PlanHalo above owns approval).
+- **ComposerChip:** 26px high, `radius 8`, `padding 0 9px` (or 26×26 icon-only). Hairline border, optional accent tint when active. Used for model, autopilot/plan, paperclip, code, mic.
+- **Send button (Mac):** 34×34 circle, `linear-gradient(180deg, accent, accentDeep)`, white arrow icon, soft accent shadow. Disabled in plan mode (hair2 fill, fg4 icon, `cursor: not-allowed`).
+- **Send button (iPhone):** 38×38 circle, same gradient and shadow as Mac.
+- **LiveTicker** (replaces Send while a session is running): 34px high, `radius 999`, accent rim `inset 0 0 0 1px accent@40%`, fill `linear-gradient(90deg, accent@18%, accent@10%)`. Inner stop button: 26×26 circle (white in dark mode / `#15171b` in light) with black/white stop icon. Right side shows live `$x.xxx` mono + `● live` accent + secondary line `<tok/s> · <elapsed>`.
 - It should support prompt text, file/command chips, attachments, microphone, autopilot/bolt affordance, send button, live running/cost state, and plan refinement state.
-- Placeholder examples:
-  - `Ask anything. Use / for skills, @ for files.`
-  - `Editing settlement-store.ts - send a follow-up...`
-  - `Refine the plan above...`
+- Placeholder examples (use these copy strings, do not invent new ones):
+  - idle: `Ask anything. Use / for skills, @ for files.`
+  - running: `Editing <file> — send a follow-up…`
+  - plan: `Refine the plan above… (e.g. "skip the migration step, just add the test")`
 
 ### Review Pane
 
@@ -375,6 +415,8 @@ Review pane tabs:
 - PR
 - Term
 
+Tab strip: each tab is `flex: 1`, 30px high, `radius 8`, `font-size 11.5` (active weight 700, idle 600). Active fill `white@10%` (dark) / `#fff` (light) with the same `0 1px 2px black@10%, 0 0 0 0.5px black@8%` shadow used on titlebar tabs. Icon + label, gap 5px.
+
 The review pane should prefer concrete, executable state:
 
 - Plan: numbered steps and estimated cost.
@@ -383,14 +425,27 @@ The review pane should prefer concrete, executable state:
 - PR: checks and PR status.
 - Term: command output.
 
+### Plan Halo / Plan Card
+
+The single canonical surface for "plan ready · review before run." Used in the Mac thread (full-width) and on iOS (compact mini).
+
+- **Aura behind card is static, not animated.** Mac: `inset: -28, radius: 38, radial-gradient(60% 60% at 50% 30%, accentGlow @(dark 0.30 / muted 0.10), transparent 70%), blur 8px`. iPhone: `inset: -20, radius: 30, blur 6px`. No `repeat-forever` pulse — the halo communicates state once, statically.
+- Glass card: `raised` tone, `radius: 20`.
+- Accent block (leading): Mac 28×28 / iOS 26×26, `radius 10` (Mac) / `9` (iOS), `linear-gradient(180deg, accent, accentDeep)`, sparkles icon in white, soft accentDeep@35% shadow + inset white@22% highlight.
+- Header: uppercase `Plan ready · review before run` (Mac) or `Plan ready` (iOS) in fg3 11.5px, then a bold detail line `N steps · est. M tool calls · ~$X.XX` in fg 14px.
+- Step list: ol with no list-style. Each step has a leading 22×22 (Mac) / 18×18 (iOS) `radius 6-7` badge containing the step number in mono 11px. Badge background `hair2`, label color `fg2` — except step 1 which uses `accent@18%` fill and `accent` text.
+- Actions row: ghost "Refine" + ghost "Edit plan" on Mac (size m), ghost "Refine" (size l, flex 1) on iOS. Trailing accent "Approve & run" (size m on Mac, size l flex 2 on iOS) with keyboard hint `⇧⏎` rendered at 70% opacity weight 500.
+- Mac action row also shows `Will commit to <branch>` in fg3 with a branch icon, sitting between the ghost buttons and the accent CTA.
+
 ## Motion
 
 - Default interaction transitions: 120ms to 160ms.
 - Segmented controls: background, box-shadow, and color transition over 160ms ease.
 - Buttons/tabs: background, border-color, and color transition over 120ms.
 - Switch thumb: 150ms cubic-bezier `(0.3, 0.7, 0.4, 1)`.
-- Plan/running pulse: subtle 1.8s pulse only for active running/plan states.
-- Spinners: 0.9s linear.
+- Composer running rim: 1.8s `ease-in-out infinite` opacity pulse on the accent-rim `box-shadow` only, applied to the composer surface while a session is running. **The Plan Halo aura is static** — do not pulse it.
+- Spinners: 0.9s linear (14×14 ring, 1.5px stroke, 25% accent track with full-accent top arc).
+- Honor `prefers-reduced-motion` / `accessibilityReduceMotion` everywhere: collapse repeating animations to a single state change (no infinite loops) and shorten interaction transitions to ≤30ms.
 
 Motion must clarify state changes. Avoid ambient animation on idle dashboards.
 
@@ -451,3 +506,4 @@ Avoid vague labels like `Explore`, `Get started`, `Learn more`, or `Dashboard` w
 | 2026-05-27 | Adopt Tahoe liquid-glass workbench direction | The source artifact consistently uses glass panels, Apple system fonts, native controls, and agent-workbench layouts. |
 | 2026-05-27 | Preserve provider-specific identity tokens | Claude, Codex, and Antigravity are visually and functionally distinct across chat, usage, sessions, and analytics. |
 | 2026-05-27 | Keep Chat first and Code production-grade | The source artboards make Chat the hero and Code a real session/workbench surface with plan, diff, PR, source, and terminal states. |
+| 2026-05-27 | Reconcile DESIGN.md against the canonical Tahoe HTML | Decoded the bundled JSX modules and absorbed gaps: session-status semantic table, AccentButton/GhostButton sizing scale, ComposerChip + Send button + LiveTicker geometry, static Plan Halo (no pulse) spec, vertical vs horizontal chart stack order, iPhone tab-bar geometry, QR popover halo + corner brackets, iOS Codex tint-boost rule (2.6× on segmented control), `prefers-reduced-motion` requirement, hairline 0.5px thickness. |
