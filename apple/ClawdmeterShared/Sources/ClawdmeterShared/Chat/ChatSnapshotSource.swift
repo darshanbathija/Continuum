@@ -1,7 +1,4 @@
 import Foundation
-#if canImport(Combine)
-import Combine
-#endif
 
 /// Cross-platform view onto a per-session chat snapshot, conformed by
 /// both Mac's `SessionChatStore` and iOS's `iOSChatStore`. The Chat V2
@@ -12,12 +9,36 @@ import Combine
 /// live in `ClawdmeterShared`, and iOS's `iOSChatStore` is an LRU-2
 /// mirror with its own backoff ladder.
 ///
-/// Conformers MUST be `@MainActor ObservableObject` so SwiftUI
-/// `@ObservedObject` subscribes to `objectWillChange` whenever the
-/// underlying snapshot mutates. Read access happens through computed
-/// properties below — both stores already hold this state under
-/// different field names; the protocol normalizes the shape without
-/// forcing a struct rewrite.
+/// **C2 — D14#3 protocol collision resolution (Option a):**
+/// Pre-C2 this protocol required `ObservableObject` conformance so
+/// SwiftUI views could subscribe via `@ObservedObject`. With
+/// `SessionChatStore` migrating to `@Observable`, the
+/// `ObservableObject` constraint would have to either (a) drop, or
+/// (b) be replaced by a parallel `ObservableObject` adapter shim for
+/// the iOS-mirror store.
+///
+/// We picked **Option (a)**: drop the requirement. SwiftUI's
+/// `withObservationTracking` (the runtime under `@Observable`)
+/// already discovers per-keypath dependencies inside a view body
+/// regardless of the binding-property-wrapper used, so views
+/// holding a reference to a conforming concrete type get the right
+/// invalidations from the underlying storage mechanism each store
+/// uses:
+///   - Mac's `SessionChatStore` is `@Observable` → keypath tracking.
+///   - iOS's `iOSChatStore` is `ObservableObject` → `@Published`
+///     fan-out (unchanged).
+/// The protocol is now a pure read-shape contract; neither storage
+/// strategy is enforced. This works today because no view binds
+/// generically over `<T: ChatSnapshotSource>` — the existing V2
+/// views address the concrete store type. If that changes, a
+/// generic view will need an `@ObservedObject` (for iOS) /
+/// `@Bindable` (for Mac) branch, OR a thin per-platform protocol
+/// extension that recovers the per-platform binding pattern.
+///
+/// Conformers MUST be `@MainActor` classes. Read access happens
+/// through computed properties below — both stores already hold this
+/// state under different field names; the protocol normalizes the
+/// shape without forcing a struct rewrite.
 ///
 /// Adding a new field to the protocol means adding it to both store
 /// types' conformance extensions. Don't add behavior here — keep it
@@ -25,7 +46,7 @@ import Combine
 /// (Mac dispatches via the daemon; iOS dispatches via
 /// `AgentControlClient`).
 @MainActor
-public protocol ChatSnapshotSource: ObservableObject {
+public protocol ChatSnapshotSource: AnyObject {
     /// Stable identity for the conversation. Used as the SwiftUI
     /// `View.id(...)` so switching between conversations cleanly tears
     /// down the previous transcript's `LazyVStack`.

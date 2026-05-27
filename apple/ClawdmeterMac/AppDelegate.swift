@@ -514,7 +514,12 @@ final class OpencodeStatusController: NSObject {
         // Re-render the dollar amount whenever the usage store's
         // opencode bag mutates. Single observer covers both the
         // initial ingest + every subsequent SSE usage event.
-        runtime.usageHistoryStore.$opencodeLiveRecords
+        //
+        // C2 — was `$opencodeLiveRecords` pre-C2. With UsageHistoryStore
+        // migrated to `@Observable`, the daemon-side Combine bridge is
+        // `opencodeLiveRecordsPublisher` (a `PassthroughSubject` pushed
+        // inside `appendOpencodeRecord(_:)`).
+        runtime.usageHistoryStore.opencodeLiveRecordsPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refresh() }
             .store(in: &cancellables)

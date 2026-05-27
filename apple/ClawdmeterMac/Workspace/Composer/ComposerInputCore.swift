@@ -1092,7 +1092,12 @@ private struct AgentMenuIcon: View {
 /// distinguishes pending from settled — opacity 0.65 + dashed border for
 /// pending, solid + 1.0 opacity once reconciled.
 private struct PendingMessageStrip: View {
-    @ObservedObject var chatStore: SessionChatStore
+    // C2 — was `@ObservedObject var chatStore: SessionChatStore`
+    // pre-C2. With the store now `@Observable`, the wrapper drops
+    // away: SwiftUI's `withObservationTracking` automatically picks
+    // up the `chatStore.pendingMessage` reads inside `body` and
+    // re-invalidates only this view when the pending slot mutates.
+    let chatStore: SessionChatStore
     let onRetry: () -> Void
     let onDismiss: () -> Void
     @Environment(\.tahoe) private var t

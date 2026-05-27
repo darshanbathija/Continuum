@@ -88,7 +88,12 @@ public final class ChatStreamWebSocketChannel: WSChannel {
         // no-op republishes that bump the same updateCounter (the staging
         // commit task only republishes when counter changes, but a
         // defense-in-depth filter here is cheap).
-        cancellable = store.$snapshot
+        //
+        // C2 — was `store.$snapshot` pre-C2. With the store now
+        // `@Observable`, the daemon-side Combine bridge is
+        // `snapshotPublisher` (a `PassthroughSubject` pushed alongside
+        // each `snapshot =` write inside the commit task).
+        cancellable = store.snapshotPublisher
             .removeDuplicates { $0.updateCounter == $1.updateCounter }
             .debounce(
                 for: .milliseconds(Self.coalesceWindowMs),

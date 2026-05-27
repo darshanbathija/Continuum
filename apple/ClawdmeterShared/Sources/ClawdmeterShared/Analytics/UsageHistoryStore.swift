@@ -1,7 +1,6 @@
 import Foundation
-#if canImport(Combine)
 import Combine
-#endif
+import Observation
 #if canImport(OSLog)
 import OSLog
 #endif
@@ -12,9 +11,16 @@ import UIKit
 import AppKit
 #endif
 
-/// `@MainActor` ObservableObject bridge between the analytics loader actor
-/// and SwiftUI. Apps construct one of these at startup and pass it down via
-/// `@EnvironmentObject`.
+/// `@MainActor` `@Observable` bridge between the analytics loader actor
+/// and SwiftUI. Apps construct one of these at startup and pass it down
+/// as a plain property; SwiftUI's `withObservationTracking` registers
+/// the view-body dependency on whichever fields the body actually reads.
+///
+/// **C2 migration**: was `ObservableObject` + `@Published` pre-C2. The
+/// move to `@Observable` drops the Combine fan-out (every observer
+/// re-invalidates on any `@Published` mutation, even fields they don't
+/// read) in favour of per-keypath tracking. Body-invalidation drop is
+/// measured in `BodyInvalidationCounter`-driven perf tests.
 ///
 /// Plan A8: refreshes on app-foreground via `NotificationCenter` + every
 /// 60s via a `Timer`. Both invalidations are cheap because the cache makes
@@ -29,12 +35,41 @@ public extension Notification.Name {
 }
 
 @MainActor
-public final class UsageHistoryStore: ObservableObject {
+@Observable
+public final class UsageHistoryStore {
 
-    @Published public private(set) var snapshot: UsageHistorySnapshot?
-    @Published public private(set) var loading: Bool = false
-    @Published public var activeWindow: UsageHistorySnapshot.Window = .past30d
-    @Published public var providerFilter: ProviderFilter = .both
+    public private(set) var snapshot: UsageHistorySnapshot?
+    public private(set) var loading: Bool = false
+    public var activeWindow: UsageHistorySnapshot.Window = .past30d
+    public var providerFilter: ProviderFilter = .both
+
+    /// C2 — Combine bridge for non-view subscribers. `AppRuntime`
+    /// pipes `snapshot` into `UsageCloudMirror` via `.sink`, which
+    /// expects a Combine `Publisher`. The view-side path uses
+    /// `@Observable` keypath tracking and does NOT touch this; it
+    /// exists solely so the iCloud mirror's subscription survives
+    /// the C2 migration.
+    @ObservationIgnored private let snapshotSubject = PassthroughSubject<UsageHistorySnapshot?, Never>()
+    /// Public Combine bridge equivalent to the pre-C2 `$snapshot`
+    /// publisher. Daemon/runtime code that needs Combine semantics
+    /// (`.compactMap`, `.receive(on:)`, `.sink`) bridges through
+    /// this property. Replace `store.$snapshot` with
+    /// `store.snapshotPublisher`.
+    public var snapshotPublisher: AnyPublisher<UsageHistorySnapshot?, Never> {
+        snapshotSubject.eraseToAnyPublisher()
+    }
+
+    /// C2 — Combine bridge for opencode live-records updates. The
+    /// `OpencodeStatusController` in AppDelegate.swift refreshes the
+    /// menu-bar dollar gauge on every SSE record append.
+    @ObservationIgnored private let opencodeLiveRecordsSubject = PassthroughSubject<[UsageRecord], Never>()
+    /// Public Combine bridge equivalent to the pre-C2
+    /// `$opencodeLiveRecords` publisher. Replace
+    /// `store.$opencodeLiveRecords` with
+    /// `store.opencodeLiveRecordsPublisher`.
+    public var opencodeLiveRecordsPublisher: AnyPublisher<[UsageRecord], Never> {
+        opencodeLiveRecordsSubject.eraseToAnyPublisher()
+    }
 
     /// PR #31 chunk 3: live opencode usage events recorded since app
     /// launch. Driven by the `opencodeUsageRecorded` notification the
@@ -42,7 +77,7 @@ public final class UsageHistoryStore: ObservableObject {
     /// `opencodeWeekCostUSD` for the menu-bar dollar gauge (A2).
     /// Bounded to the last 5000 events to keep memory bounded for
     /// long-running sessions; older events are dropped FIFO.
-    @Published public private(set) var opencodeLiveRecords: [UsageRecord] = []
+    public private(set) var opencodeLiveRecords: [UsageRecord] = []
     private static let maxLiveRecords = 5000
 
     public enum ProviderFilter: String, CaseIterable, Sendable {
@@ -85,10 +120,14 @@ public final class UsageHistoryStore: ObservableObject {
         }
     }
 
-    private let loader: UsageHistoryLoader
-    private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "Analytics")
-    private var refreshTimer: Timer?
-    private var observers: [NSObjectProtocol] = []
+    // C2 — these are pure plumbing fields. Marking them
+    // `@ObservationIgnored` keeps `@Observable`'s synthesized tracking
+    // off them so a refresh-timer reschedule or a notification
+    // observation never accidentally invalidates a view body.
+    @ObservationIgnored private let loader: UsageHistoryLoader
+    @ObservationIgnored private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "Analytics")
+    @ObservationIgnored private var refreshTimer: Timer?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
     // MARK: - B2 mtime probe + idle backoff
     //
@@ -108,10 +147,10 @@ public final class UsageHistoryStore: ObservableObject {
     /// Set on every successful refresh (mtime-probe or full load); used
     /// to detect "nothing changed since last refresh" so the next tick
     /// can short-circuit.
-    private var lastSeenMaxMtime: Date?
+    @ObservationIgnored private var lastSeenMaxMtime: Date?
     /// Consecutive ticks where the mtime probe found no change. Drives
     /// the slide from `baseInterval` to `idleInterval`.
-    private var consecutiveIdleTicks: Int = 0
+    @ObservationIgnored private var consecutiveIdleTicks: Int = 0
     private static let baseInterval: TimeInterval = 60     // active
     private static let idleInterval: TimeInterval = 300    // backoff cap (5 min)
     /// After this many no-change ticks at base interval, slide to idle.
@@ -195,6 +234,10 @@ public final class UsageHistoryStore: ObservableObject {
         loading = true
         let result = await loader.loadAll()
         snapshot = result
+        // C2 — Combine bridge for the iCloud mirror (AppRuntime).
+        // The view-side @Observable path is unaffected; this push is
+        // for the non-view subscriber that was on `$snapshot` pre-C2.
+        snapshotSubject.send(result)
         loading = false
     }
 
@@ -299,8 +342,9 @@ public final class UsageHistoryStore: ObservableObject {
     }
 
     /// Timestamp of the last opencode-event-triggered refresh. Drives the
-    /// 10s debounce in `scheduleOpencodeMirrorRefresh`.
-    private var lastOpencodeMirrorRefreshAt: Date?
+    /// 10s debounce in `scheduleOpencodeMirrorRefresh`. Internal-only —
+    /// not a view-relevant field, kept off the `@Observable` keypath set.
+    @ObservationIgnored private var lastOpencodeMirrorRefreshAt: Date?
 
     /// Append a live opencode UsageRecord. Trims to the 5000-item
     /// retention cap so memory stays bounded over a long-running day.
@@ -312,6 +356,10 @@ public final class UsageHistoryStore: ObservableObject {
         if opencodeLiveRecords.count > Self.maxLiveRecords {
             opencodeLiveRecords.removeFirst(opencodeLiveRecords.count - Self.maxLiveRecords)
         }
+        // C2 — Combine bridge for `OpencodeStatusController` (menu-bar
+        // dollar gauge). The view-side @Observable keypath path is
+        // unaffected.
+        opencodeLiveRecordsSubject.send(opencodeLiveRecords)
     }
 
     /// PR #31 chunk 3 (A2): sum of opencode cost recorded since 00:00

@@ -43,7 +43,11 @@ public struct MacMenubarPopover: View {
     /// render its dollar-cost tile (`$X today / $Y this week` per A2).
     /// When nil (preview path or when opencode isn't wired) the
     /// OpenCode tab still appears but shows "$—.——".
-    @ObservedObject private var usageHistoryStore: UsageHistoryStore
+    ///
+    /// C2 — was `@ObservedObject` pre-C2; the store is now `@Observable`
+    /// and SwiftUI tracks reads via `withObservationTracking` so the
+    /// wrapper drops away.
+    private var usageHistoryStore: UsageHistoryStore
 
     /// v0.22.30: OpenCode joins Claude / Codex / Antigravity as a
     /// first-class tab in the popover. The user reported "we built

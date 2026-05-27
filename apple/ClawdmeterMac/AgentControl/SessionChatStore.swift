@@ -1,4 +1,6 @@
 import Foundation
+import Combine
+import Observation
 import ClawdmeterShared
 import OSLog
 import os.signpost
@@ -29,8 +31,29 @@ let chatPerfLog = OSLog(subsystem: "com.clawdmeter.mac", category: "Performance"
 /// The store accumulates messages in arrival order. Live updates via the
 /// JSONLTail's DispatchSource fire `applyLine` on the main actor so the
 /// SwiftUI view re-renders incrementally.
+/// C2 migration — was `ObservableObject` + `@Published` pre-C2. The
+/// move to `@Observable` swaps Combine's blanket fan-out
+/// (`objectWillChange` fires for every `@Published` mutation, regardless
+/// of which fields a given view body reads) for per-keypath tracking
+/// via `withObservationTracking`. Views that read only
+/// `pendingMessage` no longer invalidate when the fat `snapshot`
+/// commits.
+///
+/// **Why the slices are NOT migrated**: `ChatMessagesSlice`,
+/// `ChatLiveStatusSlice`, and `ChatComposerSlice` (declared below)
+/// remain `@MainActor ObservableObject` with equality-guarded
+/// `@Published` setters. The per-concern slicing is the actual
+/// runtime perf win (no-op writes already short-circuit
+/// `objectWillChange`), and the existing
+/// `SessionChatStoreSlicePublishingTests` measure invalidation via
+/// `objectWillChange.sink {}` (the Combine API). Migrating the
+/// slices would force a test rewrite while delivering no
+/// invalidation-count delta — `@Observable`'s keypath tracking
+/// catches the same set as the equality-guarded `@Published` setters
+/// because every slice consumer binds to a single field group.
 @MainActor
-public final class SessionChatStore: ObservableObject {
+@Observable
+public final class SessionChatStore {
 
     /// `ChatMessage` is now the Shared value type (T1 extraction). Keeping
     /// the SessionChatStore.ChatMessage alias preserves the existing
@@ -179,20 +202,49 @@ public final class SessionChatStore: ObservableObject {
     /// rewrite.
     public typealias PendingMessage = OptimisticPendingMessage
 
-    @Published public private(set) var snapshot: ChatSnapshot = .empty
+    public private(set) var snapshot: ChatSnapshot = .empty
+
+    /// C2 — Combine bridge for non-view subscribers. The
+    /// `@Observable` macro replaces `@Published` for view-side
+    /// observation, but daemon-layer subscribers (`PRMirror`,
+    /// `ChatStreamWebSocketChannel`, `FrontierWebSocketChannel`,
+    /// `RunProfileManager`) consume snapshots through Combine
+    /// operators (`.debounce`, `.removeDuplicates`,
+    /// `.receive(on:)`). Rather than rewriting each subscriber to
+    /// poll via `withObservationTracking` — which is awkward for
+    /// streams with `.debounce` semantics — we publish each
+    /// `snapshot` write through this `PassthroughSubject` and hand
+    /// out a typed `AnyPublisher` via `snapshotPublisher`.
+    ///
+    /// View code does NOT touch this. View code reads
+    /// `store.snapshot` directly and gets per-keypath observation
+    /// for free. The publisher exists solely so daemon code that
+    /// was on `store.$snapshot` (Combine) before C2 keeps working
+    /// with a one-character migration (`$` → `.snapshotPublisher`).
+    @ObservationIgnored private let snapshotSubject = PassthroughSubject<ChatSnapshot, Never>()
+    /// Public Combine bridge. Daemon-side subscribers (PRMirror,
+    /// ChatStreamWebSocketChannel, etc.) replace
+    /// `chatStore.$snapshot` with `chatStore.snapshotPublisher`.
+    public var snapshotPublisher: AnyPublisher<ChatSnapshot, Never> {
+        snapshotSubject.eraseToAnyPublisher()
+    }
+
     /// Back-compat: views that still call `store.messages` keep working.
     /// Derived lazily from `snapshot.items` — was previously a parallel
     /// `@Published` rebuilt on every 16ms commit (allocating a fresh
     /// flat array on the main thread). With the snapshot now driving
     /// all view invalidations, the read sites (PRMirror.findPRURL,
     /// SessionsModel.filter search, PoppedChatThread ForEach) re-flatten
-    /// only when they actually consume it. ObservableObject notification
-    /// happens via `$snapshot` so subscribers still see updates.
+    /// only when they actually consume it. After C2 `@Observable`
+    /// migration: SwiftUI's `withObservationTracking` registers a
+    /// dependency on `snapshot` whenever a body evaluates this
+    /// computed property, so subscribers still see updates without a
+    /// parallel stored field.
     public var messages: [ChatMessage] {
         Self.flattenMessages(from: snapshot.items)
     }
-    @Published public private(set) var isLoading: Bool = true
-    @Published public private(set) var hasOlderHistory: Bool = false
+    public private(set) var isLoading: Bool = true
+    public private(set) var hasOlderHistory: Bool = false
 
     /// v0.8 QA: a CLI permission prompt awaiting user input. The Mac UI
     /// renders this as an AskUserQuestion-style card; on user click the
@@ -200,25 +252,25 @@ public final class SessionChatStore: ObservableObject {
     /// clears this back to nil. Nil for non-chat sessions, sessions
     /// where no permission is pending, and Codex SDK chat (the SDK
     /// doesn't surface permission prompts through tmux).
-    @Published public private(set) var pendingPermissionPrompt: PendingPermissionPrompt?
+    public private(set) var pendingPermissionPrompt: PendingPermissionPrompt?
 
     /// A13 (perf — optimistic composer UI): slot for an in-flight user
     /// turn that has been injected optimistically but not yet confirmed
-    /// by the daemon. Published so the composer surface can render the
+    /// by the daemon. Observed so the composer surface can render the
     /// "Sending…" / "Failed to send" chip without waiting for the JSONL
     /// round-trip. Reconciliation: when the real user-text message lands
     /// in `snapshot.messages` with matching body, `reconcilePending()`
     /// clears this slot. Rejection (D24): on a 4xx or transport error
     /// the parent flips this to `.failed` and the bubble stays visible
     /// with a retry chip until the user resends or dismisses.
-    @Published public private(set) var pendingMessage: PendingMessage?
+    public private(set) var pendingMessage: PendingMessage?
 
     /// A13 — offline queue. When the daemon is briefly unreachable the
     /// composer enqueues the pending body here; on the next successful
     /// send-completion we drain the queue. Capped at 8 entries so a
     /// long offline window doesn't grow unbounded — anything beyond is
     /// surfaced as `.failed` so the user can manually retry.
-    @Published public private(set) var queuedPendingMessages: [PendingMessage] = []
+    public private(set) var queuedPendingMessages: [PendingMessage] = []
 
     /// A13 hard cap on the offline queue. Beyond this we stop enqueueing
     /// silently — extra sends fail-loud with a chip so the user knows.
@@ -516,31 +568,31 @@ public final class SessionChatStore: ObservableObject {
     /// sessions can swap the tailed file when the CLI rotates its rollout
     /// per turn. `switchTailedFile(to:)` re-aims the JSONLTail at the new
     /// URL while keeping the SAME store identity, so the Mac UI's
-    /// @ObservedObject chain stays intact and snapshot updates flow.
-    private var sessionFileURL: URL
-    private var tail: JSONLTail?
+    /// observation chain stays intact and snapshot updates flow.
+    @ObservationIgnored private var sessionFileURL: URL
+    @ObservationIgnored private var tail: JSONLTail?
     /// Background parser actor — owns ChatItemBuilder, ingests typed
     /// `ParsedLine` values, never touches main. Replaced on every fresh
     /// start so stale in-flight work from an older file/generation cannot
     /// reset or republish the current transcript.
-    private var staging = StagingParser()
+    @ObservationIgnored private var staging = StagingParser()
     /// Generation token (codex tension #6). Bumped on every `start()` /
     /// `stop()`. Background commit task captures its generation at launch
     /// and silently drops any commit where the captured generation
     /// doesn't match the current — so stale parses from an evicted
     /// store can't publish after navigation.
-    private var parseGeneration: UInt64 = 0
-    private var commitTask: Task<Void, Never>?
+    @ObservationIgnored private var parseGeneration: UInt64 = 0
+    @ObservationIgnored private var commitTask: Task<Void, Never>?
     /// Reverse-tail ingest task — tracked so `stop()` cancels it (was
     /// previously fire-and-forget, so a `stop()` followed by `start()`
     /// could let the old reverse-tail's late ingests bleed into the new
     /// parse generation through the shared StagingParser).
-    private var ingestTailTask: Task<Void, Never>?
+    @ObservationIgnored private var ingestTailTask: Task<Void, Never>?
     /// Per-line ingest tasks spawned by the JSONLTail handler. These are
     /// also tracked so `stop()` cancels them; combined with the per-task
     /// generation check inside the ingest closure, this closes the
     /// "stop() doesn't stop all writers" race surfaced in /review.
-    private var perLineIngestTasks: [Task<Void, Never>] = []
+    @ObservationIgnored private var perLineIngestTasks: [Task<Void, Never>] = []
 
     /// v0.8 NEW-E3: when true, `start()` skips JSONLTail + reverse-tail
     /// entirely. Only the commit task runs, which picks up
@@ -629,6 +681,11 @@ public final class SessionChatStore: ObservableObject {
         startSignpostID = signpostID
         chatLogger.info("Starting chat store for session \(self.sessionId.uuidString, privacy: .public) at \(self.sessionFileURL.path, privacy: .public)")
         snapshot = .empty
+        // C2 — broadcast the reset to Combine subscribers
+        // (ChatStreamWebSocketChannel coalesces these via debounce, so
+        // an empty + an immediate first commit collapse into one wire
+        // frame).
+        snapshotSubject.send(.empty)
         isLoading = true
         hasOlderHistory = false
         // A5 — keep the per-concern slices in lockstep with the fat
@@ -759,6 +816,13 @@ public final class SessionChatStore: ObservableObject {
                     guard let self else { return }
                     guard self.parseGeneration == generation else { return }
                     self.snapshot = next
+                    // C2 — broadcast to Combine subscribers. The
+                    // `@Observable` keypath path handles view
+                    // invalidation; the publisher carries daemon-side
+                    // subscribers (PRMirror, ChatStream WS,
+                    // FrontierWebSocketChannel, RunProfileManager)
+                    // that previously relied on `$snapshot`.
+                    self.snapshotSubject.send(next)
                     // A5 — fan the snapshot out to the per-concern slices.
                     // Each slice's setter is equality-guarded, so a tick
                     // that touches only items doesn't bump composerSlice
@@ -798,7 +862,7 @@ public final class SessionChatStore: ObservableObject {
         }
     }
 
-    private var startSignpostID: OSSignpostID?
+    @ObservationIgnored private var startSignpostID: OSSignpostID?
 
     public func stop() {
         // Bump generation so any in-flight commit task drops its next
@@ -837,6 +901,17 @@ public final class SessionChatStore: ObservableObject {
     deinit {
         commitTask?.cancel()
         tail?.stop()
+    }
+
+    /// C2 test-only — write `snapshot` directly with a synthetic
+    /// `updateCounter`. Drives the
+    /// `SessionChatStoreObservableBurstTests` so the C2 perf gate can
+    /// trigger `snapshot` mutations without standing up the
+    /// JSONLTail pipeline. Internal-visibility (`@testable import`)
+    /// so we don't leak this into the production API surface.
+    internal func forceSnapshotBumpForC2Test(updateCounter: UInt64) {
+        snapshot = ChatSnapshot(items: [], updateCounter: updateCounter)
+        snapshotSubject.send(snapshot)
     }
 
     private nonisolated static func fileSize(at url: URL) -> UInt64 {

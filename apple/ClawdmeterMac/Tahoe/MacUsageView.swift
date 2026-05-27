@@ -627,12 +627,17 @@ private struct RepoList: View {
 /// signed in with).
 private struct OpencodeDollarRow: View {
     @Environment(\.tahoe) private var t
-    @ObservedObject var usageHistory: UsageHistoryStore
+    // C2 — was `@ObservedObject var usageHistory: UsageHistoryStore`
+    // pre-C2. Now `@Observable`, so a plain stored reference is
+    // sufficient — SwiftUI's `withObservationTracking` registers
+    // dependencies on whichever fields the body actually reads
+    // (`opencodeTodayCostUSD` / `opencodeWeekCostUSD`).
+    let usageHistory: UsageHistoryStore
 
     init(usageHistory: UsageHistoryStore?) {
         // Bind to whichever store the parent injected; for Previews
-        // we instantiate a fresh one so the view doesn't crash on the
-        // @ObservedObject requirement.
+        // a fresh store is fine — opencodeLive* default to empty
+        // arrays so the row shows "$0.00".
         self.usageHistory = usageHistory ?? UsageHistoryStore()
     }
 

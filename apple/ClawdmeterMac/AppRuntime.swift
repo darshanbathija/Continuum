@@ -182,7 +182,12 @@ final class AppRuntime: ObservableObject {
         // calendar-day-aligned totals, mirrors the snapshot into iCloud KV
         // for the iOS analytics tab. Plan A8 + A19.
         self.usageHistoryStore = UsageHistoryStore()
-        self.usageHistoryStore.$snapshot
+        // C2 — was `usageHistoryStore.$snapshot` pre-C2 when the
+        // store was `@Published`. With the store now `@Observable`,
+        // the daemon-side Combine bridge is `snapshotPublisher` (a
+        // `PassthroughSubject` pushed alongside each `snapshot =`
+        // write in `refresh(force:)`).
+        self.usageHistoryStore.snapshotPublisher
             .compactMap { $0 }
             .receive(on: DispatchQueue.main)
             .sink { snapshot in
