@@ -376,6 +376,34 @@ targets:
         # actually load the host binary and run unit tests.
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Continuum.app/Contents/MacOS/Continuum"
 
+  # ───────────────────────────────────────────────────────────────
+  # iOS XCTest target — E4. Exercises the iOS-only helpers that can't
+  # be reached from ClawdmeterShared's SwiftPM test target:
+  # IOSRelayClient lifecycle + handshake flow.
+  #
+  # Hosted by the ClawdmeteriOS application target so `@testable import
+  # Clawdmeter` (iOS module name) works.
+  # ───────────────────────────────────────────────────────────────
+  ClawdmeteriOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ClawdmeteriOSTests
+    dependencies:
+      - target: ClawdmeteriOS
+      - package: ClawdmeterShared
+        product: ClawdmeterShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.ios.tests
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "76S62SDSD3"
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_OBJC_BRIDGING_HEADER: ""
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdmeter.app/Clawdmeter"
+
 schemes:
   Clawdmeter (Mac):
     build:
@@ -401,8 +429,13 @@ schemes:
       targets:
         ClawdmeteriOS: all
         ClawdmeteriOSWidgets: all
+        ClawdmeteriOSTests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - ClawdmeteriOSTests
 
   Clawdmeter (Watch):
     build:

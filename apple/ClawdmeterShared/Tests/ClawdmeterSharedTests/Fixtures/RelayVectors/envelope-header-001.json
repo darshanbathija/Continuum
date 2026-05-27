@@ -1,0 +1,12 @@
+{
+  "name": "envelope-header-001",
+  "kind": "envelope-header",
+  "description": "Canonical envelope header: keys MUST appear in (v, from, type) order. Swift Codable + JSONEncoder MUST produce identical bytes.",
+  "header_object": {
+    "v": 1,
+    "from": "mac",
+    "type": "ciphertext"
+  },
+  "expected_serialized_ascii": "{\"v\":1,\"from\":\"mac\",\"type\":\"ciphertext\"}",
+  "expected_serialized_hex": "7b2276223a312c2266726f6d223a226d6163222c2274797065223a2263697068657274657874227d"
+}

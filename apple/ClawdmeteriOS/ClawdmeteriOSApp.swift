@@ -38,6 +38,15 @@ struct ClawdmeteriOSApp: App {
         #endif
         _agentClient = StateObject(wrappedValue: client)
         _outbox = StateObject(wrappedValue: MobileCommandOutbox(client: client))
+
+        // E4: spin up the outbound relay client if a pairing record
+        // exists. This runs side-by-side with the existing Tailscale
+        // `AgentControlClient` path — the relay is the "second
+        // transport" the design doc §1 promised, and stays in fallback
+        // until E3 lands the Mac-side relay sender. When no pairing
+        // exists this is a no-op; callers can still use Tailscale
+        // unchanged.
+        IOSRelayClientCoordinator.shared.start()
         // Register the BGAppRefreshTask handler at launch (D15 fallback for
         // APNS). The actual scheduling + ack/send happens inside
         // iOSNotificationManager; this just plants the dispatch handler.

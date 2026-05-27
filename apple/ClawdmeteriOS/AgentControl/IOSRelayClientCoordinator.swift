@@ -1,0 +1,143 @@
+// E4 wiring: a thin singleton that:
+//
+//   - watches `IOSRelayPairingService.phase` for `.readyButNotConnected`,
+//   - constructs an `IOSRelayClient` against the persisted pairing
+//     record + Keychain key,
+//   - calls `start()` so the WebSocket opens as soon as the iPhone has
+//     a valid pairing.
+//
+// The coordinator is NOT a transport router — it doesn't replace
+// `iOSChatStore`'s direct-WS path yet. That swap requires the Mac
+// daemon to also speak the relay envelope (E3 lands that). Until then
+// this coordinator just keeps the relay socket WARM so:
+//
+//   - iOS's foreground/background lifecycle is exercised end-to-end
+//     against a real Cloudflare DO from day one (catches OS-level
+//     regressions early);
+//   - any inbound APNS-wake decryption path lands on a connected
+//     client, no slow first-open in the wake budget;
+//   - the iOS daemon can observe `.lastInbound` once E3 starts pushing
+//     real plan-approval / chat-frame envelopes through the relay.
+//
+// Per the E4 task spec ("wherever the iOS app currently uses Tailscale
+// to reach the Mac, swap in the relay client when a relay pairing is
+// present"), the swap is conditional: if no pairing record exists,
+// this coordinator stays idle and the legacy Tailscale path
+// (`AgentControlClient`) handles all traffic. If a pairing record
+// exists, BOTH paths run side-by-side until E3 promotes the relay to
+// the primary transport. This is the "fallback to legacy Tailscale LAN
+// mode when relay is unavailable" guarantee from the design doc §1.
+
+import Foundation
+import Combine
+import OSLog
+import ClawdmeterShared
+
+private let coordinatorLogger = Logger(
+    subsystem: "com.clawdmeter.ios",
+    category: "RelayCoordinator"
+)
+
+@MainActor
+public final class IOSRelayClientCoordinator: ObservableObject {
+
+    public static let shared = IOSRelayClientCoordinator()
+
+    /// The active relay client, or nil if no pairing has been completed.
+    /// Surfaced as `@Published` so a debug overlay can observe state.
+    @Published public private(set) var client: IOSRelayClient?
+
+    private let pairingService: IOSRelayPairingService
+    private let store: RelayPairingStore
+    private var cancellables: Set<AnyCancellable> = []
+
+    public init(
+        pairingService: IOSRelayPairingService = .shared,
+        store: RelayPairingStore = .shared
+    ) {
+        self.pairingService = pairingService
+        self.store = store
+    }
+
+    /// Wire up the pairing-service observer. Call from the app's `init`
+    /// once.
+    public func start() {
+        // If a pairing already exists at app launch, spin up immediately.
+        if pairingService.hasActivePairing {
+            spinUpFromPersistedRecord()
+        }
+        pairingService.$phase
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] phase in
+                self?.handlePhaseChange(phase)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// E6 entry point — once APNS routing is in place, the app delegate
+    /// forwards push receipts here, which forwards to the client.
+    public func handleAPNSWake() {
+        client?.connectForAPNSWake()
+    }
+
+    /// Tear down the coordinator. Used by `RelayPairingStore.clear()`
+    /// callers ("Forget pairing" in iOS Settings).
+    public func stop() {
+        cancellables.removeAll()
+        client?.stop()
+        client = nil
+    }
+
+    // MARK: - Internal
+
+    private func handlePhaseChange(_ phase: RelayPairingPhase) {
+        switch phase {
+        case .readyButNotConnected, .keyExchanged:
+            if client == nil { spinUpFromPersistedRecord() }
+        case .unpaired:
+            client?.stop()
+            client = nil
+        case .scanning, .generatingBundle:
+            // Mid-flight; don't act yet.
+            break
+        }
+    }
+
+    private func spinUpFromPersistedRecord() {
+        guard let record = store.loadRecord() else {
+            coordinatorLogger.warning("No persisted pairing record; coordinator idle")
+            return
+        }
+        guard let key = store.loadSymmetricKey(), key.count == 32 else {
+            coordinatorLogger.error("Symmetric key missing/short in Keychain — re-pair required")
+            return
+        }
+        guard let config = IOSRelayClientConfig.fromPairingRecord(record, symmetricKey: key) else {
+            coordinatorLogger.error("Pairing record lacks peer pubkey; re-pair required")
+            return
+        }
+        // For v1 we send the iPhone's own pubkey from the pairing
+        // record as the handshake envelope. The pairing service stored
+        // it in `ourEcdhPublicKeyBase64URL`.
+        guard let ourPub = base64URLDecodeStrict(record.ourEcdhPublicKeyBase64URL),
+              ourPub.count == 32 else {
+            coordinatorLogger.error("Our pubkey malformed in pairing record")
+            return
+        }
+        let newClient = IOSRelayClient(
+            config: config,
+            ourPublicKeyBytes: ourPub
+        )
+        self.client = newClient
+        newClient.start()
+        coordinatorLogger.info("Relay client started (sid prefix=\(record.sid.prefix(8))…)")
+    }
+}
+
+private func base64URLDecodeStrict(_ s: String) -> Data? {
+    var padded = s
+        .replacingOccurrences(of: "-", with: "+")
+        .replacingOccurrences(of: "_", with: "/")
+    while padded.count % 4 != 0 { padded.append("=") }
+    return Data(base64Encoded: padded)
+}
