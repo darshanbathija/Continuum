@@ -32,9 +32,8 @@ public actor UsageHistoryLoader {
     /// machines without the CLI installed skip the pass cleanly.
     private let agyDir: URL?
     /// v0.22.8: OpenCode SQLite database (`~/.local/share/opencode/opencode.db`).
-    /// Optional + Mac-only — iOS doesn't run OpenCode locally and its
-    /// sandbox blocks `~/.local/share/`. Nil ⇒ no opencode column in the
-    /// snapshot (current behavior).
+    /// Optional. Non-macOS builds do not auto-discover OpenCode's host DB,
+    /// but tests and explicit callers may still inject a path.
     private let opencodeDBURL: URL?
     private let cacheURL: URL?
     private let pricing: Pricing
@@ -78,7 +77,7 @@ public actor UsageHistoryLoader {
         #if os(macOS)
         self.opencodeDBURL = opencodeDBURL ?? OpencodeUsageParser.defaultDatabaseURL()
         #else
-        self.opencodeDBURL = nil
+        self.opencodeDBURL = opencodeDBURL
         #endif
         self.cacheURL = cacheURL ?? Self.defaultCacheURL()
         self.pricing = pricing

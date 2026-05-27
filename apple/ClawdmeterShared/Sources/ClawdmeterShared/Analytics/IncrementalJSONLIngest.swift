@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 #if canImport(OSLog)
 import OSLog
 #endif
@@ -79,19 +84,52 @@ public actor IncrementalJSONLIngest {
         /// platforms where `st_ino` is narrower so we have one schema.
         /// `0` ⇒ unknown / first-touch.
         public var inode: UInt64
+        /// FNV-1a hash of the first few KB of the file. This is a secondary
+        /// identity guard for hosts where a delete/recreate can reuse an inode.
+        /// `0` ⇒ unknown / unavailable / empty file.
+        public var prefixHash: UInt64
+        /// Number of prefix bytes represented by `prefixHash`. The actor
+        /// re-hashes exactly this byte count on later reads so normal appends
+        /// do not change the identity fingerprint.
+        public var prefixByteCount: UInt64
 
         public init(
             byteOffset: UInt64 = 0,
             lineCount: UInt64 = 0,
             size: UInt64 = 0,
             mtime: TimeInterval = 0,
-            inode: UInt64 = 0
+            inode: UInt64 = 0,
+            prefixHash: UInt64 = 0,
+            prefixByteCount: UInt64 = 0
         ) {
             self.byteOffset = byteOffset
             self.lineCount = lineCount
             self.size = size
             self.mtime = mtime
             self.inode = inode
+            self.prefixHash = prefixHash
+            self.prefixByteCount = prefixByteCount
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case byteOffset
+            case lineCount
+            case size
+            case mtime
+            case inode
+            case prefixHash
+            case prefixByteCount
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            byteOffset = try container.decodeIfPresent(UInt64.self, forKey: .byteOffset) ?? 0
+            lineCount = try container.decodeIfPresent(UInt64.self, forKey: .lineCount) ?? 0
+            size = try container.decodeIfPresent(UInt64.self, forKey: .size) ?? 0
+            mtime = try container.decodeIfPresent(TimeInterval.self, forKey: .mtime) ?? 0
+            inode = try container.decodeIfPresent(UInt64.self, forKey: .inode) ?? 0
+            prefixHash = try container.decodeIfPresent(UInt64.self, forKey: .prefixHash) ?? 0
+            prefixByteCount = try container.decodeIfPresent(UInt64.self, forKey: .prefixByteCount) ?? 0
         }
     }
 
@@ -138,6 +176,7 @@ public actor IncrementalJSONLIngest {
     /// Per-path cursor state. `URL.path` is the key. Callers can hydrate
     /// from disk via `seed(states:)` and snapshot via `snapshot()`.
     private var states: [String: FileState] = [:]
+    private static let prefixHashByteLimit: UInt64 = 4096
 
     public init(initialStates: [String: FileState] = [:]) {
         self.states = initialStates
@@ -200,7 +239,11 @@ public actor IncrementalJSONLIngest {
         }
         let currentSize = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
         let currentMtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let currentInode = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+        let currentInode = Self.inode(path: path, attrs: attrs)
+        let comparisonPrefixByteCount = prior.prefixByteCount == 0
+            ? min(currentSize, Self.prefixHashByteLimit)
+            : min(prior.prefixByteCount, currentSize)
+        let comparisonPrefixHash = Self.prefixHash(url: url, byteCount: comparisonPrefixByteCount)
 
         // Decide whether we have to reset before reading.
         var resetReason: IngestResult.ResetReason = .none
@@ -214,6 +257,15 @@ public actor IncrementalJSONLIngest {
             resetReason = .inodeChanged
         } else if currentSize < prior.size {
             resetReason = .truncated
+        } else if prior.prefixHash != 0,
+                  prior.prefixByteCount != 0,
+                  currentSize >= prior.prefixByteCount,
+                  comparisonPrefixHash != 0,
+                  prior.prefixHash != comparisonPrefixHash {
+            // Linux filesystems can reuse an inode after delete/recreate in
+            // small temp dirs. A changed prefix while the cursor expects the
+            // old prefix means the path no longer represents the same stream.
+            resetReason = .inodeChanged
         } else if currentMtime != 0, prior.mtime != 0, currentMtime + 0.001 < prior.mtime {
             // mtime going backwards while size is consistent is suspicious
             // (atomic replace by editor, restore-from-backup, etc.). Tiny
@@ -233,7 +285,9 @@ public actor IncrementalJSONLIngest {
                 lineCount: 0,
                 size: 0,
                 mtime: 0,
-                inode: 0
+                inode: 0,
+                prefixHash: 0,
+                prefixByteCount: 0
             )
             #if canImport(OSLog)
             if resetReason != .firstTouch {
@@ -242,6 +296,11 @@ public actor IncrementalJSONLIngest {
             #endif
         }
 
+        let statePrefixByteCount = prior.prefixByteCount == 0
+            ? min(currentSize, Self.prefixHashByteLimit)
+            : min(prior.prefixByteCount, currentSize)
+        let statePrefixHash = Self.prefixHash(url: url, byteCount: statePrefixByteCount)
+
         // Nothing new to read?
         if currentSize == prior.byteOffset {
             let unchanged = FileState(
@@ -249,7 +308,9 @@ public actor IncrementalJSONLIngest {
                 lineCount: prior.lineCount,
                 size: currentSize,
                 mtime: currentMtime,
-                inode: currentInode
+                inode: currentInode,
+                prefixHash: statePrefixHash,
+                prefixByteCount: statePrefixByteCount
             )
             states[path] = unchanged
             return IngestResult(
@@ -332,7 +393,9 @@ public actor IncrementalJSONLIngest {
             lineCount: newLineCount,
             size: currentSize,
             mtime: currentMtime,
-            inode: currentInode
+            inode: currentInode,
+            prefixHash: statePrefixHash,
+            prefixByteCount: statePrefixByteCount
         )
 
         // If auto-commit is on, advance the cursor immediately. The
@@ -415,5 +478,40 @@ public actor IncrementalJSONLIngest {
             default: return false
             }
         }
+    }
+
+    private static func inode(path: String, attrs: [FileAttributeKey: Any]) -> UInt64 {
+        #if canImport(Glibc)
+        var statBuffer = stat()
+        if stat(path, &statBuffer) == 0 {
+            return UInt64(statBuffer.st_ino)
+        }
+        #elseif canImport(Darwin)
+        var statBuffer = stat()
+        if stat(path, &statBuffer) == 0 {
+            return UInt64(statBuffer.st_ino)
+        }
+        #endif
+
+        if let inode = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value, inode != 0 {
+            return inode
+        }
+
+        return 0
+    }
+
+    private static func prefixHash(url: URL, byteCount: UInt64) -> UInt64 {
+        guard byteCount > 0 else { return 0 }
+        let byteLimit = Int(min(byteCount, Self.prefixHashByteLimit))
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return 0 }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: byteLimit), !data.isEmpty else { return 0 }
+
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return hash
     }
 }

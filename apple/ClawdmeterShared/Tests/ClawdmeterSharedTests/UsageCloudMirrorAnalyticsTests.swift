@@ -1,4 +1,4 @@
-#if os(iOS) || os(macOS) || os(tvOS) || os(visionOS)
+#if os(iOS) || os(macOS) || os(tvOS)
 import XCTest
 @testable import ClawdmeterShared
 

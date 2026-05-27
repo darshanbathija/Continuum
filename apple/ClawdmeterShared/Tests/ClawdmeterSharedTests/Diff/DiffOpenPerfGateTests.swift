@@ -76,11 +76,18 @@ final class DiffOpenPerfGateTests: XCTestCase {
     /// this one's job is to give CI a stable baseline metric to chart.
     func testColdParseMeasure() {
         let diff = DiffFixtureBuilder.fiftyKLineDiff()
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
         let options = XCTMeasureOptions()
         options.iterationCount = 3
         measure(metrics: [XCTClockMetric()], options: options) {
             let parsed = UnifiedDiffParser.parse(diff)
             XCTAssertGreaterThanOrEqual(parsed.totalLineCount, 50_000)
         }
+#else
+        measure {
+            let parsed = UnifiedDiffParser.parse(diff)
+            XCTAssertGreaterThanOrEqual(parsed.totalLineCount, 50_000)
+        }
+#endif
     }
 }

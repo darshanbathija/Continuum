@@ -38,6 +38,21 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 - Find-bar overlay isolation. The find-bar inside `ChatThreadScroll` shares the parent body, so a transcript append still re-evaluates its body (small cost — TextField + 4 buttons). Full isolation requires extracting `TranscriptFindBarOverlay` as an Equatable child view with on-demand match computation.
 - `@Observable` migration (C2 in the plan) is a separate PR that will re-architect the slices as `@Observable` macro types.
 
+## [0.29.12 build 151] - 2026-05-26 - Code session rename persistence (`darshanbathija/rename-fix`)
+
+### Fixed
+
+- **Code session renames now stick.** Renaming a Code session from the Mac sidebar writes to the canonical session record, so the new title survives app reloads and matches the sidebar, header, command palette, iOS mirror, and daemon rename surfaces.
+- **Clearing a session name is consistent.** The Clear name action now removes the canonical custom name and clears stale client-local title overrides left by older builds, so old presentation-only labels no longer shadow the real session title.
+- **Code tab build membership is refreshed.** The Mac target now includes the workspace notification file needed by Code tab actions such as pop-out and transcript find.
+
+### Tests
+
+- Added Mac regression coverage for trimming, persisting, reloading, clearing, and missing-id behavior in Code session rename.
+- Kept sidebar projection cache coverage aligned with the status grouping input so custom-name changes invalidate stale rows correctly.
+
+Bumps `MARKETING_VERSION` 0.29.11 -> 0.29.12, `CURRENT_PROJECT_VERSION` 150 -> 151.
+
 ## [0.29.11 build 150] - 2026-05-26 - Rebrand sweep + OpenCode status pill + design polish (`fix/v0.29.11-rebrand-bleed-and-opencode-badge`)
 
 Verifier loop on v0.29.9 surfaced two classes of leftover work from the Continuum rebrand and the new OpenCode CLI auth row. Folded both into a single follow-up.

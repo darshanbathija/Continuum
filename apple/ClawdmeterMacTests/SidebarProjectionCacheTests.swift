@@ -167,10 +167,12 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertEqual(builderCalls, 1, "builder must not re-run on identical keys")
         XCTAssertEqual(cache.hitCount, 5)
 
-        // Sanity-check the projection covers all live sessions.
+        // Sanity-check the projection covers the full status-grouping input.
+        // Status grouping keeps archived rows so the Archived bucket can
+        // render; non-status groupings apply the archive guard.
         XCTAssertEqual(
             first.visibleSessions.count,
-            sessions.filter { $0.archivedAt == nil }.count
+            sessions.count
         )
     }
 
