@@ -106,6 +106,8 @@ struct PermissionModeChip: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Click to toggle plan ⇆ code — long-press for ask / bypass (⌘⇧1-4)")
+        .accessibilityLabel("Permission mode")
+        .accessibilityValue(mode.shortLabel)
         .accessibilityIdentifier("code.composer.permission-mode")
         .onHover { isHovered = $0 }
     }

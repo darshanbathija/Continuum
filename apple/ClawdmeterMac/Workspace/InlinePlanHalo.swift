@@ -12,12 +12,10 @@ import ClawdmeterShared
 /// @State. Independent body-invalidation scope.
 struct InlinePlanHalo: View {
     @Environment(\.tahoe) private var t
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let session: AgentSession
     let onRefine: () -> Void
     let onApprove: () -> Void
     let canApprove: Bool
-    @State private var auraGlow = false
 
     private var steps: [String] {
         guard let plan = session.planText else { return [] }
@@ -27,6 +25,8 @@ struct InlinePlanHalo: View {
     var body: some View {
         // A6 (foundation): body-invalidation tap. No-op in production.
         BodyInvalidationCounter.bump("InlinePlanHalo")
+        // Per DESIGN.md: the plan halo aura is STATIC. No repeating-pulse
+        // breathing animation — the halo conveys state once, not ambiently.
         return ZStack {
             RoundedRectangle(cornerRadius: 38, style: .continuous)
                 .fill(
@@ -39,16 +39,7 @@ struct InlinePlanHalo: View {
                 )
                 .blur(radius: 8)
                 .padding(-28)
-                .opacity(reduceMotion ? 0.88 : (auraGlow ? 1 : 0.82))
                 .allowsHitTesting(false)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: auraGlow)
-                .onAppear {
-                    guard !reduceMotion else { return }
-                    auraGlow = true
-                }
-                .onChange(of: reduceMotion) { _, newValue in
-                    auraGlow = !newValue
-                }
 
             TahoeGlass(radius: 20, tone: .raised) {
                 VStack(alignment: .leading, spacing: 0) {

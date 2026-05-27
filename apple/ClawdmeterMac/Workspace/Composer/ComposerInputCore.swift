@@ -1176,10 +1176,10 @@ private struct PendingMessageStrip: View {
                 HStack(spacing: 5) {
                     Image(systemName: "wifi.exclamationmark")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(SessionsV2Theme.warn)
                     Text(pending.errorDescription ?? "Will send when daemon returns")
                         .font(TahoeFont.body(10.5, weight: .semibold))
-                        .foregroundStyle(t.fg3)
+                        .foregroundStyle(SessionsV2Theme.warn)
                 }
                 Button("Retry now") { onRetry() }
                     .buttonStyle(.plain)
@@ -1198,10 +1198,10 @@ private struct PendingMessageStrip: View {
                 HStack(spacing: 5) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(SessionsV2Theme.danger)
                     Text(pending.errorDescription ?? "Failed to send")
                         .font(TahoeFont.body(10.5, weight: .semibold))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(SessionsV2Theme.danger)
                         .lineLimit(2)
                 }
                 Button("Retry") { onRetry() }
@@ -1226,18 +1226,17 @@ private struct PendingMessageStrip: View {
 
     private func bubbleFill(_ pending: SessionChatStore.PendingMessage) -> Color {
         switch pending.state {
-        case .sending, .queuedOffline:
-            return t.hair2
-        case .failed:
-            return Color.red.opacity(0.12)
+        case .sending:        return t.hair2
+        case .queuedOffline:  return SessionsV2Theme.warn.opacity(0.08)
+        case .failed:         return SessionsV2Theme.danger.opacity(0.12)
         }
     }
 
     private func bubbleStroke(_ pending: SessionChatStore.PendingMessage) -> Color {
         switch pending.state {
         case .sending:        return t.accentAlpha(0.35)
-        case .queuedOffline:  return Color.orange.opacity(0.55)
-        case .failed:         return Color.red.opacity(0.55)
+        case .queuedOffline:  return SessionsV2Theme.warn.opacity(0.55)
+        case .failed:         return SessionsV2Theme.danger.opacity(0.55)
         }
     }
 
