@@ -68,9 +68,23 @@ final class AppRuntime: ObservableObject {
 
     // E7: relay-session-token pairing UX. Owns the X25519 keypair +
     // bundle the Mac shows in a QR; iPhone scans it to derive the
-    // shared symmetric key. NOT a real WS client yet — E3 brings the
-    // actual relay socket. See RelayPairingService for state machine.
+    // shared symmetric key. See RelayPairingService for state machine.
     let relayPairingService: RelayPairingService
+
+    // E3 (respin): outbound relay WebSocket client. Opens when paired
+    // (E7 bundle available) and the user has explicitly flipped the
+    // `clawdmeter.relay.enabled` UserDefaults flag. The relay is
+    // ADDITIVE — `AgentControlServer` still listens on Tailscale; the
+    // relay just adds a second transport that activates when paired.
+    //
+    // Per the design doc §1 "relay-degraded fallback": when the relay
+    // is unreachable for >60s the client transitions to `.degraded`
+    // and AgentControlServer's outbound-notification path can prefer
+    // Tailscale. Inbound HTTP requests still arrive on whichever
+    // transport the iPhone used.
+    private(set) var relayClient: MacRelayClient?
+    private var relayDispatcher: RelayRequestDispatcher?
+    private var relayPairingObserver: AnyCancellable?
 
     // v0.27.0: openFolderInDesign(baseDir:) removed along with the Design tab.
 
@@ -312,6 +326,42 @@ final class AppRuntime: ObservableObject {
                 runtimeLogger.error("MacLoopbackClient construction failed — Mac IDE actions will be disabled this session")
             }
 
+            // E3 (respin): wire the relay-pairing observer behind the
+            // `clawdmeter.relay.enabled` UserDefaults gate. Default off
+            // so dev/staging builds can flip it without a rebuild and
+            // production stays on Tailscale until the relay is shipped
+            // end-to-end. When enabled AND a pairing bundle exists,
+            // spawn the relay client; otherwise stay idle (Tailscale-only).
+            //
+            // The relay client routes inbound encrypted frames into the
+            // localhost AgentControlServer via `RelayRequestDispatcher`,
+            // so paired Mac handlers fire over either Tailscale or the
+            // relay transparently.
+            let relayEnabled = UserDefaults.standard.object(forKey: "clawdmeter.relay.enabled") as? Bool ?? false
+            if relayEnabled, let loopback = self.loopbackClient {
+                let dispatcher = RelayRequestDispatcher(loopbackClient: loopback)
+                self.relayDispatcher = dispatcher
+                let recorder = RelayPairingServiceHandshakeRecorder(service: self.relayPairingService)
+                self.relayPairingObserver = self.relayPairingService.$bundle
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] bundle in
+                        Task { @MainActor in
+                            self?.handleRelayPairingChange(
+                                bundle: bundle,
+                                dispatcher: dispatcher,
+                                recorder: recorder
+                            )
+                        }
+                    }
+                runtimeLogger.info("Relay enabled via UserDefaults (clawdmeter.relay.enabled=YES); observing pairing bundle")
+            } else {
+                if !relayEnabled {
+                    runtimeLogger.info("Relay disabled (clawdmeter.relay.enabled UserDefaults flag is false); Tailscale-only")
+                } else {
+                    runtimeLogger.warning("Relay enabled but loopback client unavailable; cannot spawn relay client")
+                }
+            }
+
             // A7: defer non-critical subsystems. Strong-capture self in
             // the Task since AppRuntime is an app-lifetime singleton; a
             // weak capture risks the work being dropped if init returns
@@ -376,6 +426,59 @@ final class AppRuntime: ObservableObject {
 
         bootstrapProviderRuntimes()
         runtimeLogger.info("AppRuntime.init COMPLETE instance=\(ObjectIdentifier(self).hashValue)")
+    }
+
+    // MARK: - E3: relay client lifecycle
+
+    /// Handle a change in `RelayPairingService.bundle` — either nil
+    /// (user reset / forget) or a freshly-minted bundle. When non-nil,
+    /// we spawn / replace the `MacRelayClient` with one configured
+    /// from the bundle + the in-process keypair.
+    ///
+    /// The real X25519 shared K is derived LATER, when the iPhone
+    /// connects + sends its handshake envelope. `MacRelayClient` calls
+    /// into `RelayPairingService.recordPeerHandshake(_:)` via the
+    /// supplied `recorder`; that's where K materializes and gets
+    /// persisted. Until then the client is in `.awaitingPeer` — the
+    /// socket is open but no ciphertext flows.
+    @MainActor
+    private func handleRelayPairingChange(
+        bundle: RelayPairingBundle?,
+        dispatcher: RelayRequestDispatcher,
+        recorder: any MacRelayPairingHandshakeRecorder
+    ) {
+        // Tear down any existing client; we always rebuild on bundle
+        // change (the bundle's `sid` / `macTok` baked into the URL
+        // change too, so reusing the old socket would dial the wrong
+        // session).
+        relayClient?.stop()
+        relayClient = nil
+
+        guard let bundle else {
+            runtimeLogger.info("Relay pairing cleared; client torn down")
+            return
+        }
+        guard let keypair = relayPairingService.keypairForTesting else {
+            runtimeLogger.warning("Relay pairing observed bundle without a keypair; cannot spawn client")
+            return
+        }
+        let ourPubBytes = keypair.publicKey.rawRepresentation
+        let config = MacRelayClientConfig.fromMacBundle(
+            bundle: bundle,
+            ourPublicKeyBytes: ourPubBytes
+        )
+        let client = MacRelayClient(
+            config: config,
+            pairingService: recorder,
+            frameHandler: { [weak dispatcher] inbound in
+                await dispatcher?.dispatch(inbound)
+            }
+        )
+        relayClient = client
+        client.start()
+        runtimeLogger.info(
+            "Relay client started (sid=\(bundle.sid.prefix(8), privacy: .public)…, host=\(bundle.relayUrl, privacy: .public))"
+        )
     }
 
     private func bootstrapProviderRuntimes() {
