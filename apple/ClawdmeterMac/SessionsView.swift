@@ -419,6 +419,54 @@ public final class SessionsModel: ObservableObject {
         showingNewSessionSheet = true
     }
 
+    /// One-click "+ New workspace" for a known repo. Bypasses the New
+    /// Session sheet and spawns directly with the repo's last-used agent
+    /// or — failing that — Codex / GPT-5.5 / max effort / plan mode.
+    /// Worktree branch is auto-named by the existing city-namer; user
+    /// jumps straight into the composer. Errors fall back to the sheet
+    /// (pre-targeted at the repo) so missing CLIs / locked branches /
+    /// daemon-down states remain diagnosable.
+    public func quickSpawnInRepo(_ repoKey: String) {
+        // `.other` and any non-resolvable bucket can't be spawned into;
+        // route through the sheet so the user can pick a real path.
+        guard repos.contains(where: { $0.key == repoKey }),
+              repoKey != RepoKey.other else {
+            prepareNewSession(in: repoKey)
+            return
+        }
+        guard let runtime = AppDelegate.runtime else {
+            prepareNewSession(in: repoKey)
+            return
+        }
+        let agent: AgentKind = .codex
+        let modelId = "gpt-5.5"
+        let effort: ReasoningEffort = .max
+        Task { @MainActor in
+            do {
+                let session = try await spawnSession(
+                    repoPath: repoKey,
+                    agent: agent,
+                    planMode: true,
+                    goal: nil,
+                    mode: .worktree,
+                    tmux: runtime.tmuxClient,
+                    model: modelId,
+                    effort: effort
+                )
+                openSessionId = session.id
+                selectedRepoKey = repoKey
+                if !expandedRepoKeys.contains(repoKey) {
+                    expandedRepoKeys.insert(repoKey)
+                }
+            } catch {
+                // Surface the failure in the sheet so the user can adjust
+                // (e.g. install the Codex CLI, pick a different model, or
+                // turn off worktree mode for a non-git path).
+                prepareNewSession(in: repoKey)
+            }
+        }
+    }
+
     /// Persist a user-facing code-session label through the registry-backed
     /// session record. The sidebar, header, command palette, iOS mirror, and
     /// daemon `/rename` route all read `AgentSession.customName`, so local
