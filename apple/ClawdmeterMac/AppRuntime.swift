@@ -55,6 +55,7 @@ final class AppRuntime: ObservableObject {
     let workspaceStore: WorkspaceStore
     let repoEnvStore: RepoEnvStore
     let repoEnvRuntimeResolver: RepoEnvRuntimeResolver
+    let vendorProvisioningService: VendorProvisioningService
     let tmuxClient: TmuxControlClient
     let tmuxSupervisor: TmuxSupervisor
     let agentControlServer: AgentControlServer
@@ -281,6 +282,12 @@ final class AppRuntime: ObservableObject {
             envStore: self.repoEnvStore
         )
         self.tmuxClient = TmuxControlClient()
+        self.vendorProvisioningService = VendorProvisioningService(
+            workspaceStore: self.workspaceStore,
+            envStore: self.repoEnvStore,
+            repoEnvResolver: self.repoEnvRuntimeResolver,
+            tmuxClient: self.tmuxClient
+        )
         self.tmuxSupervisor = TmuxSupervisor(
             tmux: self.tmuxClient,
             registry: self.agentSessionRegistry
@@ -294,7 +301,8 @@ final class AppRuntime: ObservableObject {
             tmux: self.tmuxClient,
             notifications: self.notificationDispatcher,
             workspaceStore: self.workspaceStore,
-            repoEnvResolver: self.repoEnvRuntimeResolver
+            repoEnvResolver: self.repoEnvRuntimeResolver,
+            vendorProvisioningService: self.vendorProvisioningService
         )
         // Hand the daemon refs to the live-usage publishers + analytics
         // store so the iPhone's `/usage` and `/analytics` endpoints can

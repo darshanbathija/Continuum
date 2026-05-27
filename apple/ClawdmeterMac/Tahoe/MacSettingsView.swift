@@ -141,6 +141,8 @@ public struct MacSettingsView: View {
             workspaceSettings
         case .envVariables:
             envVariablesSettings
+        case .advanced:
+            advancedSettings
         case .devices:
             deviceSettings
         case .diagnostics:
@@ -273,6 +275,15 @@ public struct MacSettingsView: View {
             workspaceStore: runtime?.workspaceStore,
             envStore: runtime?.repoEnvStore,
             resolver: runtime?.repoEnvRuntimeResolver
+        )
+    }
+
+    @ViewBuilder
+    private var advancedSettings: some View {
+        VendorProvisioningSettingsView(
+            service: runtime?.vendorProvisioningService,
+            workspaceStore: runtime?.workspaceStore,
+            envStore: runtime?.repoEnvStore
         )
     }
 
@@ -551,6 +562,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case providers
     case workspaces
     case envVariables
+    case advanced
     case devices
     case diagnostics
     case notifications
@@ -566,6 +578,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .providers: return "Providers"
         case .workspaces: return "Workspaces"
         case .envVariables: return "Env Variables"
+        case .advanced: return "Advanced"
         case .devices: return "Devices"
         case .diagnostics: return "Diagnostics"
         case .notifications: return "Notifications"
@@ -585,6 +598,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "Worktree setup, copied local files, and branch isolation."
         case .envVariables:
             return "Named repo env sets, shared variables, and .env.local materialization."
+        case .advanced:
+            return "Vendor CLI, MCP, hosting, storage, and domain provisioning."
         case .devices:
             return "Quota behavior, iPhone mirroring, Live Activities, and pairing."
         case .diagnostics:
@@ -606,6 +621,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .providers: return "terminal"
         case .workspaces: return "folder"
         case .envVariables: return "command"
+        case .advanced: return "bolt"
         case .devices: return "link"
         case .diagnostics: return "gear"
         case .notifications: return "bell"

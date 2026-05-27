@@ -120,6 +120,30 @@ final class CodeTabHoverShortcutUITests: XCTestCase {
         app.buttons["Cancel"].click()
     }
 
+    func testAdvancedProvisioningSettingsExposeDeviceCheckAndEnvImportControls() throws {
+        openSettingsTab()
+
+        let advancedSection = element("settings.section.advanced")
+        XCTAssertTrue(advancedSection.waitForExistence(timeout: 10), "Settings should expose the Advanced section.")
+        advancedSection.click()
+
+        XCTAssertTrue(element("settings.provisioning.root").waitForExistence(timeout: 10), "Provisioning settings root should render.")
+        XCTAssertTrue(element("settings.provisioning.check-device").exists, "Provisioning should expose Check Device.")
+        XCTAssertTrue(element("settings.provisioning.category-filter").exists, "Provisioning should expose category filters.")
+        XCTAssertTrue(element("settings.provisioning.vendor.supabase").waitForExistence(timeout: 5), "Supabase vendor row should render.")
+
+        let importButton = element("settings.provisioning.import.supabase")
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5), "Supabase row should expose env import CTA.")
+        importButton.click()
+
+        XCTAssertTrue(element("settings.provisioning.env.current-repo").waitForExistence(timeout: 5), "Env import should expose current repo selection.")
+        XCTAssertTrue(element("settings.provisioning.env.all-repos").exists, "Env import should expose all-repos targeting.")
+        XCTAssertTrue(element("settings.provisioning.env.value.SUPABASE_URL").exists, "Env import should expose vendor env value fields.")
+        XCTAssertTrue(element("settings.provisioning.env.preview").exists, "Env import should expose preview.")
+        XCTAssertTrue(element("settings.provisioning.env.import").exists, "Env import should expose import.")
+        app.buttons["Close"].click()
+    }
+
     private func openCodeTab() {
         app.typeKey("3", modifierFlags: .command)
         let codeTab = element("dash.tab.code")

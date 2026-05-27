@@ -547,6 +547,9 @@ public final class AgentControlClient: ObservableObject {
     /// idempotency key, and the user's retry would re-execute the
     /// clone (which then 409s with "destination exists").
     private static func timeoutForPath(_ path: String) -> TimeInterval {
+        if path.hasPrefix("/vendor-provisioning/") {
+            return path == "/vendor-provisioning/check-device" ? 75 : 20
+        }
         switch path {
         case "/workspaces/open-local":   return 300  // matches daemon's NSOpenPanel cap
         case "/workspaces/from-github":  return 300  // matches ShellRunner gh-clone cap
@@ -688,6 +691,11 @@ public final class AgentControlClient: ObservableObject {
     @MainActor
     public var supportsWorkspaces: Bool {
         AgentControlWireVersion.supportsWorkspaces(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
+    public var supportsVendorProvisioning: Bool {
+        AgentControlWireVersion.supportsVendorProvisioning(serverWireVersion: serverWireVersion)
     }
 
     @MainActor
@@ -2238,6 +2246,107 @@ public final class AgentControlClient: ObservableObject {
         do {
             let data = try await sendChecked(request)
             return try JSONDecoder().decode(WorkspaceAllowListResponse.self, from: data)
+        } catch {
+            self.lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    // MARK: - v24 vendor provisioning
+
+    @MainActor
+    public func fetchVendorProvisioningVendors() async -> VendorProvisioningVendorsResponse? {
+        if let v = serverWireVersion, v < AgentControlWireVersion.vendorProvisioningMinimum {
+            return nil
+        }
+        guard let request = makeRequest(path: "/vendor-provisioning/vendors", method: "GET") else {
+            return nil
+        }
+        return await decodeResponse(request, as: VendorProvisioningVendorsResponse.self)
+    }
+
+    @MainActor
+    public func checkVendorProvisioning() async -> VendorProvisioningCheckResponse? {
+        if let v = serverWireVersion, v < AgentControlWireVersion.vendorProvisioningMinimum {
+            return nil
+        }
+        guard var request = makeRequest(path: "/vendor-provisioning/check-device", method: "POST", body: Data("{}".utf8)) else {
+            return nil
+        }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return await decodeResponse(request, as: VendorProvisioningCheckResponse.self)
+    }
+
+    @MainActor
+    public func performVendorProvisioningAction(
+        vendorId: String,
+        actionId: String
+    ) async -> VendorProvisioningActionResponse? {
+        let requestBody = VendorProvisioningActionRequest(actionId: actionId)
+        return await postVendorProvisioning(
+            vendorId: vendorId,
+            suffix: "actions",
+            body: requestBody,
+            response: VendorProvisioningActionResponse.self
+        )
+    }
+
+    @MainActor
+    public func previewVendorEnv(
+        vendorId: String,
+        request: VendorEnvPreviewRequest
+    ) async -> VendorEnvPreviewResponse? {
+        await postVendorProvisioning(
+            vendorId: vendorId,
+            suffix: "env/preview",
+            body: request,
+            response: VendorEnvPreviewResponse.self
+        )
+    }
+
+    @MainActor
+    public func importVendorEnv(
+        vendorId: String,
+        request: VendorEnvImportRequest
+    ) async -> VendorEnvImportResponse? {
+        await postVendorProvisioning(
+            vendorId: vendorId,
+            suffix: "env/import",
+            body: request,
+            response: VendorEnvImportResponse.self
+        )
+    }
+
+    @MainActor
+    private func postVendorProvisioning<Body: Encodable, Response: Decodable>(
+        vendorId: String,
+        suffix: String,
+        body: Body,
+        response: Response.Type
+    ) async -> Response? {
+        if let v = serverWireVersion, v < AgentControlWireVersion.vendorProvisioningMinimum {
+            return nil
+        }
+        let encoded = (try? JSONEncoder().encode(body)) ?? Data()
+        guard let encodedVendor = vendorId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              var request = makeRequest(
+                path: "/vendor-provisioning/vendors/\(encodedVendor)/\(suffix)",
+                method: "POST",
+                body: encoded
+              )
+        else { return nil }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return await decodeResponse(request, as: response)
+    }
+
+    @MainActor
+    private func decodeResponse<T: Decodable>(_ request: URLRequest, as type: T.Type) async -> T? {
+        do {
+            let data = try await sendChecked(request)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            lastError = nil
+            return try decoder.decode(T.self, from: data)
         } catch {
             self.lastError = error.localizedDescription
             return nil

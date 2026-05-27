@@ -52,6 +52,22 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 - Find-bar overlay isolation. The find-bar inside `ChatThreadScroll` shares the parent body, so a transcript append still re-evaluates its body (small cost — TextField + 4 buttons). Full isolation requires extracting `TranscriptFindBarOverlay` as an Equatable child view with on-demand match computation.
 - `@Observable` migration (C2 in the plan) is a separate PR that will re-architect the slices as `@Observable` macro types.
 
+## [0.29.24 build 163] - 2026-05-27 - Vendor provisioning (`darshanbathija/cli-vendor-auth`)
+
+### Added
+
+- **Advanced provisioning in Settings.** Adds Settings -> Advanced -> Provisioning with category filters, Check Device, vendor rows, CLI auth status, MCP status, signup links, visible install/auth actions, and environment import CTAs. V1 covers MongoDB Atlas, Upstash, Supabase, Fly, Railway, Hetzner, AWS, GCP, Azure, and Cloudflare/Wrangler.
+- **Wire v24 vendor-provisioning API.** Adds catalog, device-check, terminal action, env preview, and env import routes under `/vendor-provisioning`, wired through `AppRuntime`, `AgentControlServer`, and `AgentControlClient`.
+- **Repo-env import bridge.** Vendor env candidates flow through PR 201's import preview and `RepoEnvStore.importVariables`, always store as sensitive Keychain-backed values, preserve duplicate/overwrite behavior, support selected repos plus current-repo set IDs, and record `actor: vendor:<id>` provenance without persisting secrets in JSON.
+- **Visible CLI/tmux launch path.** Install and auth actions are allowlisted, launched through tmux-backed visible terminal windows, and return terminal window/pane identifiers instead of running hidden credential commands.
+
+### Tests
+
+- Added vendor catalog, allowlist, concurrent probe, MCP matching, env preview/import, route DTO, and UI smoke coverage.
+- Verified focused shared wire tests plus Mac route/service regression gates, including `RepoEnvStoreTests` and `TmuxControlClientValidationTests`.
+
+Bumps `MARKETING_VERSION` 0.29.23 -> 0.29.24, `CURRENT_PROJECT_VERSION` 162 -> 163.
+
 ## [0.29.21 build 160] - 2026-05-27 - Generated Markdown document tabs (`darshanbathija/chat-md-render`)
 
 ### Added

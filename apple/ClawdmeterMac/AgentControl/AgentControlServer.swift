@@ -50,6 +50,9 @@ public final class AgentControlServer {
     /// iOS new-session flow doesn't need to ship explicit defaults.
     let workspaceStore: WorkspaceStore
     private let repoEnvResolver: RepoEnvRuntimeResolver?
+    /// Wire v24: vendor CLI/MCP provisioning. Optional for tests that
+    /// instantiate only the session daemon surface.
+    let vendorProvisioningService: VendorProvisioningService?
     /// v16 Code V2: bounded LRU receipt cache for iOS write commands.
     /// Wraps the write handlers so a retried request with the same
     /// idempotency key returns the cached response instead of repeating
@@ -236,6 +239,7 @@ public final class AgentControlServer {
         chatFileResolver: SessionFileResolver? = nil,
         workspaceStore: WorkspaceStore? = nil,
         repoEnvResolver: RepoEnvRuntimeResolver? = nil,
+        vendorProvisioningService: VendorProvisioningService? = nil,
         mobileCommandOutbox: MobileCommandOutbox? = nil,
         listenPortRange: ClosedRange<UInt16> = 21731...21741,
         writesServerMetadata: Bool = true
@@ -254,6 +258,7 @@ public final class AgentControlServer {
         // can inject an isolated tmpdir-backed store.
         self.workspaceStore = workspaceStore ?? WorkspaceStore()
         self.repoEnvResolver = repoEnvResolver
+        self.vendorProvisioningService = vendorProvisioningService
         self.codeRunProfiles = CodeRunProfileService(repoEnvResolver: repoEnvResolver)
         // v16 Code V2: bounded receipt cache. The replay-from-audit-log
         // call is fire-and-forget — happens on the first request to an
@@ -1127,6 +1132,36 @@ public final class AgentControlServer {
         }
         t.register(method: "GET", pattern: "/workspaces/allow-list") { [weak self] _, conn, _ in
             self?.handleGetWorkspaceAllowList(connection: conn)
+        }
+        // v24: vendor CLI/MCP provisioning. Install/auth actions launch
+        // visible Terminal commands from an allowlisted catalog; env import
+        // delegates to PR 201's RepoEnvStore + Keychain flow.
+        t.register(method: "GET", pattern: "/vendor-provisioning/vendors") { [weak self] _, conn, _ in
+            self?.handleGetVendorProvisioningVendors(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/vendor-provisioning/check-device") { [weak self] _, conn, _ in
+            await self?.handleCheckVendorProvisioning(connection: conn)
+        }
+        t.register(method: "POST", pattern: "/vendor-provisioning/vendors/:id/actions") { [weak self] req, conn, params in
+            await self?.handleVendorProvisioningAction(
+                vendorId: params["id"] ?? "",
+                request: req,
+                connection: conn
+            )
+        }
+        t.register(method: "POST", pattern: "/vendor-provisioning/vendors/:id/env/preview") { [weak self] req, conn, params in
+            self?.handleVendorEnvPreview(
+                vendorId: params["id"] ?? "",
+                request: req,
+                connection: conn
+            )
+        }
+        t.register(method: "POST", pattern: "/vendor-provisioning/vendors/:id/env/import") { [weak self] req, conn, params in
+            self?.handleVendorEnvImport(
+                vendorId: params["id"] ?? "",
+                request: req,
+                connection: conn
+            )
         }
         t.register(method: "PUT", pattern: "/provider-defaults/:vendor") { [weak self] req, conn, params in
             await self?.handlePutProviderDefault(
@@ -5057,7 +5092,7 @@ public final class AgentControlServer {
     }
 
     @discardableResult
-    private func sendRepoEnvConflict(_ error: Error, on connection: NWConnection) -> Bool {
+    func sendRepoEnvConflict(_ error: Error, on connection: NWConnection) -> Bool {
         guard case RepoEnvError.manualConflicts(let conflicts) = error else { return false }
         let payload = RepoEnvConflictPayload(
             error: "repo_env_conflict",
