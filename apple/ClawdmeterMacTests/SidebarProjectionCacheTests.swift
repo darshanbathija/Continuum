@@ -610,7 +610,8 @@ final class SidebarProjectionCacheTests: XCTestCase {
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
+            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
+            workspaceStore: Self.makeWorkspaceStore(in: directory)
         )
         let now = Date(timeIntervalSince1970: 1_900_000_000)
         let jsonlURL = directory.appendingPathComponent("read-only-external.jsonl")
@@ -642,7 +643,7 @@ final class SidebarProjectionCacheTests: XCTestCase {
             now: now
         )
         XCTAssertTrue(projection.workspaceSections.isEmpty)
-        XCTAssertEqual(projection.activeExternalSections.flatMap(\.recents).map(\.path), [recent.path])
+        XCTAssertEqual(projection.activeExternalSections.flatMap { $0.recents }.map { $0.path }, [recent.path])
     }
 
     @MainActor
@@ -656,7 +657,8 @@ final class SidebarProjectionCacheTests: XCTestCase {
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
+            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
+            workspaceStore: Self.makeWorkspaceStore(in: directory)
         )
         let recent = Self.recent(
             path: directory.appendingPathComponent("outside-session.jsonl").path,
@@ -668,10 +670,10 @@ final class SidebarProjectionCacheTests: XCTestCase {
         model.repos = [repo]
         model.searchQuery = "sidebar projection"
 
-        XCTAssertEqual(model.filteredRepos.map(\.key), [repo.key])
+        XCTAssertEqual(model.filteredRepos.map { $0.key }, [repo.key])
 
         model.searchQuery = "codex"
-        XCTAssertEqual(model.filteredRepos.map(\.key), [repo.key])
+        XCTAssertEqual(model.filteredRepos.map { $0.key }, [repo.key])
     }
 
     @MainActor
@@ -685,7 +687,8 @@ final class SidebarProjectionCacheTests: XCTestCase {
         let model = SessionsModel(
             repoIndex: RepoIndex(),
             registry: registry,
-            supervisor: TmuxSupervisor(tmux: tmux, registry: registry)
+            supervisor: TmuxSupervisor(tmux: tmux, registry: registry),
+            workspaceStore: Self.makeWorkspaceStore(in: directory)
         )
         model.expandedRepoKeys = ["/Users/dev/existing"]
 
@@ -695,7 +698,7 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertTrue(model.showingNewSessionSheet)
         XCTAssertEqual(model.expandedRepoKeys, ["/Users/dev/existing"])
 
-        model.prepareNewSession(in: nil)
+        model.prepareNewSession(in: nil as String?)
         XCTAssertNil(model.selectedRepoKey)
         XCTAssertEqual(model.expandedRepoKeys, ["/Users/dev/existing"])
     }
@@ -857,6 +860,14 @@ final class SidebarProjectionCacheTests: XCTestCase {
             provider: provider,
             firstPrompt: firstPrompt,
             customName: customName
+        )
+    }
+
+    @MainActor
+    private static func makeWorkspaceStore(in directory: URL) -> WorkspaceStore {
+        WorkspaceStore(
+            storeURL: directory.appendingPathComponent("workspaces.json"),
+            sessionsURL: directory.appendingPathComponent("workspace-sessions.json")
         )
     }
 
