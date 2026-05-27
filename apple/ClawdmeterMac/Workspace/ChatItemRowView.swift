@@ -435,19 +435,24 @@ struct ChatItemRowContent: View {
             set: { actions.onToggleToolRun(id, $0) }
         )
         // The most recent pair without a result is the in-flight step.
-        // While present, render a subtitle under the chip; once all
+        // While present, render a subtitle next to the chip; once all
         // pairs have results the subtitle dissolves.
         let runningStep: ToolPair? = pairs.last(where: { $0.result == nil })
-        return VStack(alignment: .leading, spacing: 3) {
-            DisclosureGroup(isExpanded: isOpen) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(pairs) { pair in
-                        toolPairRow(pair)
-                    }
+        return DisclosureGroup(isExpanded: isOpen) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(pairs) { pair in
+                    toolPairRow(pair)
                 }
-                .padding(.leading, 16)
-                .padding(.top, 4)
-            } label: {
+            }
+            .padding(.leading, 16)
+            .padding(.top, 4)
+        } label: {
+            // v0.29.26: subtitle moves inline next to the "Ran N commands"
+            // pill instead of stacking underneath. Outer HStack keeps the
+            // pill (background-capsuled) and the running subtitle on the
+            // same baseline; the subtitle truncates with ellipsis when
+            // the row narrows.
+            HStack(alignment: .center, spacing: 6) {
                 HStack(spacing: 6) {
                     TahoeIcon("terminal", size: 10)
                         .foregroundStyle(t.fg3)
@@ -478,20 +483,19 @@ struct ChatItemRowContent: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(t.hair2, in: Capsule(style: .continuous))
-                .contentShape(Rectangle())
-            }
-            .disclosureGroupStyle(QuietDisclosure())
 
-            if let running = runningStep {
-                Text(runningStepSubtitle(running))
-                    .font(TahoeFont.body(10))
-                    .foregroundStyle(t.fg3)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .padding(.leading, 18)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                if let running = runningStep {
+                    Text("· \(runningStepSubtitle(running))")
+                        .font(TahoeFont.body(10))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .transition(.opacity)
+                }
             }
+            .contentShape(Rectangle())
         }
+        .disclosureGroupStyle(QuietDisclosure())
         .animation(.easeInOut(duration: 0.22), value: runningStep?.id)
     }
 
