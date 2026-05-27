@@ -24,7 +24,9 @@
 // `RelayPairingService`.
 
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 
 /// Persistent store for the most recent successful pairing. Single
 /// pairing only in v1 (Open Question 1 + Group F).
@@ -102,6 +104,7 @@ public final class RelayPairingStore: @unchecked Sendable {
 
     // MARK: - Keychain helpers
 
+    #if canImport(Security)
     private func keychainQuery() -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -135,4 +138,13 @@ public final class RelayPairingStore: @unchecked Sendable {
     private func deleteKeychain() {
         _ = SecItemDelete(keychainQuery() as CFDictionary)
     }
+    #else
+    private func readKeychain() -> Data? {
+        nil
+    }
+
+    private func writeKeychain(_: Data) {}
+
+    private func deleteKeychain() {}
+    #endif
 }
