@@ -209,6 +209,11 @@ struct iOSWorkspaceSwitcherSheet: View {
             return
         }
         if let err = result.error {
+            // Codex R4 #2: transport error preserves the key.
+            if result.transportError {
+                openLocalMessage = "Network error — try again when reachable."
+                return
+            }
             openLocalMessage = iosFriendlyMessage(for: err)
             RepoOnboardingIdempotencyStore.clear(.openLocal)
             openLocalIdempotencyKey = RepoOnboardingIdempotencyStore.currentKey(for: .openLocal)

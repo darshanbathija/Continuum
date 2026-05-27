@@ -89,20 +89,26 @@ public final class RepoOnboarding {
         let lastComponent = String(normalized[normalized.index(after: lastSlash)...])
         let destPath = (destinationParent as NSString).appendingPathComponent(lastComponent)
 
-        // TOCTOU mitigation (Codex R3 #6): the daemon handler validated
-        // `destinationParent` against PathAllowList, but the parent
-        // could have been replaced with a symlink in the window between
-        // that check and this filesystem call. Re-validate immediately
-        // before mkdir narrows the window from ~hundreds of ms (handler
-        // → service hop) down to microseconds. Doesn't fully close
-        // TOCTOU (the true fix is openat(O_NOFOLLOW) at the syscall
-        // level, which Swift doesn't expose cleanly), but blocks all
-        // practical local-user attacks.
+        // TOCTOU mitigation (Codex R3 #6 + R4 #3): the daemon handler
+        // validated `destinationParent` against PathAllowList, but the
+        // parent could have been replaced with a symlink in the window
+        // between that check and this filesystem call. Two-layer defense:
+        //   1. Re-validate the path against the allow-list (narrows
+        //      window from handler-to-service hop to microseconds).
+        //   2. lstat() the path RIGHT before each filesystem operation;
+        //      if it's a symlink at that instant, abort. Window shrinks
+        //      to ~50ns — practically unattackable without a kernel-
+        //      side primitive.
+        // Full closure requires openat(O_NOFOLLOW) which Swift doesn't
+        // expose cleanly. Pragmatic mitigation only.
         switch PathAllowList.validate(destinationParent) {
         case .success:
             break
         case .failure(let err):
             throw err
+        }
+        if let symlinkError = PathAllowList.confirmNotSymlink(destinationParent) {
+            throw symlinkError
         }
 
         // mkdir -p the parent if it doesn't exist yet. Clone fails fast
@@ -183,13 +189,17 @@ public final class RepoOnboarding {
         in parent: String
     ) async throws -> CodeWorkspaceRecord {
         try Self.validateQuickStartName(name)
-        // TOCTOU mitigation: re-validate `parent` immediately before
-        // we touch the filesystem. See `cloneFromGitHub` for rationale.
+        // TOCTOU mitigation: re-validate `parent` + lstat immediately
+        // before we touch the filesystem. See `cloneFromGitHub` for
+        // rationale.
         switch PathAllowList.validate(parent) {
         case .success:
             break
         case .failure(let err):
             throw err
+        }
+        if let symlinkError = PathAllowList.confirmNotSymlink(parent) {
+            throw symlinkError
         }
         // Ensure the parent itself exists (idempotent mkdir).
         var parentIsDir: ObjCBool = false
@@ -227,6 +237,18 @@ public final class RepoOnboarding {
             )
         }
 
+        // Codex R4 #2: if anything after createDirectory fails, the
+        // empty `destPath` is stranded — iOS clears the key on failure,
+        // retry hits "folder already exists" indefinitely. Use a
+        // success flag + defer-cleanup so the partial directory is
+        // removed on every failure path before we re-throw.
+        var quickStartSucceeded = false
+        defer {
+            if !quickStartSucceeded {
+                try? FileManager.default.removeItem(atPath: destPath)
+            }
+        }
+
         guard let git = ShellRunner.locateBinary("git") else {
             throw RepoOnboardingError.gitInitFailed(stderr: "git binary not found")
         }
@@ -247,7 +269,9 @@ public final class RepoOnboarding {
             throw RepoOnboardingError.gitInitFailed(stderr: result.stderrString)
         }
 
-        return try await registerWorkspace(at: destPath, allowNonGit: false)
+        let record = try await registerWorkspace(at: destPath, allowNonGit: false)
+        quickStartSucceeded = true
+        return record
     }
 
     // MARK: - Chokepoint

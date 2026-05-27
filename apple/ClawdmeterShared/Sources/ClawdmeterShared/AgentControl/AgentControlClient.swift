@@ -2087,19 +2087,29 @@ public final class AgentControlClient: ObservableObject {
         /// sheet should refresh the workspace list + dismiss rather
         /// than show "unknown failure" or re-fire the operation.
         public let replayedWithoutRecord: Bool
+        /// The URLSession call threw before any server response landed
+        /// (network drop, app background, 300s client-side timeout).
+        /// The Mac MIGHT have completed the operation, but iOS never
+        /// saw the answer. Sheets MUST NOT clear the persisted
+        /// idempotency key on transport errors — the next retry needs
+        /// to reuse the key to either replay the daemon's cached
+        /// response or pick up the in-flight reservation.
+        public let transportError: Bool
 
         public init(
             record: CodeWorkspaceRecord? = nil,
             error: RepoOnboardingError? = nil,
             macLocked: Bool = false,
             unsupportedServer: Bool = false,
-            replayedWithoutRecord: Bool = false
+            replayedWithoutRecord: Bool = false,
+            transportError: Bool = false
         ) {
             self.record = record
             self.error = error
             self.macLocked = macLocked
             self.unsupportedServer = unsupportedServer
             self.replayedWithoutRecord = replayedWithoutRecord
+            self.transportError = transportError
         }
     }
 
@@ -2286,9 +2296,16 @@ public final class AgentControlClient: ObservableObject {
                 )
             }
         } catch {
+            // URLSession threw before any server response — network
+            // drop, timeout, app suspend. The Mac MAY still complete
+            // the work; iOS must keep the idempotency key so the next
+            // retry hits the daemon's in-flight reservation or replay
+            // path. The `transportError: true` flag signals the sheet
+            // to surface a retryable banner instead of clearing the key.
             self.lastError = error.localizedDescription
             return WorkspaceOnboardingResult(
-                error: .persistenceFailed(message: error.localizedDescription)
+                error: .persistenceFailed(message: error.localizedDescription),
+                transportError: true
             )
         }
     }

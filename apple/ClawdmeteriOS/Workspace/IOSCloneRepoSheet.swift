@@ -124,6 +124,16 @@ struct IOSCloneRepoSheet: View {
             return
         }
         if let err = result.error {
+            // Codex R4 #2: transport errors (URLSession threw before
+            // any server response) MUST NOT clear the persisted key.
+            // The Mac might have completed the clone; the next retry
+            // needs the same key to either replay the daemon's cached
+            // response or join its in-flight reservation. Surface the
+            // banner so the user can retry when network recovers.
+            if result.transportError {
+                errorMessage = "Network error — try again when reachable. Your clone may still be running on the Mac."
+                return
+            }
             switch err {
             case .ghAuthFailed:
                 // Clear the persisted key. Codex R3 #5: keeping the key

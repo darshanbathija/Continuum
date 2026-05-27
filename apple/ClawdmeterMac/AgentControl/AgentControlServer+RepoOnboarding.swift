@@ -53,6 +53,7 @@ extension AgentControlServer {
         } catch {
             await respondInternal(
                 req: req,
+                kind: .openLocalFolder,
                 payloadHash: payloadHash,
                 connection: connection,
                 error: .persistenceFailed(message: "NSOpenPanel error: \(error.localizedDescription)")
@@ -89,6 +90,7 @@ extension AgentControlServer {
         } catch {
             await respondInternal(
                 req: req,
+                kind: .openLocalFolder,
                 payloadHash: payloadHash,
                 connection: connection,
                 error: .persistenceFailed(message: error.localizedDescription)
@@ -149,6 +151,7 @@ extension AgentControlServer {
         } catch {
             await respondInternal(
                 req: PathReceiptCarrier(idempotencyKey: req.idempotencyKey),
+                kind: .cloneFromGitHub,
                 payloadHash: payloadHash,
                 connection: connection,
                 error: .cloneFailed(stderr: error.localizedDescription)
@@ -208,6 +211,7 @@ extension AgentControlServer {
         } catch {
             await respondInternal(
                 req: PathReceiptCarrier(idempotencyKey: req.idempotencyKey),
+                kind: .quickStartRepo,
                 payloadHash: payloadHash,
                 connection: connection,
                 error: .gitInitFailed(stderr: error.localizedDescription)
@@ -436,13 +440,16 @@ extension AgentControlServer {
         }
         // Best-effort: record an idempotency receipt for the failure too,
         // so retries replay the same error rather than re-attempting.
+        // payloadHash threaded through so 422 mismatch detection also
+        // works against cached failures (Codex R4 #1 fix).
         if let key = req.idempotencyKey {
             await mobileCommandOutbox.recordFailure(
                 key: key,
                 kind: kind,
                 error: "\(error)",
                 responseStatus: status,
-                responseBody: body
+                responseBody: body,
+                payloadHash: payloadHash
             )
         }
         let resp = AgentControlServer.HTTPResponse(
@@ -486,6 +493,7 @@ extension AgentControlServer {
 
     private func respondInternal<R: HasIdempotencyKey>(
         req: R,
+        kind: MobileCommandKind,
         payloadHash: String,
         connection: NWConnection,
         error: RepoOnboardingError
@@ -493,7 +501,7 @@ extension AgentControlServer {
         await respondOnboardingError(
             error,
             req: req,
-            kind: .openLocalFolder,
+            kind: kind,
             payloadHash: payloadHash,
             connection: connection
         )
@@ -512,7 +520,8 @@ extension AgentControlServer {
                 kind: .openLocalFolder,
                 responseBody: Data("{}".utf8),
                 responseContentType: "application/json",
-                responseStatus: 204
+                responseStatus: 204,
+                payloadHash: payloadHash
             )
         }
         let resp = AgentControlServer.HTTPResponse(

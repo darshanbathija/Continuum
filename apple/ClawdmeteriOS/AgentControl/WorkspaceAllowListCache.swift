@@ -54,8 +54,18 @@ public final class WorkspaceAllowListCache: ObservableObject {
     }
     public func validate(_ path: String) -> ValidationResult {
         guard let snapshot else { return ValidationResult.success(path) }
-        let canonical = canonicalize(path)
-        if canonical.isEmpty { return ValidationResult.failure("Path is empty.") }
+        let trimmed = path.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return ValidationResult.failure("Path is empty.") }
+        // Codex R4 #4: `~` in a Mac-side path expands against the Mac's
+        // real home, but iOS would expand against its own container.
+        // Tilde-prefixed paths are intentionally permissive — accept
+        // them and let the daemon's PathAllowList do the real check.
+        // iOS pre-validation is UX (avoid round-trip for obviously-bad
+        // paths), not security.
+        if trimmed.hasPrefix("~") {
+            return ValidationResult.success(trimmed)
+        }
+        let canonical = canonicalize(trimmed)
         for denied in snapshot.deniedSubpaths {
             if isPath(canonical, underOrEqualTo: canonicalize(denied)) {
                 return ValidationResult.failure("Path is under a denied location.")
@@ -71,8 +81,10 @@ public final class WorkspaceAllowListCache: ObservableObject {
     }
 
     private func canonicalize(_ path: String) -> String {
-        let expanded = (path as NSString).expandingTildeInPath
-        let standardized = (expanded as NSString).standardizingPath
+        // Intentionally do NOT call `expandingTildeInPath` here — `~`
+        // means iOS's container home, not the Mac's. Tilde-prefixed
+        // paths are handled by an early-accept above. Standardize only.
+        let standardized = (path as NSString).standardizingPath
         var stripped = standardized
         while stripped.count > 1 && stripped.hasSuffix("/") {
             stripped.removeLast()

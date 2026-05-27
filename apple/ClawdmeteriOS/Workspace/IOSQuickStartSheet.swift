@@ -104,6 +104,13 @@ struct IOSQuickStartSheet: View {
             return
         }
         if let err = result.error {
+            // Codex R4 #2: transport error preserves the key — the Mac
+            // may still complete; next retry must reuse the key to
+            // replay or join in-flight reservation.
+            if result.transportError {
+                errorMessage = "Network error — try again when reachable. The Mac may still be processing."
+                return
+            }
             switch err {
             case .alreadyRegistered:
                 RepoOnboardingIdempotencyStore.clear(.quickStart)

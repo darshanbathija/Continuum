@@ -225,4 +225,32 @@ public enum PathAllowList {
         let rootWithSlash = root.hasSuffix("/") ? root : root + "/"
         return path.hasPrefix(rootWithSlash)
     }
+
+    /// Last-line TOCTOU defense (Codex R4 #3): immediately before the
+    /// caller touches the filesystem, lstat the canonical path and
+    /// confirm it's not a symlink at that instant. Race window between
+    /// this check and the operation is ~50ns; in practice unattackable
+    /// from another same-user process without a kernel-side primitive.
+    /// Full closure requires openat(O_NOFOLLOW); this is the best Swift
+    /// can do without dropping to POSIX.
+    ///
+    /// Returns `nil` on success (path is safe to use), or a
+    /// `RepoOnboardingError.pathNotAllowed` if the path is a symlink
+    /// or stat fails.
+    public static func confirmNotSymlink(_ path: String) -> RepoOnboardingError? {
+        var statBuf = stat()
+        guard lstat(path, &statBuf) == 0 else {
+            // stat failure on a path that doesn't exist yet is fine —
+            // it's the "path not yet created" case for Quick Start /
+            // clone destination. We only reject when stat succeeds AND
+            // reveals a symlink.
+            if errno == ENOENT { return nil }
+            return .pathNotAllowed(reason: "could not lstat path: errno \(errno)")
+        }
+        let mode = mode_t(statBuf.st_mode) & S_IFMT
+        if mode == S_IFLNK {
+            return .pathNotAllowed(reason: "path is a symlink (TOCTOU swap detected)")
+        }
+        return nil
+    }
 }

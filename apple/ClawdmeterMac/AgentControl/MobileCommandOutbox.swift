@@ -239,6 +239,12 @@ public actor MobileCommandOutbox {
             let kind = MobileCommandKind(rawValue: kindRaw) ?? .send
             let status = MobileCommandStatus(rawValue: statusRaw) ?? .acknowledged
             let serverReceiptId = (dict["serverReceiptId"] as? String) ?? UUID().uuidString
+            // Pull payloadHash out of the audit row so the 422 mismatch
+            // gate works against post-restart replayed entries too
+            // (Codex R4 #1 fix). Without this, a retry with edited
+            // payload after daemon restart would silently replay the
+            // wrong response.
+            let payloadHash = dict["payloadHash"] as? String
             let receipt = MobileCommandReceipt(
                 idempotencyKey: key,
                 status: status,
@@ -251,7 +257,8 @@ public actor MobileCommandOutbox {
                 kind: kind,
                 responseBody: nil,
                 responseStatus: status == .failed ? 500 : 200,
-                cachedAt: Date()
+                cachedAt: Date(),
+                payloadHash: payloadHash
             )
             upsert(key: key, entry: entry)
             seeded += 1
