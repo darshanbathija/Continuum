@@ -46,6 +46,10 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
     /// Optional structured shell payload. Providers only populate fields
     /// they actually expose; missing cwd/duration/stderr remain nil.
     public let bashResult: BashResult?
+    /// Provider-agnostic generated files extracted from raw tool payloads
+    /// at parse time. Optional on the wire; missing legacy transcripts
+    /// decode to an empty list.
+    public let generatedArtifacts: [GeneratedArtifact]
 
     public init(
         id: String,
@@ -58,7 +62,8 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
         editStats: EditStats? = nil,
         askUserQuestion: AskUserQuestion? = nil,
         editDiff: EditDiff? = nil,
-        bashResult: BashResult? = nil
+        bashResult: BashResult? = nil,
+        generatedArtifacts: [GeneratedArtifact] = []
     ) {
         self.id = id
         self.kind = kind
@@ -71,6 +76,7 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
         self.askUserQuestion = askUserQuestion
         self.editDiff = editDiff
         self.bashResult = bashResult
+        self.generatedArtifacts = generatedArtifacts
     }
 
     // Custom Decodable init so v0 messages persisted before the editStats
@@ -89,10 +95,11 @@ public struct ChatMessage: Identifiable, Hashable, Sendable, Codable {
         self.askUserQuestion = try c.decodeIfPresent(AskUserQuestion.self, forKey: .askUserQuestion)
         self.editDiff = try c.decodeIfPresent(EditDiff.self, forKey: .editDiff)
         self.bashResult = try c.decodeIfPresent(BashResult.self, forKey: .bashResult)
+        self.generatedArtifacts = (try? c.decodeIfPresent([GeneratedArtifact].self, forKey: .generatedArtifacts)) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, title, body, detail, at, isError, editStats, askUserQuestion, editDiff, bashResult
+        case id, kind, title, body, detail, at, isError, editStats, askUserQuestion, editDiff, bashResult, generatedArtifacts
     }
 }
 

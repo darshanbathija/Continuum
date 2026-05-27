@@ -132,6 +132,8 @@ struct ChatItemRowActions {
     let onQuoteReply: (_ body: String) -> Void
     /// Toggle the bookmark on a message id.
     let onToggleBookmark: (_ messageId: String) -> Void
+    /// Open a generated Markdown document in the Code workspace tab strip.
+    let onOpenMarkdownDocument: (_ path: String) -> Void
 }
 
 // MARK: - Equatable row view (historical rows)
@@ -265,10 +267,49 @@ struct ChatItemRowContent: View {
                     }
                 }
             }
+            ForEach(markdownArtifacts(in: pairs)) { artifact in
+                generatedArtifactButton(artifact)
+            }
             if !otherPairs.isEmpty {
                 toolRunGroup(id: runId, pairs: otherPairs)
             }
         }
+    }
+
+    private func markdownArtifacts(in pairs: [ToolPair]) -> [GeneratedArtifact] {
+        var seen: Set<String> = []
+        var out: [GeneratedArtifact] = []
+        for artifact in pairs.flatMap({ $0.call.generatedArtifacts }) where artifact.kind == .markdownDocument {
+            guard !seen.contains(artifact.path) else { continue }
+            seen.insert(artifact.path)
+            out.append(artifact)
+        }
+        return out
+    }
+
+    private func generatedArtifactButton(_ artifact: GeneratedArtifact) -> some View {
+        Button {
+            actions.onOpenMarkdownDocument(artifact.path)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "doc.richtext")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(t.accent)
+                Text((artifact.path as NSString).lastPathComponent.isEmpty ? artifact.path : (artifact.path as NSString).lastPathComponent)
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(t.hair2, in: Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Open Markdown document in Code tab")
     }
 
     @ViewBuilder
@@ -367,7 +408,10 @@ struct ChatItemRowContent: View {
         if let root = payload.repoRoot {
             let links = Array(ResolvablePathLinkParser.links(in: body, repoRoot: root).prefix(8))
             if !links.isEmpty {
-                TranscriptPathLinkStripWithEnvironment(links: links)
+                TranscriptPathLinkStripWithEnvironment(
+                    links: links,
+                    onOpenMarkdownDocument: actions.onOpenMarkdownDocument
+                )
             }
         }
     }
@@ -655,11 +699,16 @@ struct ChatItemRowContent: View {
 /// exactly what A9 wants to avoid.
 private struct TranscriptPathLinkStripWithEnvironment: View {
     let links: [ResolvablePathLink]
+    let onOpenMarkdownDocument: (String) -> Void
     @Environment(\.sessionPresentationStore) private var presentationStore
 
     var body: some View {
         if let presentationStore {
-            TranscriptPathLinkStrip(links: links, presentationStore: presentationStore)
+            TranscriptPathLinkStrip(
+                links: links,
+                presentationStore: presentationStore,
+                onOpenMarkdownDocument: onOpenMarkdownDocument
+            )
         }
     }
 }

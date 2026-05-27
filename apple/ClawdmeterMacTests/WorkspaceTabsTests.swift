@@ -179,6 +179,79 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(model.workspaceTerminalTabs(in: WorkspaceKey.of(source)!).count, 0)
     }
 
+    func test_workspaceDocumentTabsOpenSelectDedupeAndCloseToOriginChat() async throws {
+        let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceDocumentTabs")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let repo = directory.appendingPathComponent("repo", isDirectory: true)
+        let docs = repo.appendingPathComponent("docs", isDirectory: true)
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        let source = try await registry.create(
+            repoKey: repo.path,
+            repoDisplayName: "repo",
+            agent: .codex,
+            model: "gpt",
+            goal: "source",
+            worktreePath: repo.path,
+            tmuxWindowId: "@1",
+            tmuxPaneId: "%1",
+            planMode: false,
+            mode: .worktree
+        )
+        model.openWorkspaceTerminalTab(from: source)
+        XCTAssertNotNil(model.selectedWorkspaceTerminalTab)
+
+        model.openWorkspaceDocumentTab(
+            from: source,
+            path: "docs/report.md",
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+
+        let expectedPath = docs.appendingPathComponent("report.md").standardizedFileURL.path
+        let selected = try XCTUnwrap(model.selectedWorkspaceDocumentTab)
+        XCTAssertEqual(selected.path, expectedPath)
+        XCTAssertEqual(selected.sessionId, source.id)
+        XCTAssertEqual(model.openSessionId, source.id)
+        XCTAssertNil(model.selectedWorkspaceTerminalTab)
+
+        model.openWorkspaceDocumentTab(
+            from: source,
+            path: expectedPath,
+            createdAt: Date(timeIntervalSince1970: 2)
+        )
+
+        XCTAssertEqual(model.workspaceDocumentTabs(in: WorkspaceKey.of(source)!).count, 1)
+        XCTAssertEqual(model.selectedWorkspaceDocumentTab?.id, selected.id)
+
+        model.closeWorkspaceDocumentTab(selected)
+
+        XCTAssertTrue(model.workspaceDocumentTabs.isEmpty)
+        XCTAssertNil(model.selectedWorkspaceDocumentTab)
+        XCTAssertEqual(model.openSessionId, source.id)
+    }
+
+    func test_markdownDocumentPathResolutionAllowsAbsoluteOutsideWorkspaceAndRejectsUnsafePaths() {
+        let cwd = "/Users/example/project"
+
+        XCTAssertEqual(
+            AgentControlServer.standardizedMarkdownDocumentPath(
+                "/Users/example/.gstack/projects/report.md",
+                relativeTo: cwd
+            ),
+            "/Users/example/.gstack/projects/report.md"
+        )
+        XCTAssertEqual(
+            AgentControlServer.standardizedMarkdownDocumentPath("docs/report.md", relativeTo: cwd),
+            "/Users/example/project/docs/report.md"
+        )
+        XCTAssertEqual(
+            AgentControlServer.standardizedMarkdownDocumentPath("~/.gstack/projects/report.md", relativeTo: cwd),
+            NSString(string: "~/.gstack/projects/report.md").expandingTildeInPath
+        )
+        XCTAssertNil(AgentControlServer.standardizedMarkdownDocumentPath("../secrets/report.md", relativeTo: cwd))
+        XCTAssertNil(AgentControlServer.standardizedMarkdownDocumentPath("docs/report.md\nbad", relativeTo: cwd))
+        XCTAssertNil(AgentControlServer.standardizedMarkdownDocumentPath("docs/report.md", relativeTo: ""))
+    }
+
     func test_workspaceTerminalTabsAreScopedAndIgnoreMissingPaneRefs() async throws {
         let (model, registry, directory) = try Self.makeIsolatedModel("WorkspaceTerminalScope")
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }

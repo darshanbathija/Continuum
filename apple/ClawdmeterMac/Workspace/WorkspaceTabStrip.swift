@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import ClawdmeterShared
 
 struct WorkspaceTabStrip: View {
@@ -9,11 +10,15 @@ struct WorkspaceTabStrip: View {
     let draftTab: WorkspaceDraftTab?
     let terminalTabs: [WorkspaceTerminalTab]
     let activeTerminalTabId: UUID?
+    let documentTabs: [WorkspaceDocumentTab]
+    let activeDocumentTabId: UUID?
     let terminalAvailable: Bool
     let onNewChat: () -> Void
     let onNewTerminal: () -> Void
     let onSelectTerminal: (WorkspaceTerminalTab) -> Void
     let onCloseTerminal: (WorkspaceTerminalTab) -> Void
+    let onSelectDocument: (WorkspaceDocumentTab) -> Void
+    let onCloseDocument: (WorkspaceDocumentTab) -> Void
 
     @Environment(\.tahoe) private var t
 
@@ -21,12 +26,14 @@ struct WorkspaceTabStrip: View {
         case session(AgentSession)
         case draft(WorkspaceDraftTab)
         case terminal(WorkspaceTerminalTab, AgentSession)
+        case document(WorkspaceDocumentTab)
 
         var id: String {
             switch self {
             case .session(let session): return "session-\(session.id.uuidString)"
             case .draft(let draft): return "draft-\(draft.id.uuidString)"
             case .terminal(let tab, _): return "terminal-\(tab.id.uuidString)"
+            case .document(let tab): return "document-\(tab.id.uuidString)"
             }
         }
 
@@ -35,6 +42,7 @@ struct WorkspaceTabStrip: View {
             case .session(let session): return session.createdAt
             case .draft(let draft): return draft.createdAt
             case .terminal(let tab, _): return tab.createdAt
+            case .document(let tab): return tab.createdAt
             }
         }
     }
@@ -65,6 +73,9 @@ struct WorkspaceTabStrip: View {
             else { continue }
             out.append(.terminal(tab, session))
         }
+        for tab in documentTabs where tab.workspaceKey == workspaceKey {
+            out.append(.document(tab))
+        }
         return out.sorted {
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.id < $1.id
@@ -83,6 +94,8 @@ struct WorkspaceTabStrip: View {
                             draftButton
                         case .terminal(let tab, let session):
                             terminalButton(tab, session: session)
+                        case .document(let tab):
+                            documentButton(tab)
                         }
                     }
                 }
@@ -121,7 +134,7 @@ struct WorkspaceTabStrip: View {
                 title: title(for: session),
                 subtitle: workspaceSubtitle(for: session),
                 systemImage: nil,
-                isActive: activeTerminalTabId == nil && session.id == activeSessionId,
+                isActive: activeTerminalTabId == nil && activeDocumentTabId == nil && session.id == activeSessionId,
                 closeAction: {
                     Task {
                         await model.endSession(id: session.id)
@@ -151,7 +164,7 @@ struct WorkspaceTabStrip: View {
                 title: "Untitled",
                 subtitle: "Draft",
                 systemImage: nil,
-                isActive: activeSessionId == nil && activeTerminalTabId == nil,
+                isActive: activeSessionId == nil && activeTerminalTabId == nil && activeDocumentTabId == nil,
                 closeAction: { model.clearDraftWorkspaceTab() }
             )
         }
@@ -176,6 +189,31 @@ struct WorkspaceTabStrip: View {
         .contextMenu {
             Button("Close") {
                 onCloseTerminal(tab)
+            }
+        }
+    }
+
+    private func documentButton(_ tab: WorkspaceDocumentTab) -> some View {
+        Button {
+            onSelectDocument(tab)
+        } label: {
+            tabLabel(
+                title: tab.title,
+                subtitle: "Document",
+                systemImage: "doc.richtext",
+                isActive: activeDocumentTabId == tab.id,
+                closeAction: { onCloseDocument(tab) }
+            )
+        }
+        .buttonStyle(.plain)
+        .help(tab.path)
+        .contextMenu {
+            Button("Close") {
+                onCloseDocument(tab)
+            }
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(tab.path, forType: .string)
             }
         }
     }

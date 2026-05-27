@@ -190,6 +190,10 @@ public enum CodexJSONLParser {
         let callId = (payload["call_id"] as? String) ?? baseId
         let editDiff = inputDict.flatMap { EditDiff.fromCodexInput($0, toolName: name) }
         let bashResult = inputDict.flatMap { BashResult.fromToolCallInput($0, toolName: name) }
+        let generatedArtifacts = GeneratedArtifactDetector.artifacts(
+            fromToolInput: inputDict ?? argsString,
+            toolName: name
+        )
         return [ChatMessage(
             id: "call:\(callId)",
             kind: .toolCall,
@@ -198,7 +202,8 @@ public enum CodexJSONLParser {
             detail: detail,
             at: at,
             editDiff: editDiff,
-            bashResult: bashResult
+            bashResult: bashResult,
+            generatedArtifacts: generatedArtifacts
         )]
     }
 
@@ -246,23 +251,29 @@ public enum CodexJSONLParser {
         let name = (payload["name"] as? String) ?? (payload["tool_name"] as? String) ?? "custom_tool"
         let callId = (payload["call_id"] as? String) ?? (payload["id"] as? String) ?? baseId
         let rawInput: String
+        let artifactInput: Any?
         if let s = payload["input"] as? String {
             rawInput = s
+            artifactInput = s
         } else if let dict = payload["input"] as? [String: Any],
                   let data = try? JSONSerialization.data(withJSONObject: dict),
                   let s = String(data: data, encoding: .utf8) {
             rawInput = s
+            artifactInput = dict
         } else {
             rawInput = ""
+            artifactInput = nil
         }
         let summary = rawInput.replacingOccurrences(of: "\n", with: " ")
+        let generatedArtifacts = GeneratedArtifactDetector.artifacts(fromToolInput: artifactInput, toolName: name)
         return [ChatMessage(
             id: "call:\(callId)",
             kind: .toolCall,
             title: name,
             body: summary.isEmpty ? name : summary,
             detail: rawInput.isEmpty ? nil : rawInput,
-            at: at
+            at: at,
+            generatedArtifacts: generatedArtifacts
         )]
     }
 
