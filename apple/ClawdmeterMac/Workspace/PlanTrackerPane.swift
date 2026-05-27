@@ -161,7 +161,7 @@ struct PlanTrackerPane: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: effectivelyComplete ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 13))
-                    .foregroundStyle(effectivelyComplete ? .green : .secondary)
+                    .foregroundStyle(effectivelyComplete ? AnyShapeStyle(SessionsV2Theme.success) : AnyShapeStyle(.secondary))
                     .padding(.top, 1)
                 Text(step.text)
                     .font(.system(size: 12))

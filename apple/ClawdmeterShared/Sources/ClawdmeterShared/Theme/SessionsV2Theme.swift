@@ -112,9 +112,21 @@ public enum SessionsV2Theme {
     public static let textPrimary: Color = .white
     public static let textSecondary: Color = .white.opacity(0.7)
     public static let textTertiary: Color = .white.opacity(0.5)
-    public static let warn: Color = .yellow   // soft-warn cost banner
-    public static let danger: Color = .red    // autopilot banner, destructive
-    public static let success: Color = .green
+    /// Mac traffic-light yellow (#febc2e) per DESIGN.md — soft-warn cost banner,
+    /// pending CI checks, paused state.
+    public static let warn: Color = Color(
+        red: 0xFE / 255.0, green: 0xBC / 255.0, blue: 0x2E / 255.0
+    )
+    /// Mac traffic-light red (#ff5f57) per DESIGN.md — autopilot banner,
+    /// destructive actions, failed checks.
+    public static let danger: Color = Color(
+        red: 0xFF / 255.0, green: 0x5F / 255.0, blue: 0x57 / 255.0
+    )
+    /// Live green (#28c840) per DESIGN.md — live dots, successful checks,
+    /// enabled switches.
+    public static let success: Color = Color(
+        red: 0x28 / 255.0, green: 0xC8 / 255.0, blue: 0x40 / 255.0
+    )
     #endif
 
     // MARK: - Reduce-Motion respect helper

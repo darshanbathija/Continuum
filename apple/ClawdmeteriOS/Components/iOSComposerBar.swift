@@ -226,8 +226,9 @@ struct iOSComposerBar: View {
             Image(systemName: "paperclip")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 34, height: 34)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
+                .accessibilityLabel("Attach photos")
         }
         .photosPickerStyle(.presentation)
     }
@@ -237,8 +238,9 @@ struct iOSComposerBar: View {
             Image(systemName: "mic")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 34, height: 34)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
+                .accessibilityLabel("Dictate")
         }
         .buttonStyle(.plain)
     }
@@ -390,7 +392,9 @@ struct iOSComposerBar: View {
                         .symbolRenderingMode(.hierarchical)
                 }
             }
-            .frame(width: 36, height: 36)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .accessibilityLabel("Send")
         }
         .buttonStyle(.plain)
         .disabled(!canSend || isSending)

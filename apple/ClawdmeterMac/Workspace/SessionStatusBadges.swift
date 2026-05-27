@@ -82,10 +82,10 @@ struct AttentionBadge: View {
 
     private var tint: Color {
         switch reason {
-        case .checksFailed, .providerBlocked, .degraded: return .red
-        case .awaitingInput, .planReady: return .orange
-        case .pullRequest, .outboxPending: return .blue
-        case .unread: return .accentColor
+        case .checksFailed, .providerBlocked, .degraded: return SessionsV2Theme.danger
+        case .awaitingInput, .planReady: return SessionsV2Theme.warn
+        case .pullRequest, .outboxPending: return SessionsV2Theme.codexBlue
+        case .unread: return SessionsV2Theme.accent
         }
     }
 }
@@ -113,12 +113,13 @@ struct SessionHoverActions: View {
     private func hoverButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 9, weight: .semibold))
-                .frame(width: 18, height: 18)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .codeHoverChrome(
-            cornerRadius: 5,
+            cornerRadius: 7,
             help: label,
             accessibilityLabel: label,
             accessibilityIdentifier: "code.session.action.\(label.lowercased().replacingOccurrences(of: " ", with: "-"))"
