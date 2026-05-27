@@ -169,9 +169,7 @@ public struct StructuredEventList: View {
         }
     }
 
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var terraCotta: Color { SessionsV2Theme.accent }
 
     private var secondaryBg: Color {
         #if os(iOS)

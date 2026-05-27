@@ -102,12 +102,9 @@ public struct LiveSessionActivityIndicator: View {
     private var accent: Color {
         switch agent {
         case .claude:
-            // Anthropic terra-cotta — same #D97757 used by the gauge +
-            // chat bubble + Live Activity indicator.
-            return Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
+            return SessionsV2Theme.accent
         case .codex:
-            // Codex blue — same #5C9DFF used in SessionsV2Theme.codexBlue.
-            return Color(red: 0x5C / 255.0, green: 0x9D / 255.0, blue: 0xFF / 255.0)
+            return SessionsV2Theme.codexBlue
         case .gemini:
             // Google blue — Antigravity / Gemini CLI's brand accent.
             // Used by the Gemini gauge, chat bubble + Live Activity indicator.

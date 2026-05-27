@@ -558,9 +558,7 @@ struct SessionWorkspaceView: View {
             : Color(red: 0.96, green: 0.96, blue: 0.96)
     }
 
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var terraCotta: Color { SessionsV2Theme.accent }
 }
 
 // MARK: - Sidebar (left pane)
@@ -2331,9 +2329,7 @@ private struct SidebarPane: View {
             : Color(red: 0.94, green: 0.94, blue: 0.94)
     }
 
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var terraCotta: Color { SessionsV2Theme.accent }
 }
 
 // `SessionComparisonPair` + `SessionComparisonSheet` live in
@@ -3647,9 +3643,7 @@ private struct CenterThread: View {
         )
     }
 
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var terraCotta: Color { SessionsV2Theme.accent }
 }
 
 // `InlinePlanHalo` lives in `InlinePlanHalo.swift` (A6 foundation extraction).
@@ -3923,6 +3917,7 @@ private struct ChatThreadScroll: View {
                 .textFieldStyle(.plain)
                 .focused($findFocused)
                 .onSubmit { jumpToFindMatch(proxy, delta: 1) }
+                .accessibilityLabel("Find in transcript")
             Text(findStatusLabel)
                 .font(TahoeFont.mono(10.5))
                 .foregroundStyle(t.fg3)
@@ -4484,9 +4479,7 @@ private struct ReviewPane: View {
             : Color(red: 0.95, green: 0.95, blue: 0.95)
     }
 
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var terraCotta: Color { SessionsV2Theme.accent }
 }
 
 private struct TahoeReviewContentShell<Content: View>: View {
@@ -5442,6 +5435,7 @@ private struct TahoePRCompactPane: View {
                     TextField("https://github.com/owner/repo/pull/123", text: $coordinator.manualURL)
                         .textFieldStyle(.roundedBorder)
                         .font(TahoeFont.mono(11.5))
+                        .accessibilityLabel("Pull request URL")
                     HStack(spacing: 8) {
                         TahoeGhostButton(size: .m, action: { coordinator.loadFromManualURL() }) {
                             Text("Load")

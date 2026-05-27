@@ -17,9 +17,7 @@ struct PairingCTAButtons: View {
 
     @State private var showingPairing: Bool = false
 
-    private var terraCotta: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var terraCotta: Color { SessionsV2Theme.accent }
 
     var body: some View {
         HStack(spacing: 10) {

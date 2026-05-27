@@ -220,8 +220,8 @@ public struct AnalyticsDailyChart: View {
                 .foregroundStyle(by: .value("Provider", pt.provider))
             }
             .chartForegroundStyleScale([
-                "Claude": Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255),
-                "Codex": Color.accentColor,
+                "Claude": SessionsV2Theme.accent,
+                "Codex": SessionsV2Theme.codexBlue,
             ])
             .chartLegend(.hidden)
             .chartXAxis {
@@ -293,7 +293,7 @@ public struct AnalyticsDailyChart: View {
                 HStack(spacing: 5) {
                     ProviderBadgeImage(assetName: "ClaudeLogo", isTemplate: false, size: 11)
                     Circle()
-                        .fill(Color(red: 217.0/255, green: 119.0/255, blue: 87.0/255))
+                        .fill(SessionsV2Theme.accent)
                         .frame(width: 6, height: 6)
                     Text("Claude")
                         .font(.system(size: 11))

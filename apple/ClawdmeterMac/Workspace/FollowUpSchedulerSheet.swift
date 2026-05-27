@@ -82,7 +82,7 @@ struct FollowUpSchedulerSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .tint(Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0))
+                .tint(SessionsV2Theme.accent)
                 .disabled(prompt.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }

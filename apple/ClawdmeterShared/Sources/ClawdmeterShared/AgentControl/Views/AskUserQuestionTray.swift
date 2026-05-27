@@ -172,9 +172,6 @@ public struct AskUserQuestionTray: View {
         selections[q.header] = current
     }
 
-    private var accent: Color {
-        // Same terra-cotta as the rest of the agent-control UI.
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var accent: Color { SessionsV2Theme.accent }
 }
 #endif
