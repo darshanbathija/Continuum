@@ -175,9 +175,7 @@ private struct ProviderToggleHeader: View {
         }
     }
 
-    private var accent: Color {
-        Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    }
+    private var accent: Color { SessionsV2Theme.accent }
 }
 
 private struct ProviderLogo: View {

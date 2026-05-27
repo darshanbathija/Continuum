@@ -341,7 +341,7 @@ private struct PoppedChatThread: View {
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 20))
-                        .foregroundStyle(composerText.isEmpty ? .secondary : Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0))
+                        .foregroundStyle(composerText.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(SessionsV2Theme.accent))
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.return, modifiers: [.command])

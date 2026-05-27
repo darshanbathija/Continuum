@@ -269,8 +269,8 @@ struct UpdatePopoverContent: View {
 // the rest of the app's accent palette.
 
 private enum Theme {
-    static let accent = Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
-    static let statusWarning = Color(red: 0xE0 / 255.0, green: 0x7A / 255.0, blue: 0x5F / 255.0)
+    static let accent = SessionsV2Theme.accent
+    static let statusWarning = ClawdmeterTheme.Colors.statusWarning
 }
 
 // MARK: - Optional-coordinator wrapper for SwiftUI
