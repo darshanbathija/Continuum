@@ -130,6 +130,11 @@ public final class AgentControlServer {
     /// JSONL tail + done-detector + plan-watcher wired per active session.
     private var sessionWiring: [UUID: SessionEventWiring] = [:]
 
+    @MainActor
+    public var ownedSessionJSONLPaths: Set<String> {
+        Set(sessionWiring.values.map { $0.sessionFileURL.path })
+    }
+
     /// v0.8 Phase 4.5: per-session Codex SDK chat ingestors. Created on
     /// the first /send for an SDK chat session; torn down on DELETE or
     /// SDK chat-session idle evict. Holding a strong reference keeps the
