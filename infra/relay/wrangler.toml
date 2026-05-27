@@ -22,8 +22,10 @@ compatibility_date = "2026-05-26"
 compatibility_flags = ["nodejs_compat"]
 
 # Cost guardrails. Tune after the first week of staging traffic.
-[limits]
-cpu_ms = 50
+# NOTE: CPU limits require the Workers Paid plan ($5/mo). Re-enable once
+# the account is upgraded; the free plan defaults to 10 ms cpu_ms anyway.
+# [limits]
+# cpu_ms = 50
 
 # Observability — surfaces in Cloudflare's Workers Logs dashboard.
 [observability]
@@ -40,9 +42,14 @@ bindings = [
 # Migrations are inheritable across envs (per Cloudflare DO migration
 # docs); a single top-level migration list applies to every env unless
 # explicitly overridden at [env.<name>.migrations].
+#
+# `new_sqlite_classes` (not `new_classes`) is required on the Cloudflare
+# free plan; SQLite-backed DOs are the default tier there. Production
+# accounts on the paid plan can use either, so we keep this form across
+# all envs for parity.
 [[migrations]]
 tag = "v1"
-new_classes = ["RelaySession"]
+new_sqlite_classes = ["RelaySession"]
 
 # Top-level (dev) KV bindings. Operator fills IDs in via
 # `wrangler kv namespace create`.
@@ -69,10 +76,13 @@ SESSION_TTL_SECONDS = "900"   # 15-min idle eviction per D22
 # -------- staging --------
 [env.staging]
 name = "clawdmeter-relay-staging"
+workers_dev = true
 
-[[env.staging.routes]]
-pattern = "relay-staging.clawdmeter.dev"
-custom_domain = true
+# Custom domain disabled for initial staging deploy (operator does not yet
+# own clawdmeter.dev). Re-enable once DNS is wired.
+# [[env.staging.routes]]
+# pattern = "relay-staging.clawdmeter.dev"
+# custom_domain = true
 
 [env.staging.durable_objects]
 bindings = [
@@ -81,17 +91,15 @@ bindings = [
 
 [[env.staging.migrations]]
 tag = "v1"
-new_classes = ["RelaySession"]
+new_sqlite_classes = ["RelaySession"]
 
 [[env.staging.kv_namespaces]]
 binding = "RELAY_AUDIT_LOG"
-id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+id = "a4d4908adc384103b57f97101d126987"
 
 [[env.staging.kv_namespaces]]
 binding = "RELAY_RATE_LIMIT"
-id = "REPLACE_WITH_STAGING_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
+id = "66109918a76e40c5b8523eeb5b48b506"
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
@@ -113,7 +121,7 @@ bindings = [
 
 [[env.production.migrations]]
 tag = "v1"
-new_classes = ["RelaySession"]
+new_sqlite_classes = ["RelaySession"]
 
 [[env.production.kv_namespaces]]
 binding = "RELAY_AUDIT_LOG"
@@ -125,8 +133,8 @@ binding = "RELAY_RATE_LIMIT"
 id = "REPLACE_WITH_PROD_NAMESPACE_ID"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
-[env.production.limits]
-cpu_ms = 50
+# [env.production.limits]
+# cpu_ms = 50
 
 [env.production.vars]
 ENVIRONMENT = "production"
