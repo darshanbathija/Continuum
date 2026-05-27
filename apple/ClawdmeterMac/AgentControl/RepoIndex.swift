@@ -35,7 +35,19 @@ public actor RepoIndex {
     /// Track the most-recent refresh task so callers can `await` it.
     private var refreshTask: Task<[AgentRepo], Never>?
 
-    public init() {}
+    /// 4th source provider (A1-A in /plan-eng-review). Returns the current
+    /// `WorkspaceStore.workspaces` snapshot. Workspaces not already
+    /// discovered by sources 1-3 (by canonical repoKey) are added to the
+    /// sidebar so freshly-added repos with no JSONL history appear
+    /// immediately. Defaults to `{ [] }` so back-compat call sites work
+    /// without wiring the workspace store.
+    nonisolated let workspaceSnapshotProvider: @Sendable () async -> [CodeWorkspaceRecord]
+
+    public init(
+        workspaceSnapshotProvider: @escaping @Sendable () async -> [CodeWorkspaceRecord] = { [] }
+    ) {
+        self.workspaceSnapshotProvider = workspaceSnapshotProvider
+    }
 
     // MARK: - Public API
 
@@ -223,6 +235,26 @@ public actor RepoIndex {
                     keysSeen.insert(key)
                     displayNames[key] = RepoIdentity.displayName(for: key)
                 }
+            }
+        }
+
+        // Source 4 (A1-A, /plan-eng-review): WorkspaceStore.workspaces.
+        // Workspaces explicitly added via the Add-Repo flow live here even
+        // when they have no JSONL history yet. Dedup against sources 1-3
+        // by canonical repoKey. Workspace metadata's display name wins
+        // over the auto-derived one so user-renamed repos surface their
+        // chosen label in the sidebar.
+        let workspaces = await workspaceSnapshotProvider()
+        for ws in workspaces {
+            let key = RepoIdentity.normalize(ws.repoRoot)
+            // Prefer explicit display names from WorkspaceStore even on
+            // dedup; the user may have renamed the repo. The map gets
+            // updated either way.
+            displayNames[key] = ws.repoDisplayName.isEmpty
+                ? (displayNames[key] ?? RepoIdentity.displayName(for: key))
+                : ws.repoDisplayName
+            if !keysSeen.contains(key) {
+                keysSeen.insert(key)
             }
         }
 

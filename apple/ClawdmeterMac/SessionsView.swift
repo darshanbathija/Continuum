@@ -601,6 +601,21 @@ public final class SessionsModel: ObservableObject {
         self.workspaceStore = workspaceStore
     }
 
+    /// Lazy `RepoOnboarding` service. Wired with self-referential closures
+    /// for refresh + selection; `[weak self]` avoids retain cycles in case
+    /// the service outlives the model (unlikely in practice — both live
+    /// for the app's lifetime).
+    public lazy var repoOnboarding: RepoOnboarding = {
+        RepoOnboarding(
+            workspaceStore: workspaceStore,
+            repoIndex: repoIndex,
+            refresh: { [weak self] in await self?.refresh() },
+            onWorkspaceRegistered: { [weak self] record in
+                self?.selectedRepoKey = record.repoRoot
+            }
+        )
+    }()
+
     /// Get or create the chat store for a session. If the session is one of
     /// our synthetic outside-Clawdmeter ones, route through the pinned URL
     /// the caller registered via `openOutsideSession(...)`; otherwise fall
