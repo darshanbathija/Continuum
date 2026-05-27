@@ -230,7 +230,10 @@ final class PRCoordinator: ObservableObject {
         }
     }
 
-    private func refreshDaemonOnce() async {
+    /// Internal (not private) so `@testable import` can drive a single
+    /// refresh without spinning the 30s poll loop. Externally still only
+    /// reached via `startWatching` → `startDaemonPolling`.
+    func refreshDaemonOnce() async {
         guard isWatching || snapshot == nil else { return }
         guard let client, !daemonDisowned else { return }
         isRefreshing = true

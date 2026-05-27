@@ -445,19 +445,11 @@ struct ChatItemRowContent: View {
     }
 
     /// One-liner shown under the "Ran N commands" pill while a tool call
-    /// is in flight. Format: `Running <tool> · <input snippet>`. Snippet
-    /// is clipped to 60 chars and stripped of newlines so it fits a
-    /// single line in narrow chat columns.
+    /// is in flight. Delegates to the module-scope
+    /// `runningStepSubtitle(forTool:body:)` pure helper so the
+    /// string-transform is unit-testable without a SwiftUI host.
     private func runningStepSubtitle(_ pair: ToolPair) -> String {
-        let title = pair.call.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let bodyOneLine = pair.call.body
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if bodyOneLine.isEmpty || bodyOneLine == title {
-            return "Running \(title)…"
-        }
-        let snippet = bodyOneLine.count > 60 ? String(bodyOneLine.prefix(60)) + "…" : bodyOneLine
-        return "Running \(title) · \(snippet)"
+        ClawdmeterMac_runningStepSubtitle(forTool: pair.call.title, body: pair.call.body)
     }
 
     private func toolPairRow(_ pair: ToolPair) -> some View {
@@ -678,4 +670,22 @@ extension EnvironmentValues {
         get { self[SessionPresentationStoreKey.self] }
         set { self[SessionPresentationStoreKey.self] = newValue }
     }
+}
+
+/// Pure string helper for the "Running <tool> · <input>" subtitle under
+/// the Ran-N-commands disclosure. Module-scope rather than nested on
+/// `ChatItemRowView` so it can be unit-tested without a SwiftUI host —
+/// nested statics on a `View`-conforming struct hit
+/// MainActor-isolation gotchas across `@testable` boundaries.
+/// Prefixed `ClawdmeterMac_` to keep the symbol namespaced.
+func ClawdmeterMac_runningStepSubtitle(forTool toolTitle: String, body: String) -> String {
+    let title = toolTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    let bodyOneLine = body
+        .replacingOccurrences(of: "\n", with: " ")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if bodyOneLine.isEmpty || bodyOneLine == title {
+        return "Running \(title)…"
+    }
+    let snippet = bodyOneLine.count > 60 ? String(bodyOneLine.prefix(60)) + "…" : bodyOneLine
+    return "Running \(title) · \(snippet)"
 }
