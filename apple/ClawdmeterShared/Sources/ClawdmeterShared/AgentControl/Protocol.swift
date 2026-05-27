@@ -2768,6 +2768,11 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// ended. Same-workspace tabs can run in a worktree without owning it.
     public let ownsWorktree: Bool
 
+    /// Repo environment set pinned at session creation. This stores only
+    /// the set identity; secret values stay in the platform secret store.
+    public let envSetId: UUID?
+    public let envSetName: String?
+
     public init(
         id: UUID,
         repoKey: String?,
@@ -2811,7 +2816,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         planProgress: PlanProgress? = nil,
         providerInstanceId: String? = nil,
         inheritedContextSourceIds: [UUID]? = nil,
-        ownsWorktree: Bool = false
+        ownsWorktree: Bool = false,
+        envSetId: UUID? = nil,
+        envSetName: String? = nil
     ) {
         self.id = id
         self.repoKey = repoKey
@@ -2856,6 +2863,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.providerInstanceId = providerInstanceId
         self.inheritedContextSourceIds = inheritedContextSourceIds
         self.ownsWorktree = ownsWorktree
+        self.envSetId = envSetId
+        self.envSetName = envSetName
     }
 
     public init(from decoder: Decoder) throws {
@@ -2949,6 +2958,8 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         } else {
             self.ownsWorktree = false
         }
+        self.envSetId = (try? c.decodeIfPresent(UUID.self, forKey: .envSetId)) ?? nil
+        self.envSetName = (try? c.decodeIfPresent(String.self, forKey: .envSetName)) ?? nil
     }
 
     /// User-facing label for the session. Prefers the user-set
@@ -3002,7 +3013,9 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              providerInstanceId,
              // v0.29 schema v9 (workspace session tabs).
              inheritedContextSourceIds,
-             ownsWorktree
+             ownsWorktree,
+             // Repo env sets.
+             envSetId, envSetName
     }
 
     /// Resolve `providerInstanceId` (a `ProviderInstanceId.wireId` string)

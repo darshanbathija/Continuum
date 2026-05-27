@@ -547,6 +547,7 @@ public final class SessionsModel: ObservableObject {
     public let registry: AgentSessionRegistry
     public let supervisor: TmuxSupervisor
     public let workspaceStore: WorkspaceStore
+    public let repoEnvResolver: RepoEnvRuntimeResolver?
     private var refreshTask: Task<Void, Never>?
 
     /// Per-session chat stores, LRU-bound to `maxResidentChatStores`. Each
@@ -593,12 +594,14 @@ public final class SessionsModel: ObservableObject {
         repoIndex: RepoIndex,
         registry: AgentSessionRegistry,
         supervisor: TmuxSupervisor,
-        workspaceStore: WorkspaceStore
+        workspaceStore: WorkspaceStore,
+        repoEnvResolver: RepoEnvRuntimeResolver? = nil
     ) {
         self.repoIndex = repoIndex
         self.registry = registry
         self.supervisor = supervisor
         self.workspaceStore = workspaceStore
+        self.repoEnvResolver = repoEnvResolver
     }
 
     /// Lazy `RepoOnboarding` service. Wired with self-referential closures
@@ -1253,8 +1256,10 @@ public final class SessionsModel: ObservableObject {
             throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
         }
         let window: TmuxControlClient.WindowRef
+        let resolvedEnv: RepoEnvResolvedEnvironment?
         do {
-            window = try await tmux.newWindow(cwd: cwd, child: argv)
+            resolvedEnv = try resolveRepoEnv(repoRoot: repoPath, cwd: cwd)
+            window = try await tmux.newWindow(cwd: cwd, child: argv, environment: resolvedEnv?.environment ?? [:])
         } catch {
             await cleanupUnregisteredWorktree(
                 repoPath: repoPath,
@@ -1278,6 +1283,8 @@ public final class SessionsModel: ObservableObject {
             mode: mode,
             effort: effort,
             ownsWorktree: worktreePath != nil,
+            envSetId: resolvedEnv?.set?.id,
+            envSetName: resolvedEnv?.set?.name,
             id: provisionalSessionId ?? UUID()
         )
         if let pinned = pinnedJSONLURL {
@@ -1399,7 +1406,8 @@ public final class SessionsModel: ObservableObject {
         guard !argv.isEmpty else {
             throw SpawnError.missingBinary("Agent CLI not found on PATH: \(agent.rawValue). Configure in Settings -> Diagnostics.")
         }
-        let window = try await tmux.newWindow(cwd: cwd, child: argv)
+        let resolvedEnv = try resolveRepoEnv(repoRoot: repoPath, cwd: cwd)
+        let window = try await tmux.newWindow(cwd: cwd, child: argv, environment: resolvedEnv?.environment ?? [:])
         let session = try await registry.create(
             repoKey: repoPath,
             repoDisplayName: (repoPath as NSString).lastPathComponent,
@@ -1413,7 +1421,9 @@ public final class SessionsModel: ObservableObject {
             mode: mode,
             effort: effort,
             inheritedContextSourceIds: inheritedContextSourceIds,
-            ownsWorktree: false
+            ownsWorktree: false,
+            envSetId: resolvedEnv?.set?.id,
+            envSetName: resolvedEnv?.set?.name
         )
         expandedRepoKeys.insert(repoPath)
         draftWorkspaceTab = nil
@@ -1472,6 +1482,7 @@ public final class SessionsModel: ObservableObject {
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
             "title": String(titleSource.prefix(60))
         ])
+        let resolvedEnv = try resolveRepoEnv(repoRoot: repoPath, cwd: paths.cwd)
 
         let opencodeID: String
         do {
@@ -1504,7 +1515,9 @@ public final class SessionsModel: ObservableObject {
             mode: mode,
             effort: effort,
             inheritedContextSourceIds: inheritedContextSourceIds,
-            ownsWorktree: false
+            ownsWorktree: false,
+            envSetId: resolvedEnv?.set?.id,
+            envSetName: resolvedEnv?.set?.name
         )
         OpencodeSSEAdapter.shared.register(
             clawdmeterID: session.id,
@@ -1629,6 +1642,17 @@ public final class SessionsModel: ObservableObject {
                 throw error
             }
         }
+        let resolvedEnv: RepoEnvResolvedEnvironment?
+        do {
+            resolvedEnv = try resolveRepoEnv(repoRoot: repoPath, cwd: cwd)
+        } catch {
+            await cleanupPreparedWorktree(
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId
+            )
+            throw error
+        }
 
         let install = await AntigravityInstall.preflight(
             forRepoKey: cwd,
@@ -1741,6 +1765,8 @@ public final class SessionsModel: ObservableObject {
                 antigravityConversationId: conversationId,
                 antigravityProjectId: projectId,
                 ownsWorktree: provisioning != nil && worktreePath != nil,
+                envSetId: resolvedEnv?.set?.id,
+                envSetName: resolvedEnv?.set?.name,
                 id: provisionalSessionId ?? UUID()
             )
             recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
@@ -1890,10 +1916,6 @@ public final class SessionsModel: ObservableObject {
         // both require a git repo). Chat sessions don't expose the
         // chip, so this is unreachable for them — guard for type safety.
         guard session.kind == .code, let sessionRepoKey = session.repoKey else { return }
-        // Tear down the existing agent.
-        if let windowId = session.tmuxWindowId {
-            try? await runtime.tmuxClient.killWindow(windowId)
-        }
         // Pick the new cwd.
         var newCwd = sessionRepoKey
         var newWorktree: String? = nil
@@ -1945,7 +1967,15 @@ public final class SessionsModel: ObservableObject {
                 )
                 return
             }
-            let newWindow = try await runtime.tmuxClient.newWindow(cwd: newCwd, child: argv)
+            let resolvedEnv = try resolveRepoEnv(session: session, cwd: newCwd)
+            if let windowId = session.tmuxWindowId {
+                try? await runtime.tmuxClient.killWindow(windowId)
+            }
+            let newWindow = try await runtime.tmuxClient.newWindow(
+                cwd: newCwd,
+                child: argv,
+                environment: resolvedEnv?.environment ?? [:]
+            )
             try await registry.updateRuntime(
                 id: sessionId,
                 worktreePath: newWorktree,
@@ -1975,7 +2005,11 @@ public final class SessionsModel: ObservableObject {
     /// both aliases and full ids.
     public func switchModel(sessionId: UUID, to entry: ModelCatalogEntry, effort: ReasoningEffort? = nil) async {
         guard let runtime = AppDelegate.runtime else { return }
-        let changer = SessionConfigChanger(registry: registry, tmux: runtime.tmuxClient)
+        let changer = SessionConfigChanger(
+            registry: registry,
+            tmux: runtime.tmuxClient,
+            repoEnvResolver: repoEnvResolver
+        )
         let modelToUse = entry.cliAlias ?? entry.id
         _ = await changer.swap(sessionId: sessionId, newModel: modelToUse, newEffort: .some(effort))
     }
@@ -1983,14 +2017,22 @@ public final class SessionsModel: ObservableObject {
     /// Sessions v2 Phase 1: swap the effort dial mid-session.
     public func switchEffort(sessionId: UUID, to effort: ReasoningEffort) async {
         guard let runtime = AppDelegate.runtime else { return }
-        let changer = SessionConfigChanger(registry: registry, tmux: runtime.tmuxClient)
+        let changer = SessionConfigChanger(
+            registry: registry,
+            tmux: runtime.tmuxClient,
+            repoEnvResolver: repoEnvResolver
+        )
         _ = await changer.swap(sessionId: sessionId, newEffort: .some(effort))
     }
 
     /// Sessions v2 Phase 1: toggle plan/code mid-session (Claude only).
     public func switchPlanMode(sessionId: UUID, planMode: Bool) async {
         guard let runtime = AppDelegate.runtime else { return }
-        let changer = SessionConfigChanger(registry: registry, tmux: runtime.tmuxClient)
+        let changer = SessionConfigChanger(
+            registry: registry,
+            tmux: runtime.tmuxClient,
+            repoEnvResolver: repoEnvResolver
+        )
         _ = await changer.swap(sessionId: sessionId, newPlanMode: planMode)
     }
 
@@ -2019,7 +2061,11 @@ public final class SessionsModel: ObservableObject {
             store.setAcceptEdits(false, sessionId: sessionId)
             store.setBypass(true, sessionId: sessionId)
         }
-        let changer = SessionConfigChanger(registry: registry, tmux: runtime.tmuxClient)
+        let changer = SessionConfigChanger(
+            registry: registry,
+            tmux: runtime.tmuxClient,
+            repoEnvResolver: repoEnvResolver
+        )
         _ = await changer.swap(sessionId: sessionId, newPlanMode: newMode == .plan)
     }
 
@@ -2073,7 +2119,12 @@ public final class SessionsModel: ObservableObject {
         ), workspacePath: cwd)
         do {
             guard !argv.isEmpty else { return nil }
-            let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
+            let resolvedEnv = try resolveRepoEnv(session: parent, cwd: cwd)
+            let window = try await runtime.tmuxClient.newWindow(
+                cwd: cwd,
+                child: argv,
+                environment: resolvedEnv?.environment ?? [:]
+            )
             let child = try await registry.create(
                 repoKey: parentRepoKey,
                 repoDisplayName: parent.repoDisplayName,
@@ -2086,7 +2137,9 @@ public final class SessionsModel: ObservableObject {
                 planMode: false,
                 mode: parent.mode,
                 parentSessionId: parentId,
-                ownsWorktree: false
+                ownsWorktree: false,
+                envSetId: parent.envSetId,
+                envSetName: parent.envSetName
             )
             openSessionId = child.id
             await refresh()
@@ -2165,9 +2218,14 @@ public final class SessionsModel: ObservableObject {
                 workspacePath: session.effectiveCwd
             )
             guard !argv.isEmpty else { return }
-            try await runtime.tmuxClient.killWindow(windowId)
             let cwd = session.effectiveCwd
-            let window = try await runtime.tmuxClient.newWindow(cwd: cwd, child: argv)
+            let resolvedEnv = try resolveRepoEnv(session: session, cwd: cwd)
+            try await runtime.tmuxClient.killWindow(windowId)
+            let window = try await runtime.tmuxClient.newWindow(
+                cwd: cwd,
+                child: argv,
+                environment: resolvedEnv?.environment ?? [:]
+            )
             try await registry.updateRuntime(
                 id: id,
                 worktreePath: session.worktreePath,
@@ -2201,6 +2259,14 @@ public final class SessionsModel: ObservableObject {
 
     private func filesToCopySettings(forRepoRoot repoRoot: String) -> WorkspaceFilesToCopySettings {
         workspaceStore.workspace(forRepoRoot: repoRoot)?.filesToCopy ?? WorkspaceFilesToCopySettings()
+    }
+
+    private func resolveRepoEnv(repoRoot: String, cwd: String) throws -> RepoEnvResolvedEnvironment? {
+        try repoEnvResolver?.resolveForLaunch(repoRoot: repoRoot, cwd: cwd)
+    }
+
+    private func resolveRepoEnv(session: AgentSession, cwd: String? = nil) throws -> RepoEnvResolvedEnvironment? {
+        try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd)
     }
 
     private func recordWorkspaceSession(repoRoot: String, sessionId: UUID) {

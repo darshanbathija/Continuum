@@ -44,11 +44,16 @@ final class CodeRunProfileService {
     }
 
     private let processManager: RunProcessManaging
+    private let repoEnvResolver: RepoEnvRuntimeResolver?
     private var profiles: [UUID: Profile] = [:]
     private let maxBufferedLines = 200
 
-    init(processManager: RunProcessManaging = LocalRunProcessManager()) {
+    init(
+        processManager: RunProcessManaging = LocalRunProcessManager(),
+        repoEnvResolver: RepoEnvRuntimeResolver? = nil
+    ) {
         self.processManager = processManager
+        self.repoEnvResolver = repoEnvResolver
     }
 
     deinit {
@@ -89,10 +94,11 @@ final class CodeRunProfileService {
         profile.updatedAt = Date()
 
         do {
+            let env = try repoEnvResolver?.resolveForLaunch(session: session)?.environment
             profile.processHandle = try processManager.start(
                 command: command,
                 cwd: session.effectiveCwd,
-                environment: nil,
+                environment: env,
                 onOutput: { [weak self] output in
                     Task { @MainActor [weak self] in
                         self?.record(output, sessionId: session.id)

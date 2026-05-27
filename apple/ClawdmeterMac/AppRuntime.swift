@@ -53,6 +53,8 @@ final class AppRuntime: ObservableObject {
     let repoIndex: RepoIndex
     let agentSessionRegistry: AgentSessionRegistry
     let workspaceStore: WorkspaceStore
+    let repoEnvStore: RepoEnvStore
+    let repoEnvRuntimeResolver: RepoEnvRuntimeResolver
     let tmuxClient: TmuxControlClient
     let tmuxSupervisor: TmuxSupervisor
     let agentControlServer: AgentControlServer
@@ -254,16 +256,30 @@ final class AppRuntime: ObservableObject {
         // NotificationDispatcher is an actor. SessionsModel bridges to UI.
         // Per the feature flag plan (T18): gate the daemon start on
         // `UserDefaults.clawdmeter.sessions.enabled`. Default on in v1.
-        // Workspace store first — RepoIndex's 4th source (A1-A) reads its
-        // snapshot to surface freshly-added repos that have no JSONL history.
-        self.workspaceStore = WorkspaceStore()
+        let uiTestingAppSupport = Self.uiTestingAppSupportOverride()
+        let sessionsStoreURL = uiTestingAppSupport?.appendingPathComponent("sessions.json")
+            ?? AgentSessionRegistry.defaultStoreURL()
+        let workspacesStoreURL = uiTestingAppSupport?.appendingPathComponent("workspaces.json")
+            ?? WorkspaceStore.defaultStoreURL()
+        let repoEnvStoreURL = uiTestingAppSupport?.appendingPathComponent("repo-env-variables.json")
+            ?? RepoEnvStore.defaultStoreURL()
+
+        self.workspaceStore = WorkspaceStore(
+            storeURL: workspacesStoreURL,
+            sessionsURL: sessionsStoreURL
+        )
         let workspaceStoreRef = self.workspaceStore
         self.repoIndex = RepoIndex(
             workspaceSnapshotProvider: { @Sendable in
                 await MainActor.run { workspaceStoreRef.workspaces }
             }
         )
-        self.agentSessionRegistry = AgentSessionRegistry()
+        self.agentSessionRegistry = AgentSessionRegistry(storeURL: sessionsStoreURL)
+        self.repoEnvStore = RepoEnvStore(storeURL: repoEnvStoreURL)
+        self.repoEnvRuntimeResolver = RepoEnvRuntimeResolver(
+            workspaceStore: self.workspaceStore,
+            envStore: self.repoEnvStore
+        )
         self.tmuxClient = TmuxControlClient()
         self.tmuxSupervisor = TmuxSupervisor(
             tmux: self.tmuxClient,
@@ -277,7 +293,8 @@ final class AppRuntime: ObservableObject {
             registry: self.agentSessionRegistry,
             tmux: self.tmuxClient,
             notifications: self.notificationDispatcher,
-            workspaceStore: self.workspaceStore
+            workspaceStore: self.workspaceStore,
+            repoEnvResolver: self.repoEnvRuntimeResolver
         )
         // Hand the daemon refs to the live-usage publishers + analytics
         // store so the iPhone's `/usage` and `/analytics` endpoints can
@@ -294,7 +311,8 @@ final class AppRuntime: ObservableObject {
             repoIndex: self.repoIndex,
             registry: self.agentSessionRegistry,
             supervisor: self.tmuxSupervisor,
-            workspaceStore: self.workspaceStore
+            workspaceStore: self.workspaceStore,
+            repoEnvResolver: self.repoEnvRuntimeResolver
         )
         self.sessionScheduler = SessionScheduler(
             registry: self.agentSessionRegistry,
@@ -742,5 +760,17 @@ final class AppRuntime: ObservableObject {
             OpencodeSSEAdapter.shared.stop()
         }
         runtimeLogger.warning("AppRuntime.deinit")
+    }
+
+    private static func uiTestingAppSupportOverride() -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["CLAWDMETER_UI_TESTING"] == "1",
+              let rawPath = environment["CLAWDMETER_TEST_APP_SUPPORT_DIR"],
+              !rawPath.isEmpty else {
+            return nil
+        }
+        let url = URL(fileURLWithPath: rawPath, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 }

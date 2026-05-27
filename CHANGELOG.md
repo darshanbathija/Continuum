@@ -52,6 +52,27 @@ is `MARKETING_VERSION` in `apple/project.yml`; build number is
 - Find-bar overlay isolation. The find-bar inside `ChatThreadScroll` shares the parent body, so a transcript append still re-evaluates its body (small cost — TextField + 4 buttons). Full isolation requires extracting `TranscriptFindBarOverlay` as an Equatable child view with on-demand match computation.
 - `@Observable` migration (C2 in the plan) is a separate PR that will re-architect the slices as `@Observable` macro types.
 
+## [0.29.16 build 155] - 2026-05-27 - Repo environment variable sets (`darshanbathija/repo-env-vars`)
+
+### Added
+
+- **Repo environment variables in Settings.** Developers can create repo-specific sets such as local, testnet, staging, and prod; add variables in a dense Vercel-style table; filter by set/source/type/status; import `.env` text; and share global variables into multiple repos without reading secret values into the settings list.
+- **Runtime env-set resolution.** Sessions, mode switches, restore/respawn paths, run profiles, in-app browser launches, and tmux windows resolve the pinned env set before launch, materialize only the Clawdmeter-managed block in `.env.local`, preserve manual lines, and pass tmux variables via native `-e KEY=value`.
+- **Repo env V2 design reference.** Added `docs/designs/repo-env-v2-vercel-parity.md` to capture the table-first UX, filter model, repo/set matrix, import flows, and Vercel-parity follow-up scope.
+
+### Fixed
+
+- Duplicate shared-variable assignments are rejected before they create key collisions in a target repo.
+- Failed Keychain deletes now preserve metadata and surface an error instead of claiming the secret was removed.
+- Mid-session respawns preflight env materialization before killing the existing tmux window.
+
+### Tests
+
+- Added `RepoEnvStoreTests` for metadata persistence, secret-free JSON, assignment resolution, import parsing, materialization conflicts, duplicate assignment rejection, and Keychain failure handling.
+- Added tmux validation for native env injection and UI smoke coverage for the Env Variables settings table, filters, import flow, and add-variable drawer.
+
+Bumps `MARKETING_VERSION` 0.29.15 -> 0.29.16, `CURRENT_PROJECT_VERSION` 154 -> 155.
+
 ## [0.29.14 build 153] - 2026-05-27 - Workspace tabs + Code sidebar active-session priority (`darshanbathija/session-tabs`)
 
 ### Added
