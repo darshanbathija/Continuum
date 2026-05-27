@@ -20,6 +20,14 @@ struct PermissionModeChip: View {
     @State private var isHovered = false
 
     var body: some View {
+        // Single chip, dual behavior:
+        //   • click          → quick-flip plan ⇆ acceptEdits (the two
+        //                       modes people swap between hourly)
+        //   • hold / arrow   → full menu with ask / accept / plan / bypass
+        // Backed by SwiftUI's `Menu(primaryAction:)` which is the native
+        // pattern for "button with attached menu". Replaces the older
+        // setup that needed a sibling `</> code` chip to provide the
+        // single-click flip.
         Menu {
             Section("Mode") {
                 ForEach(Array(availableModes.enumerated()), id: \.element) { (idx, candidate) in
@@ -76,10 +84,28 @@ struct PermissionModeChip: View {
             )
             .contentShape(Capsule())
         }
+        primaryAction: {
+            // Quick flip: plan ↔ acceptEdits. Both must be available
+            // (Cursor's acceptEdits-only modes drop into the menu via
+            // long-press). When the current mode is something else
+            // (ask / bypass), the flip lands on plan if available so the
+            // user feels "click to enter plan mode."
+            let canPlan = availableModes.contains(.plan)
+            let canEdits = availableModes.contains(.acceptEdits)
+            switch mode {
+            case .plan where canEdits:
+                onChange(.acceptEdits)
+            case .acceptEdits where canPlan:
+                onChange(.plan)
+            default:
+                if canPlan { onChange(.plan) }
+                else if canEdits { onChange(.acceptEdits) }
+            }
+        }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Permission mode — ⌘⇧1-4 to switch")
+        .help("Click to toggle plan ⇆ code — long-press for ask / bypass (⌘⇧1-4)")
         .accessibilityIdentifier("code.composer.permission-mode")
         .onHover { isHovered = $0 }
     }

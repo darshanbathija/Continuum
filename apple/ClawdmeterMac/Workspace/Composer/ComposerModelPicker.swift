@@ -57,6 +57,14 @@ public struct ComposerModelPicker: View {
 
     public var onClose: () -> Void
 
+    /// Optional sink for callers (Code composer) that own their own
+    /// model/effort state outside ChatV2Store. When set, `select(...)`
+    /// fires this in addition to the regular ChatV2Store write so the
+    /// host can mirror the change into the running session via
+    /// SessionConfigChanger / ComposerStore. Chat-side leaves this nil
+    /// since `selectedModelByVendor` already drives the Chat composer.
+    public var onSelectModel: ((ChatVendor, String, ReasoningEffort?) -> Void)? = nil
+
     // MARK: - Theme
 
     @Environment(\.tahoe) private var t
@@ -74,7 +82,8 @@ public struct ComposerModelPicker: View {
         defaultsStore: ProviderDefaultsStore,
         catalog: ModelCatalog = .bundled,
         enabledVendors: [ChatVendor] = ChatVendor.allCases,
-        onClose: @escaping () -> Void
+        onClose: @escaping () -> Void,
+        onSelectModel: ((ChatVendor, String, ReasoningEffort?) -> Void)? = nil
     ) {
         self.initialVendor = initialVendor
         self.store = store
@@ -82,6 +91,7 @@ public struct ComposerModelPicker: View {
         self.catalog = catalog
         self.enabledVendors = enabledVendors
         self.onClose = onClose
+        self.onSelectModel = onSelectModel
         self._activeRail = State(initialValue: .vendor(initialVendor))
     }
 
@@ -535,6 +545,7 @@ public struct ComposerModelPicker: View {
             clearEffort: normalizedEffort == nil,
             catalog: catalog
         )
+        onSelectModel?(vendor, entry.model.id, normalizedEffort)
         onClose()
     }
 
