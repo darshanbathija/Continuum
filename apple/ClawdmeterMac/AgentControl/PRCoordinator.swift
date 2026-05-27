@@ -7,6 +7,7 @@ protocol PRCoordinatingClient: AnyObject {
     var lastError: String? { get }
 
     func getPRStatus(sessionId: UUID) async -> PRStatus?
+    func getPRStatusOutcome(sessionId: UUID) async -> AgentControlClient.PRStatusOutcome
     func createPR(
         sessionId: UUID,
         title: String?,
@@ -60,7 +61,7 @@ final class PRCoordinator: ObservableObject {
     @Published private(set) var lastError: String?
     @Published var manualURL: String = ""
 
-    var canUseDaemonActions: Bool { client != nil }
+    var canUseDaemonActions: Bool { client != nil && !daemonDisowned }
 
     private let sessionId: UUID
     private weak var client: PRCoordinatingClient?
@@ -70,6 +71,12 @@ final class PRCoordinator: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var fallbackCancellable: AnyCancellable?
     private var isWatching = false
+    /// Set after the daemon reports `.sessionUnknown` for this session id —
+    /// stops daemon polling and routes everything through `PRMirror`. We
+    /// don't try to recover (the registry won't suddenly learn about a
+    /// synthetic preview session); the user would need to spawn the work
+    /// through Clawdmeter to get daemon-backed PR actions.
+    private var daemonDisowned = false
 
     init(
         sessionId: UUID,
@@ -105,7 +112,7 @@ final class PRCoordinator: ObservableObject {
 
     func startWatching() {
         isWatching = true
-        if client != nil {
+        if client != nil, !daemonDisowned {
             startDaemonPolling()
         } else {
             fallback.startWatching()
@@ -126,7 +133,7 @@ final class PRCoordinator: ObservableObject {
     }
 
     func refreshNow() {
-        guard client != nil else {
+        guard client != nil, !daemonDisowned else {
             fallback.startWatching()
             return
         }
@@ -134,7 +141,7 @@ final class PRCoordinator: ObservableObject {
     }
 
     func createPR() async {
-        guard let client else {
+        guard let client, !daemonDisowned else {
             lastError = "Daemon unavailable"
             return
         }
@@ -188,7 +195,7 @@ final class PRCoordinator: ObservableObject {
     }
 
     func merge() async {
-        guard let client else {
+        guard let client, !daemonDisowned else {
             lastError = "Daemon unavailable"
             return
         }
@@ -225,16 +232,33 @@ final class PRCoordinator: ObservableObject {
 
     private func refreshDaemonOnce() async {
         guard isWatching || snapshot == nil else { return }
-        guard let client else { return }
+        guard let client, !daemonDisowned else { return }
         isRefreshing = true
         defer { isRefreshing = false }
-        if let status = await client.getPRStatus(sessionId: sessionId) {
+        switch await client.getPRStatusOutcome(sessionId: sessionId) {
+        case .found(let status):
             snapshot = Self.snapshot(from: status)
             lastError = nil
-        } else {
+        case .noPR:
             snapshot = nil
-            lastError = client.lastError
+            lastError = nil
+        case .sessionUnknown:
+            switchToFallback()
+        case .unavailable(let message):
+            snapshot = nil
+            lastError = message
         }
+    }
+
+    /// One-way switch: daemon doesn't know about this session, so stop
+    /// pestering it and drive the pane from `PRMirror` (chat-scan +
+    /// manual-URL paths) instead.
+    private func switchToFallback() {
+        daemonDisowned = true
+        pollTask?.cancel()
+        pollTask = nil
+        lastError = nil
+        fallback.startWatching()
     }
 
     static func snapshot(from status: PRStatus) -> Snapshot? {
