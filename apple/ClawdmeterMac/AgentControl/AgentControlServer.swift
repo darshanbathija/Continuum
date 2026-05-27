@@ -711,11 +711,19 @@ public final class AgentControlServer {
         case "chat-subscribe":
             // Phase 2 of the WhatsApp-smooth Sessions pipeline. Replaces
             // iOS's 3-second `GET /chat-snapshot` HTTP polling with a
-            // long-lived WS subscription. Server pushes the full
-            // `WireChatSnapshot` on each coalesced 100ms commit window.
+            // long-lived WS subscription. A10 (wire v21) layered the
+            // shell/detail split on top:
+            //   - Client reports `wireVersion`. v21+ receives shell +
+            //     detail event pairs (one shell frame + one detail frame
+            //     per 100ms coalesced commit); v20 and earlier keep
+            //     receiving the legacy single `WireChatSnapshot` frame.
+            //   - Branch is selected ONCE in the channel constructor and
+            //     never re-evaluated mid-connection (clients that
+            //     dynamically upgrade their wire shape would have to
+            //     reconnect — which they already do across app launches).
             // No delta encoding in v1 — Codex's outside-voice review (D6)
             // explicitly cut that scope until measurements show it's
-            // needed.
+            // needed; the split lands first.
             guard let sessionIdString = envelope.sessionId,
                   let sessionId = UUID(uuidString: sessionIdString),
                   let session = registry.session(id: sessionId)
@@ -726,7 +734,8 @@ public final class AgentControlServer {
             let chatChannel = ChatStreamWebSocketChannel(
                 connection: connection,
                 session: session,
-                registry: chatStoreRegistry
+                registry: chatStoreRegistry,
+                clientWireVersion: envelope.wireVersion
             )
             wsChannels[ObjectIdentifier(connection)] = chatChannel
             chatChannel.start()
@@ -842,6 +851,14 @@ public final class AgentControlServer {
         /// v0.9.x: required for `frontier-subscribe` — the group whose
         /// aggregate `FrontierGroupSnapshot` envelopes the client wants.
         let groupId: String?
+        /// A10 (wire v21): client's reported wireVersion. The server picks
+        /// the dispatch branch ONCE per connection: `wireVersion >= 21`
+        /// receives shell + detail event pairs on `chat-subscribe`; older
+        /// clients receive the legacy `WireChatSnapshot` frame on each
+        /// commit (back-compat). Optional; absent on v20 and earlier
+        /// clients that don't know to send it (the default-to-legacy path
+        /// covers them).
+        let wireVersion: Int?
     }
 
     // MARK: - Accept handling

@@ -142,7 +142,20 @@ public enum AgentControlWireVersion {
     /// together so older v19 clients always degrade safely to the
     /// primary instance (Codex #10 acceptance: clients on `wireVersion
     /// < providerInstanceMinimum` only ever see/select the primary).
-    public static let current: Int = 20
+    /// v21 (2026-05-27, A10): chat stream is split into a thin
+    /// `ChatShellEvent` (header: session id, sequence number, kind,
+    /// emittedAt, optional token counts — typically ~80 bytes) and a
+    /// heavy `ChatDetailEvent` (full text, tool calls, plan steps,
+    /// source entries, artifacts). v21+ clients receive shell + detail
+    /// pairs on the `chat-subscribe` WS; v20 and below receive the full
+    /// `WireChatSnapshot` on each commit (back-compat). The dispatch
+    /// branch is selected once per connection from the client's
+    /// `wireVersion` field on the subscribe envelope. Drives ≥80%
+    /// payload reduction during token-burst streaming by deferring the
+    /// heavy fields to a separate frame that consumers can render
+    /// after the shell summary lands. Non-chat events (lifecycle,
+    /// usage, etc.) keep their existing single-frame shape.
+    public static let current: Int = 21
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -280,6 +293,21 @@ public enum AgentControlWireVersion {
     /// scrubbing) never strands a too-old client in a half-configured
     /// multi-instance state.
     public static let providerInstanceMinimum: Int = 20
+
+    /// Minimum wire version that supports the chat shell/detail split on
+    /// `chat-subscribe` (A10, 2026-05-27). When the client subscribes with
+    /// `wireVersion >= 21`, the daemon pushes a thin `ChatShellEvent`
+    /// (~80 bytes — session id, sequence number, kind, emittedAt, optional
+    /// token counts) followed by a heavy `ChatDetailEvent` (items, plan
+    /// steps, source entries, artifacts, codex todos, token totals) per
+    /// commit window. Clients on wireVersion ≤ 20 keep receiving the full
+    /// `WireChatSnapshot` JSON frame per commit (the legacy shape).
+    ///
+    /// The dispatch branch is chosen ONCE per connection from the
+    /// `wireVersion` field on the subscribe envelope. The shell event
+    /// drives the lightweight activity strip / sidebar summary; the
+    /// detail event fills in the full body when it arrives.
+    public static let shellDetailMinimum: Int = 21
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -448,6 +476,15 @@ public enum AgentControlWireVersion {
     public static func supportsProviderInstance(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= providerInstanceMinimum
+    }
+
+    /// Whether the paired Mac supports the chat shell/detail split on the
+    /// `chat-subscribe` WS (A10). Returns true iff `serverWireVersion >= 21`.
+    /// Clients on `serverWireVersion <= 20` keep receiving the full
+    /// `WireChatSnapshot` per commit.
+    public static func supportsShellDetail(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= shellDetailMinimum
     }
 }
 
@@ -3268,6 +3305,346 @@ public struct WireChatSnapshot: Codable, Sendable, Hashable {
         self.lastEventAt = try c.decodeIfPresent(Date.self, forKey: .lastEventAt)
         self.updateCounter = try c.decode(UInt64.self, forKey: .updateCounter)
         self.currentTurnState = try c.decodeIfPresent(TurnState.self, forKey: .currentTurnState) ?? .idle
+    }
+}
+
+// MARK: - Chat shell/detail split (A10 — wireVersion 21)
+
+/// Lightweight "shell" event emitted on every chat-subscribe commit when the
+/// paired client speaks `wireVersion >= 21`. Contains only the bare header
+/// needed to drive the activity strip / sidebar summary without waiting for
+/// the heavy body:
+///
+///   - `sessionId` + `sequenceNumber` reference the paired `ChatDetailEvent`
+///     so consumers can stitch the two frames back together.
+///   - `kind` is the most-recent activity bucket (assistant streaming, user
+///     prompt, tool call, system). Drives the small subtitle "Assistant
+///     typing…" / "Tool running…" without rendering the full text.
+///   - `emittedAt` is the snapshot's `lastEventAt` (server-time of the most
+///     recent ingested event).
+///   - `tokensIn` / `tokensOut` carry running totals so the activity-strip
+///     counter can update before the heavy detail lands. Both are present
+///     only when there's been an assistant turn this snapshot.
+///   - `turnState` mirrors `WireChatSnapshot.currentTurnState` so the Stop↔
+///     Send transition + stopwatch can flip immediately on shell.
+///
+/// **Wire payload:** ~80 bytes JSON typical. The matching `ChatDetailEvent`
+/// carries the rest. v20 and earlier clients never see this type — they
+/// keep receiving full `WireChatSnapshot` frames. The dispatch decision is
+/// made ONCE at subscribe time from the client's reported `wireVersion`.
+public struct ChatShellEvent: Codable, Sendable, Hashable {
+    public let sessionId: UUID
+    /// Monotonic per-session counter that pairs this shell event with its
+    /// matching `ChatDetailEvent`. Same value as the underlying
+    /// `WireChatSnapshot.updateCounter` so consumers can `removeDuplicates`
+    /// and stitch shell↔detail without a separate id field.
+    public let sequenceNumber: UInt64
+    /// Most-recent activity bucket for the activity strip subtitle.
+    public let kind: Kind
+    /// Snapshot's `lastEventAt` — server-time of the most recent ingested
+    /// chat event. Drives the "x min ago" relative-time label.
+    public let emittedAt: Date?
+    /// Running input-token total for the session. Optional because non-chat
+    /// sessions and brand-new sessions don't have one yet.
+    public let tokensIn: Int?
+    /// Running output-token total for the session.
+    public let tokensOut: Int?
+    /// Per-turn lifecycle so the V2 status strip's Stop↔Send flip can land
+    /// on the shell event without waiting for the heavy detail.
+    public let turnState: TurnState
+
+    /// Coarse-grained activity bucket. The sidebar / activity strip uses
+    /// this to render the subtitle without parsing the full message body.
+    public enum Kind: String, Codable, Sendable, Hashable, CaseIterable {
+        /// Empty session / nothing rendered yet.
+        case empty
+        /// User-prompt message is the most-recent item.
+        case user
+        /// Assistant-prose message is the most-recent item (or streaming
+        /// in-flight).
+        case assistant
+        /// Tool call is the most-recent item.
+        case tool
+        /// Meta / system message (e.g. permission prompt, summary).
+        case system
+
+        /// Lenient decoder so a future wireVersion that adds a new kind
+        /// doesn't crash older v21 clients. Unknown raws fall back to
+        /// `.system` (safe default — UI keeps showing the indicator).
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            let raw = try c.decode(String.self)
+            self = Kind(rawValue: raw) ?? .system
+        }
+    }
+
+    public init(
+        sessionId: UUID,
+        sequenceNumber: UInt64,
+        kind: Kind,
+        emittedAt: Date?,
+        tokensIn: Int? = nil,
+        tokensOut: Int? = nil,
+        turnState: TurnState = .idle
+    ) {
+        self.sessionId = sessionId
+        self.sequenceNumber = sequenceNumber
+        self.kind = kind
+        self.emittedAt = emittedAt
+        self.tokensIn = tokensIn
+        self.tokensOut = tokensOut
+        self.turnState = turnState
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId, sequenceNumber, kind, emittedAt
+        case tokensIn, tokensOut, turnState
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionId = try c.decode(UUID.self, forKey: .sessionId)
+        self.sequenceNumber = try c.decode(UInt64.self, forKey: .sequenceNumber)
+        self.kind = try c.decode(Kind.self, forKey: .kind)
+        self.emittedAt = try c.decodeIfPresent(Date.self, forKey: .emittedAt)
+        self.tokensIn = try c.decodeIfPresent(Int.self, forKey: .tokensIn)
+        self.tokensOut = try c.decodeIfPresent(Int.self, forKey: .tokensOut)
+        self.turnState = try c.decodeIfPresent(TurnState.self, forKey: .turnState) ?? .idle
+    }
+
+    /// Derive the activity-strip Kind from the most-recent chat item. The
+    /// daemon uses this when constructing a shell event from a snapshot.
+    public static func kind(from items: [ChatItem]) -> Kind {
+        guard let last = items.last else { return .empty }
+        switch last {
+        case .message(let m):
+            switch m.kind {
+            case .userText:      return .user
+            case .assistantText: return .assistant
+            case .toolCall, .toolResult: return .tool
+            case .meta:          return .system
+            }
+        case .toolRun:
+            return .tool
+        }
+    }
+}
+
+/// Heavy "detail" event paired with a `ChatShellEvent`. Carries the full
+/// chat body: items (messages + tool runs), plan steps, source entries,
+/// artifacts, codex todos, token breakdowns, and the pending permission
+/// prompt. Sent as the second frame on each commit when the paired client
+/// speaks `wireVersion >= 21`.
+///
+/// `sessionId` + `sequenceNumber` match the immediately-preceding shell
+/// event so consumers can pair them. v20 and earlier clients never see
+/// this type — they keep receiving full `WireChatSnapshot` frames.
+public struct ChatDetailEvent: Codable, Sendable, Hashable {
+    public let sessionId: UUID
+    /// Matches the paired `ChatShellEvent.sequenceNumber` AND the
+    /// underlying `WireChatSnapshot.updateCounter`. Lets the iOS store
+    /// stitch the two frames together (or drop a stale detail if the
+    /// shell counter has already advanced past it).
+    public let sequenceNumber: UInt64
+    public let items: [ChatItem]
+    public let planSteps: [PlanStep]
+    public let sourceEntries: [SourceEntry]
+    public let artifactEntries: [ArtifactEntry]
+    public let codexTodos: [CodexTodoItem]
+    public let pendingPermissionPrompt: PendingPermissionPrompt?
+    public let totalInputTokens: Int
+    public let totalOutputTokens: Int
+    public let cacheReadTokens: Int
+    public let cacheCreationTokens: Int
+
+    public init(
+        sessionId: UUID,
+        sequenceNumber: UInt64,
+        items: [ChatItem],
+        planSteps: [PlanStep],
+        sourceEntries: [SourceEntry],
+        artifactEntries: [ArtifactEntry],
+        codexTodos: [CodexTodoItem] = [],
+        pendingPermissionPrompt: PendingPermissionPrompt? = nil,
+        totalInputTokens: Int,
+        totalOutputTokens: Int,
+        cacheReadTokens: Int = 0,
+        cacheCreationTokens: Int = 0
+    ) {
+        self.sessionId = sessionId
+        self.sequenceNumber = sequenceNumber
+        self.items = items
+        self.planSteps = planSteps
+        self.sourceEntries = sourceEntries
+        self.artifactEntries = artifactEntries
+        self.codexTodos = codexTodos
+        self.pendingPermissionPrompt = pendingPermissionPrompt
+        self.totalInputTokens = totalInputTokens
+        self.totalOutputTokens = totalOutputTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheCreationTokens = cacheCreationTokens
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId, sequenceNumber
+        case items, planSteps, sourceEntries, artifactEntries
+        case codexTodos, pendingPermissionPrompt
+        case totalInputTokens, totalOutputTokens
+        case cacheReadTokens, cacheCreationTokens
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionId = try c.decode(UUID.self, forKey: .sessionId)
+        self.sequenceNumber = try c.decode(UInt64.self, forKey: .sequenceNumber)
+        self.items = try c.decode([ChatItem].self, forKey: .items)
+        self.planSteps = try c.decode([PlanStep].self, forKey: .planSteps)
+        self.sourceEntries = try c.decode([SourceEntry].self, forKey: .sourceEntries)
+        self.artifactEntries = try c.decode([ArtifactEntry].self, forKey: .artifactEntries)
+        self.codexTodos = try c.decodeIfPresent([CodexTodoItem].self, forKey: .codexTodos) ?? []
+        self.pendingPermissionPrompt = try c.decodeIfPresent(PendingPermissionPrompt.self, forKey: .pendingPermissionPrompt)
+        self.totalInputTokens = try c.decode(Int.self, forKey: .totalInputTokens)
+        self.totalOutputTokens = try c.decode(Int.self, forKey: .totalOutputTokens)
+        self.cacheReadTokens = try c.decodeIfPresent(Int.self, forKey: .cacheReadTokens) ?? 0
+        self.cacheCreationTokens = try c.decodeIfPresent(Int.self, forKey: .cacheCreationTokens) ?? 0
+    }
+}
+
+/// Discriminated envelope for chat-subscribe WS frames. v21+ pushes
+/// `.shell(...)` then `.detail(...)`; v20 and earlier push `.snapshot(...)`.
+/// Each variant carries a `type` tag in JSON so the consumer can decode by
+/// kind in one pass.
+///
+/// Wire JSON shape (all variants share the same envelope key):
+///   ```
+///   { "type": "shell",    "shell": {...} }
+///   { "type": "detail",   "detail": {...} }
+///   { "type": "snapshot", "snapshot": {...} }
+///   ```
+///
+/// **Back-compat note:** v20 and earlier clients are NOT aware of this
+/// envelope — the daemon sends them a raw `WireChatSnapshot` frame (no
+/// envelope wrap). The envelope is only used on the v21+ path. This
+/// preserves the legacy wire on the slow rollout window.
+public enum ChatStreamFrame: Sendable, Hashable {
+    case shell(ChatShellEvent)
+    case detail(ChatDetailEvent)
+    /// Legacy single-frame snapshot. Used by v21+ debugging / one-shot
+    /// fixtures that want to round-trip the envelope; the live v20 path
+    /// does NOT wrap snapshots in this envelope.
+    case snapshot(WireChatSnapshot)
+
+    /// Stable tag value for the envelope's `type` field. Decoders use
+    /// this to dispatch the right inner type.
+    public var typeTag: String {
+        switch self {
+        case .shell:    return "shell"
+        case .detail:   return "detail"
+        case .snapshot: return "snapshot"
+        }
+    }
+}
+
+extension ChatStreamFrame: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case shell, detail, snapshot
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try c.decode(String.self, forKey: .type)
+        switch type {
+        case "shell":
+            self = .shell(try c.decode(ChatShellEvent.self, forKey: .shell))
+        case "detail":
+            self = .detail(try c.decode(ChatDetailEvent.self, forKey: .detail))
+        case "snapshot":
+            self = .snapshot(try c.decode(WireChatSnapshot.self, forKey: .snapshot))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .type, in: c,
+                debugDescription: "Unknown ChatStreamFrame type: \(type)"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(typeTag, forKey: .type)
+        switch self {
+        case .shell(let e):    try c.encode(e, forKey: .shell)
+        case .detail(let e):   try c.encode(e, forKey: .detail)
+        case .snapshot(let s): try c.encode(s, forKey: .snapshot)
+        }
+    }
+}
+
+extension WireChatSnapshot {
+    /// Derive a `ChatShellEvent` from this snapshot. Used by the daemon's
+    /// `ChatStreamWebSocketChannel` when the paired client speaks v21+.
+    public func shellEvent() -> ChatShellEvent {
+        let tokensIn: Int? = totalInputTokens > 0 ? totalInputTokens : nil
+        let tokensOut: Int? = totalOutputTokens > 0 ? totalOutputTokens : nil
+        return ChatShellEvent(
+            sessionId: sessionId,
+            sequenceNumber: updateCounter,
+            kind: ChatShellEvent.kind(from: items),
+            emittedAt: lastEventAt,
+            tokensIn: tokensIn,
+            tokensOut: tokensOut,
+            turnState: currentTurnState
+        )
+    }
+
+    /// Derive a `ChatDetailEvent` from this snapshot. Used by the daemon's
+    /// `ChatStreamWebSocketChannel` when the paired client speaks v21+.
+    public func detailEvent() -> ChatDetailEvent {
+        ChatDetailEvent(
+            sessionId: sessionId,
+            sequenceNumber: updateCounter,
+            items: items,
+            planSteps: planSteps,
+            sourceEntries: sourceEntries,
+            artifactEntries: artifactEntries,
+            codexTodos: codexTodos,
+            pendingPermissionPrompt: pendingPermissionPrompt,
+            totalInputTokens: totalInputTokens,
+            totalOutputTokens: totalOutputTokens,
+            cacheReadTokens: cacheReadTokens,
+            cacheCreationTokens: cacheCreationTokens
+        )
+    }
+
+    /// Combine a paired shell + detail event back into a `WireChatSnapshot`.
+    /// Used by v21+ iOS clients to materialize the legacy snapshot from
+    /// the split events for code paths that still consume the unified
+    /// shape (e.g. `iOSChatStore.snapshot`).
+    ///
+    /// The shell + detail are expected to share the same `sequenceNumber`.
+    /// When they don't (e.g. an out-of-order frame from a flaky network),
+    /// consumers should drop the older frame and wait for a fresh pair —
+    /// this method does NOT enforce the pairing; callers do.
+    public static func combine(
+        shell: ChatShellEvent,
+        detail: ChatDetailEvent
+    ) -> WireChatSnapshot {
+        WireChatSnapshot(
+            sessionId: shell.sessionId,
+            items: detail.items,
+            planSteps: detail.planSteps,
+            sourceEntries: detail.sourceEntries,
+            artifactEntries: detail.artifactEntries,
+            codexTodos: detail.codexTodos,
+            pendingPermissionPrompt: detail.pendingPermissionPrompt,
+            totalInputTokens: detail.totalInputTokens,
+            totalOutputTokens: detail.totalOutputTokens,
+            cacheReadTokens: detail.cacheReadTokens,
+            cacheCreationTokens: detail.cacheCreationTokens,
+            lastEventAt: shell.emittedAt,
+            updateCounter: shell.sequenceNumber,
+            currentTurnState: shell.turnState
+        )
     }
 }
 
