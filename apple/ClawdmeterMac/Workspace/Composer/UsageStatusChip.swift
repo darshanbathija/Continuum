@@ -384,7 +384,7 @@ struct ContextUsagePopover: View {
 
     @ViewBuilder
     private func progressRow(label: String, value: String, fraction: Double, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(label)
                     .font(.system(size: 12))
@@ -393,9 +393,7 @@ struct ContextUsagePopover: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            ProgressView(value: max(0, min(1, fraction)))
-                .progressViewStyle(.linear)
-                .tint(tint)
+            QuotaPillBar(fraction: max(0, min(1, fraction)), tint: tint)
         }
     }
 
@@ -451,5 +449,46 @@ struct ContextUsagePopover: View {
             formatter.maximumFractionDigits = 2
         }
         return formatter.string(from: n) ?? "$\(info.costDollar)"
+    }
+}
+
+// MARK: - Quota pill bar
+
+/// 6px pill bar matching DESIGN.md "Quota Meter" (lines 363–379):
+/// - Capsule (pill radius 999).
+/// - 180° linear gradient from `tint @ 0.85` (≈ provider.glow) to
+///   `tint` (provider.base).
+/// - Soft `tint @ 50%` shadow so the fill reads on translucent glass
+///   backgrounds.
+/// - Hairline-tinted track underneath so the empty portion stays
+///   legible on both light and dark surfaces.
+///
+/// Replaces SwiftUI's `ProgressView(.linear)`, which renders flat
+/// NSProgressIndicator chrome on macOS and ignores the tint gradient
+/// the design system mandates for quota visualisation.
+private struct QuotaPillBar: View {
+    let fraction: Double
+    let tint: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.18))
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [tint.opacity(0.85), tint],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: max(0, min(1, fraction)) * geo.size.width)
+                    .shadow(color: tint.opacity(0.5), radius: 1.5, x: 0, y: 0)
+            }
+        }
+        .frame(height: 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityValue("\(Int(fraction * 100)) percent")
     }
 }
