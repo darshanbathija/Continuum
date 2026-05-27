@@ -183,7 +183,12 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
     init(
         selectedSessionId: UUID? = nil,
         selectedRightPane: WorkbenchPaneTab = .plan,
-        showingReviewPane: Bool = true,
+        // Default collapsed — the review pane is rarely the first thing
+        // a user wants when opening a session. They reach for it
+        // intentionally via the top-right pane menu (Plan / Diff / etc.).
+        // Persisted state takes over on subsequent launches, so a user
+        // who opens the pane keeps it open.
+        showingReviewPane: Bool = false,
         density: TranscriptDensity = .balanced,
         workspaceWidth: Double = 1400,
         sidebarWidth: Double? = nil,
@@ -224,7 +229,7 @@ struct WorkbenchStateSnapshot: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         selectedSessionId = try c.decodeIfPresent(UUID.self, forKey: .selectedSessionId)
         selectedRightPane = try c.decodeIfPresent(WorkbenchPaneTab.self, forKey: .selectedRightPane) ?? .plan
-        showingReviewPane = try c.decodeIfPresent(Bool.self, forKey: .showingReviewPane) ?? true
+        showingReviewPane = try c.decodeIfPresent(Bool.self, forKey: .showingReviewPane) ?? false
         density = try c.decodeIfPresent(TranscriptDensity.self, forKey: .density) ?? .balanced
         workspaceWidth = try c.decodeIfPresent(Double.self, forKey: .workspaceWidth) ?? 1400
         sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth)

@@ -31,6 +31,14 @@ struct ModelEffortChip: View {
 
     @State private var showingPopover = false
     @State private var isHovered = false
+    /// Shared favorites + per-vendor defaults backing store. Reads the
+    /// same `UserDefaults` keys as the Chat picker, so a model starred
+    /// in Chat shows up starred in Code and vice-versa.
+    @StateObject private var providerDefaults = ProviderDefaultsStore()
+    /// Throwaway ChatV2Store the rich picker writes its preview state
+    /// into. We never observe it from Code (the real selection flows
+    /// through `onSelectModel`), but ComposerModelPicker requires one.
+    @StateObject private var pickerScratchStore = ChatV2Store()
 
     var body: some View {
         Button(action: { showingPopover.toggle() }) {
@@ -67,12 +75,26 @@ struct ModelEffortChip: View {
             cycleEffort(direction: -1)
         }
         .popover(isPresented: $showingPopover, arrowEdge: .top) {
-            ModelEffortPopover(
+            // v0.30 — Code now uses the same rich vendor-rail picker as
+            // Chat. The ChatV2Store is a private scratch store; the real
+            // mutation flows through `onSelectModel` which updates the
+            // Code-side bindings (and, indirectly, the running session
+            // via SessionConfigChanger). The simpler `ModelEffortPopover`
+            // is retained as the secondary surface — held behind a small
+            // "Effort" footer button below so users can still re-pick
+            // effort without re-picking model.
+            ComposerModelPicker(
+                initialVendor: ChatVendor.migrated(from: agent) ?? .chatgpt,
+                store: pickerScratchStore,
+                defaultsStore: providerDefaults,
                 catalog: catalog,
-                agent: agent,
-                selectedModelId: $selectedModelId,
-                selectedEffort: $selectedEffort,
-                modelSupportsEffort: modelSupportsEffort
+                onClose: { showingPopover = false },
+                onSelectModel: { _, modelId, effort in
+                    selectedModelId = modelId
+                    if let effort {
+                        selectedEffort = effort
+                    }
+                }
             )
         }
     }

@@ -139,7 +139,13 @@ public struct TahoeDashTab: View {
         .buttonStyle(.plain)
         .help(tooltip)
         .accessibilityIdentifier("dash.tab.\(label.lowercased())")
+        // .onHover is macOS / iOS / visionOS only — gated so the
+        // ClawdmeterShared package compiles for the Watch scheme.
+        // watchOS readers stay on the resting cell style; the hover
+        // state is desktop-only chrome anyway.
+        #if !os(watchOS)
         .onHover { isHovered = $0 }
+        #endif
     }
 
     private var tooltip: String {

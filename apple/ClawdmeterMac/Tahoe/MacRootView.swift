@@ -12,6 +12,13 @@ struct MacRootView: View {
 
     @State private var theme: TahoeThemeStore
     @State private var tab: Tab
+    /// Tabs we've ever rendered. ZStack-cached so a re-visit doesn't
+    /// re-instantiate the view (which was the source of the "slow + jumpy"
+    /// tab switches — destroying a fully-loaded Code workspace, sidebar
+    /// state, transcript stores, and re-creating it from scratch on each
+    /// tap). Once a tab is in the set, its view stays mounted with
+    /// `opacity: 0` while inactive.
+    @State private var visitedTabs: Set<Tab> = []
 
     /// AppRuntime — drives the live Usage / Menu-bar surfaces via the
     /// `tahoeLive` adapter in `MacTahoeAdapter.swift`. Other surfaces
@@ -77,6 +84,10 @@ struct MacRootView: View {
         self.geminiModel = runtime.geminiModel
         _theme = State(initialValue: TahoeThemeStore.loaded())
         _tab = State(initialValue: initialTab)
+        // Seed the visited-tabs cache with the initial tab so the very
+        // first render has a slot to populate (otherwise the ZStack
+        // would briefly render nothing while `.task(id:)` catches up).
+        _visitedTabs = State(initialValue: [initialTab])
         _presentationStore = StateObject(wrappedValue: SessionPresentationStore(
             storeURL: SessionPresentationStore.defaultStoreURL(
                 appSupportDirectory: WorkspaceStore.defaultStoreURL().deletingLastPathComponent()
@@ -105,7 +116,16 @@ struct MacRootView: View {
             VStack(spacing: 0) {
                 MacTitlebar(
                     active: tab,
-                    onTab: { tab = $0 },
+                    // Insert into visitedTabs synchronously alongside the
+                    // tab change so the destination slot is mounted in
+                    // the same render frame the tab switch happens —
+                    // no one-frame gap where neither slot is hittable.
+                    onTab: { newTab in
+                        if !visitedTabs.contains(newTab) {
+                            visitedTabs.insert(newTab)
+                        }
+                        tab = newTab
+                    },
                     theme: theme,
                     runtime: runtime
                 )
@@ -129,9 +149,14 @@ struct MacRootView: View {
                     // lights.
                     .ignoresSafeArea(edges: .top)
 
-                Group {
-                    switch tab {
-                    case .chat:
+                ZStack {
+                    // Each tab view stays mounted once first rendered;
+                    // an inactive tab is `opacity 0` + hit-test-disabled
+                    // so it doesn't intercept clicks. This makes
+                    // re-visits feel instant — no view-tree teardown,
+                    // no re-fetch, no layout pop. The cross-fade is
+                    // driven by `.animation(...value: tab)` below.
+                    if visitedTabs.contains(.chat) {
                         // v0.23 (Chat V2): the new chat surface replaces
                         // the legacy MacChatView. Phase 1 foundation
                         // (wire v14 + ChatSnapshotSource protocol +
@@ -143,27 +168,32 @@ struct MacRootView: View {
                             loopbackClient: runtime.loopbackClient,
                             runtime: runtime
                         )
-                    case .usage:
-                        // A8: per-provider usage reads moved here from the
-                        // top of body. SwiftUI subscribes MacRootView to
-                        // claudeModel/codexModel/geminiModel ONLY when this
-                        // case is evaluated — i.e. only when Usage tab is
-                        // active. Background polls during Chat/Code/Settings
-                        // no longer invalidate the parent.
+                        .modifier(TabSlotVisibility(active: tab == .chat))
+                    }
+                    if visitedTabs.contains(.usage) {
+                        // A8: per-provider usage reads — when the Usage
+                        // tab is active the parent subscribes to live
+                        // updates so the inner view re-renders. The
+                        // discards happen inside this branch only, so
+                        // background polls don't invalidate the parent
+                        // when the user is in Chat / Code / Settings.
                         let _ = claudeModel.usage
                         let _ = codexModel.usage
                         let _ = geminiModel.usage
-                        let live = runtime.tahoeLive
                         MacUsageView(
-                            data: live,
+                            data: runtime.tahoeLive,
                             claudeModel: claudeModel,
                             codexModel: codexModel,
                             geminiModel: geminiModel,
                             usageHistoryStore: runtime.usageHistoryStore
                         )
-                    case .code:
+                        .modifier(TabSlotVisibility(active: tab == .usage))
+                    }
+                    if visitedTabs.contains(.code) {
                         MacCodeShell(model: sessionsModel, presentationStore: presentationStore)
-                    case .settings:
+                            .modifier(TabSlotVisibility(active: tab == .code))
+                    }
+                    if visitedTabs.contains(.settings) {
                         MacSettingsView(
                             theme: theme,
                             claudeModel: claudeModel,
@@ -172,11 +202,19 @@ struct MacRootView: View {
                             runtime: runtime,
                             presentationStore: presentationStore
                         )
+                        .modifier(TabSlotVisibility(active: tab == .settings))
                     }
                 }
                 .padding([.horizontal, .bottom], 10)
                 .padding(.top, 10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: tab)
+                .task(id: tab) {
+                    // Track first visit so the ZStack only materializes
+                    // a tab on demand (lazy load). Subsequent visits
+                    // re-show the already-mounted view in one frame.
+                    visitedTabs.insert(tab)
+                }
             }
         }
         .frame(minWidth: 1280, minHeight: 820)
@@ -877,6 +915,23 @@ private struct ShortcutOverrideMonitor: NSViewRepresentable {
     }
 }
 
+/// ZStack tab slot modifier — keeps an inactive tab mounted but invisible
+/// + un-hittable so it doesn't intercept clicks or steal focus. The
+/// surrounding `.animation(value: tab)` drives the cross-fade.
+private struct TabSlotVisibility: ViewModifier {
+    let active: Bool
+    func body(content: Content) -> some View {
+        content
+            .opacity(active ? 1 : 0)
+            .allowsHitTesting(active)
+            // Inactive slots collapse to zero apparent size for SwiftUI's
+            // layout pass while still measuring their own content
+            // intrinsically. We use `.zIndex` to keep the active slot on
+            // top in case of overlapping draw order.
+            .zIndex(active ? 1 : 0)
+    }
+}
+
 private struct ToastCountdownRing: View {
     let startedAt: Date
     let duration: TimeInterval
@@ -1005,12 +1060,11 @@ struct MacTitlebar: View {
         HStack(spacing: 10) {
             // v0.22.6: window is now `.hiddenTitleBar`, so the macOS
             // traffic lights overlay the top-left at the system level.
-            // Reserve ~76pt of leading space so the tab chip doesn't
-            // collide with the real (close/min/zoom) controls. We
-            // dropped the decorative TahoeTrafficLights chip — it was
-            // a non-functional Tahoe-themed clone that visually stacked
-            // on top of the real lights.
-            Color.clear.frame(width: 76, height: 1)
+            // Reserve just enough leading space so the tab chip clears
+            // the real (close/min/zoom) controls (rightmost edge ~66pt
+            // at standard inset). The outer HStack's 10pt spacing adds
+            // the visual buffer past that, no need to over-reserve.
+            Color.clear.frame(width: 60, height: 1)
 
             if active == .code {
                 TahoeGlass(radius: 11, tone: .chip) {
@@ -1096,21 +1150,71 @@ struct MacTitlebar: View {
                 codeActionButton(icon: "sliders", help: "Focus Code filters") {
                     NotificationCenter.default.post(name: .focusSidebarSearch, object: nil)
                 }
-                codeActionButton(icon: "bell", help: "Pair or manage iPhone sync") {
-                    syncChipPopoverPresented = true
-                }
-                codeActionButton(icon: "sidebar", help: "Open Plan and review pane") {
-                    NotificationCenter.default.post(
-                        name: .openCodeReviewPane,
-                        object: nil,
-                        userInfo: ["tab": WorkbenchPaneTab.plan.rawValue]
-                    )
-                }
+                paneMenuButton
             }
             .padding(.horizontal, 7)
             .frame(height: 30)
         }
         .fixedSize()
+    }
+
+    /// Single right-pane menu. Replaces the older "bell + sidebar"
+    /// trio — the bell button was bound to a popover anchored on a
+    /// different chip and never showed reliably; the sidebar button
+    /// only ever opened the Plan pane. This Menu lists every workbench
+    /// tab plus a Collapse action so the user can open any pane in one
+    /// click and dismiss it from the same chip.
+    @ViewBuilder
+    private var paneMenuButton: some View {
+        Menu {
+            paneMenuItem(.plan,      shortcut: "⇧⌘P")
+            paneMenuItem(.diff,      shortcut: "⇧⌘D")
+            paneMenuItem(.terminal,  shortcut: "⌃`")
+            paneMenuItem(.sources)
+            paneMenuItem(.artifacts, shortcut: "⇧⌘F")
+            paneMenuItem(.pr)
+            paneMenuItem(.browser)
+            Divider()
+            Button(action: {
+                NotificationCenter.default.post(name: .toggleCodeReviewPane, object: nil)
+            }) {
+                Label("Collapse pane", systemImage: "sidebar.trailing")
+            }
+        } label: {
+            TahoeIcon("sidebar", size: 12)
+                .foregroundStyle(t.fg3)
+                .frame(width: 24, height: 24)
+                .background(t.hair2.opacity(0.65), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Right pane")
+    }
+
+    /// Menu row that opens a specific workbench tab. `WorkbenchPaneTab`
+    /// owns its own systemImage so the icons stay aligned with the
+    /// tab strip and the deep-link / keyboard-shortcut routes already
+    /// registered for the Code scope.
+    @ViewBuilder
+    private func paneMenuItem(_ tab: WorkbenchPaneTab, shortcut: String? = nil) -> some View {
+        Button(action: {
+            NotificationCenter.default.post(
+                name: .openCodeReviewPane,
+                object: nil,
+                userInfo: ["tab": tab.rawValue]
+            )
+        }) {
+            HStack {
+                Label(tab.rawValue, systemImage: tab.systemImage)
+                if let shortcut {
+                    Spacer()
+                    Text(shortcut)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
     }
 
     private func codeActionButton(icon: String, help: String, action: @escaping () -> Void) -> some View {

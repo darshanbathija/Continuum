@@ -419,6 +419,97 @@ public final class SessionsModel: ObservableObject {
         showingNewSessionSheet = true
     }
 
+    /// One-click "+ New workspace" for a known repo. Bypasses the New
+    /// Session sheet entirely — defaults are Codex / GPT-5.5 / max
+    /// effort / plan mode / worktree, worktree branch auto-named by the
+    /// existing city-namer. The user jumps straight into the composer.
+    ///
+    /// **No silent fall-back to the sheet.** The whole point of this
+    /// button is to NOT see the sheet; routing back to it on error is
+    /// the bug the user keeps re-reporting. Failures surface as a
+    /// `.clawdmeterShowTransientToast` with the underlying error and a
+    /// hint that Option-click opens the full sheet when the user
+    /// actually wants to customize.
+    public func quickSpawnInRepo(_ repoKey: String) {
+        // `.other` and any non-resolvable bucket genuinely have no path
+        // to spawn into. Route through the sheet ONLY in this terminal
+        // case — there's no quick-spawn that makes sense without a
+        // real repo path.
+        guard repos.contains(where: { $0.key == repoKey }),
+              repoKey != RepoKey.other else {
+            prepareNewSession(in: repoKey)
+            return
+        }
+        guard let runtime = AppDelegate.runtime else {
+            Self.postQuickSpawnFailureToast(
+                title: "Daemon offline",
+                detail: "Restart Clawdmeter to spawn sessions."
+            )
+            return
+        }
+        let agent: AgentKind = .codex
+        let modelId = "gpt-5.5"
+        let effort: ReasoningEffort = .max
+        Task { @MainActor in
+            do {
+                let session = try await spawnSession(
+                    repoPath: repoKey,
+                    agent: agent,
+                    planMode: true,
+                    goal: nil,
+                    mode: .worktree,
+                    tmux: runtime.tmuxClient,
+                    model: modelId,
+                    effort: effort
+                )
+                openSessionId = session.id
+                selectedRepoKey = repoKey
+                if !expandedRepoKeys.contains(repoKey) {
+                    expandedRepoKeys.insert(repoKey)
+                }
+            } catch {
+                // Stay out of the sheet. Make the failure loud + actionable.
+                NSLog("[Clawdmeter] quickSpawnInRepo failed for repo=%@: %@", repoKey, "\(error)")
+                Self.postQuickSpawnFailureToast(
+                    title: "Couldn't spawn session in \((repoKey as NSString).lastPathComponent)",
+                    detail: "\(Self.humanize(spawnError: error)) — hold Option and click + to open the full New Session sheet."
+                )
+            }
+        }
+    }
+
+    /// Bottom-anchored transient toast wired to MacRootView's existing
+    /// `.clawdmeterShowTransientToast` observer. Six-second visible
+    /// window is enough to read a multi-line error without blocking.
+    private static func postQuickSpawnFailureToast(title: String, detail: String) {
+        let toast = TransientToast(title: title, detail: detail, duration: 6)
+        NotificationCenter.default.post(
+            name: .clawdmeterShowTransientToast,
+            object: nil,
+            userInfo: ["toast": toast]
+        )
+    }
+
+    /// `localizedDescription` on `Swift.Error` collapses to "The operation
+    /// couldn't be completed" for our domain errors. Pull out the
+    /// human-meaningful payload from each known case so the toast says
+    /// something useful.
+    private static func humanize(spawnError error: Error) -> String {
+        if let spawn = error as? SpawnError {
+            return spawn.errorDescription ?? "spawn failed"
+        }
+        if let tmux = error as? TmuxControlClient.TmuxError {
+            switch tmux {
+            case .notStarted: return "tmux not started"
+            case .commandFailed(let s): return "tmux: \(s)"
+            case .serverExited: return "tmux server exited"
+            case .ptyClosed: return "PTY closed unexpectedly"
+            case .invalidArgument(let s): return "tmux: invalid argument (\(s))"
+            }
+        }
+        return error.localizedDescription
+    }
+
     /// Persist a user-facing code-session label through the registry-backed
     /// session record. The sidebar, header, command palette, iOS mirror, and
     /// daemon `/rename` route all read `AgentSession.customName`, so local

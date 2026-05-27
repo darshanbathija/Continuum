@@ -1,7 +1,7 @@
 {
   "_meta": {
     "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "capturedAt": "2026-05-23T03:21:17Z",
+    "capturedAt": "2026-05-27T06:32:03Z",
     "manualOverrides": "gemini-3.5-flash: Antigravity 2 default model. Official pricing announced at Google I/O 2026 (2026-05-19): $1.50/M input, $9.00/M output, $0.15/M cached input (90% discount). | gemini-3.5-flash-thinking: Gemini 3.5 Flash's Extended thinking mode. Same per-token rate card as the base model — Google bills thinking tokens at the output rate, so a session with extended thinking enabled produces a larger output-token total but the price per token is unchanged. | gemini-3.1-pro: Antigravity 2 frontier Pro model, announced alongside 3.5 Flash at Google I/O 2026 (2026-05-19). Tiered pricing: $2.00/M input + $12.00/M output for prompts up to 200K tokens; $4.00/M + $18.00/M above 200K. Cache discount mirrors 3.5 Flash's 90% (Google's stated default for the 3.x line)."
   },
   "models": {

@@ -334,7 +334,6 @@ struct ComposerInputCore: View {
                 .layoutPriority(1)
             }
             attachButton
-            codeContextChip
             historyButton
             savedPromptsMenu
             stripANSIPasteButton
@@ -431,23 +430,19 @@ struct ComposerInputCore: View {
         }
         .buttonStyle(.plain)
         .help("Attach a file (drag-drop, paste, or click)")
+        // The matching identifier for `code.composer.model-effort` /
+        // `permission-mode` / `context-usage` — added in PR #185 with the
+        // UI test that pins ⌘U → attach. The identifier itself was
+        // missing in #185's merge, so `testCodeTabComposerControlsExposeShortcutTargets`
+        // failed on this line.
+        .accessibilityIdentifier("code.composer.attach")
     }
 
-    private var codeContextChip: some View {
-        Button(action: { showingMentions = true }) {
-            HStack(spacing: 5) {
-                TahoeIcon("code", size: 11)
-                Text("code")
-                    .font(TahoeFont.body(11, weight: .semibold))
-            }
-            .foregroundStyle(t.fg2)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Color.secondary.opacity(0.10), in: Capsule(style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .help("Attach code context")
-    }
+    // codeContextChip was deleted in v0.30: PermissionModeChip now does
+    // both jobs (click = plan↔code flip via `Menu(primaryAction:)`,
+    // long-press = full ask/accept/plan/bypass picker). Two chips for
+    // overlapping behavior was the wrong call. Type `@` to open the
+    // mention picker (the chip's old "attach code context" entry point).
 
     private var historyButton: some View {
         Button(action: { showingPromptHistory = true }) {
