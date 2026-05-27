@@ -430,6 +430,12 @@ struct ComposerInputCore: View {
         }
         .buttonStyle(.plain)
         .help("Attach a file (drag-drop, paste, or click)")
+        // The matching identifier for `code.composer.model-effort` /
+        // `permission-mode` / `context-usage` — added in PR #185 with the
+        // UI test that pins ⌘U → attach. The identifier itself was
+        // missing in #185's merge, so `testCodeTabComposerControlsExposeShortcutTargets`
+        // failed on this line.
+        .accessibilityIdentifier("code.composer.attach")
     }
 
     // codeContextChip was deleted in v0.30: PermissionModeChip now does
