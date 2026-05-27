@@ -25,8 +25,27 @@ struct ClawdmeteriOSApp: App {
     /// propagates into sheets + alerts (which a TabView-level modifier
     /// does NOT do — sheets present in a fresh trait environment).
     @AppStorage("clawdmeter.appearance") private var appearanceRaw: String = AppearanceMode.system.rawValue
+    /// Tahoe redesign's own appearance toggle (defaults to dark per
+    /// `TahoeThemeStore.loaded()`). When the legacy picker is on
+    /// `.system`, this drives the color scheme so the Tahoe wallpaper
+    /// (which is unconditionally dark when `t.dark == true`) stays in
+    /// sync with the UIKit semantic colors that LiveGaugesHeader / Pair
+    /// banners use under the hood. Without this sync, a user on iOS-light
+    /// system mode + Tahoe-dark theme saw `Color.black` wallpaper but
+    /// `secondarySystemGroupedBackground` cards rendered light — mixed.
+    @AppStorage("tahoe.appearance") private var tahoeAppearanceRaw: String = "dark"
     private var appearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceRaw) ?? .system
+    }
+    /// Resolved scheme: explicit legacy pin wins; otherwise follow the
+    /// Tahoe theme. Never returns `nil`, so the whole app — including
+    /// UIKit semantic colors — stays consistently dark (or light) instead
+    /// of falling back to the device system and creating mixed surfaces.
+    private var resolvedColorScheme: ColorScheme {
+        if let explicit = appearance.colorScheme {
+            return explicit
+        }
+        return tahoeAppearanceRaw == "light" ? .light : .dark
     }
 
     init() {
@@ -85,10 +104,13 @@ struct ClawdmeteriOSApp: App {
                 // Applied here, INSIDE the WindowGroup, so the value
                 // lands on the root view's traitCollection — that's
                 // the path SwiftUI uses to re-theme sheets and alerts
-                // alongside the regular view tree. Returning nil for
-                // `.system` lets iOS Settings → Display & Brightness
-                // drive things.
-                .preferredColorScheme(appearance.colorScheme)
+                // alongside the regular view tree. Per Apple docs, the
+                // ROOT-MOST preferredColorScheme wins, so a `nil` here
+                // overrides any inner `.preferredColorScheme(.dark)` from
+                // TahoeThemeApplied. To keep the iOS app consistently
+                // themed (no mixed light/dark surfaces), always resolve
+                // to a concrete scheme — legacy pin > Tahoe > .dark.
+                .preferredColorScheme(resolvedColorScheme)
         }
     }
 }
