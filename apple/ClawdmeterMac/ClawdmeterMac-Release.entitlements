@@ -43,6 +43,16 @@
 		<string>$(AppIdentifierPrefix)com.clawdmeter</string>
 	</array>
 
+	<!-- v0.29.20: NSOpenPanel-picked file/folder access. The Add-Repo
+	     flow (Open project / Clone destination / Quick Start parent)
+	     opens NSOpenPanel for the user to pick a folder. Sandboxed
+	     apps without this entitlement either get NO panel at all
+	     (powerbox refuses) or get a panel whose returned URL is
+	     unreadable. Read-write is required because Quick Start /
+	     clone WRITE the new repo into the picked parent. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+
 	<!--
 	  v0.26.2: Read-only sandbox exceptions for the provider state dirs
 	  Clawdmeter needs to inspect.
