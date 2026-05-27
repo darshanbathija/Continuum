@@ -117,8 +117,12 @@ struct SessionHoverActions: View {
                 .frame(width: 18, height: 18)
         }
         .buttonStyle(.plain)
-        .help(label)
-        .accessibilityLabel(label)
+        .codeHoverChrome(
+            cornerRadius: 5,
+            help: label,
+            accessibilityLabel: label,
+            accessibilityIdentifier: "code.session.action.\(label.lowercased().replacingOccurrences(of: " ", with: "-"))"
+        )
     }
 }
 

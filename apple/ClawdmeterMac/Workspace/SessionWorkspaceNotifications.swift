@@ -30,4 +30,18 @@ extension Notification.Name {
     /// Posted by iOS via the daemon's compose-draft WS event to seed the
     /// Mac empty-state composer with iPhone-typed prompt text (X1).
     static let composeDraftIncoming = Notification.Name("clawdmeter.workspace.composeDraftIncoming")
+
+    // MARK: - PR #185 — Code tab hover polish + composer chip shortcuts
+    //
+    // Used by `UsageStatusChip`, `PermissionModeChip`, `SessionStatusBadges`,
+    // and `CodeTabHoverShortcutUITests` to wire keyboard chords directly to
+    // the open composer without going through the menu bar.
+    static let composerAttach = Notification.Name("clawdmeter.workspace.composerAttach")
+    static let composerOpenModelEffort = Notification.Name("clawdmeter.workspace.composerOpenModelEffort")
+    static let composerOpenContextUsage = Notification.Name("clawdmeter.workspace.composerOpenContextUsage")
+    static let composerCycleEffortNext = Notification.Name("clawdmeter.workspace.composerCycleEffortNext")
+    static let composerCycleEffortPrevious = Notification.Name("clawdmeter.workspace.composerCycleEffortPrevious")
+    static let composerSetPermissionMode = Notification.Name("clawdmeter.workspace.composerSetPermissionMode")
+    static let renameOpenSession = Notification.Name("clawdmeter.workspace.renameOpenSession")
+    static let archiveOpenSession = Notification.Name("clawdmeter.workspace.archiveOpenSession")
 }

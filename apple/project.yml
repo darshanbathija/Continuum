@@ -404,6 +404,26 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdmeter.app/Clawdmeter"
 
+  # ───────────────────────────────────────────────────────────────
+  # Mac UI XCTest target — Code workspace hover/shortcut smoke tests.
+  # Hosted by the ClawdmeterMac application target.
+  # ───────────────────────────────────────────────────────────────
+  ClawdmeterMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: ClawdmeterMacUITests
+    dependencies:
+      - target: ClawdmeterMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.mac.uitests
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "76S62SDSD3"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: ClawdmeterMac
+
 schemes:
   Clawdmeter (Mac):
     build:
@@ -411,12 +431,14 @@ schemes:
         ClawdmeterMac: all
         ClawdmeterMacWidgets: all
         ClawdmeterMacTests: [test]
+        ClawdmeterMacUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - ClawdmeterMacTests
+        - ClawdmeterMacUITests
     archive:
       config: Release
     profile:
