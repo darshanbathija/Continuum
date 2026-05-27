@@ -81,6 +81,19 @@ struct SessionWorkspaceView: View {
         !effectiveShowReviewPane && workbenchState.workspaceWidth >= Self.gutterThreshold
     }
 
+    /// Diff needs space — bump the review pane to ~58% of the workspace
+    /// width when Diff is the selected tab. Other tabs stay at the
+    /// compact 380pt so the center chat keeps its breathing room.
+    private var reviewPaneWidth: CGFloat {
+        let workspace = CGFloat(workbenchState.workspaceWidth)
+        let isDiff = workbenchState.selectedRightPane == .diff
+        guard isDiff, workspace > 0 else { return 380 }
+        // Clamp so even on a narrow window Diff stays usable, and on a
+        // huge window it doesn't squeeze the center chat to nothing.
+        let target = workspace * 0.58
+        return max(560, min(target, workspace - 520))
+    }
+
     var body: some View {
         // A6 (foundation): tap the body-invalidation counter so downstream
         // PRs can assert independence between this parent and the extracted
@@ -194,7 +207,13 @@ struct SessionWorkspaceView: View {
                             }
                         )
                     }
-                    .frame(width: 380)
+                    // Diff is the one pane that's useless at the default
+                    // 380pt width — readers need to see ±50 cols at once.
+                    // Bump it to ~58% of the workspace when Diff is the
+                    // selected tab; the other tabs (Plan / Sources / PR /
+                    // Terminal) stay compact so the center chat keeps its
+                    // breathing room.
+                    .frame(width: reviewPaneWidth)
                     .padding(.leading, 5)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
@@ -561,6 +580,11 @@ private struct SidebarPane: View {
     @AppStorage("clawdmeter.sidebar.sorting")  private var sortingRaw: String  = SessionSorting.recency.rawValue
     @AppStorage("clawdmeter.sidebar.status")   private var statusRaw: String   = SessionStatusFilter.all.rawValue
 
+    /// History section is collapsed by default — older external sessions
+    /// clutter the sidebar and most of the time the user wants the active
+    /// repos at the top. Tapping the History row expands the list.
+    @AppStorage("clawdmeter.sidebar.historyExpanded") private var historyExpanded: Bool = false
+
     /// v0.5.4: rename sheet state. v0.5.9: split into a dedicated bool
     /// + data target — the `Binding(get:set:)` pattern for `isPresented:`
     /// didn't reliably trigger alert presentation; the canonical pattern
@@ -717,10 +741,17 @@ private struct SidebarPane: View {
             }
             filterMenu
             Button(action: { model.prepareNewSession(in: nil) }) {
-                TahoeIcon("folderPlus", size: 12)
-                    .foregroundStyle(t.fg3)
-                    .frame(width: 24, height: 24)
-                    .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                TahoeIcon("folderPlus", size: 15, weight: .semibold)
+                    .foregroundStyle(t.accent)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(t.accentAlpha(t.dark ? 0.18 : 0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(t.accentAlpha(0.32), lineWidth: 0.5)
+                    )
             }
             .buttonStyle(.plain)
             .help("New session")
@@ -1054,11 +1085,50 @@ private struct SidebarPane: View {
         }
         if !projection.historySections.isEmpty {
             historyDivider
-            priorityLabel("History")
-            ForEach(projection.historySections) { section in
-                historyRepoSection(section)
+            historyToggle(repoCount: projection.historySections.count)
+            if historyExpanded {
+                ForEach(projection.historySections) { section in
+                    historyRepoSection(section)
+                }
             }
         }
+    }
+
+    /// Collapsed-by-default "History" row. Looks like a sidebar item so
+    /// it sits cleanly at the bottom of the list; tapping toggles the
+    /// `historyExpanded` AppStorage which conditionally renders the
+    /// historyRepoSection list above this row.
+    private func historyToggle(repoCount: Int) -> some View {
+        Button(action: {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                historyExpanded.toggle()
+            }
+        }) {
+            HStack(spacing: 8) {
+                TahoeIcon(historyExpanded ? "chevD" : "chevR", size: 10)
+                    .foregroundStyle(t.fg3)
+                    .frame(width: 10)
+                Text("History")
+                    .font(.system(size: 10, weight: .bold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                if !historyExpanded && repoCount > 0 {
+                    Text("\(repoCount)")
+                        .font(TahoeFont.body(10.5, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(t.hair2, in: Capsule())
+                }
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 3)
+        }
+        .buttonStyle(.plain)
+        .help(historyExpanded ? "Hide older external sessions" : "Show older external sessions")
     }
 
     private func priorityLabel(_ title: String) -> some View {
@@ -1374,7 +1444,7 @@ private struct SidebarPane: View {
                 }
                 if visibleSessions.isEmpty && recentSessions.isEmpty {
                     Button(action: {
-                        model.prepareNewSession(in: repo.key)
+                        model.quickSpawnInRepo(repo.key)
                     }) {
                         HStack(spacing: 6) {
                             Image(systemName: "plus.circle")
@@ -1642,7 +1712,7 @@ private struct SidebarPane: View {
                 .help("\(repo.liveSessionCount) live JSONL — Conductor / Cursor / Terminal-launched agents writing now.")
             }
             Button {
-                model.prepareNewSession(in: repo.key)
+                model.quickSpawnInRepo(repo.key)
             } label: {
                 TahoeIcon("plus", size: 11, weight: .bold)
                     .foregroundStyle(t.fg3)
@@ -1650,7 +1720,13 @@ private struct SidebarPane: View {
                     .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(.plain)
-            .help("New workspace")
+            .help("New workspace — Codex · gpt-5.5 · max effort · plan mode (option-click to customize)")
+            // Option/Alt-click escape hatch: power users who want to
+            // pick a different agent/model/effort/path get the full
+            // sheet by holding Option while clicking the "+".
+            .simultaneousGesture(TapGesture().modifiers(.option).onEnded {
+                model.prepareNewSession(in: repo.key)
+            })
         }
         .padding(.horizontal, 10)
         .padding(.vertical, subtitle == nil ? 6 : 5)
@@ -2447,17 +2523,39 @@ private struct CenterThread: View {
                 .frame(maxWidth: 190)
                 .help(branchTooltip)
             }
-            TahoePill(tone: .chip) {
-                HStack(spacing: 5) {
-                    TahoeIcon("bolt", size: 10)
-                        .foregroundStyle(t.fg2)
-                    Text(permissionModeLabel)
-                        .font(TahoeFont.body(11))
-                        .foregroundStyle(t.fg2)
+            Menu {
+                Section("Mode") {
+                    ForEach(headerPermissionModes, id: \.self) { candidate in
+                        Button(action: {
+                            Task { await changePermissionMode(to: candidate) }
+                        }) {
+                            Label(
+                                candidate.displayName,
+                                systemImage: permissionModeStore.currentMode(for: session) == candidate ? "checkmark" : ""
+                            )
+                        }
+                    }
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
+            } label: {
+                TahoePill(tone: .chip) {
+                    HStack(spacing: 5) {
+                        TahoeIcon("bolt", size: 10)
+                            .foregroundStyle(t.fg2)
+                        Text(permissionModeLabel)
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(t.fg2)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 7, weight: .semibold))
+                            .foregroundStyle(t.fg3)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                }
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Permission mode")
             // v0.5.2: the prominent "Read-only" pill was dropped per user
             // feedback — the composer's "Continue here" placeholder + the
             // disabled-action menu state already signal read-only mode.
@@ -2554,6 +2652,17 @@ private struct CenterThread: View {
         case .plan: return "plan"
         case .bypass: return "bypass"
         }
+    }
+
+    /// Modes shown in the header pill's dropdown. Mirrors the composer
+    /// `PermissionModeChip` list, minus Cursor's plan-mode hole (Cursor
+    /// agents don't support `.plan` — see `availablePermissionModes` in
+    /// `ComposerInputCore`).
+    private var headerPermissionModes: [PermissionMode] {
+        if session.agent == .cursor {
+            return [.ask, .acceptEdits, .bypass]
+        }
+        return [.ask, .acceptEdits, .plan, .bypass]
     }
 
     private var workspaceDraftDefaults: ComposerStore.ChipDefaults {
@@ -4320,7 +4429,11 @@ private struct ReviewPane: View {
                 }
             )
         case .terminal:
-            TahoeTerminalCompactPane(session: session, chatStore: chatStore)
+            // Real PTY-backed terminal pointed at the session's repo.
+            // Reuses the same `TerminalTabContainer` (G12 multi-pane)
+            // wired to the daemon's WS port + bearer token, so the user
+            // gets a live shell instead of an echoed bash-tool summary.
+            terminalTab
         }
     }
 
@@ -5522,169 +5635,13 @@ private struct TahoePRCompactPane: View {
     }
 }
 
-private struct TahoeTerminalCompactPane: View {
-    @Environment(\.tahoe) private var t
-    let session: AgentSession
-    let chatStore: SessionChatStore?
-    @State private var scrollLocked = false
-    @State private var lockedLines: [TerminalLine]?
+// TahoeTerminalCompactPane was a static summary of past bash tool calls
+// (echoed `$ cmd` / `stdout` / `exit N` lines). The Term workbench tab
+// now embeds the live `TerminalTabContainer` instead — see the
+// `.terminal` case in `tabContent`. The compact summary is gone for now;
+// if a passive read-only summary is ever needed again, lift it from git
+// history.
 
-    private var lines: [TerminalLine] {
-        let pairs = (chatStore?.snapshot.items ?? []).flatMap { item -> [ToolPair] in
-            if case .toolRun(_, let pairs) = item { return pairs }
-            return []
-        }
-        return pairs.suffix(6).flatMap { pair -> [TerminalLine] in
-            let bash = pair.result?.bashResult ?? pair.call.bashResult
-            let command = bash?.command ?? pair.call.detail ?? pair.call.body
-            var out: [TerminalLine] = [TerminalLine(text: "$ \(command)", color: .muted)]
-            if let stdout = bash?.stdout?.split(separator: "\n").prefix(2), !stdout.isEmpty {
-                out.append(contentsOf: stdout.map { TerminalLine(text: String($0), color: .normal) })
-            }
-            if let stderr = bash?.stderr?.split(separator: "\n").prefix(1), !stderr.isEmpty {
-                out.append(contentsOf: stderr.map { TerminalLine(text: String($0), color: .error) })
-            }
-            if let exit = bash?.exitCode {
-                out.append(TerminalLine(text: "exit \(exit)", color: exit == 0 ? .success : .error))
-            }
-            return out
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            terminalToolbar
-            TahoeHairline()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if displayedLines.isEmpty {
-                        TerminalLine(text: "$ _", color: .muted).view(t)
-                    } else {
-                        ForEach(displayedLines) { line in
-                            line.view(t)
-                                .contextMenu {
-                                    Button("Copy line") { copy(line.text) }
-                                    Button("Explain error") {
-                                        ComposerInsertionInbox.shared.enqueue(text: "Explain this terminal output and suggest the next fix:\n\n```\n\(line.text)\n```\n", autoSend: false)
-                                    }
-                                    Button("Send to agent") {
-                                        ComposerInsertionInbox.shared.enqueue(text: "@terminal \(line.text)\n", autoSend: false)
-                                    }
-                                }
-                        }
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-        }
-        .background(t.dark ? Color.black.opacity(0.30) : Color.black.opacity(0.04))
-        .contextMenu {
-            Button("Open live terminal") {
-                NotificationCenter.default.post(name: .showRawTerminal, object: nil, userInfo: ["sessionId": session.id])
-            }
-        }
-    }
-
-    private var terminalToolbar: some View {
-        HStack(spacing: 8) {
-            Button("@terminal") {
-                ComposerInsertionInbox.shared.enqueue(text: "@terminal ", autoSend: false)
-            }
-            .font(TahoeFont.body(11, weight: .semibold))
-            .buttonStyle(.plain)
-            .help("Mention the terminal in the composer")
-            Toggle("Scroll lock", isOn: scrollLockBinding)
-                .toggleStyle(.checkbox)
-                .font(TahoeFont.body(11))
-                .help("Keep the preview from following new terminal lines")
-            Spacer()
-            ForEach(detectedPorts, id: \.self) { port in
-                Button(":\(port)") {
-                    if let url = URL(string: "http://127.0.0.1:\(port)") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .font(TahoeFont.mono(10.5, weight: .semibold))
-                .buttonStyle(.plain)
-                .help("Open localhost:\(port)")
-            }
-            Button("Live") {
-                NotificationCenter.default.post(name: .showRawTerminal, object: nil, userInfo: ["sessionId": session.id])
-            }
-            .font(TahoeFont.body(11, weight: .semibold))
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-    }
-
-    private var detectedPorts: [Int] {
-        let text = displayedLines.map(\.text).joined(separator: "\n")
-        guard let regex = try? NSRegularExpression(pattern: #"(?:localhost|127\.0\.0\.1|0\.0\.0\.0):([0-9]{2,5})|port\s+([0-9]{2,5})"#, options: [.caseInsensitive]) else {
-            return []
-        }
-        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        var out: [Int] = []
-        for match in regex.matches(in: text, range: nsRange) {
-            for idx in 1...2 {
-                guard let range = Range(match.range(at: idx), in: text),
-                      let port = Int(text[range]),
-                      (1...65535).contains(port),
-                      !out.contains(port)
-                else { continue }
-                out.append(port)
-            }
-        }
-        return Array(out.prefix(4))
-    }
-
-    private var displayedLines: [TerminalLine] {
-        lockedLines ?? lines
-    }
-
-    private var scrollLockBinding: Binding<Bool> {
-        Binding(
-            get: { scrollLocked },
-            set: { newValue in
-                scrollLocked = newValue
-                lockedLines = newValue ? lines : nil
-            }
-        )
-    }
-
-    private func copy(_ value: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-    }
-
-    private struct TerminalLine: Identifiable {
-        enum LineColor { case muted, normal, success, error }
-        let id = UUID()
-        let text: String
-        let color: LineColor
-
-        func view(_ t: TahoeTokens) -> some View {
-            Text(text)
-                .font(TahoeFont.mono(11.5))
-                .foregroundStyle(foreground(t))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .textSelection(.enabled)
-                .padding(.vertical, 2)
-        }
-
-        private func foreground(_ t: TahoeTokens) -> Color {
-            switch color {
-            case .muted: return t.fg3
-            case .normal: return t.fg2
-            case .success: return Color.green
-            case .error: return Color.red
-            }
-        }
-    }
-}
 
 private struct TahoeEmptyReviewState: View {
     @Environment(\.tahoe) private var t
