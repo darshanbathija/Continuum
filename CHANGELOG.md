@@ -4,6 +4,27 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.30 build 169] - 2026-05-28 - Collapsed transcript projection (`darshanbathija/collapse-status`)
+
+### Added
+
+- **Collapsed transcript projection for chat threads.** Mac and iOS chat surfaces now group each user turn around the latest assistant answer, hiding noisy intermediate tool/result rows behind an expandable "worked for" summary while preserving full transcript access.
+- **Output and edit chips on collapsed turns.** Collapsed turns surface generated artifacts and edited-file summaries so users can jump to important outputs without expanding every hidden row.
+
+### Fixed
+
+- **Collapsed chat caches refresh when transcript content changes.** iOS snapshots with legacy/stale counters now receive a local counter bump when transcript items change, so collapsed projections refresh without hashing every transcript row in SwiftUI.
+- **Streaming tool output stays visible while a turn is running.** Collapsed projection now waits for the final assistant answer before hiding intermediate tool/result rows behind the "worked for" summary.
+- **Mac artifact chips resolve relative paths from the session workspace.** Popped-out and Chat V2 transcript artifact buttons now resolve relative paths from the session runtime/worktree/repo root instead of the app process working directory.
+- **Jump-to-last-user targets the visible turn anchor.** The transcript shortcut now skips synthetic tool-result user rows and expands the collapsed turn before scrolling.
+
+### Tests
+
+- Added regression coverage that unfinished streaming turns keep active tool output visible instead of collapsing it early.
+- Verified `swift test --package-path apple/ClawdmeterShared`, Mac debug build, and iOS simulator debug build.
+
+Bumps `MARKETING_VERSION` 0.29.29 -> 0.29.30, `CURRENT_PROJECT_VERSION` 168 -> 169.
+
 ## [Unreleased]
 
 ### Added

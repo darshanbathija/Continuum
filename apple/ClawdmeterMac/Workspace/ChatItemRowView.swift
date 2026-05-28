@@ -236,10 +236,10 @@ struct ChatItemRowContent: View {
     /// single `toolRunGroup` collapsed pill.
     @ViewBuilder
     private func toolRunBody(runId: String, pairs: [ToolPair]) -> some View {
-        let editPairs = pairs.filter { $0.call.editStats != nil }
+        let editPairs = pairs.filter { !TranscriptEditedFile.from($0.call).isEmpty }
         let askPairs  = pairs.filter { $0.call.askUserQuestion != nil }
         let otherPairs = pairs.filter {
-            $0.call.editStats == nil && $0.call.askUserQuestion == nil
+            TranscriptEditedFile.from($0.call).isEmpty && $0.call.askUserQuestion == nil
         }
         VStack(alignment: .leading, spacing: 6) {
             ForEach(editPairs) { pair in
@@ -250,6 +250,23 @@ struct ChatItemRowContent: View {
                         resultBody: pair.result?.body,
                         density: payload.density
                     )
+                    .id("pair:\(pair.id)")
+                } else {
+                    let files = TranscriptEditedFile.from(pair.call)
+                    ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
+                        EditDiffRow(
+                            stats: EditStats(
+                                kind: .edit,
+                                filePath: file.filePath,
+                                additions: file.additions,
+                                deletions: file.deletions
+                            ),
+                            editDiff: pair.call.editDiff,
+                            resultBody: pair.result?.body,
+                            density: payload.density
+                        )
+                        .id(index == 0 ? "pair:\(pair.id)" : "pair:\(pair.id):\(file.filePath)")
+                    }
                 }
             }
             ForEach(askPairs) { pair in
@@ -442,6 +459,7 @@ struct ChatItemRowContent: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(pairs) { pair in
                     toolPairRow(pair)
+                        .id("pair:\(pair.id)")
                 }
             }
             .padding(.leading, 16)

@@ -205,7 +205,7 @@ public final class SessionChatStore {
             var prev: ChatMessage? = nil
             var realPromptAt: Date? = nil
             for msg in messages {
-                if msg.kind == .userText, prev?.kind != .toolResult {
+                if PromptBoundary.isRealPrompt(msg, previous: prev) {
                     realPromptAt = msg.at
                 }
                 prev = msg
@@ -2454,7 +2454,7 @@ actor StagingParser {
         "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
         "png", "jpg", "jpeg", "gif", "svg", "webp", "tiff",
         "mp4", "mov", "mp3", "wav",
-        "csv", "tsv", "md", "markdown", "mdown",
+        "csv", "tsv", "md", "markdown", "mdown", "html", "htm",
         "zip", "tar", "gz",
     ]
 
