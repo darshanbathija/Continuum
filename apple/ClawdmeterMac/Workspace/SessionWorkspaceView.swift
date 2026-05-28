@@ -1137,6 +1137,12 @@ private struct SidebarPane: View {
         let workbenchPRStateBySession: [UUID: String?] = prSnapshot.reduce(into: [:]) { acc, kv in
             acc[kv.key] = kv.value.state
         }
+        // v0.29.28: pull the manually-registered workspace keys (Add Repo
+        // flow) so the projection can pull those repos out of "Active
+        // outside Clawdmeter" / "History" and into Managed.
+        let workspaceRepoKeys: Set<String> = Set(
+            model.workspaceStore.all().map { RepoIdentity.normalize($0.repoRoot) }
+        )
         let key = SidebarProjectionKey(
             registryFingerprint: SidebarProjectionBuilder.registryFingerprint(sessions),
             reposFingerprint: SidebarProjectionBuilder.reposFingerprint(repos),
@@ -1149,7 +1155,8 @@ private struct SidebarPane: View {
             sorting: sorting,
             pinnedSet: presentationStore.snapshot.pinnedSessionIds,
             ownedJSONLPathsFingerprint: SidebarProjectionBuilder.ownedJSONLPathsFingerprint(ownedJSONLPaths),
-            externalActivityClockBucket: SidebarProjectionBuilder.externalActivityClockBucket(now: now, repos: repos)
+            externalActivityClockBucket: SidebarProjectionBuilder.externalActivityClockBucket(now: now, repos: repos),
+            workspaceRepoKeysFingerprint: SidebarProjectionBuilder.workspaceRepoKeysFingerprint(workspaceRepoKeys)
         )
         return projectionCache.value(for: key) {
             SidebarProjectionBuilder.build(
@@ -1163,6 +1170,7 @@ private struct SidebarPane: View {
                 pinnedSessionIds: presentationStore.snapshot.pinnedSessionIds,
                 workbenchPRStateBySession: workbenchPRStateBySession,
                 ownedJSONLPaths: ownedJSONLPaths,
+                workspaceRepoKeys: workspaceRepoKeys,
                 now: now
             )
         }
@@ -1280,6 +1288,16 @@ private struct SidebarPane: View {
     private func workspaceSection(_ section: SidebarWorkspaceSection) -> some View {
         let sectionID = "workspace:\(section.id)"
         let isExpanded = isPrioritySectionExpanded(sectionID)
+        // v0.29.29: import-a-repo should be a clean slate. Earlier v0.29.28
+        // rendered the repo's historical JSONLs underneath the workspace
+        // header so users wouldn't lose access to past sessions; turns
+        // out the user expects "import" to mean "start fresh here." Only
+        // Clawdmeter-spawned `AgentSession` rows render under Managed
+        // now. Historical JSONLs remain reachable from the History
+        // section at the bottom of the sidebar when the user expands
+        // it — but only when the repo is NOT workspace-managed
+        // (managed repos skip the external/history split entirely so
+        // their recents stay out of sight).
         return VStack(alignment: .leading, spacing: 0) {
             repoHeader(
                 section.repo,
@@ -1304,7 +1322,7 @@ private struct SidebarPane: View {
                 section.repo,
                 isExpanded: isExpanded,
                 sessionCount: section.recents.count,
-                subtitle: "Active in the last 10 min",
+                subtitle: "Active in the last 5 min",
                 onToggle: { togglePrioritySection(sectionID) }
             )
             if isExpanded {
