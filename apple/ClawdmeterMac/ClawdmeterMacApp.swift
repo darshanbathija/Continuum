@@ -298,6 +298,8 @@ private struct PoppedChatThread: View {
     let session: AgentSession
     @ObservedObject var model: SessionsModel
     @State private var composerText: String = ""
+    @State private var expandedTurns: Set<String> = []
+    @State private var projectionCache = SingleSlotProjectionCache<TranscriptProjectionCacheKey, TranscriptProjection>()
 
     init(store: SessionChatStore, session: AgentSession, model: SessionsModel) {
         self.store = store
@@ -307,24 +309,20 @@ private struct PoppedChatThread: View {
     }
 
     var body: some View {
+        let projection = projectionCache.value(
+            for: TranscriptProjectionCacheKey(updateCounter: messagesSlice.updateCounter, mode: .latestAnswerOnly)
+        ) {
+            TranscriptTurnProjector.project(
+                items: messagesSlice.items,
+                messages: messagesSlice.messages,
+                mode: .latestAnswerOnly
+            )
+        }
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(messagesSlice.messages) { msg in
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: msg.kind == .userText
-                                ? "person.fill"
-                                : (msg.kind == .toolCall ? "wrench" : "sparkle"))
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 16)
-                            Text(msg.body)
-                                .font(.system(size: 12, design: msg.kind == .toolCall ? .monospaced : .default))
-                                .foregroundStyle(.primary)
-                                .lineLimit(msg.kind == .toolResult ? 3 : nil)
-                                .textSelection(.enabled)
-                        }
-                        .padding(.horizontal, 12)
+                    ForEach(projection.turns) { turn in
+                        poppedTurnRow(turn)
                     }
                     Color.clear.frame(height: 8).id("bottom")
                 }
@@ -348,6 +346,130 @@ private struct PoppedChatThread: View {
                 .disabled(composerText.isEmpty)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func poppedTurnRow(_ turn: TranscriptTurn) -> some View {
+        if turn.prompt == nil {
+            ForEach(turn.visibleItems) { item in poppedItemRow(item) }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(promptItems(turn)) { item in poppedItemRow(item) }
+                poppedDisclosureRow(turn)
+                if turn.hasCollapsedContent, expandedTurns.contains(turn.id) {
+                    ForEach(turn.hiddenItems) { item in poppedItemRow(item) }
+                }
+                ForEach(finalItems(turn)) { item in poppedItemRow(item) }
+                poppedChipStrip(turn)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func poppedDisclosureRow(_ turn: TranscriptTurn) -> some View {
+        let isOpen = expandedTurns.contains(turn.id)
+        if turn.hasCollapsedContent {
+            Button {
+                if isOpen {
+                    expandedTurns.remove(turn.id)
+                } else {
+                    expandedTurns.insert(turn.id)
+                }
+            } label: {
+                Label(
+                    turn.summary.disclosureLabel,
+                    systemImage: isOpen ? "chevron.down" : "chevron.right"
+                )
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+        } else {
+            Label(turn.summary.disclosureLabel, systemImage: "clock")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+        }
+    }
+
+    @ViewBuilder
+    private func poppedItemRow(_ item: ChatItem) -> some View {
+        switch item {
+        case .message(let msg):
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: msg.kind == .userText
+                    ? "person.fill"
+                    : (msg.kind == .toolCall ? "wrench" : "sparkle"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                Text(ClawdmeterMac_displaySkillInvocations(in: msg.body))
+                    .font(.system(size: 12, design: msg.kind == .toolCall ? .monospaced : .default))
+                    .foregroundStyle(.primary)
+                    .lineLimit(msg.kind == .toolResult ? 3 : nil)
+                    .textSelection(.enabled)
+            }
+            .padding(.horizontal, 12)
+            .id(msg.id)
+        case .toolRun(_, let pairs):
+            VStack(alignment: .leading, spacing: 5) {
+                Text(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(pairs) { pair in
+                    Text("\(pair.call.title): \(pair.call.body)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .id("pair:\(pair.id)")
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+    }
+
+    private func promptItems(_ turn: TranscriptTurn) -> [ChatItem] {
+        guard let promptId = turn.prompt?.id else { return [] }
+        return turn.visibleItems.filter {
+            if case .message(let message) = $0 { return message.id == promptId }
+            return false
+        }
+    }
+
+    private func finalItems(_ turn: TranscriptTurn) -> [ChatItem] {
+        let promptId = turn.prompt?.id
+        return turn.visibleItems.filter {
+            if case .message(let message) = $0 { return message.id != promptId }
+            return true
+        }
+    }
+
+    @ViewBuilder
+    private func poppedChipStrip(_ turn: TranscriptTurn) -> some View {
+        if !turn.outputArtifacts.isEmpty || !turn.editedFiles.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(turn.outputArtifacts.prefix(4)) { artifact in
+                    Button {
+                        if artifact.kind == .markdown {
+                            model.openWorkspaceDocumentTab(from: session, path: artifact.path)
+                        } else {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: NSString(string: artifact.path).expandingTildeInPath))
+                        }
+                    } label: {
+                        Label(artifact.filename, systemImage: artifact.kind == .markdown ? "doc.richtext" : "arrow.up.right.square")
+                            .font(.system(size: 10.5, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(turn.editedFiles.prefix(4)) { file in
+                    Label(file.basename, systemImage: "pencil")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 34)
         }
     }
 

@@ -19,7 +19,6 @@ public struct GeneratedArtifact: Identifiable, Hashable, Sendable, Codable {
 }
 
 public enum GeneratedArtifactDetector {
-    private static let markdownExtensions: Set<String> = ["md", "markdown", "mdown"]
     private static let pathKeys: Set<String> = [
         "path", "file", "file_path", "filePath", "filepath",
         "target", "target_path", "targetPath", "destination",
@@ -37,7 +36,7 @@ public enum GeneratedArtifactDetector {
     ]
 
     public static func isMarkdownPath(_ path: String) -> Bool {
-        markdownExtensions.contains((path as NSString).pathExtension.lowercased())
+        TranscriptArtifactClassifier.isMarkdownPath(path)
     }
 
     public static func artifacts(fromToolInput input: Any?, toolName: String) -> [GeneratedArtifact] {

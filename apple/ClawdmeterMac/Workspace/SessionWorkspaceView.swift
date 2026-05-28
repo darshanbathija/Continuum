@@ -3813,6 +3813,7 @@ private struct ChatThreadScroll: View {
     @State private var showingFindBar = false
     @State private var findQuery = ""
     @State private var selectedMatchIndex: Int?
+    @State private var projectionCache = SingleSlotProjectionCache<TranscriptProjectionCacheKey, TranscriptProjection>()
     @FocusState private var findFocused: Bool
 
     var body: some View {
@@ -3825,6 +3826,7 @@ private struct ChatThreadScroll: View {
         // `BodyInvalidationCounter.enabled` is false (production).
         let _ = BodyInvalidationCounter.bump("ChatThreadScroll")
         let streamingTailId = streamingTailItemId
+        let projection = transcriptProjection
         return ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
@@ -3834,13 +3836,13 @@ private struct ChatThreadScroll: View {
                                 .padding(.top, 10)
                                 .padding(.bottom, 4)
                         }
-                        if messagesSlice.items.isEmpty && !liveStatusSlice.isLoading {
+                        if projection.turns.isEmpty && !liveStatusSlice.isLoading {
                             emptyState
                                 .frame(maxWidth: .infinity)
                         } else {
-                            ForEach(messagesSlice.items) { item in
-                                rowView(for: item, streamingTailId: streamingTailId)
-                                    .id(item.id)
+                            ForEach(projection.turns) { turn in
+                                collapsedTurnView(turn, streamingTailId: streamingTailId)
+                                    .id(turn.id)
                                     .padding(rowInsets)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -3952,7 +3954,7 @@ private struct ChatThreadScroll: View {
                 // Jump-to-latest CTA. Visible whenever the user has
                 // scrolled away from the bottom (a new turn lands while
                 // they're reading history). Click → scroll-to-last-item.
-                if !userPinnedToBottom, !messagesSlice.items.isEmpty {
+                if !userPinnedToBottom, !projection.turns.isEmpty {
                     Button(action: {
                         autoScrollTask?.cancel()
                         autoScrollTask = Task { @MainActor in
@@ -4003,6 +4005,18 @@ private struct ChatThreadScroll: View {
     @State private var autoScrollTask: Task<Void, Never>?
     @State private var isLoadingEarlierHistory: Bool = false
     @State private var suppressBottomGeometryUntil: Date = .distantPast
+
+    private var transcriptProjection: TranscriptProjection {
+        projectionCache.value(
+            for: TranscriptProjectionCacheKey(updateCounter: messagesSlice.updateCounter, mode: .latestAnswerOnly)
+        ) {
+            TranscriptTurnProjector.project(
+                items: messagesSlice.items,
+                messages: messagesSlice.messages,
+                mode: .latestAnswerOnly
+            )
+        }
+    }
 
     private var rowInsets: EdgeInsets {
         switch density {
@@ -4107,7 +4121,24 @@ private struct ChatThreadScroll: View {
         let next = (current + delta + matches.count) % matches.count
         selectedMatchIndex = next
         userPinnedToBottom = false
-        scrollTranscript(proxy, to: matches[next].id, anchor: .center)
+        let message = matches[next]
+        if let anchor = transcriptProjection.anchorByMessageId[message.id] {
+            if anchor.isHidden {
+                expanded.insert(anchor.turnId)
+                if let runId = anchor.runId {
+                    expanded.insert("run:\(runId)")
+                }
+                if let pairId = anchor.pairId {
+                    expanded.insert("pair:\(pairId)")
+                }
+            }
+            Task { @MainActor in
+                await Task.yield()
+                scrollTranscript(proxy, to: anchor.itemId, anchor: .center)
+            }
+        } else {
+            scrollTranscript(proxy, to: message.id, anchor: .center)
+        }
     }
 
     private func jumpToLastUserMessage(_ proxy: ScrollViewProxy) {
@@ -4266,6 +4297,150 @@ private struct ChatThreadScroll: View {
         }
     }
 
+    @ViewBuilder
+    private func collapsedTurnView(_ turn: TranscriptTurn, streamingTailId: String?) -> some View {
+        if turn.prompt == nil {
+            ForEach(turn.visibleItems) { item in
+                rowView(for: item, streamingTailId: streamingTailId)
+                    .id(item.id)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(turnPromptItems(turn)) { item in
+                    rowView(for: item, streamingTailId: streamingTailId)
+                        .id(item.id)
+                }
+                collapsedDisclosureRow(turn)
+                    .id("\(turn.id):disclosure")
+                if turn.hasCollapsedContent, expanded.contains(turn.id) {
+                    ForEach(turn.hiddenItems) { item in
+                        rowView(for: item, streamingTailId: streamingTailId)
+                            .id(item.id)
+                    }
+                }
+                ForEach(turnFinalItems(turn)) { item in
+                    rowView(for: item, streamingTailId: streamingTailId)
+                        .id(item.id)
+                }
+                turnChipStrip(turn)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func turnPromptItems(_ turn: TranscriptTurn) -> [ChatItem] {
+        guard let promptId = turn.prompt?.id else { return [] }
+        return turn.visibleItems.filter { item in
+            if case .message(let message) = item { return message.id == promptId }
+            return false
+        }
+    }
+
+    private func turnFinalItems(_ turn: TranscriptTurn) -> [ChatItem] {
+        let promptId = turn.prompt?.id
+        guard let finalId = turn.finalAssistant?.id, finalId != promptId else {
+            return turn.visibleItems.filter { item in
+                if case .message(let message) = item { return message.id != promptId }
+                return true
+            }
+        }
+        return turn.visibleItems.filter { item in
+            if case .message(let message) = item { return message.id != promptId }
+            return true
+        }
+    }
+
+    @ViewBuilder
+    private func collapsedDisclosureRow(_ turn: TranscriptTurn) -> some View {
+        let isOpen = expanded.contains(turn.id)
+        if turn.hasCollapsedContent {
+            Button {
+                if isOpen {
+                    expanded.remove(turn.id)
+                } else {
+                    expanded.insert(turn.id)
+                }
+            } label: {
+                collapsedDisclosureLabel(
+                    turn,
+                    icon: isOpen ? "chevron.down" : "chevron.right"
+                )
+            }
+            .buttonStyle(.plain)
+            .help(isOpen ? "Collapse hidden transcript rows" : "Show hidden transcript rows")
+        } else {
+            collapsedDisclosureLabel(turn, icon: "clock")
+                .help(turn.summary.disclosureLabel)
+        }
+    }
+
+    private func collapsedDisclosureLabel(_ turn: TranscriptTurn, icon: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(t.fg4)
+                .frame(width: 10)
+            Text(turn.summary.disclosureLabel)
+                .font(TahoeFont.body(11, weight: .semibold))
+                .foregroundStyle(t.fg3)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(t.hair2, in: Capsule(style: .continuous))
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func turnChipStrip(_ turn: TranscriptTurn) -> some View {
+        let artifacts = turn.outputArtifacts
+        let files = turn.editedFiles
+        if !artifacts.isEmpty || !files.isEmpty {
+            HStack(spacing: 8) {
+                ForEach(artifacts.prefix(6)) { artifact in
+                    Button {
+                        openTranscriptArtifact(artifact)
+                    } label: {
+                        transcriptChip(
+                            icon: iconName(for: artifact.kind),
+                            title: artifact.filename,
+                            tint: artifact.kind == .markdown ? t.accent : t.fg3
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(helpText(for: artifact))
+                }
+                ForEach(files.prefix(6)) { file in
+                    transcriptChip(
+                        icon: "pencil.and.scribble",
+                        title: "\(file.basename) \(editDeltaLabel(file))",
+                        tint: SessionsV2Theme.success
+                    )
+                    .help(file.filePath)
+                }
+            }
+            .padding(.leading, 38)
+            .padding(.top, 2)
+        }
+    }
+
+    private func transcriptChip(icon: String, title: String, tint: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(tint)
+            Text(title)
+                .font(TahoeFont.body(11, weight: .semibold))
+                .foregroundStyle(t.fg2)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(t.hair2, in: Capsule(style: .continuous))
+    }
+
     /// Project the parent's observed state into a value-typed
     /// payload the row view can compare via `==`. Building this once
     /// per row per body pass is cheap — every field is either a
@@ -4413,6 +4588,60 @@ private struct ChatThreadScroll: View {
             }
         }
         return nil
+    }
+
+    private func openTranscriptArtifact(_ artifact: TranscriptOutputArtifact) {
+        if artifact.kind == .markdown {
+            model.openWorkspaceDocumentTab(from: session, path: artifact.path)
+            return
+        }
+        guard let url = resolvedTranscriptArtifactURL(artifact.path) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func resolvedTranscriptArtifactURL(_ path: String) -> URL? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("~") {
+            return URL(fileURLWithPath: NSString(string: trimmed).expandingTildeInPath)
+        }
+        if trimmed.hasPrefix("/") {
+            return URL(fileURLWithPath: trimmed)
+        }
+        if let root = transcriptPathRoot {
+            return root.appendingPathComponent(trimmed)
+        }
+        return URL(fileURLWithPath: trimmed)
+    }
+
+    private func helpText(for artifact: TranscriptOutputArtifact) -> String {
+        switch artifact.kind {
+        case .markdown:
+            return "Open Markdown document in Code tab"
+        case .html, .image, .pdf, .document, .spreadsheet, .presentation, .media, .archive, .data:
+            return "Open \(artifact.path)"
+        }
+    }
+
+    private func iconName(for kind: TranscriptArtifactKind) -> String {
+        switch kind {
+        case .markdown: return "doc.richtext"
+        case .html: return "safari"
+        case .image: return "photo"
+        case .pdf: return "doc.text.magnifyingglass"
+        case .document: return "doc.text"
+        case .spreadsheet: return "tablecells"
+        case .presentation: return "rectangle.on.rectangle"
+        case .media: return "play.rectangle"
+        case .archive: return "archivebox"
+        case .data: return "tablecells.badge.ellipsis"
+        }
+    }
+
+    private func editDeltaLabel(_ file: TranscriptEditedFile) -> String {
+        let additions = file.additions > 0 ? "+\(file.additions)" : ""
+        let deletions = file.deletions > 0 ? "-\(file.deletions)" : ""
+        return [additions, deletions].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     /// v0.5.6 — fire-and-forget answer send for AskUserQuestion. Mirrors

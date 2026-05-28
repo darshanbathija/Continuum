@@ -690,13 +690,24 @@ private struct TranscriptScroll: View {
     var isLoadingOlder: Bool = false
     var onLoadOlder: (() async -> Void)? = nil
     @State private var pinned = true
+    @State private var expandedTurns: Set<String> = []
+    @State private var projectionCache = SingleSlotProjectionCache<TranscriptProjectionCacheKey, TranscriptProjection>()
     private static let bottomSentinelId = "chat-v2-bottom-sentinel"
 
-    private var visibleItems: ArraySlice<ChatItem> {
-        onLoadOlder == nil ? items.suffix(200) : items[...]
+    private var transcriptProjection: TranscriptProjection {
+        projectionCache.value(
+            for: TranscriptProjectionCacheKey(updateCounter: updateCounter, mode: .latestAnswerOnly)
+        ) {
+            TranscriptTurnProjector.project(items: items, mode: .latestAnswerOnly)
+        }
+    }
+
+    private func visibleTurns(_ projection: TranscriptProjection) -> ArraySlice<TranscriptTurn> {
+        onLoadOlder == nil ? projection.turns.suffix(100) : projection.turns[...]
     }
 
     var body: some View {
+        let projection = transcriptProjection
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -718,8 +729,9 @@ private struct TranscriptScroll: View {
                         .disabled(isLoadingOlder)
                         .frame(maxWidth: .infinity)
                     }
-                    ForEach(visibleItems) { item in
-                        MessageRow(item: item).id(item.id)
+                    ForEach(visibleTurns(projection)) { turn in
+                        collapsedTurnRow(turn)
+                            .id(turn.id)
                     }
                     Color.clear.frame(height: 12).id(Self.bottomSentinelId)
                 }
@@ -747,6 +759,121 @@ private struct TranscriptScroll: View {
                     proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func collapsedTurnRow(_ turn: TranscriptTurn) -> some View {
+        if turn.prompt == nil {
+            ForEach(turn.visibleItems) { item in
+                MessageRow(item: item).id(item.id)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(promptItems(turn)) { item in
+                    MessageRow(item: item).id(item.id)
+                }
+                disclosureButton(turn)
+                if turn.hasCollapsedContent, expandedTurns.contains(turn.id) {
+                    ForEach(turn.hiddenItems) { item in
+                        MessageRow(item: item).id(item.id)
+                    }
+                }
+                ForEach(finalItems(turn)) { item in
+                    MessageRow(item: item).id(item.id)
+                }
+                compactChipStrip(turn)
+            }
+        }
+    }
+
+    private func promptItems(_ turn: TranscriptTurn) -> [ChatItem] {
+        guard let promptId = turn.prompt?.id else { return [] }
+        return turn.visibleItems.filter {
+            if case .message(let message) = $0 { return message.id == promptId }
+            return false
+        }
+    }
+
+    private func finalItems(_ turn: TranscriptTurn) -> [ChatItem] {
+        let promptId = turn.prompt?.id
+        return turn.visibleItems.filter {
+            if case .message(let message) = $0 { return message.id != promptId }
+            return true
+        }
+    }
+
+    @ViewBuilder
+    private func disclosureButton(_ turn: TranscriptTurn) -> some View {
+        let isOpen = expandedTurns.contains(turn.id)
+        if turn.hasCollapsedContent {
+            Button {
+                if isOpen { expandedTurns.remove(turn.id) } else { expandedTurns.insert(turn.id) }
+            } label: {
+                disclosureLabel(turn, icon: isOpen ? "chevron.down" : "chevron.right")
+            }
+            .buttonStyle(.plain)
+        } else {
+            disclosureLabel(turn, icon: "clock")
+        }
+    }
+
+    private func disclosureLabel(_ turn: TranscriptTurn, icon: String) -> some View {
+        Label(turn.summary.disclosureLabel, systemImage: icon)
+            .font(TahoeFont.body(10.5, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(0.045), in: Capsule())
+    }
+
+    @ViewBuilder
+    private func compactChipStrip(_ turn: TranscriptTurn) -> some View {
+        if !turn.outputArtifacts.isEmpty || !turn.editedFiles.isEmpty {
+            HStack(spacing: 7) {
+                ForEach(turn.outputArtifacts.prefix(4)) { artifact in
+                    Button {
+                        openArtifact(artifact)
+                    } label: {
+                        compactChip(icon: iconName(for: artifact.kind), title: artifact.filename)
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(turn.editedFiles.prefix(4)) { file in
+                    compactChip(icon: "pencil.and.scribble", title: file.basename)
+                }
+            }
+            .padding(.leading, 38)
+        }
+    }
+
+    private func compactChip(icon: String, title: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+            Text(title).lineLimit(1).truncationMode(.middle)
+        }
+        .font(TahoeFont.body(10.5, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.045), in: Capsule())
+    }
+
+    private func openArtifact(_ artifact: TranscriptOutputArtifact) {
+        NSWorkspace.shared.open(URL(fileURLWithPath: NSString(string: artifact.path).expandingTildeInPath))
+    }
+
+    private func iconName(for kind: TranscriptArtifactKind) -> String {
+        switch kind {
+        case .markdown: return "doc.richtext"
+        case .html: return "safari"
+        case .image: return "photo"
+        case .pdf: return "doc.text.magnifyingglass"
+        case .document: return "doc.text"
+        case .spreadsheet, .data: return "tablecells"
+        case .presentation: return "rectangle.on.rectangle"
+        case .media: return "play.rectangle"
+        case .archive: return "archivebox"
         }
     }
 }
@@ -804,9 +931,36 @@ private struct MessageRow: View {
                     .foregroundStyle(t.fg4)
             }
         case .toolRun(_, let pairs):
-            Text(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
-                .font(TahoeFont.body(10.5))
-                .foregroundStyle(t.fg3)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(pairs.count == 1 ? "Ran 1 command" : "Ran \(pairs.count) commands")
+                    .font(TahoeFont.body(10.5, weight: .semibold))
+                    .foregroundStyle(t.fg3)
+                ForEach(pairs) { pair in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            TahoeIcon("terminal", size: 10).foregroundStyle(t.fg3)
+                            Text(pair.call.title)
+                                .font(TahoeFont.mono(10.5, weight: .semibold))
+                                .foregroundStyle(t.fg2)
+                            Text(pair.call.body)
+                                .font(TahoeFont.mono(10.5))
+                                .foregroundStyle(t.fg3)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                        }
+                        if let result = pair.result, !result.body.isEmpty {
+                            Text(result.body)
+                                .font(TahoeFont.mono(10.5))
+                                .foregroundStyle(result.isError ? .red : t.fg3)
+                                .lineLimit(6)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .padding(8)
+                    .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+                    .id("pair:\(pair.id)")
+                }
+            }
         }
     }
 }

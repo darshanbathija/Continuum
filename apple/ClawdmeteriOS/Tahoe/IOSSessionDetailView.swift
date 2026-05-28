@@ -99,6 +99,8 @@ public struct IOSSessionDetailView: View {
     @State private var isDispatchingQueuedDraft: Bool = false
     @State private var dispatchedQueuedTurnForCurrentIdle: Bool = false
     @State private var chatPanePinned: Bool = true
+    @State private var expandedTranscriptTurns: Set<String> = []
+    @State private var projectionCache = SingleSlotProjectionCache<TranscriptProjectionCacheKey, TranscriptProjection>()
     @State private var attachments: [ComposerAttachment] = []
     @State private var photoPickerItems: [PhotosPickerItem] = []
     @State private var documentTabs: [IOSWorkspaceDocumentTab] = []
@@ -768,6 +770,11 @@ public struct IOSSessionDetailView: View {
     /// a session and stays on the Chat tab.
     @ViewBuilder
     private var chatPane: some View {
+        let projection = projectionCache.value(
+            for: TranscriptProjectionCacheKey(updateCounter: chatStore.snapshot.updateCounter, mode: .latestAnswerOnly)
+        ) {
+            TranscriptTurnProjector.project(items: chatStore.snapshot.items, mode: .latestAnswerOnly)
+        }
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
@@ -801,14 +808,8 @@ public struct IOSSessionDetailView: View {
                                 )
                             }
                         } else {
-                            ForEach(chatStore.snapshot.items.suffix(200)) { item in
-                                IOSWireChatItemRow(
-                                    item: item,
-                                    sessionId: sessionId,
-                                    provider: session?.agent ?? .claude,
-                                    presentationStore: presentationStore,
-                                    onOpenMarkdownDocument: openMarkdownDocument
-                                )
+                            ForEach(projection.turns.suffix(100)) { turn in
+                                iosCollapsedTurnRow(turn)
                             }
                             if !planSteps.isEmpty {
                                 IOSPlanHaloMini(
@@ -870,6 +871,139 @@ public struct IOSSessionDetailView: View {
             .refreshable {
                 await agentClient.refreshAll()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func iosCollapsedTurnRow(_ turn: TranscriptTurn) -> some View {
+        if turn.prompt == nil {
+            ForEach(turn.visibleItems) { item in
+                iosTranscriptItemRow(item)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(iosPromptItems(turn)) { item in
+                    iosTranscriptItemRow(item)
+                }
+                iosDisclosureButton(turn)
+                if turn.hasCollapsedContent, expandedTranscriptTurns.contains(turn.id) {
+                    ForEach(turn.hiddenItems) { item in
+                        iosTranscriptItemRow(item)
+                    }
+                }
+                ForEach(iosFinalItems(turn)) { item in
+                    iosTranscriptItemRow(item)
+                }
+                iosTurnChipStrip(turn)
+            }
+        }
+    }
+
+    private func iosTranscriptItemRow(_ item: ChatItem) -> some View {
+        IOSWireChatItemRow(
+            item: item,
+            sessionId: sessionId,
+            provider: session?.agent ?? .claude,
+            presentationStore: presentationStore,
+            onOpenMarkdownDocument: openMarkdownDocument
+        )
+        .id(item.id)
+    }
+
+    private func iosPromptItems(_ turn: TranscriptTurn) -> [ChatItem] {
+        guard let promptId = turn.prompt?.id else { return [] }
+        return turn.visibleItems.filter {
+            if case .message(let message) = $0 { return message.id == promptId }
+            return false
+        }
+    }
+
+    private func iosFinalItems(_ turn: TranscriptTurn) -> [ChatItem] {
+        let promptId = turn.prompt?.id
+        return turn.visibleItems.filter {
+            if case .message(let message) = $0 { return message.id != promptId }
+            return true
+        }
+    }
+
+    @ViewBuilder
+    private func iosDisclosureButton(_ turn: TranscriptTurn) -> some View {
+        let isOpen = expandedTranscriptTurns.contains(turn.id)
+        if turn.hasCollapsedContent {
+            Button {
+                if isOpen {
+                    expandedTranscriptTurns.remove(turn.id)
+                } else {
+                    expandedTranscriptTurns.insert(turn.id)
+                }
+            } label: {
+                iosDisclosureLabel(turn, icon: isOpen ? "chevron.down" : "chevron.right")
+            }
+            .buttonStyle(.plain)
+        } else {
+            iosDisclosureLabel(turn, icon: "clock")
+        }
+    }
+
+    private func iosDisclosureLabel(_ turn: TranscriptTurn, icon: String) -> some View {
+        Label(turn.summary.disclosureLabel, systemImage: icon)
+            .font(TahoeFont.body(11.5, weight: .semibold))
+            .foregroundStyle(t.fg3)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(t.glassTintHi, in: Capsule())
+    }
+
+    @ViewBuilder
+    private func iosTurnChipStrip(_ turn: TranscriptTurn) -> some View {
+        if !turn.outputArtifacts.isEmpty || !turn.editedFiles.isEmpty {
+            HStack(spacing: 7) {
+                ForEach(turn.outputArtifacts.prefix(4)) { artifact in
+                    Button {
+                        if artifact.kind == .markdown {
+                            openMarkdownDocument(artifact.path)
+                        } else {
+                            UIPasteboard.general.string = artifact.path
+                        }
+                    } label: {
+                        iosTranscriptChip(icon: iosArtifactIcon(artifact.kind), title: artifact.filename)
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(turn.editedFiles.prefix(4)) { file in
+                    iosTranscriptChip(icon: "pencil.and.scribble", title: file.basename)
+                }
+            }
+            .padding(.leading, 34)
+        }
+    }
+
+    private func iosTranscriptChip(icon: String, title: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 10.5, weight: .semibold))
+            Text(title)
+                .font(TahoeFont.body(11.5, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .foregroundStyle(t.fg3)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(t.glassTintHi, in: Capsule())
+    }
+
+    private func iosArtifactIcon(_ kind: TranscriptArtifactKind) -> String {
+        switch kind {
+        case .markdown: return "doc.richtext"
+        case .html: return "safari"
+        case .image: return "photo"
+        case .pdf: return "doc.text.magnifyingglass"
+        case .document: return "doc.text"
+        case .spreadsheet, .data: return "tablecells"
+        case .presentation: return "rectangle.on.rectangle"
+        case .media: return "play.rectangle"
+        case .archive: return "archivebox"
         }
     }
 
