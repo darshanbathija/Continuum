@@ -149,8 +149,9 @@ public final class iOSChatStore: ObservableObject {
             // items in case an older Mac (< wireVersion 5) is replying
             // with the legacy `session.lastEventSeq` counter that doesn't
             // bump on chat changes.
-            if fetched.updateCounter > snapshot.updateCounter || fetched.items != snapshot.items {
-                self.snapshot = fetched
+            let next = normalizedSnapshotForApply(fetched)
+            if next.updateCounter > snapshot.updateCounter || next.items != snapshot.items {
+                self.snapshot = next
                 self.lastFrameAt = Date()
             }
         }
@@ -380,10 +381,33 @@ public final class iOSChatStore: ObservableObject {
     }
 
     private func applyFullSnapshot(_ fetched: WireChatSnapshot) {
-        if fetched.updateCounter > snapshot.updateCounter || fetched.items != snapshot.items {
-            self.snapshot = fetched
+        let next = normalizedSnapshotForApply(fetched)
+        if next.updateCounter > snapshot.updateCounter || next.items != snapshot.items {
+            self.snapshot = next
             self.lastFrameAt = Date()
         }
+    }
+
+    private func normalizedSnapshotForApply(_ fetched: WireChatSnapshot) -> WireChatSnapshot {
+        guard fetched.updateCounter <= snapshot.updateCounter,
+              fetched.items != snapshot.items
+        else { return fetched }
+        return WireChatSnapshot(
+            sessionId: fetched.sessionId,
+            items: fetched.items,
+            planSteps: fetched.planSteps,
+            sourceEntries: fetched.sourceEntries,
+            artifactEntries: fetched.artifactEntries,
+            codexTodos: fetched.codexTodos,
+            pendingPermissionPrompt: fetched.pendingPermissionPrompt,
+            totalInputTokens: fetched.totalInputTokens,
+            totalOutputTokens: fetched.totalOutputTokens,
+            cacheReadTokens: fetched.cacheReadTokens,
+            cacheCreationTokens: fetched.cacheCreationTokens,
+            lastEventAt: fetched.lastEventAt,
+            updateCounter: snapshot.updateCounter &+ 1,
+            currentTurnState: fetched.currentTurnState
+        )
     }
 
     /// Run a bounded sequence of HTTP `refresh()` polls before attempting

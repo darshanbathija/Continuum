@@ -4028,9 +4028,7 @@ private struct ChatThreadScroll: View {
         projectionCache.value(
             for: TranscriptProjectionCacheKey(
                 updateCounter: messagesSlice.updateCounter,
-                mode: .latestAnswerOnly,
-                items: messagesSlice.items,
-                messages: messagesSlice.messages
+                mode: .latestAnswerOnly
             )
         ) {
             TranscriptTurnProjector.project(
@@ -4165,9 +4163,27 @@ private struct ChatThreadScroll: View {
     }
 
     private func jumpToLastUserMessage(_ proxy: ScrollViewProxy) {
-        guard let message = messagesSlice.messages.last(where: { $0.kind == .userText }) else { return }
+        var previous: SessionChatStore.ChatMessage?
+        var lastPrompt: SessionChatStore.ChatMessage?
+        for message in messagesSlice.messages {
+            if PromptBoundary.isRealPrompt(message, previous: previous) {
+                lastPrompt = message
+            }
+            previous = message
+        }
+        guard let message = lastPrompt else { return }
         userPinnedToBottom = false
-        scrollTranscript(proxy, to: message.id, anchor: .center)
+        if let anchor = transcriptProjection.anchorByMessageId[message.id] {
+            if anchor.isHidden {
+                expanded.insert(anchor.turnId)
+            }
+            Task { @MainActor in
+                await Task.yield()
+                scrollTranscript(proxy, to: anchor.itemId, anchor: .center)
+            }
+        } else {
+            scrollTranscript(proxy, to: message.id, anchor: .center)
+        }
     }
 
     private func scrollTranscript(_ proxy: ScrollViewProxy, to id: String, anchor: UnitPoint) {

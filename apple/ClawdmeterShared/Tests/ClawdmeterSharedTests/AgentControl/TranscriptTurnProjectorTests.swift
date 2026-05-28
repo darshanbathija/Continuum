@@ -34,8 +34,8 @@ final class TranscriptTurnProjectorTests: XCTestCase {
         let projection = TranscriptTurnProjector.project(messages: messages, now: t0.addingTimeInterval(8))
         let turn = try! XCTUnwrap(projection.turns.first)
 
-        XCTAssertEqual(turn.visibleItems.map(\.id), ["u1"])
-        XCTAssertEqual(turn.hiddenItems.map(\.id), ["run:t1"])
+        XCTAssertEqual(turn.visibleItems.map(\.id), ["u1", "run:t1"])
+        XCTAssertEqual(turn.hiddenItems.map(\.id), [])
         XCTAssertEqual(turn.summary.toolCallCount, 1)
     }
 
@@ -143,24 +143,6 @@ final class TranscriptTurnProjectorTests: XCTestCase {
         XCTAssertEqual(files[1].deletions, 1)
         XCTAssertEqual(files[2].additions, 2)
         XCTAssertEqual(files[2].deletions, 0)
-    }
-
-    func testProjectionCacheKeyChangesWhenItemsChangeWithSameCounter() {
-        let oldItems = [ChatItem.message(msg("a1", .assistantText, "Codex", "Old answer", 0))]
-        let newItems = [ChatItem.message(msg("a1", .assistantText, "Codex", "New answer", 0))]
-
-        let oldKey = TranscriptProjectionCacheKey(
-            updateCounter: 42,
-            mode: .latestAnswerOnly,
-            items: oldItems
-        )
-        let newKey = TranscriptProjectionCacheKey(
-            updateCounter: 42,
-            mode: .latestAnswerOnly,
-            items: newItems
-        )
-
-        XCTAssertNotEqual(oldKey, newKey)
     }
 
     private func msg(

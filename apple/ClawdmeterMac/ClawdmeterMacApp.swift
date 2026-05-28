@@ -312,9 +312,7 @@ private struct PoppedChatThread: View {
         let projection = projectionCache.value(
             for: TranscriptProjectionCacheKey(
                 updateCounter: messagesSlice.updateCounter,
-                mode: .latestAnswerOnly,
-                items: messagesSlice.items,
-                messages: messagesSlice.messages
+                mode: .latestAnswerOnly
             )
         ) {
             TranscriptTurnProjector.project(

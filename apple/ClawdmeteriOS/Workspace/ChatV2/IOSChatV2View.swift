@@ -379,8 +379,7 @@ private struct TranscriptScroll: View {
         projectionCache.value(
             for: TranscriptProjectionCacheKey(
                 updateCounter: updateCounter,
-                mode: .latestAnswerOnly,
-                items: items
+                mode: .latestAnswerOnly
             )
         ) {
             TranscriptTurnProjector.project(items: items, mode: .latestAnswerOnly)

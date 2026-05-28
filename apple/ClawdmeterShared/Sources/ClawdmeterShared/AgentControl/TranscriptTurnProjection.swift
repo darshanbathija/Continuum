@@ -38,30 +38,10 @@ public struct TranscriptProjection: Hashable, Sendable {
 public struct TranscriptProjectionCacheKey: Equatable, Sendable {
     public let updateCounter: UInt64
     public let mode: TranscriptCollapseMode
-    public let contentFingerprint: Int
 
-    public init(
-        updateCounter: UInt64,
-        mode: TranscriptCollapseMode,
-        items: [ChatItem] = [],
-        messages: [ChatMessage] = []
-    ) {
+    public init(updateCounter: UInt64, mode: TranscriptCollapseMode) {
         self.updateCounter = updateCounter
         self.mode = mode
-        self.contentFingerprint = Self.fingerprint(items: items, messages: messages)
-    }
-
-    public static func fingerprint(items: [ChatItem], messages: [ChatMessage] = []) -> Int {
-        var hasher = Hasher()
-        hasher.combine(items.count)
-        for item in items {
-            hasher.combine(item)
-        }
-        hasher.combine(messages.count)
-        for message in messages {
-            hasher.combine(message)
-        }
-        return hasher.finalize()
     }
 }
 
@@ -512,7 +492,7 @@ public enum TranscriptTurnProjector {
 
         let visibleItems: [ChatItem]
         let hiddenItems: [ChatItem]
-        if mode == .fullTranscript || prompt == nil {
+        if mode == .fullTranscript || prompt == nil || finalAssistant == nil {
             visibleItems = items
             hiddenItems = []
         } else {

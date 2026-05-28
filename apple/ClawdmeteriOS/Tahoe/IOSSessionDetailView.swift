@@ -773,8 +773,7 @@ public struct IOSSessionDetailView: View {
         let projection = projectionCache.value(
             for: TranscriptProjectionCacheKey(
                 updateCounter: chatStore.snapshot.updateCounter,
-                mode: .latestAnswerOnly,
-                items: chatStore.snapshot.items
+                mode: .latestAnswerOnly
             )
         ) {
             TranscriptTurnProjector.project(items: chatStore.snapshot.items, mode: .latestAnswerOnly)
