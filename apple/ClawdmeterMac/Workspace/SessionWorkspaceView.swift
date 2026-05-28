@@ -4008,7 +4008,12 @@ private struct ChatThreadScroll: View {
 
     private var transcriptProjection: TranscriptProjection {
         projectionCache.value(
-            for: TranscriptProjectionCacheKey(updateCounter: messagesSlice.updateCounter, mode: .latestAnswerOnly)
+            for: TranscriptProjectionCacheKey(
+                updateCounter: messagesSlice.updateCounter,
+                mode: .latestAnswerOnly,
+                items: messagesSlice.items,
+                messages: messagesSlice.messages
+            )
         ) {
             TranscriptTurnProjector.project(
                 items: messagesSlice.items,

@@ -145,6 +145,24 @@ final class TranscriptTurnProjectorTests: XCTestCase {
         XCTAssertEqual(files[2].deletions, 0)
     }
 
+    func testProjectionCacheKeyChangesWhenItemsChangeWithSameCounter() {
+        let oldItems = [ChatItem.message(msg("a1", .assistantText, "Codex", "Old answer", 0))]
+        let newItems = [ChatItem.message(msg("a1", .assistantText, "Codex", "New answer", 0))]
+
+        let oldKey = TranscriptProjectionCacheKey(
+            updateCounter: 42,
+            mode: .latestAnswerOnly,
+            items: oldItems
+        )
+        let newKey = TranscriptProjectionCacheKey(
+            updateCounter: 42,
+            mode: .latestAnswerOnly,
+            items: newItems
+        )
+
+        XCTAssertNotEqual(oldKey, newKey)
+    }
+
     private func msg(
         _ id: String,
         _ kind: ChatMessage.Kind,

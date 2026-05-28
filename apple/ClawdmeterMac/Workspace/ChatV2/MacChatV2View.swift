@@ -476,12 +476,26 @@ private struct SoloTranscript: View {
     var body: some View {
         TahoeGlass(radius: 20, tone: .panel) {
             if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
-                TranscriptScroll(items: store.snapshot.items, updateCounter: store.snapshot.updateCounter)
+                TranscriptScroll(
+                    items: store.snapshot.items,
+                    updateCounter: store.snapshot.updateCounter,
+                    pathRoot: Self.transcriptPathRoot(for: session)
+                )
             } else {
                 ProgressView().controlSize(.small)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    private static func transcriptPathRoot(for session: AgentSession) -> URL? {
+        for raw in [session.runtimeCwd, session.worktreePath, session.repoKey] {
+            guard let path = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { continue }
+            if path.hasPrefix("/") || path.hasPrefix("~") {
+                return URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+            }
+        }
+        return nil
     }
 }
 
@@ -499,6 +513,7 @@ private struct ReadOnlyTranscript: View {
                 TranscriptScroll(
                     items: envelope.messages.map(ChatItem.message),
                     updateCounter: UInt64(envelope.messages.count),
+                    pathRoot: nil,
                     hasOlderHistory: envelope.truncated,
                     isLoadingOlder: isLoadingOlder,
                     onLoadOlder: loadOlder
@@ -670,9 +685,17 @@ private struct ProviderColumn: View {
                 .padding(12)
                 TahoeHair()
                 if let snapshot = frontierChild?.snapshot {
-                    TranscriptScroll(items: snapshot.items, updateCounter: snapshot.updateCounter)
+                    TranscriptScroll(
+                        items: snapshot.items,
+                        updateCounter: snapshot.updateCounter,
+                        pathRoot: Self.transcriptPathRoot(for: session)
+                    )
                 } else if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
-                    TranscriptScroll(items: store.snapshot.items, updateCounter: store.snapshot.updateCounter)
+                    TranscriptScroll(
+                        items: store.snapshot.items,
+                        updateCounter: store.snapshot.updateCounter,
+                        pathRoot: Self.transcriptPathRoot(for: session)
+                    )
                 } else {
                     ProgressView().controlSize(.small)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -680,12 +703,23 @@ private struct ProviderColumn: View {
             }
         }
     }
+
+    private static func transcriptPathRoot(for session: AgentSession) -> URL? {
+        for raw in [session.runtimeCwd, session.worktreePath, session.repoKey] {
+            guard let path = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { continue }
+            if path.hasPrefix("/") || path.hasPrefix("~") {
+                return URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+            }
+        }
+        return nil
+    }
 }
 
 @available(macOS 14, *)
 private struct TranscriptScroll: View {
     let items: [ChatItem]
     let updateCounter: UInt64
+    var pathRoot: URL? = nil
     var hasOlderHistory: Bool = false
     var isLoadingOlder: Bool = false
     var onLoadOlder: (() async -> Void)? = nil
@@ -696,7 +730,11 @@ private struct TranscriptScroll: View {
 
     private var transcriptProjection: TranscriptProjection {
         projectionCache.value(
-            for: TranscriptProjectionCacheKey(updateCounter: updateCounter, mode: .latestAnswerOnly)
+            for: TranscriptProjectionCacheKey(
+                updateCounter: updateCounter,
+                mode: .latestAnswerOnly,
+                items: items
+            )
         ) {
             TranscriptTurnProjector.project(items: items, mode: .latestAnswerOnly)
         }
@@ -860,7 +898,20 @@ private struct TranscriptScroll: View {
     }
 
     private func openArtifact(_ artifact: TranscriptOutputArtifact) {
-        NSWorkspace.shared.open(URL(fileURLWithPath: NSString(string: artifact.path).expandingTildeInPath))
+        guard let url = resolvedArtifactURL(artifact.path) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func resolvedArtifactURL(_ path: String) -> URL? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("~") {
+            return URL(fileURLWithPath: NSString(string: trimmed).expandingTildeInPath)
+        }
+        if trimmed.hasPrefix("/") {
+            return URL(fileURLWithPath: trimmed)
+        }
+        return pathRoot?.appendingPathComponent(trimmed)
     }
 
     private func iconName(for kind: TranscriptArtifactKind) -> String {

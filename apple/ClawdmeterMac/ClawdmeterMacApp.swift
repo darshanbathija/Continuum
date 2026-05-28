@@ -310,7 +310,12 @@ private struct PoppedChatThread: View {
 
     var body: some View {
         let projection = projectionCache.value(
-            for: TranscriptProjectionCacheKey(updateCounter: messagesSlice.updateCounter, mode: .latestAnswerOnly)
+            for: TranscriptProjectionCacheKey(
+                updateCounter: messagesSlice.updateCounter,
+                mode: .latestAnswerOnly,
+                items: messagesSlice.items,
+                messages: messagesSlice.messages
+            )
         ) {
             TranscriptTurnProjector.project(
                 items: messagesSlice.items,
@@ -452,11 +457,7 @@ private struct PoppedChatThread: View {
             HStack(spacing: 6) {
                 ForEach(turn.outputArtifacts.prefix(4)) { artifact in
                     Button {
-                        if artifact.kind == .markdown {
-                            model.openWorkspaceDocumentTab(from: session, path: artifact.path)
-                        } else {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: NSString(string: artifact.path).expandingTildeInPath))
-                        }
+                        openPoppedArtifact(artifact)
                     } label: {
                         Label(artifact.filename, systemImage: artifact.kind == .markdown ? "doc.richtext" : "arrow.up.right.square")
                             .font(.system(size: 10.5, weight: .semibold))
@@ -471,6 +472,37 @@ private struct PoppedChatThread: View {
             }
             .padding(.horizontal, 34)
         }
+    }
+
+    private var transcriptPathRoot: URL? {
+        for raw in [session.runtimeCwd, session.worktreePath, session.repoKey] {
+            guard let path = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { continue }
+            if path.hasPrefix("/") || path.hasPrefix("~") {
+                return URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+            }
+        }
+        return nil
+    }
+
+    private func openPoppedArtifact(_ artifact: TranscriptOutputArtifact) {
+        if artifact.kind == .markdown {
+            model.openWorkspaceDocumentTab(from: session, path: artifact.path)
+            return
+        }
+        guard let url = resolvedPoppedArtifactURL(artifact.path) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func resolvedPoppedArtifactURL(_ path: String) -> URL? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("~") {
+            return URL(fileURLWithPath: NSString(string: trimmed).expandingTildeInPath)
+        }
+        if trimmed.hasPrefix("/") {
+            return URL(fileURLWithPath: trimmed)
+        }
+        return transcriptPathRoot?.appendingPathComponent(trimmed)
     }
 
     private func send() {

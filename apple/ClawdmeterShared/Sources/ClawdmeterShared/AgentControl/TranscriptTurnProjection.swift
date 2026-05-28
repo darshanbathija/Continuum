@@ -38,10 +38,30 @@ public struct TranscriptProjection: Hashable, Sendable {
 public struct TranscriptProjectionCacheKey: Equatable, Sendable {
     public let updateCounter: UInt64
     public let mode: TranscriptCollapseMode
+    public let contentFingerprint: Int
 
-    public init(updateCounter: UInt64, mode: TranscriptCollapseMode) {
+    public init(
+        updateCounter: UInt64,
+        mode: TranscriptCollapseMode,
+        items: [ChatItem] = [],
+        messages: [ChatMessage] = []
+    ) {
         self.updateCounter = updateCounter
         self.mode = mode
+        self.contentFingerprint = Self.fingerprint(items: items, messages: messages)
+    }
+
+    public static func fingerprint(items: [ChatItem], messages: [ChatMessage] = []) -> Int {
+        var hasher = Hasher()
+        hasher.combine(items.count)
+        for item in items {
+            hasher.combine(item)
+        }
+        hasher.combine(messages.count)
+        for message in messages {
+            hasher.combine(message)
+        }
+        return hasher.finalize()
     }
 }
 

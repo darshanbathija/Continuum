@@ -771,7 +771,11 @@ public struct IOSSessionDetailView: View {
     @ViewBuilder
     private var chatPane: some View {
         let projection = projectionCache.value(
-            for: TranscriptProjectionCacheKey(updateCounter: chatStore.snapshot.updateCounter, mode: .latestAnswerOnly)
+            for: TranscriptProjectionCacheKey(
+                updateCounter: chatStore.snapshot.updateCounter,
+                mode: .latestAnswerOnly,
+                items: chatStore.snapshot.items
+            )
         ) {
             TranscriptTurnProjector.project(items: chatStore.snapshot.items, mode: .latestAnswerOnly)
         }
