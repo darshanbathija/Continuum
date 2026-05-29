@@ -174,6 +174,22 @@ public final class Pricing: @unchecked Sendable {
         for candidate in modelKeys where model.hasPrefix(candidate) {
             return models[candidate]
         }
+
+        // Provider-prefix fallback. Some sources (e.g. opencode) log bare model
+        // names like `grok-4.3`, while LiteLLM keys them under a provider prefix
+        // (`xai/grok-4.3`). Retry the lookup with known prefixes before giving
+        // up, so xAI/Grok usage isn't silently priced at $0.
+        if !model.contains("/") {
+            for prefix in ["xai/"] {
+                let prefixed = prefix + model
+                if let exact = models[prefixed] { return exact }
+                let strippedPrefixed = Self.stripDateSuffix(prefixed)
+                if strippedPrefixed != prefixed, let m = models[strippedPrefixed] { return m }
+                for candidate in modelKeys where prefixed.hasPrefix(candidate) {
+                    return models[candidate]
+                }
+            }
+        }
         return nil
     }
 

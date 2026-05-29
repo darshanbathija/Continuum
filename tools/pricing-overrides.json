@@ -2,7 +2,7 @@
   "_meta": {
     "purpose": "Manual overrides applied on top of LiteLLM's snapshot by tools/refresh-pricing.sh. Entries here win over upstream so manual fixes for newly-announced Google/Anthropic/OpenAI rates aren't blown away when LiteLLM hasn't caught up yet.",
     "policy": "Drop an entry from this file once LiteLLM publishes the same or better rates (i.e. once the upstream snapshot would produce the same numbers we have here). Add an `_until` ISO date if you want a temporary override that auto-expires.",
-    "lastUpdated": "2026-05-23"
+    "lastUpdated": "2026-05-29"
   },
   "overrides": {
     "gemini-3.5-flash": {
@@ -48,6 +48,24 @@
       "supports_function_calling": true,
       "supports_prompt_caching": true,
       "supports_system_messages": true,
+      "supports_vision": true
+    },
+    "claude-opus-4-8": {
+      "_note": "Claude Opus 4.8 (released 2026-05-28). $5/M input, $25/M output — unchanged from Opus 4.7 per Anthropic's launch; LiteLLM may lag the release by a few days, so this override guarantees the app prices it and matches ccusage. Sources: anthropic.com/claude/opus, platform.claude.com/docs/about-claude/pricing.",
+      "cache_creation_input_token_cost": 6.25e-06,
+      "cache_creation_input_token_cost_above_1hr": 1e-05,
+      "cache_read_input_token_cost": 5e-07,
+      "input_cost_per_token": 5e-06,
+      "litellm_provider": "anthropic",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "max_tokens": 128000,
+      "mode": "chat",
+      "output_cost_per_token": 2.5e-05,
+      "supports_function_calling": true,
+      "supports_prompt_caching": true,
+      "supports_reasoning": true,
+      "supports_tool_choice": true,
       "supports_vision": true
     }
   }
