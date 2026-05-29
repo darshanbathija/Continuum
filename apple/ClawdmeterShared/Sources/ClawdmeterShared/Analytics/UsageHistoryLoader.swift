@@ -339,6 +339,7 @@ public actor UsageHistoryLoader {
         var seenDedupKeys = Set<String>()
         var unpricedModelTokens: [String: TokenTotals] = [:]
         var tokensByModel: [String: TokenTotals] = [:]
+        var byDayByModel: [Date: [String: TokenTotals]] = [:]
         var sessionCount = 0
 
         for result in claudeResults {
@@ -347,7 +348,8 @@ public actor UsageHistoryLoader {
                 into: &claudeDayByRepo,
                 dedup: &seenDedupKeys,
                 unpriced: &unpricedModelTokens,
-                byModel: &tokensByModel
+                byModel: &tokensByModel,
+                byDayByModel: &byDayByModel
             )
             sessionCount += 1
             nextCache.files[result.path] = result.cacheEntry
@@ -358,7 +360,8 @@ public actor UsageHistoryLoader {
                 into: &codexDayByRepo,
                 dedup: &seenDedupKeys,
                 unpriced: &unpricedModelTokens,
-                byModel: &tokensByModel
+                byModel: &tokensByModel,
+                byDayByModel: &byDayByModel
             )
             sessionCount += 1
             nextCache.files[result.path] = result.cacheEntry
@@ -378,7 +381,8 @@ public actor UsageHistoryLoader {
                     into: &geminiDayByRepo!,
                     dedup: &seenDedupKeys,
                     unpriced: &unpricedModelTokens,
-                    byModel: &tokensByModel
+                    byModel: &tokensByModel,
+                    byDayByModel: &byDayByModel
                 )
                 sessionCount += 1
                 nextCache.files[result.path] = result.cacheEntry
@@ -398,13 +402,15 @@ public actor UsageHistoryLoader {
                 var localDedup = Set<String>()
                 var localUnpriced: [String: TokenTotals] = [:]
                 var localByModel: [String: TokenTotals] = [:]
+                var localByDayByModel: [Date: [String: TokenTotals]] = [:]
                 for record in records {
                     Self.accumulate(
                         record: record,
                         into: &bucket,
                         dedup: &localDedup,
                         unpriced: &localUnpriced,
-                        byModel: &localByModel
+                        byModel: &localByModel,
+                        byDayByModel: &localByDayByModel
                     )
                 }
                 opencodeDayByRepo = bucket
@@ -414,6 +420,11 @@ public actor UsageHistoryLoader {
                 }
                 for (model, totals) in localByModel {
                     tokensByModel[model, default: .zero] += totals
+                }
+                for (day, modelMap) in localByDayByModel {
+                    var existing = byDayByModel[day, default: [:]]
+                    for (model, totals) in modelMap { existing[model, default: .zero] += totals }
+                    byDayByModel[day] = existing
                 }
                 // Single SQLite source → one "session" for the metrics counter.
                 sessionCount += 1
@@ -443,7 +454,8 @@ public actor UsageHistoryLoader {
             sequenceNumber: sequenceCounter,
             sessionCount: sessionCount,
             unpricedModelTokens: unpricedModelTokens,
-            tokensByModel: tokensByModel
+            tokensByModel: tokensByModel,
+            byDayByModel: byDayByModel
         )
 
         let elapsed = Date().timeIntervalSince(startedAt)
@@ -463,6 +475,7 @@ public actor UsageHistoryLoader {
     private struct PerFileResult: Sendable {
         let path: String
         let byDayByRepo: [Date: [RepoKey: TokenTotals]]
+        let byDayByModel: [Date: [String: TokenTotals]]
         let dedupKeys: Set<String>
         let unpricedModelTokens: [String: TokenTotals]
         let byModelTokens: [String: TokenTotals]
@@ -530,6 +543,7 @@ public actor UsageHistoryLoader {
                 cached.append(PerFileResult(
                     path: file.url.path,
                     byDayByRepo: entry.decodedByDayByRepo(),
+                    byDayByModel: entry.decodedByDayByModel(),
                     dedupKeys: entry.decodedDedupKeys(),
                     unpricedModelTokens: entry.decodedUnpricedModelTokens(),
                     byModelTokens: entry.decodedByModelTokens(),
@@ -584,6 +598,7 @@ public actor UsageHistoryLoader {
         var dedupKeys = Set<String>()
         var unpriced: [String: TokenTotals] = [:]
         var byModel: [String: TokenTotals] = [:]
+        var byDayByModel: [Date: [String: TokenTotals]] = [:]
 
         let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
         // F1a-wire shipped in #152 and is now the default-ON path: every
@@ -602,7 +617,7 @@ public actor UsageHistoryLoader {
                 ? ClaudeAdapterUsageBridge.parseLine(lineData)
                 : ClaudeUsageParser.parse(line: lineData)
             guard let record else { continue }
-            accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced, byModel: &byModel)
+            accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced, byModel: &byModel, byDayByModel: &byDayByModel)
         }
 
         let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
@@ -612,12 +627,14 @@ public actor UsageHistoryLoader {
             byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
             dedupKeys: Array(dedupKeys),
             unpricedModelTokens: unpriced,
-            byModelTokens: byModel
+            byModelTokens: byModel,
+            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
         )
 
         return PerFileResult(
             path: url.path,
             byDayByRepo: byDayByRepo,
+            byDayByModel: byDayByModel,
             dedupKeys: dedupKeys,
             unpricedModelTokens: unpriced,
             byModelTokens: byModel,
@@ -646,8 +663,9 @@ public actor UsageHistoryLoader {
         var dedupKeys = Set<String>()
         var unpriced: [String: TokenTotals] = [:]
         var byModel: [String: TokenTotals] = [:]
+        var byDayByModel: [Date: [String: TokenTotals]] = [:]
         for record in records {
-            accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced, byModel: &byModel)
+            accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced, byModel: &byModel, byDayByModel: &byDayByModel)
         }
 
         let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
@@ -657,12 +675,14 @@ public actor UsageHistoryLoader {
             byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
             dedupKeys: Array(dedupKeys),
             unpricedModelTokens: unpriced,
-            byModelTokens: byModel
+            byModelTokens: byModel,
+            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
         )
 
         return PerFileResult(
             path: url.path,
             byDayByRepo: byDayByRepo,
+            byDayByModel: byDayByModel,
             dedupKeys: dedupKeys,
             unpricedModelTokens: unpriced,
             byModelTokens: byModel,
@@ -714,8 +734,9 @@ public actor UsageHistoryLoader {
         var dedupKeys = Set<String>()
         var unpriced: [String: TokenTotals] = [:]
         var byModel: [String: TokenTotals] = [:]
+        var byDayByModel: [Date: [String: TokenTotals]] = [:]
         for record in records {
-            accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced, byModel: &byModel)
+            accumulate(record: record, into: &byDayByRepo, dedup: &dedupKeys, unpriced: &unpriced, byModel: &byModel, byDayByModel: &byDayByModel)
         }
 
         let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
@@ -725,12 +746,14 @@ public actor UsageHistoryLoader {
             byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
             dedupKeys: Array(dedupKeys),
             unpricedModelTokens: unpriced,
-            byModelTokens: byModel
+            byModelTokens: byModel,
+            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
         )
 
         return PerFileResult(
             path: url.path,
             byDayByRepo: byDayByRepo,
+            byDayByModel: byDayByModel,
             dedupKeys: dedupKeys,
             unpricedModelTokens: unpriced,
             byModelTokens: byModel,
@@ -743,7 +766,8 @@ public actor UsageHistoryLoader {
         into byDayByRepo: inout [Date: [RepoKey: TokenTotals]],
         dedup: inout Set<String>,
         unpriced: inout [String: TokenTotals],
-        byModel: inout [String: TokenTotals]
+        byModel: inout [String: TokenTotals],
+        byDayByModel: inout [Date: [String: TokenTotals]]
     ) {
         // Per-file dedup: within a single file we skip records whose dedupKey
         // we've already seen. Cross-file dedup happens at merge time inside
@@ -770,6 +794,10 @@ public actor UsageHistoryLoader {
         // tokens-by-model/family section), keyed by the raw model name.
         if record.tokens.totalTokens > 0 {
             byModel[record.model, default: .zero] += tokensWithCost
+            // Per-day-by-model adds the time dimension so the Usage tab's
+            // tokens-by-model section can be windowed (today/7d/30d/90d) the
+            // same way byDayByRepo powers the dollar charts.
+            byDayByModel[day, default: [:]][record.model, default: .zero] += tokensWithCost
         }
 
         // Bucket.
@@ -786,7 +814,8 @@ public actor UsageHistoryLoader {
         into byDayByRepo: inout [Date: [RepoKey: TokenTotals]],
         dedup: inout Set<String>,
         unpriced: inout [String: TokenTotals],
-        byModel: inout [String: TokenTotals]
+        byModel: inout [String: TokenTotals],
+        byDayByModel: inout [Date: [String: TokenTotals]]
     ) {
         // Cached files store already-aggregated totals, but Claude can
         // duplicate individual `(messageId, requestId)` rows across files.
@@ -810,7 +839,7 @@ public actor UsageHistoryLoader {
                         ? ClaudeAdapterUsageBridge.parseLine(lineData)
                         : ClaudeUsageParser.parse(line: lineData)
                     guard let record else { continue }
-                    Self.accumulateGlobal(record: record, into: &byDayByRepo, dedup: &dedup, unpriced: &unpriced, byModel: &byModel)
+                    Self.accumulateGlobal(record: record, into: &byDayByRepo, dedup: &dedup, unpriced: &unpriced, byModel: &byModel, byDayByModel: &byDayByModel)
                 }
             }
             return
@@ -831,6 +860,13 @@ public actor UsageHistoryLoader {
         for (model, totals) in result.byModelTokens {
             byModel[model, default: .zero] += totals
         }
+        for (day, modelMap) in result.byDayByModel {
+            var existing = byDayByModel[day, default: [:]]
+            for (model, totals) in modelMap {
+                existing[model, default: .zero] += totals
+            }
+            byDayByModel[day] = existing
+        }
     }
 
     private nonisolated static func accumulateGlobal(
@@ -838,7 +874,8 @@ public actor UsageHistoryLoader {
         into byDayByRepo: inout [Date: [RepoKey: TokenTotals]],
         dedup: inout Set<String>,
         unpriced: inout [String: TokenTotals],
-        byModel: inout [String: TokenTotals]
+        byModel: inout [String: TokenTotals],
+        byDayByModel: inout [Date: [String: TokenTotals]]
     ) {
         if let key = record.dedupKey, !dedup.insert(key).inserted {
             return
@@ -854,6 +891,10 @@ public actor UsageHistoryLoader {
         }
         if record.tokens.totalTokens > 0 {
             byModel[record.model, default: .zero] += tokensWithCost
+            // Per-day-by-model adds the time dimension so the Usage tab's
+            // tokens-by-model section can be windowed (today/7d/30d/90d) the
+            // same way byDayByRepo powers the dollar charts.
+            byDayByModel[day, default: [:]][record.model, default: .zero] += tokensWithCost
         }
 
         var dayMap = byDayByRepo[day, default: [:]]
@@ -980,7 +1021,12 @@ struct AnalyticsCache: Codable, Sendable {
     // rollup across all models, to power the Usage tab's tokens-by-model /
     // family section. v11 caches lack it; the bump forces a one-time reparse
     // so per-model totals are complete rather than only covering changed files.
-    static let currentVersion: Int = 12
+    // v13 (2026-05-29): FileEntry gains `byDayByModel`, the per-day-by-model
+    // rollup that lets the tokens-by-model section be windowed by time range
+    // (today/7d/30d/90d) like the dollar charts. v12 caches carry no day
+    // dimension for models; the bump forces a one-time reparse so windowed
+    // model totals are complete rather than only covering changed files.
+    static let currentVersion: Int = 13
 
     let version: Int
     var files: [String: FileEntry]
@@ -997,6 +1043,10 @@ struct AnalyticsCache: Codable, Sendable {
         // tab's tokens-by-model/family section). Optional so a stale entry
         // decodes gracefully; the v12 version bump re-parses to populate it.
         let byModelTokens: [String: TokenTotals]?
+        // v13: per-day-by-model rollup so the tokens-by-model section can be
+        // windowed by time range. Optional so v12 entries decode gracefully;
+        // the v13 bump re-parses to populate it.
+        let byDayByModel: [ModelDayBucket]?
 
         struct DayBucket: Codable, Sendable {
             let day: Date
@@ -1008,11 +1058,32 @@ struct AnalyticsCache: Codable, Sendable {
             }
         }
 
+        /// Flat encoding of `[Date: [String: TokenTotals]]` (per-day per-model),
+        /// mirroring `DayBucket` — Codable can't key dicts by `Date`.
+        struct ModelDayBucket: Codable, Sendable {
+            let day: Date
+            let byModel: [ModelRow]
+
+            struct ModelRow: Codable, Sendable {
+                let model: String
+                let totals: TokenTotals
+            }
+        }
+
         static func encode(_ map: [Date: [RepoKey: TokenTotals]]) -> [DayBucket] {
             map.map { (day, repoMap) in
                 DayBucket(
                     day: day,
                     byRepo: repoMap.map { DayBucket.RepoRow(repo: $0.key, totals: $0.value) }
+                )
+            }
+        }
+
+        static func encodeModels(_ map: [Date: [String: TokenTotals]]) -> [ModelDayBucket] {
+            map.map { (day, modelMap) in
+                ModelDayBucket(
+                    day: day,
+                    byModel: modelMap.map { ModelDayBucket.ModelRow(model: $0.key, totals: $0.value) }
                 )
             }
         }
@@ -1039,6 +1110,18 @@ struct AnalyticsCache: Codable, Sendable {
 
         func decodedByModelTokens() -> [String: TokenTotals] {
             byModelTokens ?? [:]
+        }
+
+        func decodedByDayByModel() -> [Date: [String: TokenTotals]] {
+            var out: [Date: [String: TokenTotals]] = [:]
+            for bucket in byDayByModel ?? [] {
+                var inner: [String: TokenTotals] = [:]
+                for row in bucket.byModel {
+                    inner[row.model] = row.totals
+                }
+                out[bucket.day] = inner
+            }
+            return out
         }
     }
 }

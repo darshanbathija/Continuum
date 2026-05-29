@@ -49,6 +49,10 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
     /// Per-model token rollups across ALL models (priced + unpriced), keyed by
     /// raw model name. Powers the Usage tab's tokens-by-model / family section.
     public let tokensByModel: [String: TokenTotals]
+    /// Per-day-by-model token rollups (priced + unpriced), keyed by day then
+    /// raw model name. Powers the windowed (today/7d/30d/90d) tokens-by-model
+    /// section; `tokensByModel` stays the all-time aggregate.
+    public let byDayByModel: [Date: [String: TokenTotals]]
 
     public init(
         byProvider: [UsageRecord.Provider: ProviderTotals],
@@ -56,7 +60,8 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         sequenceNumber: UInt64,
         sessionCount: Int,
         unpricedModelTokens: [String: TokenTotals],
-        tokensByModel: [String: TokenTotals] = [:]
+        tokensByModel: [String: TokenTotals] = [:],
+        byDayByModel: [Date: [String: TokenTotals]] = [:]
     ) {
         self.byProvider = byProvider
         self.computedAt = computedAt
@@ -64,6 +69,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         self.sessionCount = sessionCount
         self.unpricedModelTokens = unpricedModelTokens
         self.tokensByModel = tokensByModel
+        self.byDayByModel = byDayByModel
     }
 
     // MARK: - Compat getters
@@ -103,6 +109,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         case sessionCount
         case unpricedModelTokens
         case tokensByModel
+        case byDayByModel
         // Legacy v8 fields, retained for backward-compat decode.
         case claude
         case codex
@@ -115,6 +122,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         self.sessionCount = try c.decode(Int.self, forKey: .sessionCount)
         self.unpricedModelTokens = (try c.decodeIfPresent([String: TokenTotals].self, forKey: .unpricedModelTokens)) ?? [:]
         self.tokensByModel = (try c.decodeIfPresent([String: TokenTotals].self, forKey: .tokensByModel)) ?? [:]
+        self.byDayByModel = (try c.decodeIfPresent([Date: [String: TokenTotals]].self, forKey: .byDayByModel)) ?? [:]
 
         // Prefer the new byProvider shape. Unknown provider raw values
         // (future-client snapshots) are dropped silently.
@@ -146,6 +154,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         try c.encode(sessionCount, forKey: .sessionCount)
         try c.encode(unpricedModelTokens, forKey: .unpricedModelTokens)
         try c.encode(tokensByModel, forKey: .tokensByModel)
+        try c.encode(byDayByModel, forKey: .byDayByModel)
         // Write the new byProvider dict (canonical) AND the legacy
         // claude/codex fields (for one release of overlap, so a v5 reader
         // can still pick up totals from a v6 writer's snapshot).
