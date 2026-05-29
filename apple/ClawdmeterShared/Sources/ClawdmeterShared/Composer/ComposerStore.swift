@@ -191,7 +191,7 @@ public final class ComposerStore: ObservableObject {
         public let planMode: Bool
         public init(
             agent: AgentKind = .claude,
-            modelId: String? = "claude-opus-4-7-1m",
+            modelId: String? = "claude-opus-4-8-1m",
             effort: ReasoningEffort? = .max,
             mode: SessionMode = .worktree,
             planMode: Bool = false

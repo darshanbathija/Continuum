@@ -65,6 +65,19 @@ public struct ComposerModelPicker: View {
     /// since `selectedModelByVendor` already drives the Chat composer.
     public var onSelectModel: ((ChatVendor, String, ReasoningEffort?) -> Void)? = nil
 
+    /// Selection mode. `.single` (Code composer / per-vendor chip) picks one
+    /// model and closes. `.multi` (Chat broadcast) toggles 1–3 vendors into the
+    /// broadcast set, each with its own model + effort, and stays open while
+    /// the user configures the group. v0.29.31: folds in what the old
+    /// MacChatModelSelectorPanel did so there's a single shared picker.
+    public enum SelectionMode { case single, multi }
+    public let mode: SelectionMode
+
+    /// Multi-mode availability hooks. Kept as closures so the picker stays
+    /// decoupled from `ChatProvidersResponse`. Nil → treat as available.
+    public var vendorAvailability: ((ChatVendor) -> Bool)? = nil
+    public var vendorUnavailableReason: ((ChatVendor) -> String?)? = nil
+
     // MARK: - Theme
 
     @Environment(\.tahoe) private var t
@@ -82,6 +95,9 @@ public struct ComposerModelPicker: View {
         defaultsStore: ProviderDefaultsStore,
         catalog: ModelCatalog = .bundled,
         enabledVendors: [ChatVendor] = ChatVendor.allCases,
+        mode: SelectionMode = .single,
+        vendorAvailability: ((ChatVendor) -> Bool)? = nil,
+        vendorUnavailableReason: ((ChatVendor) -> String?)? = nil,
         onClose: @escaping () -> Void,
         onSelectModel: ((ChatVendor, String, ReasoningEffort?) -> Void)? = nil
     ) {
@@ -90,6 +106,9 @@ public struct ComposerModelPicker: View {
         self.defaultsStore = defaultsStore
         self.catalog = catalog
         self.enabledVendors = enabledVendors
+        self.mode = mode
+        self.vendorAvailability = vendorAvailability
+        self.vendorUnavailableReason = vendorUnavailableReason
         self.onClose = onClose
         self.onSelectModel = onSelectModel
         self._activeRail = State(initialValue: .vendor(initialVendor))
@@ -168,6 +187,16 @@ public struct ComposerModelPicker: View {
                         .fill(t.accent)
                         .frame(width: 3)
                         .padding(.vertical, 4)
+                }
+            }
+            // .multi: a checkmark marks vendors currently in the broadcast set.
+            .overlay(alignment: .bottomTrailing) {
+                if mode == .multi, case let .vendor(v) = entry.key, store.isVendorSelected(v) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(t.accent)
+                        .background(Circle().fill(t.surfaceSolid).padding(1))
+                        .offset(x: -1, y: -1)
                 }
             }
             .contentShape(Rectangle())
@@ -385,20 +414,25 @@ public struct ComposerModelPicker: View {
     // MARK: - Bottom bar (visual-only chips, no chevrons; v0.29.9 wires interaction)
 
     private var bottomBar: some View {
-        HStack(spacing: 6) {
-            bottomChip {
-                selectedModelChipContent
+        VStack(alignment: .leading, spacing: 8) {
+            // .multi: availability + Add/Remove for the previewed/focused vendor
+            // (replaces the deleted MacChatModelSelectorPanel's availability row).
+            if mode == .multi, let vendor = bottomBarPreview.vendor {
+                HStack(spacing: 8) {
+                    availabilityLabel(for: vendor)
+                    Spacer(minLength: 8)
+                    addRemoveButton(for: vendor)
+                }
             }
-            bottomChip {
-                effortChipContent
+            HStack(spacing: 6) {
+                bottomChip { selectedModelChipContent }
+                effortMenuChip
+                if mode == .single {
+                    bottomChip { modeChipContent }
+                    bottomChip { permissionChipContent }
+                }
+                Spacer(minLength: 0)
             }
-            bottomChip {
-                modeChipContent
-            }
-            bottomChip {
-                permissionChipContent
-            }
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
@@ -467,13 +501,96 @@ public struct ComposerModelPicker: View {
         }
     }
 
-    private var effortChipContent: some View {
+    /// Interactive effort selector for the previewed/focused vendor. Replaces
+    /// the old visual-only effort chip; writes through `store.selectEffort`, and
+    /// in `.single` mode also mirrors the change to the host via `onSelectModel`
+    /// so the running Code session updates without re-picking the model.
+    @ViewBuilder
+    private var effortMenuChip: some View {
         let vendor = bottomBarPreview.vendor
-        let effort = vendor.flatMap { defaultsStore.effort(for: $0, catalog: catalog) }
-        let label = effort.map { $0.displayLabel } ?? "Default"
-        return Text(label)
+        let modelId = vendor.flatMap { store.model(for: $0, catalog: catalog) ?? defaultsStore.modelId(for: $0, catalog: catalog) }
+        let supports = vendor.map {
+            ProviderModelPickerSupport.supportsEffort(vendor: $0, modelId: modelId, catalog: catalog)
+        } ?? false
+        let current = vendor.flatMap { store.effort(for: $0, catalog: catalog) ?? defaultsStore.effort(for: $0, catalog: catalog) }
+        if supports, let vendor {
+            Menu {
+                ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                    Button {
+                        applyEffort(effort, vendor: vendor)
+                    } label: {
+                        if current == effort {
+                            Label(effort.displayLabel, systemImage: "checkmark")
+                        } else {
+                            Text(effort.displayLabel)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(current?.displayLabel ?? "Effort")
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(t.fg3)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(t.fg4)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white.opacity(0.04)))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(t.hairline, lineWidth: 0.5))
+        } else {
+            bottomChip {
+                Text("Auto")
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg4)
+            }
+        }
+    }
+
+    private func applyEffort(_ effort: ReasoningEffort, vendor: ChatVendor) {
+        store.selectEffort(effort, for: vendor, catalog: catalog)
+        if mode == .single,
+           let modelId = store.model(for: vendor, catalog: catalog) ?? defaultsStore.modelId(for: vendor, catalog: catalog) {
+            onSelectModel?(vendor, modelId, effort)
+        }
+    }
+
+    @ViewBuilder
+    private func availabilityLabel(for vendor: ChatVendor) -> some View {
+        let available = vendorAvailability?(vendor) ?? true
+        Text(available ? "Available" : (vendorUnavailableReason?(vendor) ?? "Unavailable"))
             .font(TahoeFont.body(11))
-            .foregroundStyle(t.fg3)
+            .foregroundStyle(available ? Color.green : Color.orange)
+            .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private func addRemoveButton(for vendor: ChatVendor) -> some View {
+        let selected = store.isVendorSelected(vendor)
+        let toggleable = canToggle(vendor)
+        Button {
+            store.toggleVendor(vendor)
+        } label: {
+            Text(selected ? (toggleable ? "Remove" : "Required") : (toggleable ? "Add" : "3 max"))
+                .font(TahoeFont.body(11, weight: .semibold))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(!toggleable)
+    }
+
+    /// Mirror MacChatModelSelectorPanel.canToggleSelectedVendor: removing needs
+    /// >1 selected (broadcast keeps ≥1); adding needs <3 selected + available.
+    private func canToggle(_ vendor: ChatVendor) -> Bool {
+        if store.isVendorSelected(vendor) {
+            return store.selectedVendorCount > 1
+        }
+        return store.selectedVendorCount < 3 && (vendorAvailability?(vendor) ?? true)
     }
 
     private var modeChipContent: some View {
@@ -528,6 +645,18 @@ public struct ComposerModelPicker: View {
 
     private func select(entry: VisibleRowEntry) {
         let vendor = entry.vendor
+        if mode == .multi {
+            // Broadcast: add the vendor to the group (if there's room, ≤3) and
+            // set its model. `selectModel` handles per-vendor model + effort
+            // normalization + persistence. Stay open so the user can keep
+            // configuring vendors; the footer Add/Remove toggles membership and
+            // the rail checkmark shows who's in the broadcast.
+            if !store.isVendorSelected(vendor) {
+                store.toggleVendor(vendor)
+            }
+            store.selectModel(entry.model.id, for: vendor, catalog: catalog)
+            return
+        }
         // Persist the new default. Normalize effort so a model that
         // doesn't support an effort level clears any stale effort that
         // was carried over from the previously-selected model.
