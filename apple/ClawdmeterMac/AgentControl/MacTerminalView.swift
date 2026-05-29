@@ -73,6 +73,11 @@ public struct MacTerminalView: NSViewRepresentable {
 
         weak var terminalView: TerminalView?
         private var task: URLSessionWebSocketTask?
+        // Reconnect state: `isStopped` is latched by disconnect() so a pending
+        // backoff retry never revives a torn-down pane; `reconnectAttempts`
+        // drives the exponential backoff and resets on a healthy receive.
+        private var isStopped = false
+        private var reconnectAttempts = 0
 
         init(sessionId: UUID, host: String, wsPort: Int, token: String, paneId: String?) {
             self.sessionId = sessionId
@@ -112,6 +117,7 @@ public struct MacTerminalView: NSViewRepresentable {
         }
 
         func disconnect() {
+            isStopped = true
             task?.cancel(with: .goingAway, reason: nil)
             task = nil
         }
@@ -122,12 +128,31 @@ public struct MacTerminalView: NSViewRepresentable {
                 switch result {
                 case .failure(let error):
                     macTermLogger.debug("read: \(error.localizedDescription)")
+                    // Re-arm via bounded backoff instead of dying silently. A
+                    // transient WS error (sleep/wake, Wi-Fi blip, daemon port
+                    // flap) previously froze the terminal until the view was
+                    // recreated, because only .success recursed readLoop().
+                    Task { @MainActor [weak self] in self?.scheduleReconnect() }
                 case .success(let message):
                     Task { @MainActor in
+                        self.reconnectAttempts = 0
                         self.dispatch(message: message)
                         self.readLoop()
                     }
                 }
+            }
+        }
+
+        private func scheduleReconnect() {
+            guard !isStopped else { return }
+            let attempt = reconnectAttempts
+            reconnectAttempts += 1
+            // 1, 2, 4, 8, 16, capped 30s — mirrors the iOS chat-subscribe ladder.
+            let delaySeconds = min(30.0, pow(2.0, Double(min(attempt, 5))))
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+                guard let self, !self.isStopped else { return }
+                self.connect()
             }
         }
 
@@ -146,8 +171,10 @@ public struct MacTerminalView: NSViewRepresentable {
                 let arr = Array(payload)
                 terminalView?.feed(byteArray: ArraySlice(arr))
             case .title:
-                let title = String(decoding: payload, as: UTF8.self)
-                terminalView?.window?.title = title
+                // Ignore: an embedded pane must not rename the host app window.
+                // An OSC title escape (vim/tmux/echo -ne '\033]0;…') would
+                // otherwise hijack the whole window's titlebar.
+                break
             case .resize, .input:
                 break
             }
@@ -170,7 +197,8 @@ public struct MacTerminalView: NSViewRepresentable {
         }
 
         public func setTerminalTitle(source: TerminalView, title: String) {
-            source.window?.title = title
+            // No-op: do not propagate the embedded terminal's title to the host
+            // NSWindow (would hijack the app titlebar). See the `.title` case.
         }
 
         public func scrolled(source: TerminalView, position: Double) {}

@@ -26,6 +26,9 @@ struct PairingSettingsView: View {
     @State private var tokenForDisplay: String = ""
     @State private var didCopy: Bool = false
     @State private var resolvedHost: TailscaleHost.Resolved = TailscaleHost.Resolved(host: "127.0.0.1", kind: .loopback)
+    // Loaded once on appear — PluginRegistry.discover() is a disk scan and must
+    // not run inside the Form body (it re-ran on every settings re-render).
+    @State private var plugins: [PluginInfo] = []
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
@@ -45,7 +48,10 @@ struct PairingSettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 520, height: 720)
-        .onAppear { refreshQR() }
+        .onAppear {
+            refreshQR()
+            plugins = PluginRegistry.discover()
+        }
     }
 
     private func isMagicDNSHost(_ kind: TailscaleHost.Resolved.Kind) -> Bool {
@@ -253,7 +259,8 @@ struct PairingSettingsView: View {
 
     private var pluginsSection: some View {
         Section {
-            let plugins = PluginRegistry.discover()
+            // Inventory comes from the `plugins` @State loaded in onAppear —
+            // calling PluginRegistry.discover() here ran a disk scan per render.
             if plugins.isEmpty {
                 Text("No MCP servers or plugins detected.")
                     .font(.callout)

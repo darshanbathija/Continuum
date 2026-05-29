@@ -215,13 +215,20 @@ private struct Sidebar: View {
     }
 
     private var groupRows: [SidebarRow] {
+        // Bucket children by frontier group in a single pass so the per-group
+        // lookup below is O(1), not an O(n) filter inside the loop (was O(n²)
+        // re-run on every sidebar body render).
+        var childrenByGroup: [UUID: [AgentSession]] = [:]
+        for session in sessions where session.frontierGroupId != nil {
+            childrenByGroup[session.frontierGroupId!, default: []].append(session)
+        }
         var seenGroups = Set<UUID>()
         var rows: [SidebarRow] = []
         for session in sessions.sorted(by: { $0.lastEventAt > $1.lastEventAt }) {
             if let groupId = session.frontierGroupId {
                 guard !seenGroups.contains(groupId) else { continue }
                 seenGroups.insert(groupId)
-                let children = sessions.filter { $0.frontierGroupId == groupId }
+                let children = childrenByGroup[groupId] ?? [session]
                 rows.append(SidebarRow(
                     id: groupId,
                     target: .frontier(groupId),
@@ -279,9 +286,14 @@ private struct Sidebar: View {
     }
 
     private static func relative(_ date: Date) -> String {
-        RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+        sharedRelativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }
+
+/// Shared formatter — `RelativeDateTimeFormatter()` init is expensive, and
+/// allocating one per sidebar row inside `body` showed up as scroll churn.
+/// Used only from the main thread (SwiftUI body), so no synchronization needed.
+private let sharedRelativeFormatter = RelativeDateTimeFormatter()
 
 private struct SidebarRow: Identifiable {
     let id: UUID
@@ -307,7 +319,7 @@ private struct HistoryRow: View {
                         TahoeProviderGlyph(provider: provider.tahoeProvider, size: 16)
                     }
                     Spacer()
-                    Text(RelativeDateTimeFormatter().localizedString(for: row.lastEventAt, relativeTo: Date()))
+                    Text(sharedRelativeFormatter.localizedString(for: row.lastEventAt, relativeTo: Date()))
                         .font(TahoeFont.body(10))
                         .foregroundStyle(t.fg4)
                 }
@@ -441,12 +453,43 @@ private struct SoloTranscript: View {
     var body: some View {
         TahoeGlass(radius: 20, tone: .panel) {
             if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
-                TranscriptScroll(items: store.snapshot.items, updateCounter: store.snapshot.updateCounter)
+                // Observe the store so its ~16ms snapshot commits invalidate the
+                // transcript live. Reading store.snapshot from an un-observed
+                // `let` only refreshed on incidental parent re-renders, so a solo
+                // chat appeared frozen mid-stream.
+                ObservedChatTranscript(store: store)
             } else {
                 ProgressView().controlSize(.small)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+}
+
+@available(macOS 14, *)
+/// Binds a live `SessionChatStore` as an `@ObservedObject` so snapshot commits
+/// drive SwiftUI invalidation, and wires the store's load-older history path so
+/// live solo/broadcast transcripts can reach messages beyond the in-memory
+/// 200-message window (previously unreachable — no "load earlier" affordance).
+private struct ObservedChatTranscript: View {
+    @ObservedObject var store: SessionChatStore
+    @State private var isLoadingOlder = false
+
+    var body: some View {
+        TranscriptScroll(
+            items: store.snapshot.items,
+            updateCounter: store.snapshot.updateCounter,
+            hasOlderHistory: store.hasOlderHistory,
+            isLoadingOlder: isLoadingOlder,
+            onLoadOlder: loadOlder
+        )
+    }
+
+    private func loadOlder() async {
+        guard !isLoadingOlder else { return }
+        isLoadingOlder = true
+        await store.loadOlderHistory()
+        isLoadingOlder = false
     }
 }
 
@@ -563,7 +606,10 @@ private struct BroadcastTranscript: View {
     }
 
     private var columnWidth: CGFloat {
-        NSScreen.main?.visibleFrame.width ?? 1180 / CGFloat(max(children.count, 1))
+        // Parenthesized: `?? 1180 / count` previously bound as `?? (1180 / count)`,
+        // applying the divide only to the fallback. Harmless today (clamped by
+        // min(420,…) at the call site) but the intent is width-per-column.
+        (NSScreen.main?.visibleFrame.width ?? 1180) / CGFloat(max(children.count, 1))
     }
 
     private func winner(for child: AgentSession) -> FrontierTurnWinner? {
@@ -637,7 +683,7 @@ private struct ProviderColumn: View {
                 if let snapshot = frontierChild?.snapshot {
                     TranscriptScroll(items: snapshot.items, updateCounter: snapshot.updateCounter)
                 } else if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
-                    TranscriptScroll(items: store.snapshot.items, updateCounter: store.snapshot.updateCounter)
+                    ObservedChatTranscript(store: store)
                 } else {
                     ProgressView().controlSize(.small)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -683,8 +729,11 @@ private struct TranscriptScroll: View {
                         .disabled(isLoadingOlder)
                         .frame(maxWidth: .infinity)
                     }
+                    // No per-row .id(item.id): ForEach already keys on
+                    // ChatItem.id, and an explicit row id defeats LazyVStack
+                    // recycling (~10x scroll cost — see CLAUDE.md Phase 1).
                     ForEach(visibleItems) { item in
-                        MessageRow(item: item).id(item.id)
+                        MessageRow(item: item)
                     }
                     Color.clear.frame(height: 12).id(Self.bottomSentinelId)
                 }

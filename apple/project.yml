@@ -151,6 +151,13 @@ targets:
         # the Trash. Phase 2 bundle-id transition still pending the
         # Montauk Analytics Developer Program enrollment.
         PRODUCT_NAME: Continuum
+        # Keep the Swift MODULE name "Clawdmeter" even though the product (.app)
+        # is "Continuum". Otherwise PRODUCT_MODULE_NAME defaults from
+        # PRODUCT_NAME → "Continuum", which broke every `@testable import
+        # Clawdmeter` in ClawdmeterMacTests (the whole Mac test target stopped
+        # compiling at the v0.29.8 rename). The module name is internal and
+        # never user-visible, so this is safe.
+        PRODUCT_MODULE_NAME: Clawdmeter
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "76S62SDSD3"
         INFOPLIST_FILE: ClawdmeterMac/Info.plist
@@ -343,7 +350,11 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_OBJC_BRIDGING_HEADER: ""
         BUNDLE_LOADER: "$(TEST_HOST)"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdmeter.app/Contents/MacOS/Clawdmeter"
+        # The app's PRODUCT_NAME is "Continuum" (v0.29.8 rename), so the host
+        # bundle + executable are Continuum.app/Continuum — not Clawdmeter. The
+        # stale "Clawdmeter" path here made the test bundle fail to link
+        # (ld: library '.../Clawdmeter' not found).
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Continuum.app/Contents/MacOS/Continuum"
 
 schemes:
   Clawdmeter (Mac):
