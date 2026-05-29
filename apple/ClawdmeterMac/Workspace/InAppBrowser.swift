@@ -449,7 +449,8 @@ struct InAppBrowser: View {
             lastSendError = "Daemon offline. Restart Clawdmeter to send browser context."
             return
         }
-        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        // Local loopback: in-process token, not the pairing keychain.
+        let sender = MacComposerSender(port: Int(port), token: runtime.agentControlServer.localLoopbackToken)
         let sessionId = session.id
         Task {
             do {
