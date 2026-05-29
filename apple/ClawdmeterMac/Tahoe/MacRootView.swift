@@ -209,7 +209,9 @@ struct MacRootView: View {
                     }
                 }
                 .padding([.horizontal, .bottom], 10)
-                .padding(.top, 10)
+                // Tight gap under the titlebar (was 10pt + a ~28pt safe-area
+                // band; the band is gone now via the root .ignoresSafeArea).
+                .padding(.top, 6)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: tab)
                 .task(id: tab) {
@@ -221,6 +223,15 @@ struct MacRootView: View {
             }
         }
         .frame(minWidth: 1280, minHeight: 820)
+        // v0.29.33: kill the dead band below the titlebar. AppKit reserves a
+        // ~28pt titlebar-region top safe-area inset (see the MacTitlebar note);
+        // the chip's own `.ignoresSafeArea(.top)` drew it up to y=0 but its
+        // layout box still consumed the 28pt, leaving a visible gap between the
+        // chip and the content (and making MacUsageView's ScrollView inset its
+        // content by the same amount). Ignoring the top inset on the whole root
+        // removes both: chip stays aligned with the traffic lights (unchanged),
+        // content follows directly beneath it.
+        .ignoresSafeArea(edges: .top)
         // v0.22.9: Cmd+1..Cmd+4 (+ Cmd+,) keyboard shortcuts now live
         // in the View / app menu via `.commands` on the Window scene
         // in ClawdmeterMacApp. The previous hidden-button hack was
@@ -1100,7 +1111,6 @@ struct MacTitlebar: View {
                     HStack(spacing: 10) {
                         tabStrip
                         Spacer(minLength: 0)
-                        continuePlanChip
                         // v0.24.0: in-app update chip. Always visible across
                         // every tab when an update is available OR the bundle
                         // is translocated. Self-hides via `chipState()` —
@@ -1126,29 +1136,6 @@ struct MacTitlebar: View {
             TahoeDashTab("Code",     active: active == .code)     { onTab(.code) }
             TahoeDashTab("Settings", active: active == .settings) { onTab(.settings) }
         }
-    }
-
-    /// Titlebar chip that opens the Continue Plan spawn sheet. Posts a
-    /// notification rather than holding a closure so MacTitlebar stays
-    /// callback-free and stable across previews.
-    @ViewBuilder
-    private var continuePlanChip: some View {
-        Button(action: {
-            NotificationCenter.default.post(name: .clawdmeterShowPlanQueue, object: nil)
-        }) {
-            HStack(spacing: 5) {
-                Image(systemName: "rectangle.stack.fill.badge.plus")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("Continue plan")
-                    .font(TahoeFont.body(11.5, weight: .semibold))
-            }
-            .foregroundStyle(t.fg2)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(t.hair2.opacity(0.7), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .help("Open the spawn queue and fan out parallel CC sessions for the remaining plan")
     }
 
     private var codeActions: some View {
