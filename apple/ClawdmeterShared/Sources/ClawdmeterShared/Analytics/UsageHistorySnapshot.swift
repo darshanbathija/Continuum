@@ -171,8 +171,13 @@ public struct ProviderTotals: Codable, Sendable, Equatable {
     public let today: WindowTotals
     public let past7d: WindowTotals
     public let past30d: WindowTotals
+    /// Trailing-90d window. Uses the same 84-day (12-week) span as the 90d
+    /// chart so the per-repo rows can never sum past the 90d headline. Added
+    /// in v0.29.31 to give the Usage "90d" card a true trailing-90d per-repo
+    /// split instead of falling back to the 30d window.
+    public let past90d: WindowTotals
     public let allTime: WindowTotals
-    /// Per-day totals across the full 30-day chart window (`Calendar.current.startOfDay(for:)`
+    /// Per-day totals across the full activity span (`Calendar.current.startOfDay(for:)`
     /// keys, local timezone). Used to draw the daily-spend chart.
     public let byDay: [Date: TokenTotals]
 
@@ -180,12 +185,14 @@ public struct ProviderTotals: Codable, Sendable, Equatable {
         today: WindowTotals,
         past7d: WindowTotals,
         past30d: WindowTotals,
+        past90d: WindowTotals,
         allTime: WindowTotals,
         byDay: [Date: TokenTotals]
     ) {
         self.today = today
         self.past7d = past7d
         self.past30d = past30d
+        self.past90d = past90d
         self.allTime = allTime
         self.byDay = byDay
     }
@@ -194,6 +201,7 @@ public struct ProviderTotals: Codable, Sendable, Equatable {
         today: .empty,
         past7d: .empty,
         past30d: .empty,
+        past90d: .empty,
         allTime: .empty,
         byDay: [:]
     )
@@ -205,6 +213,32 @@ public struct ProviderTotals: Codable, Sendable, Equatable {
         case .past30d: return past30d
         case .allTime: return allTime
         }
+    }
+
+    // Custom Codable so `past90d` (added later) decode-defaults to `past30d`
+    // for snapshots written before it existed, rather than throwing.
+    enum CodingKeys: String, CodingKey {
+        case today, past7d, past30d, past90d, allTime, byDay
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.today = try c.decode(WindowTotals.self, forKey: .today)
+        self.past7d = try c.decode(WindowTotals.self, forKey: .past7d)
+        self.past30d = try c.decode(WindowTotals.self, forKey: .past30d)
+        self.past90d = (try c.decodeIfPresent(WindowTotals.self, forKey: .past90d)) ?? self.past30d
+        self.allTime = try c.decode(WindowTotals.self, forKey: .allTime)
+        self.byDay = try c.decode([Date: TokenTotals].self, forKey: .byDay)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(today, forKey: .today)
+        try c.encode(past7d, forKey: .past7d)
+        try c.encode(past30d, forKey: .past30d)
+        try c.encode(past90d, forKey: .past90d)
+        try c.encode(allTime, forKey: .allTime)
+        try c.encode(byDay, forKey: .byDay)
     }
 }
 

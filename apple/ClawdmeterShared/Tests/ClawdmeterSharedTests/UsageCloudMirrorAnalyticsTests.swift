@@ -44,6 +44,7 @@ final class UsageCloudMirrorAnalyticsTests: XCTestCase {
             today: WindowTotals(totals: totals, byRepo: [(repo: "/r", totals: totals)], restCount: 0),
             past7d: WindowTotals(totals: totals, byRepo: [(repo: "/r", totals: totals)], restCount: 0),
             past30d: WindowTotals(totals: totals, byRepo: [(repo: "/r", totals: totals)], restCount: 0),
+            past90d: WindowTotals(totals: totals, byRepo: [(repo: "/r", totals: totals)], restCount: 0),
             allTime: WindowTotals(totals: totals, byRepo: [(repo: "/r", totals: totals)], restCount: 0),
             byDay: [day: totals]
         )

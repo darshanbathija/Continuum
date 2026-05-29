@@ -912,11 +912,15 @@ public actor UsageHistoryLoader {
         let today = cal.startOfDay(for: now)
         let past7Start = cal.date(byAdding: .day, value: -6, to: today) ?? today
         let past30Start = cal.date(byAdding: .day, value: -29, to: today) ?? today
+        // 84-day (12-week) span to match the 90d chart's weekly12 window, so the
+        // per-repo 90d rows can't sum past the 90d headline (totalsForRange).
+        let past90Start = cal.date(byAdding: .day, value: -83, to: today) ?? today
 
         var byDayForChart: [Date: TokenTotals] = [:]
         var todayMap: [RepoKey: TokenTotals] = [:]
         var past7Map: [RepoKey: TokenTotals] = [:]
         var past30Map: [RepoKey: TokenTotals] = [:]
+        var past90Map: [RepoKey: TokenTotals] = [:]
         var allMap: [RepoKey: TokenTotals] = [:]
 
         for (day, repoMap) in byDayByRepo {
@@ -926,6 +930,9 @@ public actor UsageHistoryLoader {
 
             for (repo, totals) in repoMap {
                 allMap[repo, default: .zero] += totals
+                if day >= past90Start {
+                    past90Map[repo, default: .zero] += totals
+                }
                 if day >= past30Start {
                     past30Map[repo, default: .zero] += totals
                 }
@@ -942,6 +949,7 @@ public actor UsageHistoryLoader {
             today: rollupWindow(todayMap),
             past7d: rollupWindow(past7Map),
             past30d: rollupWindow(past30Map),
+            past90d: rollupWindow(past90Map),
             allTime: rollupWindow(allMap),
             byDay: byDayForChart
         )

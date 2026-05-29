@@ -48,6 +48,8 @@ struct PairingSettingsView: View {
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     /// Active Tahoe accent (Halo blue by default; tracks the user's theme).
     @Environment(\.tahoe) private var t
+    /// #21: pause the 1Hz TTL-countdown re-render when the window is inactive.
+    @Environment(\.controlActiveState) private var controlActiveState
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
@@ -81,7 +83,7 @@ struct PairingSettingsView: View {
             plugins = PluginRegistry.discover()
             refreshRelayQR()
         }
-        .onReceive(ticker) { now = $0 }
+        .onReceive(ticker) { if controlActiveState != .inactive { now = $0 } }
         .onChange(of: pairingService.bundleURL) { _, _ in refreshRelayQR() }
     }
 
