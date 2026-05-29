@@ -58,7 +58,14 @@ private struct ChatRoot: View {
                     switch openTarget {
                     case .solo(let id):
                         if let session = client.chatSessions.first(where: { $0.id == id }) {
+                            // .solo(A)→.solo(B) stays in the same switch slot, so
+                            // TranscriptScroll's @State (projectionCache keyed only on
+                            // updateCounter, plus pinned + expandedTurns) survives the
+                            // swap and leaks A's transcript/scroll state into B. Key on
+                            // session.id to force a clean remount — mirrors the sibling
+                            // BroadcastTranscript's .id(groupId) below.
                             SoloTranscript(session: session, runtime: runtime)
+                                .id(session.id)
                         } else {
                             ChatEmptyState(title: "Conversation not loaded", subtitle: "Refresh chat history and try again.")
                         }
@@ -313,8 +320,13 @@ private struct Sidebar: View {
         openTarget = .transcript(sessionId: match.sessionId, jsonlPath: match.jsonlPath)
     }
 
+    // Perf: one shared formatter instead of allocating a fresh
+    // RelativeDateTimeFormatter per sidebar row / search row on every render.
+    // fileprivate so HistoryRow (separate struct, same file) reuses it too.
+    fileprivate static let relativeFormatter = RelativeDateTimeFormatter()
+
     private static func relative(_ date: Date) -> String {
-        RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+        relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }
 
@@ -342,7 +354,7 @@ private struct HistoryRow: View {
                         TahoeProviderGlyph(provider: provider.tahoeProvider, size: 16)
                     }
                     Spacer()
-                    Text(RelativeDateTimeFormatter().localizedString(for: row.lastEventAt, relativeTo: Date()))
+                    Text(Sidebar.relativeFormatter.localizedString(for: row.lastEventAt, relativeTo: Date()))
                         .font(TahoeFont.body(10))
                         .foregroundStyle(t.fg4)
                 }
@@ -613,7 +625,12 @@ private struct BroadcastTranscript: View {
     }
 
     private var columnWidth: CGFloat {
-        NSScreen.main?.visibleFrame.width ?? 1180 / CGFloat(max(children.count, 1))
+        // Precedence: `/` binds tighter than `??`, so the unparenthesized form
+        // parsed as `width ?? (1180 / count)` — the per-column divide only hit
+        // the dead nil-screen fallback and every column rendered full-screen
+        // width (then clamped to 420). Parenthesize so the divide applies to
+        // the chosen width.
+        (NSScreen.main?.visibleFrame.width ?? 1180) / CGFloat(max(children.count, 1))
     }
 
     private func winner(for child: AgentSession) -> FrontierTurnWinner? {
@@ -955,9 +972,10 @@ private struct MessageRow: View {
                             .font(TahoeFont.body(9.5, weight: .bold))
                             .foregroundStyle(t.fg4)
                     }
-                    Text(message.body)
-                        .font(TahoeFont.body(13))
-                        .foregroundStyle(t.fg)
+                    // Assistant bodies are Markdown; plain Text rendered the raw
+                    // source (## headings, **bold**, fenced code as literal text).
+                    // Reuse the same renderer the Code tab uses for parity.
+                    MarkdownRenderer(source: message.body)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }

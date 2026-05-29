@@ -115,8 +115,21 @@ enum AnalyticsRangeAdapter {
     private static func weekly12(_ snapshot: UsageHistorySnapshot) -> TahoeDemo.RangeData {
         let series = self.weeklySeries(snapshot, weeks: 12)
         let ticks = (1...12).map { "W\($0)" }
-        let totals = self.totalsFor(snapshot, range: .allTime, label: "90d")
-        let repos = self.reposFor(snapshot, range: .allTime)
+        // Headline total must match the chart's trailing window, not all-time.
+        // UsageHistorySnapshot.Window has no .past90d, so summing byDay over the
+        // exact 12-week span the chart covers is the only truthful source —
+        // .allTime here showed lifetime dollars on a 90d card (the bug).
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let start = cal.date(byAdding: .day, value: -(7 * 11) - 6, to: today) ?? today
+        let end = cal.date(byAdding: .day, value: 1, to: today) ?? today
+        let totals = self.totalsForRange(snapshot, start: start, end: end, label: "90d")
+        // Repos: the snapshot's byDay carries no per-repo dimension and there's
+        // no .past90d window, so a true trailing-90d per-repo split isn't
+        // derivable here (see cross-file note). Use .past30d — a real window
+        // that can't overcount past the headline — instead of the .allTime
+        // lifetime split, which both overcounted and could exceed the total.
+        let repos = self.reposFor(snapshot, range: .past30d)
         return TahoeDemo.RangeData(
             label: "90d",
             ticks: ticks,
@@ -260,6 +273,38 @@ enum AnalyticsRangeAdapter {
         )
     }
 
+    /// Per-provider dollar totals summed across `[start, end)` from byDay.
+    /// Used by the 90d headline, which has no matching Window enum case — the
+    /// fixed windows (today/past7d/past30d/allTime) can't express a trailing
+    /// 90-day span, so we sum the same byDay buckets the chart's series uses.
+    private static func totalsForRange(_ snapshot: UsageHistorySnapshot, start: Date, end: Date, label: String) -> TahoeDemo.Totals {
+        let cal = Calendar.current
+        func sum(_ provider: UsageRecord.Provider) -> Decimal {
+            guard let totals = snapshot.byProvider[provider] else { return 0 }
+            var acc: Decimal = 0
+            var day = start
+            while day < end {
+                if let dayTotals = totals.byDay[day] { acc += dayTotals.costUSD }
+                guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+            return acc
+        }
+        let c = sum(.claude)
+        let x = sum(.codex)
+        let g = sum(.gemini)
+        let o = sum(.opencode)
+        let all = c + x + g + o
+        return TahoeDemo.Totals(
+            c: Self.formatUSD(c),
+            x: Self.formatUSD(x),
+            g: Self.formatUSD(g),
+            o: Self.formatUSD(o),
+            all: Self.formatUSD(all),
+            delta: "" // matches totalsFor: delta-vs-prior is a follow-up
+        )
+    }
+
     /// Build the top-N repo list, merging across all providers so each
     /// row's per-provider tint shows what fraction came from where.
     /// Mirrors the demo shape: top 4 by total + "Other" rest bucket.
@@ -274,7 +319,11 @@ enum AnalyticsRangeAdapter {
                 case .allTime: return providerTotals.allTime
                 }
             }()
-            for entry in window.byRepo {
+            // Skip the synthetic rollup row UsageHistorySnapshot stores under
+            // "__rest__" (repos ranked 9+) — otherwise it renders as a literal
+            // "__rest__" row AND double-counts those dollars against the real
+            // repos. Matches AnalyticsRepoList.computeRows.
+            for entry in window.byRepo where entry.repo != "__rest__" {
                 var slot = byRepo[entry.repo] ?? (0, 0, 0, 0)
                 switch provider {
                 case .claude:   slot.c += entry.totals.costUSD

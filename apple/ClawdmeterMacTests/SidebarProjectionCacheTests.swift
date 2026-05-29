@@ -478,26 +478,28 @@ final class SidebarProjectionCacheTests: XCTestCase {
         XCTAssertTrue(archiveOnly.historySections.isEmpty)
     }
 
-    func test_externalSessionsUseTenMinuteActiveCutoffBoundaries() {
+    func test_externalSessionsUseFiveMinuteActiveCutoffBoundaries() {
+        // SidebarProjection.externalActiveWindow is 5 min (300s) and the boundary
+        // is inclusive (lastModified >= now - 300 => active). Fixtures straddle 300s.
         let now = Date(timeIntervalSince1970: 1_900_000_000)
         let repoKey = "/Users/dev/clawdmeter"
-        let activeAt959 = Self.recent(path: "/tmp/active-959.jsonl", lastModified: now.addingTimeInterval(-599))
-        let activeAt1000 = Self.recent(path: "/tmp/active-1000.jsonl", lastModified: now.addingTimeInterval(-600))
-        let historyAt1001 = Self.recent(path: "/tmp/history-1001.jsonl", lastModified: now.addingTimeInterval(-601))
+        let activeAt299 = Self.recent(path: "/tmp/active-299.jsonl", lastModified: now.addingTimeInterval(-299))
+        let activeAt300 = Self.recent(path: "/tmp/active-300.jsonl", lastModified: now.addingTimeInterval(-300))
+        let historyAt301 = Self.recent(path: "/tmp/history-301.jsonl", lastModified: now.addingTimeInterval(-301))
 
         let projection = Self.buildProjection(
             sessions: [],
-            repos: [Self.repo(key: repoKey, recents: [historyAt1001, activeAt1000, activeAt959])],
+            repos: [Self.repo(key: repoKey, recents: [historyAt301, activeAt300, activeAt299])],
             now: now
         )
 
         XCTAssertEqual(
             projection.activeExternalSections.flatMap(\.recents).map(\.path),
-            [activeAt959.path, activeAt1000.path]
+            [activeAt299.path, activeAt300.path]
         )
         XCTAssertEqual(
             projection.historySections.flatMap { $0.dateGroups.flatMap(\.recents) }.map(\.path),
-            [historyAt1001.path]
+            [historyAt301.path]
         )
     }
 
@@ -507,7 +509,7 @@ final class SidebarProjectionCacheTests: XCTestCase {
         let repos = [
             Self.repo(
                 key: "/Users/dev/clawdmeter",
-                recents: [Self.recent(path: "/tmp/external.jsonl", lastModified: firstNow.addingTimeInterval(-599))]
+                recents: [Self.recent(path: "/tmp/external.jsonl", lastModified: firstNow.addingTimeInterval(-299))]
             )
         ]
         let cache = SingleSlotProjectionCache<SidebarProjectionKey, SidebarProjection>()

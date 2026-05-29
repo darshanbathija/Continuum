@@ -35,6 +35,14 @@ struct MarkdownRenderer: View {
     /// recycling. We now compare the parsed source against the View's
     /// current `source` on every render and on assignment.
     @State private var cache: CacheEntry?
+    /// audit/desktop-surfaces-v2: the latest source a parse was kicked for.
+    /// `kickParseIfNeeded`'s detached closure captures the View struct by
+    /// value, so the struct's `source` is FROZEN to the instance that kicked
+    /// the parse — on an `.onChange` recycle from A→B the closure that
+    /// started for A still sees `source == A`, so the staleness guard never
+    /// trips. `@State` storage is shared across struct re-creations, so
+    /// comparing against `pendingSource` reads the LIVE requested source.
+    @State private var pendingSource: String?
 
     private struct CacheEntry: Equatable {
         let source: String
@@ -92,6 +100,10 @@ struct MarkdownRenderer: View {
     private func kickParseIfNeeded(for src: String) {
         // Skip if we already have chunks for this exact source.
         if cache?.source == src { return }
+        // Record the live requested source in shared @State so the detached
+        // closure below can compare against it (not the frozen captured
+        // `source`) when it completes.
+        pendingSource = src
         Task.detached(priority: .userInitiated) {
             let prepared = Self.prepare(source: src)
             await MainActor.run {
@@ -103,10 +115,12 @@ struct MarkdownRenderer: View {
                 // onChange/onAppear would fire again for B (the source
                 // already changed) — that message stays blank
                 // indefinitely. Only commit the result when it matches
-                // the View's CURRENT `source`; otherwise re-kick a
-                // parse for the live source so the row renders.
-                guard source == src else {
-                    kickParseIfNeeded(for: source)
+                // the LIVE pending source (`source` is frozen in this
+                // captured-by-value closure); otherwise re-kick a parse
+                // for the live source so the row renders.
+                let live = pendingSource ?? source
+                guard live == src else {
+                    kickParseIfNeeded(for: live)
                     return
                 }
                 cache = CacheEntry(source: src, chunks: prepared)

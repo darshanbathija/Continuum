@@ -1899,6 +1899,7 @@ private struct RepoEnvImportSheet: View {
     @State private var kind: RepoEnvVariableKind = .sensitive
     @State private var isPickingFile = false
     @State private var fileError: String?
+    @State private var previewDebounce: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1968,7 +1969,8 @@ private struct RepoEnvImportSheet: View {
                                     .stroke(t.hairline, lineWidth: 1)
                             }
                             .accessibilityIdentifier("settings.env.import.contents")
-                            .onChange(of: text) { _, _ in refreshPreview() }
+                            // Debounce: typing fires onChange per keystroke; coalesce so we re-parse once typing settles.
+                            .onChange(of: text) { _, _ in scheduleRefreshPreview() }
                     }
 
                     if let fileError {
@@ -2161,7 +2163,20 @@ private struct RepoEnvImportSheet: View {
         return "\(ready) ready · \(duplicates) duplicates · \(invalid) invalid"
     }
 
+    // Coalesce keystroke-driven re-parses behind a 200ms timer so previewProvider runs once typing settles, not per character.
+    private func scheduleRefreshPreview() {
+        previewDebounce?.cancel()
+        previewDebounce = Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            refreshPreview()
+        }
+    }
+
     private func refreshPreview() {
+        // Definitive refreshes (paste/file-load/target toggle) supersede any pending debounce.
+        previewDebounce?.cancel()
+        previewDebounce = nil
         guard let workspaceId = selectedWorkspaceIds.first ?? defaultWorkspaceId else {
             previews = []
             return
