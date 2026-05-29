@@ -19,7 +19,8 @@ import XCTest
 ///   - Older logs without cache fields.
 ///   - Missing cwd → nil repo (aggregator buckets under "(unknown)").
 ///   - Missing model → "unknown" sentinel.
-///   - Missing message.id OR missing requestId → nil dedupKey.
+///   - Missing message.id → nil dedupKey; missing requestId → dedup by
+///     message.id alone (ccusage parity for the opus-4-8-era format).
 ///   - User lines (no usage) → both paths return nil.
 ///   - Lines with `usage: {input:0, output:0}` → both paths return nil.
 ///   - Lines with no `message.usage` envelope → both paths return nil.
@@ -87,7 +88,9 @@ final class F1aParityTests: XCTestCase {
         """)
     }
 
-    func test_parity_assistantTurn_requestIdMissing_dedupNil() {
+    func test_parity_assistantTurn_requestIdMissing_dedupsByMessageId() {
+        // opus-4-8-era format: no requestId. Both paths must still dedup by
+        // message.id (key "msg_7:"), matching ccusage — not return nil.
         assertParity(line: """
         {"timestamp":"2026-05-15T10:00:00Z","cwd":"/Users/x/repo","message":{"id":"msg_7","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":100,"output_tokens":50}}}
         """)

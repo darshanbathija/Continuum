@@ -21,6 +21,21 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertEqual(record?.dedupKey, "msg_1:req_1")
     }
 
+    func test_claudeParse_missingRequestId_stillDedupesByMessageId() {
+        // Regression: Claude Code's opus-4-8-era JSONL dropped the top-level
+        // `requestId`, leaving only `message.id`. The dedup key must fall back
+        // to message.id alone (ccusage parity) — NOT nil, which disabled
+        // cross-file dedup and 2-3x over-counted replayed session history
+        // (today's Claude spend showed ~$1528 vs ccusage's ~$625).
+        let line = """
+        {"message":{"id":"msg_42","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":900}},"timestamp":"2026-05-29T10:00:00Z","cwd":"/Users/x/foo"}
+        """
+        let record = ClaudeUsageParser.parse(line: line.data(using: .utf8)!)
+        XCTAssertNotNil(record)
+        XCTAssertEqual(record?.dedupKey, "msg_42:")
+        XCTAssertEqual(record?.tokens.cacheReadTokens, 900)
+    }
+
     func test_claudeParse_missingUsageReturnsNil() {
         let line = """
         {"message":{"id":"msg_1"},"timestamp":"2026-05-15T10:00:00Z"}
