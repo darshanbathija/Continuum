@@ -170,6 +170,11 @@ public struct IOSAnalyticsView: View {
                         }
                         .padding(.horizontal, 16).padding(.bottom, 30)
                     }
+
+                    // Tokens by model (parity with Mac Usage tab). Token
+                    // volume, not dollars — follows the page window selector.
+                    IOSTokensByModelSection(snapshot: snapshot, window: window)
+                        .padding(.horizontal, 16).padding(.bottom, 30)
                 } else {
                     // Loading / empty state — `fetchAnalytics()` hasn't
                     // returned yet (or returned nil).
@@ -403,5 +408,173 @@ private struct MiniSpendChart: View {
 
     private func grad(_ p: TahoeProvider) -> LinearGradient {
         LinearGradient(colors: [p.glow.color, p.base.color], startPoint: .top, endPoint: .bottom)
+    }
+}
+
+// MARK: - Tokens by model (parity with Mac MacUsageView.TokensByModelSection)
+
+/// iOS port of the Mac "Tokens by model" section: groups the windowed
+/// per-model token volume by provider family and renders a per-family +
+/// per-model breakdown. Token volume (not dollars), so unpriced models
+/// (Grok, free OpenRouter, …) are included. Driven by the page-level window
+/// selector via the shared `UsageHistorySnapshot.tokensByModel(in:)`.
+private struct IOSTokensByModelSection: View {
+    @Environment(\.tahoe) private var t
+    var snapshot: UsageHistorySnapshot
+    var window: UsageHistorySnapshot.Window
+
+    private struct Family: Identifiable {
+        let id: String
+        let total: TokenTotals
+        let models: [(name: String, totals: TokenTotals)]
+        /// Largest single-model volume in the family — model bars scale to it.
+        var maxModel: Int { models.map(\.totals.totalTokens).max() ?? 0 }
+    }
+
+    /// Map a raw model name to a provider family for grouping. Matches the Mac
+    /// `TokensByModelSection.family(for:)` so both platforms bucket identically.
+    static func family(for model: String) -> String {
+        let m = model.lowercased()
+        if m.hasPrefix("claude") || m == "opus" || m == "sonnet" || m == "haiku" { return "Claude" }
+        if m.hasPrefix("gpt") || m.hasPrefix("chatgpt") || m.hasPrefix("o1") || m.hasPrefix("o3") || m.hasPrefix("o4") || m.contains("codex") { return "OpenAI" }
+        if m.hasPrefix("gemini") || m.hasPrefix("gemma") { return "Gemini" }
+        if m.hasPrefix("grok") || m.hasPrefix("xai/") { return "Grok" }
+        return "Other"
+    }
+
+    private func families(from byModel: [String: TokenTotals]) -> [Family] {
+        guard !byModel.isEmpty else { return [] }
+        var grouped: [String: [(String, TokenTotals)]] = [:]
+        for (model, totals) in byModel where totals.totalTokens > 0 {
+            grouped[Self.family(for: model), default: []].append((model, totals))
+        }
+        return grouped.map { (fam, models) -> Family in
+            var sum = TokenTotals.zero
+            for (_, tot) in models { sum += tot }
+            let sorted = models.sorted { $0.1.totalTokens > $1.1.totalTokens }
+                .map { (name: $0.0, totals: $0.1) }
+            return Family(id: fam, total: sum, models: sorted)
+        }
+        .sorted { $0.total.totalTokens > $1.total.totalTokens }
+    }
+
+    /// Family accent — reuse the provider lanes where they exist so the bars
+    /// key the same colors as the dollar charts above.
+    private func familyColor(_ family: String) -> Color {
+        switch family {
+        case "Claude": return TahoeProvider.claude.glow.color
+        case "OpenAI": return TahoeProvider.codex.glow.color
+        case "Gemini": return TahoeProvider.gemini.glow.color
+        case "Grok":   return Color(red: 0.42, green: 0.82, blue: 0.62) // Grok has no Tahoe lane
+        default:        return t.fg3                                      // "Other"
+        }
+    }
+
+    var body: some View {
+        let fams = families(from: snapshot.tokensByModel(in: window))
+        if !fams.isEmpty {
+            let grand = fams.reduce(0) { $0 + $1.total.totalTokens }
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("TOKENS BY MODEL")
+                        .font(TahoeFont.body(11, weight: .bold))
+                        .tracking(0.5)
+                        .foregroundStyle(t.fg3)
+                    Spacer()
+                    Text("\(Self.fmt(grand)) tokens")
+                        .font(TahoeFont.body(11))
+                        .foregroundStyle(t.fg3)
+                }
+                .padding(.horizontal, 6).padding(.top, 14).padding(.bottom, 8)
+
+                TahoeGlass(radius: 22, tone: .raised) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(fams) { fam in
+                            familyBlock(fam, grandTotal: grand)
+                        }
+                    }
+                    .padding(14)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func familyBlock(_ fam: Family, grandTotal: Int) -> some View {
+        let color = familyColor(fam.id)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                Circle().fill(color).frame(width: 8, height: 8)
+                Text(fam.id)
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Text(grandTotal > 0 ? "\(Int((Double(fam.total.totalTokens) / Double(grandTotal) * 100).rounded()))%" : "")
+                    .font(TahoeFont.body(10.5))
+                    .foregroundStyle(t.fg4)
+                Spacer()
+                Text(Self.fmt(fam.total.totalTokens) + " tokens")
+                    .font(TahoeFont.mono(12))
+                    .monospacedDigit()
+                    .foregroundStyle(t.fg)
+            }
+            // Family share of the grand total — full-width bar.
+            IOSProportionBar(fraction: grandTotal > 0 ? Double(fam.total.totalTokens) / Double(grandTotal) : 0,
+                             color: color, height: 5)
+            ForEach(fam.models, id: \.name) { m in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(m.name)
+                            .font(TahoeFont.mono(11))
+                            .foregroundStyle(t.fg2)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 8)
+                        Text(Self.fmt(m.totals.totalTokens))
+                            .font(TahoeFont.mono(11))
+                            .monospacedDigit()
+                            .foregroundStyle(t.fg)
+                    }
+                    // Bar scaled to the family's largest model.
+                    IOSProportionBar(fraction: fam.maxModel > 0 ? Double(m.totals.totalTokens) / Double(fam.maxModel) : 0,
+                                     color: color, height: 5)
+                    Text("in \(Self.fmt(m.totals.inputTokens)) · out \(Self.fmt(m.totals.outputTokens)) · cache \(Self.fmt(m.totals.cacheReadTokens + m.totals.cacheCreationTokens))")
+                        .font(TahoeFont.body(9.5))
+                        .foregroundStyle(t.fg4)
+                        .lineLimit(1)
+                }
+                .padding(.leading, 2)
+            }
+        }
+    }
+
+    /// Compact token count: 1.2K / 3.4M / 5.6B.
+    static func fmt(_ n: Int) -> String {
+        if n >= 1_000_000_000 { return String(format: "%.1fB", Double(n) / 1e9) }
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1e6) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1e3) }
+        return "\(n)"
+    }
+}
+
+/// Thin horizontal proportion bar (0…1) for the iOS tokens-by-model section.
+/// iOS twin of the Mac `ProportionBar` (private to MacUsageView).
+private struct IOSProportionBar: View {
+    @Environment(\.tahoe) private var t
+    var fraction: Double
+    var color: Color
+    var height: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.06))
+                Capsule(style: .continuous)
+                    .fill(LinearGradient(colors: [color.opacity(0.95), color.opacity(0.5)],
+                                         startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(2, geo.size.width * CGFloat(min(1, max(0, fraction)))))
+            }
+        }
+        .frame(height: height)
     }
 }

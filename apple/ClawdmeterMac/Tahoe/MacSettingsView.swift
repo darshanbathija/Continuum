@@ -1834,6 +1834,11 @@ private struct CursorSDKProviderRow: View {
     @State private var state: CursorModelProbeState?
     @State private var hasKeychainToken: Bool = false
     @State private var isRefreshing: Bool = false
+    /// v0.29.34: reactive mirror of the Cursor opt-in. The status probe
+    /// (cursor-agent shell + cursor-access-token keychain read) must not run
+    /// for a disabled provider — that was firing a keychain prompt just from
+    /// this row appearing. Re-probes when the user enables Cursor.
+    @AppStorage("clawdmeter.provider.cursor.enabled") private var cursorEnabled: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -1861,11 +1866,15 @@ private struct CursorSDKProviderRow: View {
             actionButton
         }
         .task { await refresh() }
+        .onChange(of: cursorEnabled) { _, on in
+            if on { Task { await refresh() } }
+        }
     }
 
     @ViewBuilder
     private var statePill: some View {
         let (label, color): (String, Color) = {
+            if !cursorEnabled { return ("Disabled", t.fg4) }
             if isRefreshing || state == nil { return ("Checking…", t.fg4) }
             guard let state else { return ("Checking…", t.fg4) }
             if state.binaryPath == nil { return ("Not installed", Color.orange) }
@@ -1882,6 +1891,7 @@ private struct CursorSDKProviderRow: View {
     }
 
     private var detailLine: String {
+        if !cursorEnabled { return "Enable Cursor in Providers above to check sign-in and model access." }
         guard let state else { return "Probing cursor-agent auth and model access…" }
         if state.binaryPath == nil {
             return "Cursor Agent CLI not found. Install cursor-agent so Clawdmeter can start and resume Cursor-backed sessions."
@@ -1933,6 +1943,15 @@ private struct CursorSDKProviderRow: View {
     }
 
     private func refresh(force: Bool = false) async {
+        // v0.29.34: don't shell cursor-agent or read the cursor-access-token
+        // keychain until the user has enabled Cursor. Probing a disabled
+        // provider was firing a keychain prompt just from this row appearing.
+        guard ProviderEnablement.isEnabled("cursor") else {
+            state = nil
+            hasKeychainToken = false
+            isRefreshing = false
+            return
+        }
         isRefreshing = true
         if force {
             await CursorModelProbe.shared.invalidate()
@@ -1988,6 +2007,11 @@ private struct ClaudeCLIProviderRow: View {
     /// prompt the first time the app accesses that Keychain item; once
     /// "Always Allow" is granted, subsequent launches are silent.
     @AppStorage("clawdmeter.claude.autoImportFromClaudeCode") private var autoImportAtLaunch: Bool = false
+    /// v0.29.34: reactive mirror of the Claude opt-in. The status probe
+    /// (`ClaudeCLIProbe.run()` → `PastedAnthropicTokenProvider.hasToken`) must
+    /// not read Continuum's Anthropic-token keychain entry for a disabled
+    /// provider — that was firing a keychain prompt on row appearance.
+    @AppStorage("clawdmeter.provider.claude.enabled") private var claudeEnabled: Bool = false
 
     enum ProbeState: Equatable {
         case pending
@@ -2058,6 +2082,9 @@ private struct ClaudeCLIProviderRow: View {
             actionButton
         }
         .task { await refreshProbe() }
+        .onChange(of: claudeEnabled) { _, on in
+            if on { Task { await refreshProbe() } }
+        }
     }
 
     private var showsPasteFallback: Bool {
@@ -2067,6 +2094,7 @@ private struct ClaudeCLIProviderRow: View {
     @ViewBuilder
     private var statePill: some View {
         let (label, color): (String, Color) = {
+            if !claudeEnabled { return ("Disabled", t.fg4) }
             switch probe {
             case .pending:           return ("Checking…", t.fg4)
             case .notInstalled:      return ("Not installed", Color.orange)
@@ -2085,6 +2113,7 @@ private struct ClaudeCLIProviderRow: View {
     }
 
     private var detailLine: String {
+        if !claudeEnabled { return "Enable Claude in Providers above to check status and import auth." }
         switch probe {
         case .pending:
             return "Probing the `claude` binary, Continuum Keychain token, and activity history…"
@@ -2162,6 +2191,14 @@ private struct ClaudeCLIProviderRow: View {
     /// invocation. Run off the main actor to avoid janking the
     /// Settings tab on first appear.
     private func refreshProbe() async {
+        // v0.29.34: skip the probe (which reads Continuum's Anthropic-token
+        // keychain entry via ClaudeCLIProbe) until Claude is enabled, so a
+        // disabled provider never triggers a keychain prompt on appearance.
+        guard ProviderEnablement.isEnabled("claude") else {
+            self.hasClawdmeterToken = false
+            self.probe = .pending
+            return
+        }
         let detected = await Task.detached(priority: .userInitiated) {
             ClaudeCLIProbe.run()
         }.value

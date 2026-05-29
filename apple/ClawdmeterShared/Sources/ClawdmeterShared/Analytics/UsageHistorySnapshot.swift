@@ -72,6 +72,39 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         self.byDayByModel = byDayByModel
     }
 
+    /// Windowed per-model token totals for the tokens-by-model section (token
+    /// volume, not dollars — unpriced models like Grok are included). `.allTime`
+    /// returns the precomputed `tokensByModel` aggregate (falling back to a sum
+    /// over `byDayByModel` for older snapshots that predate the field); the
+    /// bounded windows sum `byDayByModel` over the same `startOfDay`-aligned day
+    /// spans the dollar charts use, so Mac and iOS render identical numbers.
+    /// Mirrors the Mac `AnalyticsRangeAdapter.tokensByModel(snapshot:range:)`.
+    public func tokensByModel(in window: Window) -> [String: TokenTotals] {
+        if window == .allTime {
+            if !tokensByModel.isEmpty { return tokensByModel }
+            var out: [String: TokenTotals] = [:]
+            for (_, modelMap) in byDayByModel {
+                for (model, totals) in modelMap { out[model, default: .zero] += totals }
+            }
+            return out
+        }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let startOffset: Int
+        switch window {
+        case .today:   startOffset = 0
+        case .past7d:  startOffset = 6
+        case .past30d: startOffset = 29
+        case .allTime: startOffset = 0 // handled above
+        }
+        let start = cal.date(byAdding: .day, value: -startOffset, to: today) ?? today
+        var out: [String: TokenTotals] = [:]
+        for (day, modelMap) in byDayByModel where day >= start && day <= today {
+            for (model, totals) in modelMap { out[model, default: .zero] += totals }
+        }
+        return out
+    }
+
     // MARK: - Compat getters
 
     /// Back-compat shim for call sites that used the old `claude` stored
