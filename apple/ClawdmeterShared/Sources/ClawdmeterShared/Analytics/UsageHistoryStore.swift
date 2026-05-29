@@ -174,7 +174,13 @@ public final class UsageHistoryStore {
         // immediately and the UI can render its skeleton. force:true on
         // the first refresh so the probe doesn't short-circuit before
         // lastSeenMaxMtime is initialized.
-        Task { await self.refresh(force: true) }
+        // v0.29.32: analytics reads other apps' data (~/.codex, ~/.gemini,
+        // opencode db), which triggers the macOS "access data from other apps"
+        // prompt. Defer the initial load until the user taps "Get access from
+        // your Mac" in the Usage tab (which sets usageDataAccessGranted).
+        if ProviderEnablement.usageDataAccessGranted {
+            Task { await self.refresh(force: true) }
+        }
     }
 
     deinit {
@@ -202,6 +208,11 @@ public final class UsageHistoryStore {
     /// bump the mtime above what we saved, triggering a re-load on the
     /// next tick.
     public func refresh(force: Bool = false) async {
+        // v0.29.32: never touch other apps' data until the user grants Usage
+        // access — the mtime probe + loadAll() below stat/read ~/.codex,
+        // ~/.gemini, opencode db. The "Get access" CTA sets the flag, THEN calls
+        // forceRefresh(), so this guard passes for the explicit load.
+        guard ProviderEnablement.usageDataAccessGranted else { return }
         // Probe mtime up front regardless of `force` so we have a
         // pre-load baseline to save. On non-force paths the probe also
         // gates short-circuiting; on force paths it just primes

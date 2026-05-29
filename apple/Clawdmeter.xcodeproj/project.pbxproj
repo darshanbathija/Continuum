@@ -98,6 +98,7 @@
 		429198BE705AACE1B656260E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE0C409B82A2CE3CC4741248 /* ContentView.swift */; };
 		430A5F81EEBDB5C450018559 /* SidebarProjectionCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACEC58065CF9E56EFC7561D9 /* SidebarProjectionCacheTests.swift */; };
 		43CE166F0225B3A52F99D7BA /* QuickStartRepoSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4353CCA0F5543AEB084A0406 /* QuickStartRepoSheet.swift */; };
+		44996E84FA30C403B50066AA /* OnboardingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25B0334147E01FBA4B4E6081 /* OnboardingSheet.swift */; };
 		453B70AABD9A8921BA9706FB /* PathValidatorMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98E6E75C4550204AE0288EB6 /* PathValidatorMacTests.swift */; };
 		457E68D990E7B761C11DF6CC /* AgentSpawner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */; };
 		462ED418D83A3251EDBB6147 /* WorkbenchState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3DBEBE9BF592FA1BC71A42 /* WorkbenchState.swift */; };
@@ -469,6 +470,7 @@
 		23BA2D80741F5E8B24ACEA51 /* ControlModeFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlModeFrame.swift; sourceTree = "<group>"; };
 		24E844E6256A865A0DFEEF18 /* UsageQueryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageQueryService.swift; sourceTree = "<group>"; };
 		258860E4C81547276D4E7F3C /* iOSComposerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSComposerBar.swift; sourceTree = "<group>"; };
+		25B0334147E01FBA4B4E6081 /* OnboardingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingSheet.swift; sourceTree = "<group>"; };
 		2629B754AC3EEB1E6A245A9F /* WorkspaceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStoreTests.swift; sourceTree = "<group>"; };
 		26B5538D5376C29DDF7CD413 /* deep-research-prompt.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "deep-research-prompt.txt"; sourceTree = "<group>"; };
 		26C5754995E30EFF8A7FCC93 /* IOSWorkspaceDocumentTabsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSWorkspaceDocumentTabsTests.swift; sourceTree = "<group>"; };
@@ -1272,6 +1274,7 @@
 				AD6B023408F49EF49E556DC5 /* MacSettingsView.swift */,
 				08A7E1550F933A4D19DC48D9 /* MacTahoeAdapter.swift */,
 				9B3AA024217929E481D26844 /* MacUsageView.swift */,
+				25B0334147E01FBA4B4E6081 /* OnboardingSheet.swift */,
 				18DCEE84E585CFA9E05B9805 /* OpencodeSetupSheet.swift */,
 				8B1A00A70CD4E6DD901790A3 /* PlanCompletionSurfaces.swift */,
 				8502D79883F8A1C3ED82A085 /* RepoEnvVariablesSettingsView.swift */,
@@ -1951,6 +1954,7 @@
 				11BA8BA021A2FF248DDE4965 /* ModePicker.swift in Sources */,
 				55897A9C8B2A15A2A1C231C5 /* ModelPicker.swift in Sources */,
 				16AAD267657983FF56851AD3 /* NotificationDispatcher.swift in Sources */,
+				44996E84FA30C403B50066AA /* OnboardingSheet.swift in Sources */,
 				72E7AC4665316C7AEDDD59D0 /* OpencodeAuthFile.swift in Sources */,
 				4EF86569A8E9F50930A51AF1 /* OpencodeProcessManager.swift in Sources */,
 				69BB1B4EA6D9FED589AC46BD /* OpencodeSSEAdapter.swift in Sources */,

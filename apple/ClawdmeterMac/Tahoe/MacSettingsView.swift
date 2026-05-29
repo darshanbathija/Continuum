@@ -237,6 +237,23 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var providerSettings: some View {
+        // v0.29.32: opt-in enable toggles. Off by default — enabling a provider
+        // reads its credentials + starts its poller live (no relaunch).
+        SettingsCard(title: "Enabled providers",
+                     sub: "Turn on the providers you use. Off by default — Continuum reads a provider's keychain and usage only once it's enabled.") {
+            VStack(alignment: .leading, spacing: 14) {
+                ProviderEnableToggleRow(id: "claude", label: "Claude", runtime: runtime)
+                TahoeHair()
+                ProviderEnableToggleRow(id: "codex", label: "Codex", runtime: runtime)
+                TahoeHair()
+                ProviderEnableToggleRow(id: "gemini", label: "Antigravity / Gemini", runtime: runtime)
+                TahoeHair()
+                ProviderEnableToggleRow(id: "cursor", label: "Cursor", runtime: runtime)
+                TahoeHair()
+                ProviderEnableToggleRow(id: "opencode", label: "OpenCode", runtime: runtime)
+            }
+        }
+
         // Providers card. All providers use the same row shape so
         // their visual rhythm matches: glyph + title + one-line status +
         // single trailing control (button or toggle).
@@ -845,6 +862,39 @@ private struct SettingsRow<Control: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             control
+        }
+    }
+}
+
+/// v0.29.32: per-provider opt-in toggle, reactive via @State (seeded from the
+/// persisted flag). On change it calls `runtime.setProviderEnabled`, which
+/// flips the flag, starts/stops the poller live, and syncs the menu-bar gauge.
+/// Shared by Settings → Providers and the first-run onboarding sheet. Internal
+/// (not file-private) so OnboardingSheet can reuse it.
+struct ProviderEnableToggleRow: View {
+    let id: String
+    let label: String
+    var hint: String? = nil
+    var runtime: AppRuntime?
+    @State private var on: Bool
+
+    init(id: String, label: String, hint: String? = nil, runtime: AppRuntime?) {
+        self.id = id
+        self.label = label
+        self.hint = hint
+        self.runtime = runtime
+        _on = State(initialValue: ProviderEnablement.isEnabled(id))
+    }
+
+    var body: some View {
+        SettingsRow(label: label, hint: hint) {
+            TahoeToggleView(on: Binding(
+                get: { on },
+                set: { newValue in
+                    on = newValue
+                    runtime?.setProviderEnabled(id, newValue)
+                }
+            ))
         }
     }
 }

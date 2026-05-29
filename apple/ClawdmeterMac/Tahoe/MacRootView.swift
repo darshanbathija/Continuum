@@ -42,6 +42,9 @@ struct MacRootView: View {
     // state via `ChatV2Store` (T10). MacTitlebar's `secondaryRight`
     // branch for `.chat` is `EmptyView()` so it doesn't need bindings.
 
+    // v0.29.32: first-run onboarding (providers are opt-in). Shown once.
+    @State private var showOnboarding = !ProviderEnablement.hasOnboarded
+
     // v0.14.0 (plan v2.1 D6 + D7): handoff toast + reduce-motion guard.
     @State private var handoffToast: String? = nil
     @State private var toastStartedAt: Date = Date()
@@ -245,6 +248,10 @@ struct MacRootView: View {
         }
         .overlay {
             modalOverlay
+        }
+        // v0.29.32: first-run welcome — turn on the providers you use.
+        .sheet(isPresented: $showOnboarding) {
+            OnboardingSheet(runtime: runtime, onDone: { showOnboarding = false })
         }
         .onChange(of: handoffToast) { _, newValue in
             guard newValue != nil else { return }

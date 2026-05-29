@@ -21,6 +21,10 @@ public struct MacUsageView: View {
     /// PR #31 chunk 3 (A2): the live usage store the OpenCode dollar
     /// row reads from. Optional so Previews work without a runtime.
     var usageHistoryStore: UsageHistoryStore?
+    /// v0.29.32: spend/token analytics read other apps' data, so they're gated
+    /// behind an explicit "Get access from your Mac" tap. Mirrors the persisted
+    /// flag; flipped locally so the view swaps in the charts on grant.
+    @State private var usageAccessGranted = ProviderEnablement.usageDataAccessGranted
 
     public init(
         data: TahoeLiveBindings = .demo,
@@ -47,27 +51,68 @@ public struct MacUsageView: View {
                 }
                 .padding(.horizontal, 6).padding(.bottom, 14)
 
-                // PR #31 chunk 3 (A2): OpenCode dollar-cost row.
-                // Renders as a single full-width strip beneath the 3
-                // provider columns because OpenCode doesn't have a 5h
-                // rolling quota — only dollar totals. The dedicated
-                // column avoids cramping the existing 3-column layout
-                // at the 1280pt min window width.
-                OpencodeDollarRow(usageHistory: usageHistoryStore)
-                    .padding(.horizontal, 6).padding(.bottom, 18)
+                if usageAccessGranted {
+                    // PR #31 chunk 3 (A2): OpenCode dollar-cost row.
+                    // Renders as a single full-width strip beneath the 3
+                    // provider columns because OpenCode doesn't have a 5h
+                    // rolling quota — only dollar totals.
+                    OpencodeDollarRow(usageHistory: usageHistoryStore)
+                        .padding(.horizontal, 6).padding(.bottom, 18)
 
-                TahoeHair()
+                    TahoeHair()
 
-                AnalyticsRow(usageHistoryStore: usageHistoryStore)
-                    .padding(.top, 14)
+                    AnalyticsRow(usageHistoryStore: usageHistoryStore)
+                        .padding(.top, 14)
 
-                // Token volume (not dollars): all-time tokens grouped by
-                // family with a per-model breakdown. Complements the dollar
-                // analytics above and surfaces models regardless of pricing.
-                TokensByModelSection(usageHistoryStore: usageHistoryStore)
-                    .padding(.horizontal, 6).padding(.top, 18)
+                    // Token volume (not dollars): tokens grouped by family with
+                    // a per-model breakdown. Surfaces models regardless of price.
+                    TokensByModelSection(usageHistoryStore: usageHistoryStore)
+                        .padding(.horizontal, 6).padding(.top, 18)
+                } else {
+                    // v0.29.32: gate the analytics (which reads other apps'
+                    // data) behind an explicit grant. The live provider columns
+                    // above need no file access, so they stay visible.
+                    usageAccessCTA
+                        .padding(.horizontal, 6).padding(.top, 8)
+                }
             }
             .padding(.vertical, 6)
+        }
+    }
+
+    /// "Get access from your Mac" — shown until the user grants Usage data
+    /// access. Tapping sets the flag and kicks the first analytics load (which
+    /// is the moment the cross-app-data prompt appears, with user intent).
+    private var usageAccessCTA: some View {
+        TahoeGlass(radius: 20, tone: .panel) {
+            VStack(spacing: 12) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 30, weight: .regular))
+                    .foregroundStyle(t.fg3)
+                Text("Get access from your Mac")
+                    .font(TahoeFont.body(15, weight: .bold))
+                    .foregroundStyle(t.fg)
+                Text("Spend + token analytics read usage data written by Claude Code, Codex, Antigravity, and OpenCode on this Mac. Grant access to see your usage here — macOS will ask once.")
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg3)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 440)
+                Button {
+                    ProviderEnablement.usageDataAccessGranted = true
+                    usageAccessGranted = true
+                    usageHistoryStore?.forceRefresh()
+                } label: {
+                    Text("Grant access")
+                        .font(TahoeFont.body(12.5, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18).padding(.vertical, 8)
+                        .background(t.accent, in: Capsule(style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(28)
+            .frame(maxWidth: .infinity)
         }
     }
 }
