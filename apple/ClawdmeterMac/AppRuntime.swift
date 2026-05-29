@@ -140,7 +140,11 @@ final class AppRuntime: ObservableObject {
             source: AnthropicSource(tokenProvider: claudeTokenProvider),
             tokenProvider: claudeTokenProvider
         )
-        if UserDefaults.standard.bool(forKey: "clawdmeter.claude.autoImportFromClaudeCode") {
+        // v0.29.32: also require Claude to be enabled — the auto-import reads
+        // Claude Code's third-party keychain entry, which must not happen until
+        // the user opts Claude in.
+        if ProviderEnablement.isEnabled("claude"),
+           UserDefaults.standard.bool(forKey: "clawdmeter.claude.autoImportFromClaudeCode") {
             Task.detached(priority: .utility) {
                 if let token = KeychainTokenProvider().currentAccessToken {
                     let didMirror = PastedAnthropicTokenProvider.shared().setToken(token)
@@ -217,20 +221,21 @@ final class AppRuntime: ObservableObject {
         // for the slower provider. Let each MenuBarGaugeView observe its own
         // model directly.
 
-        // Start all pollers immediately. AppModel.start() is idempotent.
-        claudeModel.start()
-        codexModel.start()
-        geminiModel.start()
-        // Cursor's OAuth token is owned by cursor-agent in the user's
-        // login keychain. Development / AI-built app bundles often have a
-        // changing code-signing requirement, so even "Always Allow" can
-        // degrade into a SecurityAgent prompt on every launch. Do not touch
-        // Cursor auth at app startup; explicit Cursor UI/actions can still
-        // probe or start sessions.
-        if Self.cursorStartupPollingEnabled {
+        // v0.29.32: providers are opt-in. A poller's first poll lazily reads
+        // its provider's keychain, so only start the ones the user has enabled
+        // (Settings → Providers / first-run welcome sheet). This is what stops
+        // the launch-time keychain prompts. AppModel.start() is idempotent;
+        // toggling a provider on later calls start() live (enableProvider).
+        if ProviderEnablement.isEnabled("claude") { claudeModel.start() }
+        if ProviderEnablement.isEnabled("codex") { codexModel.start() }
+        if ProviderEnablement.isEnabled("gemini") { geminiModel.start() }
+        // Cursor: the opt-in flag is the gate now (it supersedes the legacy
+        // cursorStartupPollingEnabled deferral — enabling Cursor means the user
+        // accepts its cursor-agent keychain prompt).
+        if ProviderEnablement.isEnabled("cursor") {
             cursorModel.start()
         } else {
-            runtimeLogger.info("Cursor startup polling disabled; deferring keychain access until explicit Cursor use")
+            runtimeLogger.info("Cursor poller deferred (provider disabled); keychain untouched until enabled")
         }
 
         // Analytics history: walks the on-disk JSONL caches, computes
@@ -568,17 +573,28 @@ final class AppRuntime: ObservableObject {
         // on a 60s TTL whenever a picker opens — this keeps the cache warm and
         // gives the "auto-check for new models daily" guarantee. First-party
         // Claude/OpenAI/Gemini stay hand-curated in ModelCatalog.bundled.)
-        Task.detached(priority: .utility) {
-            let key = "clawdmeter.models.lastProbeRefresh"
-            let now = Date()
-            let last = UserDefaults.standard.object(forKey: key) as? Date
-            if last == nil || now.timeIntervalSince(last!) >= 24 * 60 * 60 {
-                await CursorModelProbe.shared.invalidate()
-                await OpenRouterModelProbe.shared.invalidate()
-                UserDefaults.standard.set(now, forKey: key)
+        // v0.29.32: the Cursor probe shells `cursor-agent --list-models`, which
+        // reads the Cursor keychain — only warm it when Cursor is enabled, else
+        // it re-introduces the launch-time Cursor keychain prompt. OpenRouter is
+        // network-only (no keychain/TCC), so warm it whenever OpenCode is on.
+        let cursorOn = ProviderEnablement.isEnabled("cursor")
+        let openrouterOn = ProviderEnablement.isEnabled("opencode")
+        if cursorOn || openrouterOn {
+            Task.detached(priority: .utility) {
+                let key = "clawdmeter.models.lastProbeRefresh"
+                let now = Date()
+                let last = UserDefaults.standard.object(forKey: key) as? Date
+                let stale = last == nil || now.timeIntervalSince(last!) >= 24 * 60 * 60
+                if stale { UserDefaults.standard.set(now, forKey: key) }
+                if cursorOn {
+                    if stale { await CursorModelProbe.shared.invalidate() }
+                    _ = await CursorModelProbe.shared.currentModels()
+                }
+                if openrouterOn {
+                    if stale { await OpenRouterModelProbe.shared.invalidate() }
+                    _ = await OpenRouterModelProbe.shared.currentModels()
+                }
             }
-            _ = await CursorModelProbe.shared.currentModels()
-            _ = await OpenRouterModelProbe.shared.currentModels()
         }
         Task(priority: .utility) { @MainActor in
             OpencodeProcessManager.shared.prepareRuntimeHost()
@@ -625,6 +641,21 @@ final class AppRuntime: ObservableObject {
     /// `appModel(for: .primary(kind: kind))`.
     func appModel(for kind: AgentKind) -> AppModel? {
         modelsByInstanceWireId[ProviderInstanceId.primary(kind: kind).wireId]
+    }
+
+    /// v0.29.32: live provider opt-in. Flips the persisted enabled flag and
+    /// starts/stops the matching poller without a relaunch (the AppModel
+    /// already exists from init — it just wasn't started). Also writes the
+    /// `menuBarShown` pref so AppDelegate's UserDefaults observer shows/hides
+    /// the matching gauge in lockstep (no empty gauge for a disabled provider).
+    @MainActor
+    func setProviderEnabled(_ id: String, _ enabled: Bool) {
+        ProviderEnablement.setEnabled(id, enabled)
+        if let kind = AgentKind(rawValue: id), let model = appModel(for: kind) {
+            if enabled { model.start() } else { model.stop() }
+        }
+        UserDefaults.standard.set(enabled, forKey: "clawdmeter.\(id).menuBarShown")
+        runtimeLogger.info("Provider \(id, privacy: .public) \(enabled ? "enabled" : "disabled", privacy: .public)")
     }
 
     /// All `AppModel` instances the runtime currently owns, indexed by

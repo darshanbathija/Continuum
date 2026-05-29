@@ -283,16 +283,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyVisibilityFromPrefs() {
         let defaults = UserDefaults.standard
-        // Both default-on so first-launch users see what the docs promise.
-        let claudeShown = defaults.object(forKey: ProviderStatusController.prefKey("claude")) as? Bool ?? true
-        let codexShown = defaults.object(forKey: ProviderStatusController.prefKey("codex")) as? Bool ?? true
-        let geminiShown = defaults.object(forKey: ProviderStatusController.prefKey("gemini")) as? Bool ?? true
+        // v0.29.32: providers are opt-in — a disabled provider must NOT show an
+        // (empty) menu-bar gauge, so AND each shown-pref with its enabled flag.
+        // setProviderEnabled writes both in lockstep + this observer re-applies.
+        let claudeShown = (defaults.object(forKey: ProviderStatusController.prefKey("claude")) as? Bool ?? true)
+            && ProviderEnablement.isEnabled("claude")
+        let codexShown = (defaults.object(forKey: ProviderStatusController.prefKey("codex")) as? Bool ?? true)
+            && ProviderEnablement.isEnabled("codex")
+        let geminiShown = (defaults.object(forKey: ProviderStatusController.prefKey("gemini")) as? Bool ?? true)
+            && ProviderEnablement.isEnabled("gemini")
         // PR #32: OpenCode menu-bar item default OFF — opencode is opt-
         // in and many users won't have it installed. The Settings →
         // Providers panel shows the install state; toggling on the
         // menu-bar item is a separate explicit step (matches how iOS
         // Live tab toggle behaves).
-        let opencodeShown = defaults.object(forKey: ProviderStatusController.prefKey("opencode")) as? Bool ?? false
+        let opencodeShown = (defaults.object(forKey: ProviderStatusController.prefKey("opencode")) as? Bool ?? false)
+            && ProviderEnablement.isEnabled("opencode")
         // Perf: this fires on every app-wide defaults write via
         // `didChangeNotification`; bail unless one of the 4 menu-bar keys
         // actually moved so we don't re-toggle every NSStatusItem on

@@ -142,7 +142,10 @@ public actor RepoIndex {
 
         // Source 1: ~/.claude/projects/ directory names (encoded cwds)
         let claudeProjects = home.appendingPathComponent(".claude/projects")
-        if let entries = try? FileManager.default.contentsOfDirectory(
+        // v0.29.32: gate the ~/.claude read on Claude being enabled so the app
+        // doesn't touch Claude Code's data on launch until the user opts in.
+        if ProviderEnablement.isEnabled("claude"),
+           let entries = try? FileManager.default.contentsOfDirectory(
             at: claudeProjects, includingPropertiesForKeys: [.contentModificationDateKey]
         ) {
             for entry in entries where entry.hasDirectoryPath {
@@ -192,7 +195,10 @@ public actor RepoIndex {
 
         // Source 2: ~/.codex/sessions/**/*.jsonl — collect cwd + mtime + path
         let codexSessions = home.appendingPathComponent(".codex/sessions")
-        let codexJSONLs = await readCodexSessionMeta(at: codexSessions, recentCutoff: recentCutoff)
+        // v0.29.32: gate the ~/.codex read on Codex being enabled.
+        let codexJSONLs = ProviderEnablement.isEnabled("codex")
+            ? await readCodexSessionMeta(at: codexSessions, recentCutoff: recentCutoff)
+            : []
         for meta in codexJSONLs {
             let key = RepoIdentity.normalize(meta.cwd)
             if !keysSeen.contains(key) {

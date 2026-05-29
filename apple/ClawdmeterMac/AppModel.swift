@@ -115,6 +115,21 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    /// Stop polling — used when a provider is toggled OFF (opt-in providers,
+    /// v0.29.32). Quiesces the poller + tick timer so no further keychain
+    /// reads or network polls happen. Idempotent; re-`start()` re-arms cleanly
+    /// (poller's `guard task == nil` is satisfied after stop nils its task).
+    /// The last `usage` snapshot is intentionally left intact.
+    public func stop() {
+        logger.info("AppModel.stop \(self.config.id) (isStarted=\(self.isStarted))")
+        guard isStarted else { return }
+        isStarted = false
+        poller.stop()
+        poller.onEvent = nil
+        clockTimer?.invalidate()
+        clockTimer = nil
+    }
+
     public func forcePoll() {
         Task { _ = await poller.forcePoll() }
     }
