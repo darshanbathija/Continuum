@@ -80,6 +80,27 @@ final class PricingTests: XCTestCase {
         XCTAssertFalse(pricing.isPriced("completely-made-up-model-xyz"))
     }
 
+    // Opus 4.8 (released 2026-05-28) is the primary Claude Code model; a
+    // missing pricing entry understated daily Claude spend on the Usage tab.
+    // Rates are flat across Opus 4.x ($5/M in, $25/M out).
+    func test_opus48_isPricedSameAsOpus47() {
+        let tokens = TokenTotals(inputTokens: 100_000, outputTokens: 50_000)
+        XCTAssertTrue(pricing.isPriced("claude-opus-4-8"))
+        let c48 = (pricing.cost(for: "claude-opus-4-8", tokens: tokens) as NSDecimalNumber).doubleValue
+        let c47 = (pricing.cost(for: "claude-opus-4-7", tokens: tokens) as NSDecimalNumber).doubleValue
+        XCTAssertEqual(c48, 1.75, accuracy: 0.001)   // 100k @ $5/M + 50k @ $25/M
+        XCTAssertEqual(c48, c47, accuracy: 0.0001)
+    }
+
+    // Bare model names from the opencode provider (e.g. "grok-4.3") must
+    // resolve to LiteLLM's provider-prefixed key ("xai/grok-4.3") rather than
+    // pricing at $0.
+    func test_grok_resolvesViaProviderPrefix() {
+        let tokens = TokenTotals(inputTokens: 1_000, outputTokens: 1_000)
+        XCTAssertTrue(pricing.isPriced("grok-4.3"))
+        XCTAssertGreaterThan((pricing.cost(for: "grok-4.3", tokens: tokens) as NSDecimalNumber).doubleValue, 0)
+    }
+
     // v0.23.8: pin the new Gemini frontier-Pro entry. Until this
     // commit, M134 → "gemini-3.1-pro" fell through as unpriced and
     // any Antigravity session on the Pro model contributed $0.

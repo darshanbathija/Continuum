@@ -40,3 +40,6 @@ apple/ClawdmeterMac/Resources/Vendor/opencode/opencode
 # wrapper per spawn into <worktree>/.continue-plan/. These are spawn
 # scratch and must never land in a PR.
 .continue-plan/
+
+# QA run artifacts (tools/qa-surfaces.sh + tools/clawdmeter-logs.sh).
+tools/qa-logs/

@@ -251,8 +251,12 @@ struct ComposerInputCore: View {
             showingMentions = false
             return
         }
-        // @-mention: detect the trailing @<word> in the text.
-        if let atRange = text.range(of: "@", options: .backwards) {
+        // @-mention: detect a trailing @<word>, but only when the '@' begins a
+        // token (start of text or right after whitespace). Without the boundary
+        // check an email like "darshan@axtior" wrongly opened the mention picker.
+        if let atRange = text.range(of: "@", options: .backwards),
+           atRange.lowerBound == text.startIndex
+               || text[text.index(before: atRange.lowerBound)].isWhitespace {
             let afterAt = String(text[atRange.upperBound...])
             if !afterAt.contains(" "), !afterAt.contains("\n") {
                 mentionQuery = afterAt
@@ -293,7 +297,14 @@ struct ComposerInputCore: View {
         case .recent(let r):
             replacement = "@\(r.path) "
         }
-        store.text.replaceSubrange(atRange.lowerBound..<store.text.endIndex, with: replacement)
+        // Replace only the contiguous "@<query>" token, not through end-of-text:
+        // replacing to endIndex clobbered anything the user had typed after the
+        // mention (e.g. when the caret was mid-message).
+        var tokenEnd = atRange.upperBound
+        while tokenEnd < store.text.endIndex, !store.text[tokenEnd].isWhitespace {
+            tokenEnd = store.text.index(after: tokenEnd)
+        }
+        store.text.replaceSubrange(atRange.lowerBound..<tokenEnd, with: replacement)
         showingMentions = false
     }
 

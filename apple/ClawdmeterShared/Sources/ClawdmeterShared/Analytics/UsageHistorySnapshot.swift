@@ -46,19 +46,24 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
     public let sessionCount: Int
     /// Per-model unpriced token rollups (surfaces in the UI footer per A17).
     public let unpricedModelTokens: [String: TokenTotals]
+    /// Per-model token rollups across ALL models (priced + unpriced), keyed by
+    /// raw model name. Powers the Usage tab's tokens-by-model / family section.
+    public let tokensByModel: [String: TokenTotals]
 
     public init(
         byProvider: [UsageRecord.Provider: ProviderTotals],
         computedAt: Date,
         sequenceNumber: UInt64,
         sessionCount: Int,
-        unpricedModelTokens: [String: TokenTotals]
+        unpricedModelTokens: [String: TokenTotals],
+        tokensByModel: [String: TokenTotals] = [:]
     ) {
         self.byProvider = byProvider
         self.computedAt = computedAt
         self.sequenceNumber = sequenceNumber
         self.sessionCount = sessionCount
         self.unpricedModelTokens = unpricedModelTokens
+        self.tokensByModel = tokensByModel
     }
 
     // MARK: - Compat getters
@@ -97,6 +102,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         case sequenceNumber
         case sessionCount
         case unpricedModelTokens
+        case tokensByModel
         // Legacy v8 fields, retained for backward-compat decode.
         case claude
         case codex
@@ -108,6 +114,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         self.sequenceNumber = try c.decode(UInt64.self, forKey: .sequenceNumber)
         self.sessionCount = try c.decode(Int.self, forKey: .sessionCount)
         self.unpricedModelTokens = (try c.decodeIfPresent([String: TokenTotals].self, forKey: .unpricedModelTokens)) ?? [:]
+        self.tokensByModel = (try c.decodeIfPresent([String: TokenTotals].self, forKey: .tokensByModel)) ?? [:]
 
         // Prefer the new byProvider shape. Unknown provider raw values
         // (future-client snapshots) are dropped silently.
@@ -138,6 +145,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         try c.encode(sequenceNumber, forKey: .sequenceNumber)
         try c.encode(sessionCount, forKey: .sessionCount)
         try c.encode(unpricedModelTokens, forKey: .unpricedModelTokens)
+        try c.encode(tokensByModel, forKey: .tokensByModel)
         // Write the new byProvider dict (canonical) AND the legacy
         // claude/codex fields (for one release of overlap, so a v5 reader
         // can still pick up totals from a v6 writer's snapshot).

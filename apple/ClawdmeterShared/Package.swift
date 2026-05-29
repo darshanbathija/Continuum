@@ -42,6 +42,11 @@ let package = Package(
                 // Embedded LiteLLM pricing snapshot (A3 + A20). Refreshed via
                 // `tools/refresh-pricing.sh`; loaded at runtime by `Pricing`.
                 .process("Analytics/pricing.json"),
+                // Manual pricing overrides, bundled so PricingUpdater's daily
+                // runtime refresh applies them on top of LiteLLM exactly like
+                // tools/refresh-pricing.sh does at build time (kept in sync by
+                // that script from tools/pricing-overrides.json).
+                .process("Analytics/pricing-overrides.json"),
                 // Tahoe 26 redesign: provider logos + accent color sets
                 // bundled as a resource asset catalog. Read via
                 // `Image("tahoe-…-mark", bundle: .module)`.

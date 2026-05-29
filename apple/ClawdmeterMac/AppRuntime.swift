@@ -552,6 +552,15 @@ final class AppRuntime: ObservableObject {
     }
 
     private func bootstrapProviderRuntimes() {
+        // Keep pricing current without a rebuild: refresh the LiteLLM snapshot
+        // at most once per 24h, then re-aggregate analytics so a newly-released
+        // model (e.g. a fresh Opus) stops showing $0 within this session.
+        Task.detached(priority: .utility) { [weak self] in
+            let refreshed = await PricingUpdater.shared.refreshIfStale()
+            if refreshed {
+                await MainActor.run { self?.usageHistoryStore.forceRefresh() }
+            }
+        }
         Task(priority: .utility) { @MainActor in
             OpencodeProcessManager.shared.prepareRuntimeHost()
         }

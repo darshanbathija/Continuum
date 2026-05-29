@@ -60,9 +60,118 @@ public struct MacUsageView: View {
 
                 AnalyticsRow(usageHistoryStore: usageHistoryStore)
                     .padding(.top, 14)
+
+                // Token volume (not dollars): all-time tokens grouped by
+                // family with a per-model breakdown. Complements the dollar
+                // analytics above and surfaces models regardless of pricing.
+                TokensByModelSection(usageHistoryStore: usageHistoryStore)
+                    .padding(.horizontal, 6).padding(.top, 18)
             }
             .padding(.vertical, 6)
         }
+    }
+}
+
+// MARK: - Tokens by model / family
+
+private struct TokensByModelSection: View {
+    @Environment(\.tahoe) private var t
+    var usageHistoryStore: UsageHistoryStore?
+
+    private struct Family: Identifiable {
+        let id: String
+        let total: TokenTotals
+        let models: [(name: String, totals: TokenTotals)]
+    }
+
+    /// Map a raw model name to a provider family for grouping.
+    static func family(for model: String) -> String {
+        let m = model.lowercased()
+        if m.hasPrefix("claude") || m == "opus" || m == "sonnet" || m == "haiku" { return "Claude" }
+        if m.hasPrefix("gpt") || m.hasPrefix("chatgpt") || m.hasPrefix("o1") || m.hasPrefix("o3") || m.hasPrefix("o4") || m.contains("codex") { return "OpenAI" }
+        if m.hasPrefix("gemini") || m.hasPrefix("gemma") { return "Gemini" }
+        if m.hasPrefix("grok") || m.hasPrefix("xai/") { return "Grok" }
+        return "Other"
+    }
+
+    private var families: [Family] {
+        guard let byModel = usageHistoryStore?.snapshot?.tokensByModel, !byModel.isEmpty else { return [] }
+        var grouped: [String: [(String, TokenTotals)]] = [:]
+        for (model, totals) in byModel where totals.totalTokens > 0 {
+            grouped[Self.family(for: model), default: []].append((model, totals))
+        }
+        return grouped.map { (fam, models) -> Family in
+            var sum = TokenTotals.zero
+            for (_, tot) in models { sum += tot }
+            let sorted = models.sorted { $0.1.totalTokens > $1.1.totalTokens }
+                .map { (name: $0.0, totals: $0.1) }
+            return Family(id: fam, total: sum, models: sorted)
+        }
+        .sorted { $0.total.totalTokens > $1.total.totalTokens }
+    }
+
+    var body: some View {
+        let fams = families
+        if !fams.isEmpty {
+            TahoeGlass(radius: 20, tone: .panel) {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Tokens by model")
+                            .font(TahoeFont.body(15, weight: .bold))
+                            .foregroundStyle(t.fg)
+                        Text("All-time token volume per model, grouped by family.")
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(t.fg3)
+                    }
+                    ForEach(fams) { fam in
+                        familyBlock(fam)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func familyBlock(_ fam: Family) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(fam.id)
+                    .font(TahoeFont.body(13, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer()
+                Text(Self.fmt(fam.total.totalTokens) + " tokens")
+                    .font(TahoeFont.mono(12))
+                    .foregroundStyle(t.fg)
+            }
+            ForEach(fam.models, id: \.name) { m in
+                HStack(spacing: 8) {
+                    Text(m.name)
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("in \(Self.fmt(m.totals.inputTokens)) · out \(Self.fmt(m.totals.outputTokens)) · cache \(Self.fmt(m.totals.cacheReadTokens + m.totals.cacheCreationTokens))")
+                        .font(TahoeFont.body(10))
+                        .foregroundStyle(t.fg4)
+                    Text(Self.fmt(m.totals.totalTokens))
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(t.fg)
+                        .frame(width: 64, alignment: .trailing)
+                }
+                .padding(.leading, 8)
+            }
+            TahoeHair()
+        }
+    }
+
+    /// Compact token count: 1.2K / 3.4M / 5.6B.
+    static func fmt(_ n: Int) -> String {
+        if n >= 1_000_000_000 { return String(format: "%.1fB", Double(n) / 1e9) }
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1e6) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1e3) }
+        return "\(n)"
     }
 }
 
