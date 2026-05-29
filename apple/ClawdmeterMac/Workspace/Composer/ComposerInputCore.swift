@@ -22,7 +22,6 @@ struct ComposerInputCore: View {
     let catalog: ModelCatalog
     let agentForModelPicker: AgentKind
     let modelSupportsEffort: Bool
-    var availableAgents: [AgentKind] = [.claude, .codex, .gemini, .cursor]
     let onSend: () -> Void
     /// Queue delegate. Bound running sessions use this to stage a follow-up
     /// without interrupting the active turn.
@@ -324,7 +323,18 @@ struct ComposerInputCore: View {
                 agent: { if case .bound = store.modeKind { return agentForModelPicker } else { return store.agent } }(),
                 selectedModelId: $store.modelId,
                 selectedEffort: $store.effort,
-                modelSupportsEffort: modelSupportsEffort
+                modelSupportsEffort: modelSupportsEffort,
+                onSelectAgent: { newAgent in
+                    // v0.29.31: provider switching for a NEW session now flows
+                    // through the model picker's vendor rail (the standalone
+                    // "Provider" chip was removed as redundant). Mid-session
+                    // (.bound) agent changes aren't done here — empty-state only.
+                    guard case .emptyState = store.modeKind, newAgent != store.agent else { return }
+                    store.agent = newAgent
+                    if newAgent == .cursor, store.permissionMode == .plan {
+                        onChangePermissionMode?(.ask)
+                    }
+                }
             )
             .layoutPriority(2)
             if !isReadOnly, onChangePermissionMode != nil {
@@ -362,22 +372,11 @@ struct ComposerInputCore: View {
                 // the primary checkout.
                 EmptyView()
             case .emptyState:
-                // v0.7.10: agent toggle resets the model + effort to
-                // the picked agent's defaults so the chip below the
-                // composer (`Opus 4.7 (1M) · Max` etc.) reflects the
-                // active agent instead of stale Claude defaults when
-                // the user switches to Codex / Gemini.
-                AgentMenuChip(
-                    selected: store.agent,
-                    availableAgents: availableAgents,
-                    onSelect: { newAgent in
-                        guard newAgent != store.agent else { return }
-                        store.resetChipsForAgent(newAgent, catalog: catalog)
-                        if newAgent == .cursor, store.permissionMode == .plan {
-                            onChangePermissionMode?(.ask)
-                        }
-                    }
-                )
+                // v0.29.31: the standalone provider chip was removed as
+                // redundant — the model picker's vendor rail (ModelEffortChip
+                // above) now switches provider AND model in one place and maps
+                // the picked vendor back to the session agent via onSelectAgent.
+                EmptyView()
             }
 
             Spacer(minLength: 6)
@@ -896,47 +895,6 @@ struct ComposerInputCore: View {
     private var terraCotta: Color { SessionsV2Theme.accent }
 }
 
-private struct AgentMenuChip: View {
-    @Environment(\.tahoe) private var t
-    let selected: AgentKind
-    let availableAgents: [AgentKind]
-    let onSelect: (AgentKind) -> Void
-
-    var body: some View {
-        Menu {
-            Section("Provider") {
-                ForEach(availableAgents, id: \.self) { agent in
-                    Button {
-                        onSelect(agent)
-                    } label: {
-                        Label(agent.tahoeProvider.displayName, systemImage: agent == selected ? "checkmark" : "")
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 7) {
-                AgentMenuIcon(provider: selected.tahoeProvider)
-                Text(selected.tahoeProvider.displayName)
-                    .font(TahoeFont.body(12, weight: .semibold))
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(t.fg3)
-            }
-            .foregroundStyle(t.fg)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .frame(minHeight: 32)
-            .background(Color.secondary.opacity(0.10), in: Capsule(style: .continuous))
-            .contentShape(Capsule(style: .continuous))
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize(horizontal: true, vertical: false)
-        .help("Choose provider")
-    }
-}
-
 private struct PromptHistorySheet: View {
     let history: [String]
     let savedPrompts: [SavedPromptState]
@@ -1066,22 +1024,6 @@ private struct ExpandedComposerEditor: View {
         .padding(18)
         .frame(minWidth: 640, minHeight: 420)
         .onAppear { editorFocused = true }
-    }
-}
-
-private struct AgentMenuIcon: View {
-    let provider: TahoeProvider
-
-    var body: some View {
-        Text(String(provider.displayName.prefix(1)))
-            .font(TahoeFont.body(10, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 16, height: 16)
-            .background(provider.halo.color, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .stroke(.white.opacity(0.16), lineWidth: 0.5)
-            }
     }
 }
 

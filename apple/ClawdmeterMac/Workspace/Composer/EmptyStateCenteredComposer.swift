@@ -70,7 +70,6 @@ struct EmptyStateCenteredComposer: View {
                     catalog: launcher.modelCatalog,
                     agentForModelPicker: store.agent,
                     modelSupportsEffort: modelSupportsEffort,
-                    availableAgents: launcher.selectableAgents,
                     onSend: { Task { await firstSend() } },
                     onChangePermissionMode: { newMode in
                         store.permissionMode = newMode

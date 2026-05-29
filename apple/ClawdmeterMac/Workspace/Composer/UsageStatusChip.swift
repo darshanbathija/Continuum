@@ -28,6 +28,12 @@ struct ModelEffortChip: View {
     @Binding var selectedModelId: String?
     @Binding var selectedEffort: ReasoningEffort?
     let modelSupportsEffort: Bool
+    /// v0.29.31: when the rich picker's rail switches to another vendor, map
+    /// that vendor back to its AgentKind so the host can align the session's
+    /// agent. Lets the model picker subsume provider selection (the separate
+    /// "Provider" menu chip was removed as redundant). Nil → caller doesn't
+    /// track agent (agent change ignored, e.g. mid-session).
+    var onSelectAgent: ((AgentKind) -> Void)? = nil
 
     @State private var showingPopover = false
     @State private var isHovered = false
@@ -91,7 +97,11 @@ struct ModelEffortChip: View {
                 defaultsStore: providerDefaults,
                 catalog: catalog,
                 onClose: { showingPopover = false },
-                onSelectModel: { _, modelId, effort in
+                onSelectModel: { vendor, modelId, effort in
+                    // Align the session's agent to the picked vendor (the rail
+                    // is now the only provider switcher in Code), then set the
+                    // specific model + effort the user chose.
+                    onSelectAgent?(vendor.backingProvider)
                     selectedModelId = modelId
                     if let effort {
                         selectedEffort = effort
