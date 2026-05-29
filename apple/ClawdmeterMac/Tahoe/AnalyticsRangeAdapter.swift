@@ -27,6 +27,16 @@ import ClawdmeterShared
 /// per-day buckets too; "today" tells the truth.
 enum AnalyticsRangeAdapter {
 
+    // Hoisted formatters — DateFormatter init is expensive and these were
+    // allocated per render (month ticks) / per tick (weekday labels). Used
+    // only from the analytics view body on the main thread, so no sync needed.
+    private static let weekdayFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "EEE"; return f   // Mon, Tue, …
+    }()
+    private static let monthFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMM"; return f
+    }()
+
     static func rangeData(snapshot: UsageHistorySnapshot, range: String) -> TahoeDemo.RangeData {
         switch range {
         case "today": return self.today(snapshot)
@@ -157,9 +167,7 @@ enum AnalyticsRangeAdapter {
             let monthEnd = cal.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
             return self.spendPointForRange(snapshot, start: monthStart, end: monthEnd)
         }
-        let monthFormatter = DateFormatter()
-        monthFormatter.dateFormat = "MMM"
-        let ticks = months.map { monthFormatter.string(from: $0) }
+        let ticks = months.map { Self.monthFormatter.string(from: $0) }
         return TahoeDemo.RangeData(
             label: "all time",
             ticks: ticks,
@@ -184,11 +192,22 @@ enum AnalyticsRangeAdapter {
 
     /// Sum dollar values across `[start, end)` for each provider.
     private static func spendPointForRange(_ snapshot: UsageHistorySnapshot, start: Date, end: Date) -> TahoeDemo.SpendPoint {
+        // Walk the bucket's day range with O(1) byDay lookups instead of
+        // scanning every stored day per provider per bucket. byDay keys and the
+        // start/end bounds are all startOfDay/first-of-month aligned
+        // (UsageHistoryLoader + dateInterval), so the lookups match exactly —
+        // same sums, far fewer iterations per render.
+        let cal = Calendar.current
         var sums: [UsageRecord.Provider: Double] = [:]
         for (provider, totals) in snapshot.byProvider {
             var sum: Double = 0
-            for (day, dayTotals) in totals.byDay where day >= start && day < end {
-                sum += NSDecimalNumber(decimal: dayTotals.costUSD).doubleValue
+            var day = start
+            while day < end {
+                if let dayTotals = totals.byDay[day] {
+                    sum += NSDecimalNumber(decimal: dayTotals.costUSD).doubleValue
+                }
+                guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
             }
             sums[provider] = sum
         }
@@ -306,9 +325,7 @@ enum AnalyticsRangeAdapter {
     }
 
     private static func weekdayLabel(for date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "EEE"   // Mon, Tue, Wed, …
-        return f.string(from: date)
+        Self.weekdayFormatter.string(from: date)
     }
 
     private static func formatUSD(_ amount: Decimal) -> String {

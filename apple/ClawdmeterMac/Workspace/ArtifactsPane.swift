@@ -76,8 +76,13 @@ struct ArtifactsPane: View {
                     url: URL(fileURLWithPath: absolute)
                 ))
             }
+            let resolved = out
             await MainActor.run {
-                self.verifiedArtifacts = out
+                // Drop a stale result: a newer refresh (higher updateCounter)
+                // may have superseded this detached pass while it ran, so an
+                // out-of-order completion can't overwrite the latest list.
+                guard counter == self.lastVerifiedCounter else { return }
+                self.verifiedArtifacts = resolved
             }
         }
     }
@@ -145,6 +150,12 @@ struct ArtifactsPane: View {
 private struct QuickLookThumbnail: NSViewRepresentable {
     let url: URL
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var requestedURL: URL?
+    }
+
     func makeNSView(context: Context) -> NSImageView {
         let view = NSImageView()
         view.imageScaling = .scaleProportionallyUpOrDown
@@ -153,8 +164,15 @@ private struct QuickLookThumbnail: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSImageView, context: Context) {
+        // updateNSView fires on every SwiftUI invalidation; only (re)generate
+        // when the URL actually changed, otherwise we burn CPU re-thumbnailing
+        // the same file each snapshot tick.
+        let coordinator = context.coordinator
+        guard coordinator.requestedURL != url else { return }
+        coordinator.requestedURL = url
+        let targetURL = url
         let req = QLThumbnailGenerator.Request(
-            fileAt: url,
+            fileAt: targetURL,
             size: CGSize(width: 180, height: 180),
             scale: NSScreen.main?.backingScaleFactor ?? 2.0,
             representationTypes: .thumbnail
@@ -162,6 +180,9 @@ private struct QuickLookThumbnail: NSViewRepresentable {
         QLThumbnailGenerator.shared.generateBestRepresentation(for: req) { rep, _ in
             guard let rep else { return }
             DispatchQueue.main.async {
+                // Drop a late result if this (recycled) cell now shows a
+                // different URL — otherwise it flashes the wrong file's preview.
+                guard coordinator.requestedURL == targetURL else { return }
                 nsView.image = rep.nsImage
             }
         }

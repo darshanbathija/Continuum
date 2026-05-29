@@ -152,7 +152,7 @@ struct DiagnosticsSettingsView: View {
     private var entryList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(filteredEntries.enumerated()), id: \.offset) { _, entry in
+                ForEach(filteredEntries) { entry in
                     AuditEntryRow(entry: entry)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
@@ -351,7 +351,11 @@ enum SupportBundleWriter {
 }
 
 /// One row in the JSONL audit log, decoded lazily for display.
-struct AuditEntry {
+struct AuditEntry: Identifiable {
+    /// Stable identity for ForEach — the raw JSONL line is unique per event
+    /// (timestamp + payload) and, unlike a positional index, doesn't churn as
+    /// the list grows or the filter changes (which defeated row recycling).
+    var id: String { raw }
     let raw: String
     let at: String
     let kind: String

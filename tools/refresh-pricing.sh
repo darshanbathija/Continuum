@@ -7,9 +7,10 @@
 # runtime so analytics works offline and our totals are reproducible.
 #
 # Filter rule: keep keys matching `claude-*`, `gpt-*`, `o[0-9]+*`,
-# `chatgpt-*`, `gemini-*`, or `gemma-*` so the snapshot covers Anthropic +
-# OpenAI/Codex + Google (Gemini provider added 2026-05-19) without
-# dragging in every random provider LiteLLM tracks.
+# `chatgpt-*`, `gemini-*`, `gemma-*`, or `grok-*` / `xai/*` so the snapshot
+# covers Anthropic + OpenAI/Codex + Google (Gemini, added 2026-05-19) + xAI
+# (Grok, added 2026-05-29 — used via the opencode provider) without dragging
+# in every random provider LiteLLM tracks.
 #
 # Override merge (added 2026-05-23): after filtering LiteLLM, we apply
 # entries from `tools/pricing-overrides.json` on top. Overrides win.
@@ -52,7 +53,7 @@ OVERRIDE_SUMMARY="$(jq -r '
   | join(" | ")
 ' "$OVERRIDES")"
 
-echo "Filtering to claude-* / gpt-* / o[0-9]* / chatgpt-* / gemini-* / gemma-* models..."
+echo "Filtering to claude-* / gpt-* / o[0-9]* / chatgpt-* / gemini-* / gemma-* / grok-* / xai/* models..."
 echo "Merging manual overrides from $OVERRIDES..."
 
 jq \
@@ -64,7 +65,7 @@ jq \
   # Step 1: filter LiteLLM to the providers Clawdmeter cares about.
   to_entries
   | map(select(
-      .key | test("^(claude-|gpt-|o[0-9]+($|-)|chatgpt-|gemini-|gemma-)"; "i")
+      .key | test("^(claude-|gpt-|o[0-9]+($|-)|chatgpt-|gemini-|gemma-|grok-|xai/)"; "i")
     ))
   | from_entries
   # Step 2: apply manual overrides on top. `+` in jq is a shallow merge
@@ -79,3 +80,8 @@ jq \
 KEYS=$(jq '.models | length' "$OUT")
 OVERRIDE_KEYS=$(jq '.overrides | length' "$OVERRIDES")
 echo "Wrote $OUT ($KEYS models, including $OVERRIDE_KEYS manual overrides)"
+
+# Keep the bundled overrides copy (loaded by PricingUpdater's runtime daily
+# refresh) in sync with the canonical tools/pricing-overrides.json.
+cp "$OVERRIDES" "$REPO_ROOT/apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing-overrides.json"
+echo "Synced bundled overrides copy for runtime refresh."

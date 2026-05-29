@@ -792,9 +792,14 @@ private struct SidebarPane: View {
 
     private func presentationSorted(_ sessions: [AgentSession]) -> [AgentSession] {
         let pins = presentationStore.snapshot.pinnedSessionIds
+        // Precompute pin rank once (O(1) comparator lookup). pins.firstIndex(of:)
+        // inside the comparator was O(n) per comparison → O(n² log n) per render.
+        var pinRank: [UUID: Int] = [:]
+        pinRank.reserveCapacity(pins.count)
+        for (idx, id) in pins.enumerated() { pinRank[id] = idx }
         return sessions.sorted { lhs, rhs in
-            let lhsPin = pins.firstIndex(of: lhs.id)
-            let rhsPin = pins.firstIndex(of: rhs.id)
+            let lhsPin = pinRank[lhs.id]
+            let rhsPin = pinRank[rhs.id]
             switch (lhsPin, rhsPin) {
             case let (l?, r?):
                 return l < r
@@ -3414,6 +3419,37 @@ private struct ChatThreadScroll: View {
     @State private var showingFindBar = false
     @State private var findQuery = ""
     @State private var selectedMatchIndex: Int?
+    // Per-render caches (reference boxes held by @State; mutating their
+    // internals doesn't trigger SwiftUI invalidation). Each recomputes only
+    // when its input key changes, moving the cost off the per-row render path.
+    @State private var findCache = FindMatchCache()
+    @State private var pathLinkCache = PathLinkCache()
+
+    final class FindMatchCache {
+        private var key = "\u{0}"
+        private(set) var ids: Set<String> = []
+        private(set) var order: [String] = []
+        func refresh(query: String, counter: UInt64, compute: () -> [SessionChatStore.ChatMessage]) {
+            let k = "\(counter)\u{1}\(query)"
+            guard k != key else { return }
+            key = k
+            order = compute().map(\.id)
+            ids = Set(order)
+        }
+    }
+
+    final class PathLinkCache {
+        private var store: [String: [ResolvablePathLink]] = [:]
+        func links(for body: String, root: URL) -> [ResolvablePathLink] {
+            if let hit = store[body] { return hit }
+            // Bound growth: streaming bodies churn distinct keys, so cap and
+            // drop wholesale rather than retain every partial-token string.
+            if store.count > 512 { store.removeAll(keepingCapacity: true) }
+            let computed = Array(ResolvablePathLinkParser.links(in: body, repoRoot: root).prefix(8))
+            store[body] = computed
+            return computed
+        }
+    }
     @FocusState private var findFocused: Bool
 
     var body: some View {
@@ -3925,13 +3961,14 @@ private struct ChatThreadScroll: View {
     }
 
     private func messageHighlight(_ msg: SessionChatStore.ChatMessage) -> Color {
-        let matches = findMatches
-        guard !matches.isEmpty,
-              matches.contains(where: { $0.id == msg.id })
-        else { return .clear }
+        // O(1) membership via the cache instead of re-running the O(n)
+        // findMatches filter for every visible row on each render — the prior
+        // form was viewport-rows × full-transcript scans while Find was open.
+        findCache.refresh(query: findQuery, counter: store.snapshot.updateCounter) { findMatches }
+        guard findCache.ids.contains(msg.id) else { return .clear }
         if let selectedMatchIndex,
-           matches.indices.contains(selectedMatchIndex),
-           matches[selectedMatchIndex].id == msg.id {
+           findCache.order.indices.contains(selectedMatchIndex),
+           findCache.order[selectedMatchIndex] == msg.id {
             return t.accentAlpha(0.18)
         }
         return Color.yellow.opacity(t.dark ? 0.16 : 0.22)
@@ -4149,7 +4186,9 @@ private struct ChatThreadScroll: View {
 
     private func pathLinks(in body: String) -> [ResolvablePathLink] {
         guard let root = transcriptPathRoot else { return [] }
-        return Array(ResolvablePathLinkParser.links(in: body, repoRoot: root).prefix(8))
+        // Cache by body so the regex parse doesn't re-run for every assistant
+        // bubble on every render / streaming tick (finalized bubbles hit cache).
+        return pathLinkCache.links(for: body, root: root)
     }
 
     private var transcriptPathRoot: URL? {
@@ -4492,6 +4531,7 @@ private struct ReviewPane: View {
             TahoeReviewContentShell(title: "Artifacts", icon: "doc", padded: false) {
                 if let chatStore {
                     ArtifactsPane(session: session, chatStore: chatStore)
+                        .id(session.id)
                 } else {
                     placeholder(text: "Waiting for agent JSONL…")
                 }
