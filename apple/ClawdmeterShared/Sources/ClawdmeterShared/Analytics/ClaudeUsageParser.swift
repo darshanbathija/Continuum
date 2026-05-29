@@ -64,14 +64,20 @@ public enum ClaudeUsageParser {
             return nil
         }()
 
-        // Dedup key. Claude's `message.id` + top-level `requestId` is the
-        // tuple ccusage dedupes on. Either being absent → no cross-file
-        // dedup possible (treat as unique).
+        // Dedup key. ccusage collapses identical events on
+        // `message.id` + top-level `requestId`. Claude Code's opus-4-8-era
+        // JSONL DROPPED `requestId` (only `message.id` remains). Requiring
+        // both here returned nil for the new format → every row was treated as
+        // unique → no cross-file dedup → replayed/resumed session history was
+        // counted 2-3x (a ~2.4x over-count vs ccusage, e.g. today's Claude
+        // showed ~$1528 vs ccusage's ~$625). ccusage still collapses these by
+        // message.id (its `${id}:${requestId}` key folds an absent requestId to
+        // a constant), so require only `message.id` and treat a missing
+        // `requestId` as an empty qualifier — same dedup outcome as ccusage.
         let dedupKey: String? = {
-            guard let messageID = messageRaw["id"] as? String,
-                  let requestID = root["requestId"] as? String
-            else { return nil }
-            return "\(messageID):\(requestID)"
+            guard let messageID = messageRaw["id"] as? String else { return nil }
+            let requestID = root["requestId"] as? String
+            return "\(messageID):\(requestID ?? "")"
         }()
 
         return UsageRecord(

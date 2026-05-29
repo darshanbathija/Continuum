@@ -119,15 +119,17 @@ public enum ClaudeAdapterUsageBridge {
             return RepoIdentity.normalize(cwd)
         }()
 
-        // Dedup key — legacy requires BOTH message.id AND requestId.
-        // Extension carries both as separate scalars; missing either
-        // → nil dedup (treat as unique).
+        // Dedup key — mirrors ClaudeUsageParser: collapse on `message.id`,
+        // with `requestId` as an optional qualifier. Claude Code's opus-4-8-era
+        // JSONL dropped `requestId`, so requiring both disabled cross-file
+        // dedup and over-counted replayed session history ~2.4x. Require only
+        // message.id; treat an absent request_id as an empty qualifier.
         let dedupKey: String? = {
-            guard let messageID = extensionString(claudeExt["message_id"]),
-                  let requestID = extensionString(claudeExt["request_id"]) else {
+            guard let messageID = extensionString(claudeExt["message_id"]) else {
                 return nil
             }
-            return "\(messageID):\(requestID)"
+            let requestID = extensionString(claudeExt["request_id"])
+            return "\(messageID):\(requestID ?? "")"
         }()
 
         return UsageRecord(
