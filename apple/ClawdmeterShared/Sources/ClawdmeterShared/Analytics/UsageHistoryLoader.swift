@@ -1034,7 +1034,14 @@ struct AnalyticsCache: Codable, Sendable {
     // (today/7d/30d/90d) like the dollar charts. v12 caches carry no day
     // dimension for models; the bump forces a one-time reparse so windowed
     // model totals are complete rather than only covering changed files.
-    static let currentVersion: Int = 13
+    // v14 (2026-05-29): Claude dedup now collapses on `message.id` alone when
+    // the top-level `requestId` is absent (Claude Code dropped it in the
+    // opus-4-8-era JSONL). v13 caches baked in the pre-fix per-file costs that
+    // counted replayed/resumed history 2-3x (today's Claude read ~$1528 vs
+    // ccusage's ~$625); without this bump those inflated costs would survive
+    // the code fix for every already-cached file. The bump forces a one-time
+    // reparse so the corrected dedup actually applies to historical days.
+    static let currentVersion: Int = 14
 
     let version: Int
     var files: [String: FileEntry]
