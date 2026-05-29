@@ -350,7 +350,13 @@ public final class AgentControlServer {
         // The first iPhone /chat-snapshot or /transcript request after
         // Mac restart hits a warm store instead of a cold reparse.
         // Async on a detached Task so it doesn't block listener bind.
-        chatStoreRegistry.warm(recentLimit: 5)
+        //
+        // v0.29.32: this read of ~/.claude + ~/.codex triggers the macOS
+        // "access data from other apps" prompt at launch — only warm for
+        // providers the user has enabled (opt-in). With both off, skip it.
+        if ProviderEnablement.isEnabled("claude") || ProviderEnablement.isEnabled("codex") {
+            chatStoreRegistry.warm(recentLimit: 5)
+        }
         // v16 Code V2: replay the last 256 mobile-command audit entries
         // so a daemon restart still dedups in-flight iOS retries. Fire
         // and forget — the cache hydrates within tens of ms.

@@ -142,9 +142,12 @@ public actor RepoIndex {
 
         // Source 1: ~/.claude/projects/ directory names (encoded cwds)
         let claudeProjects = home.appendingPathComponent(".claude/projects")
-        // v0.29.32: gate the ~/.claude read on Claude being enabled so the app
-        // doesn't touch Claude Code's data on launch until the user opts in.
-        if ProviderEnablement.isEnabled("claude"),
+        // v0.29.33: gate ~/.claude discovery on the Code "Discover parallel
+        // sessions" opt-in alone. Off by default → opening Code does no
+        // filesystem/cross-app read (no Downloads prompt). Opting in surfaces
+        // all sessions regardless of which gauges are enabled — the prior
+        // behavior the user expects from "discover".
+        if ProviderEnablement.discoverParallelSessions,
            let entries = try? FileManager.default.contentsOfDirectory(
             at: claudeProjects, includingPropertiesForKeys: [.contentModificationDateKey]
         ) {
@@ -195,8 +198,8 @@ public actor RepoIndex {
 
         // Source 2: ~/.codex/sessions/**/*.jsonl — collect cwd + mtime + path
         let codexSessions = home.appendingPathComponent(".codex/sessions")
-        // v0.29.32: gate the ~/.codex read on Codex being enabled.
-        let codexJSONLs = ProviderEnablement.isEnabled("codex")
+        // v0.29.33: gate ~/.codex discovery on the opt-in alone.
+        let codexJSONLs = ProviderEnablement.discoverParallelSessions
             ? await readCodexSessionMeta(at: codexSessions, recentCutoff: recentCutoff)
             : []
         for meta in codexJSONLs {
@@ -231,8 +234,12 @@ public actor RepoIndex {
             )
         }
 
-        // Source 3: configured scan roots (default empty)
-        let scanRoots = UserDefaults.standard.stringArray(forKey: RepoIndex.scanRootsKey) ?? []
+        // Source 3: configured scan roots (default empty). Gated on the
+        // discovery opt-in so no user folders (Downloads/Desktop/…) are
+        // walked until the user taps "Discover parallel sessions".
+        let scanRoots = ProviderEnablement.discoverParallelSessions
+            ? (UserDefaults.standard.stringArray(forKey: RepoIndex.scanRootsKey) ?? [])
+            : []
         for rootRaw in scanRoots {
             let root = (rootRaw as NSString).expandingTildeInPath
             for repoPath in findGitRepos(under: root, maxDepth: RepoIndex.maxScanDepth) {

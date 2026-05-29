@@ -332,7 +332,9 @@ struct EmptyStateCenteredComposer: View {
                     )
                 }
             } else if store.canSend, let port = runtime.agentControlServer.boundPort {
-                let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+                // Local loopback: authenticate with the in-process token, not
+                // the pairing keychain (which would prompt on first send).
+                let sender = MacComposerSender(port: Int(port), token: runtime.agentControlServer.localLoopbackToken)
                 // Stage attachments under the new session's dir.
                 stagedPaths.removeAll()
                 if let dir = AttachmentStaging.stagingDir(for: session) {

@@ -510,7 +510,7 @@ struct SessionWorkspaceView: View {
                     session: session,
                     terminalTab: tab,
                     wsPort: Int(port),
-                    token: PairingTokenStore.shared.currentToken()
+                    token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? "")
                 )
             } else {
                 ContentUnavailableView(
@@ -644,6 +644,14 @@ private struct SidebarPane: View {
     /// clutter the sidebar and most of the time the user wants the active
     /// repos at the top. Tapping the History row expands the list.
     @AppStorage("clawdmeter.sidebar.historyExpanded") private var historyExpanded: Bool = false
+
+    /// v0.29.33: opt-in to filesystem session discovery. Default false → the
+    /// sidebar shows only Managed (explicitly-added) repos and RepoIndex does
+    /// NO ~/.claude / ~/.codex / folder scan, so opening Code triggers no
+    /// folder/cross-app permission prompt. The "Discover parallel sessions"
+    /// button flips this shared key (RepoIndex reads the same UserDefaults
+    /// key via ProviderEnablement) and refreshes → status-quo discovery.
+    @AppStorage("clawdmeter.code.discoverParallelSessions") private var discoverParallelSessions: Bool = false
 
     /// v0.5.4: rename sheet state. v0.5.9: split into a dedicated bool
     /// + data target — the `Binding(get:set:)` pattern for `isPresented:`
@@ -1081,6 +1089,13 @@ private struct SidebarPane: View {
                     } else {
                         filteredEmptyState
                     }
+                    // Sits under the Managed repos (or the empty state). Off by
+                    // default; tapping opts in to full filesystem discovery for
+                    // this and future launches. Until then nothing reads
+                    // ~/.claude / ~/.codex or scans user folders.
+                    if !discoverParallelSessions {
+                        discoverSessionsButton
+                    }
                 }
                 .padding(.vertical, 6)
                 .background(
@@ -1222,6 +1237,42 @@ private struct SidebarPane: View {
                 }
             }
         }
+    }
+
+    /// v0.29.33: opt-in CTA shown under "Managed" when discovery is off.
+    /// Tapping flips the shared `clawdmeter.code.discoverParallelSessions`
+    /// key (RepoIndex reads it via ProviderEnablement) and refreshes, so the
+    /// "Active outside Clawdmeter" / "History" sections populate from
+    /// ~/.claude + ~/.codex exactly like the prior behavior. The folder /
+    /// cross-app prompts then fire with clear user intent, not on launch.
+    private var discoverSessionsButton: some View {
+        Button(action: {
+            discoverParallelSessions = true   // @AppStorage writes the shared key
+            Task { await model.refresh() }
+        }) {
+            HStack(spacing: 8) {
+                TahoeIcon("search", size: 11)
+                    .foregroundStyle(t.accent)
+                    .frame(width: 12)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Discover parallel sessions")
+                        .font(TahoeFont.body(11.5, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text("Find Claude & Codex sessions outside your added repos")
+                        .font(TahoeFont.body(9.5))
+                        .foregroundStyle(t.fg3)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+        }
+        .buttonStyle(.plain)
+        .help("Scan ~/.claude and ~/.codex for recent sessions. Folder/data access is requested only when you tap this.")
     }
 
     /// Collapsed-by-default "History" row. Looks like a sidebar item so
@@ -2854,7 +2905,7 @@ private struct CenterThread: View {
                         session: session,
                         model: model,
                         wsPort: Int(port),
-                        token: PairingTokenStore.shared.currentToken()
+                        token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? "")
                     )
                 } else {
                     ContentUnavailableView(
@@ -3227,7 +3278,7 @@ private struct CenterThread: View {
             }
         }
 
-        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
         let body = QueuedPromptRenderer.render(text: draft.text, attachmentPaths: stagedPaths)
         do {
             guard await createLifecycleCheckpoint(summary: "Before queued prompt") else {
@@ -3369,7 +3420,7 @@ private struct CenterThread: View {
             return
         }
 
-        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
         var stagedPaths: [URL] = []
         if let dir = AttachmentStaging.stagingDir(for: target) {
             for att in composerStore.attachments {
@@ -3471,7 +3522,7 @@ private struct CenterThread: View {
         guard let chatStore = model.chatStore(for: session) else { return }
         let queued = chatStore.dequeueOfflineQueue()
         guard !queued.isEmpty else { return }
-        let sender = MacComposerSender(port: port, token: PairingTokenStore.shared.currentToken())
+        let sender = MacComposerSender(port: port, token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
         for (index, entry) in queued.enumerated() {
             // Bodies in the offline queue were captured pre-trim, so
             // re-add the terminal newline tmux paste-buffer requires.
@@ -3540,7 +3591,7 @@ private struct CenterThread: View {
         guard let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort
         else { return }
-        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
         try? await sender.interrupt(sessionId: session.id)
     }
 
@@ -3673,7 +3724,7 @@ private struct CenterThread: View {
             // here so we never persist trust for an empty string.
             AutopilotState.shared.trustRepo(repoKey)
         }
-        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
         // Daemon-side: flip state. We then respawn via SessionConfigChanger so
         // the running CLI restarts with the appropriate --dangerously-* flags.
         do {
@@ -4740,7 +4791,7 @@ private struct ChatThreadScroll: View {
         guard !answer.isEmpty,
               let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort else { return }
-        let sender = MacComposerSender(port: Int(port), token: PairingTokenStore.shared.currentToken())
+        let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
         Task {
             try? await sender.send(sessionId: sessionId, body: answer, asFollowUp: true)
         }
@@ -4889,7 +4940,7 @@ private struct ReviewPane: View {
                 session: session,
                 model: model,
                 wsPort: Int(port),
-                token: PairingTokenStore.shared.currentToken()
+                token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? "")
             )
         } else {
             placeholder(text: "Daemon offline — restart Clawdmeter.")

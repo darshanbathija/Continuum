@@ -18,7 +18,11 @@ public struct MacPermissionResponder: PermissionResponder {
         guard let port = portOpt else {
             throw PermissionResponderError("Daemon not running.")
         }
-        let token = await MainActor.run { PairingTokenStore.shared.currentToken() }
+        // Local loopback to the in-process daemon: authenticate with the
+        // per-launch loopback token, not the pairing keychain token. Reading
+        // the pairing token here forced a Keychain prompt the first time the
+        // user answered a permission card each launch.
+        let token = await MainActor.run { AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? "" }
         guard let url = URL(string: "http://127.0.0.1:\(port)/sessions/\(sessionId.uuidString)/permission-respond") else {
             throw PermissionResponderError("Bad daemon URL.")
         }
