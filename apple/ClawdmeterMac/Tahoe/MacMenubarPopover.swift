@@ -391,34 +391,6 @@ private struct OpencodeDollarTile: View {
     }
 }
 
-/// Status-item label as it appears in the macOS menu bar.
-/// Ports the JSX `menu-bar items` row format: `[glyph] {percent}%` per provider.
-public struct MenuBarItemView: View {
-    @Environment(\.tahoe) private var t
-    public var provider: TahoeProvider
-    public var percent: Double
-    public var onClick: () -> Void
-
-    public init(provider: TahoeProvider, percent: Double, onClick: @escaping () -> Void) {
-        self.provider = provider; self.percent = percent; self.onClick = onClick
-    }
-
-    public var body: some View {
-        Button(action: onClick) {
-            HStack(spacing: 5) {
-                TahoeProviderGlyph(provider: provider, size: 14)
-                Text("\(Int(percent))%")
-                    .font(TahoeFont.mono(11.5, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(t.fg)
-            }
-            .fixedSize(horizontal: true, vertical: true)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 // MARK: - Menu-bar live source (v0.22.4)
 
 /// Per-AppModel observable wrapper that re-fires `objectWillChange`

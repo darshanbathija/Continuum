@@ -77,11 +77,17 @@ public struct MacUsageView: View {
 private struct TokensByModelSection: View {
     @Environment(\.tahoe) private var t
     var usageHistoryStore: UsageHistoryStore?
+    // v0.29.31: time selector matching the dollar charts. Defaults to "all"
+    // so the landing view preserves the prior all-time numbers; the toggle
+    // narrows to today/7d/30d/90d via the windowed `byDayByModel` rollup.
+    @State private var range: String = "all"
 
     private struct Family: Identifiable {
         let id: String
         let total: TokenTotals
         let models: [(name: String, totals: TokenTotals)]
+        /// Largest single-model volume in the family — model bars scale to it.
+        var maxModel: Int { models.map(\.totals.totalTokens).max() ?? 0 }
     }
 
     /// Map a raw model name to a provider family for grouping.
@@ -94,8 +100,8 @@ private struct TokensByModelSection: View {
         return "Other"
     }
 
-    private var families: [Family] {
-        guard let byModel = usageHistoryStore?.snapshot?.tokensByModel, !byModel.isEmpty else { return [] }
+    private func families(from byModel: [String: TokenTotals]) -> [Family] {
+        guard !byModel.isEmpty else { return [] }
         var grouped: [String: [(String, TokenTotals)]] = [:]
         for (model, totals) in byModel where totals.totalTokens > 0 {
             grouped[Self.family(for: model), default: []].append((model, totals))
@@ -110,59 +116,105 @@ private struct TokensByModelSection: View {
         .sorted { $0.total.totalTokens > $1.total.totalTokens }
     }
 
+    /// Family accent — reuse the provider lanes where they exist so the bars
+    /// key the same colors as the dollar charts/legend above.
+    private func familyColor(_ family: String) -> Color {
+        switch family {
+        case "Claude": return TahoeProvider.claude.glow.color
+        case "OpenAI": return TahoeProvider.codex.glow.color
+        case "Gemini": return TahoeProvider.gemini.glow.color
+        case "Grok":   return Color(red: 0.42, green: 0.82, blue: 0.62) // Grok has no Tahoe lane
+        default:        return t.fg3                                      // "Other"
+        }
+    }
+
     var body: some View {
-        let fams = families
-        if !fams.isEmpty {
-            TahoeGlass(radius: 20, tone: .panel) {
-                VStack(alignment: .leading, spacing: 12) {
+        let byModel: [String: TokenTotals] = {
+            guard let snapshot = usageHistoryStore?.snapshot else { return [:] }
+            return AnalyticsRangeAdapter.tokensByModel(snapshot: snapshot, range: range)
+        }()
+        let fams = families(from: byModel)
+        let grand = fams.reduce(0) { $0 + $1.total.totalTokens }
+        TahoeGlass(radius: 20, tone: .panel) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Tokens by model")
                             .font(TahoeFont.body(15, weight: .bold))
                             .foregroundStyle(t.fg)
-                        Text("All-time token volume per model, grouped by family.")
+                        Text(fams.isEmpty
+                             ? "No token activity \(Self.rangeBlurb(range))."
+                             : "\(Self.fmt(grand)) tokens \(Self.rangeBlurb(range)) · grouped by family")
                             .font(TahoeFont.body(11))
                             .foregroundStyle(t.fg3)
                     }
-                    ForEach(fams) { fam in
-                        familyBlock(fam)
-                    }
+                    Spacer()
+                    RangeSelector(value: $range)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(fams) { fam in
+                    familyBlock(fam, grandTotal: grand)
+                }
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     @ViewBuilder
-    private func familyBlock(_ fam: Family) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
+    private func familyBlock(_ fam: Family, grandTotal: Int) -> some View {
+        let color = familyColor(fam.id)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                Circle().fill(color).frame(width: 8, height: 8)
                 Text(fam.id)
                     .font(TahoeFont.body(13, weight: .semibold))
                     .foregroundStyle(t.fg)
+                Text(grandTotal > 0 ? "\(Int((Double(fam.total.totalTokens) / Double(grandTotal) * 100).rounded()))%" : "")
+                    .font(TahoeFont.body(10.5))
+                    .foregroundStyle(t.fg4)
                 Spacer()
                 Text(Self.fmt(fam.total.totalTokens) + " tokens")
                     .font(TahoeFont.mono(12))
                     .foregroundStyle(t.fg)
             }
+            // Family share of the grand total — full-width bar.
+            ProportionBar(fraction: grandTotal > 0 ? Double(fam.total.totalTokens) / Double(grandTotal) : 0,
+                          color: color, height: 5)
             ForEach(fam.models, id: \.name) { m in
                 HStack(spacing: 8) {
                     Text(m.name)
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg3)
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(width: 168, alignment: .leading)
+                    // Bar scaled to the family's largest model.
+                    ProportionBar(fraction: fam.maxModel > 0 ? Double(m.totals.totalTokens) / Double(fam.maxModel) : 0,
+                                  color: color, height: 6)
+                        .frame(width: 84)
                     Spacer(minLength: 8)
                     Text("in \(Self.fmt(m.totals.inputTokens)) · out \(Self.fmt(m.totals.outputTokens)) · cache \(Self.fmt(m.totals.cacheReadTokens + m.totals.cacheCreationTokens))")
                         .font(TahoeFont.body(10))
                         .foregroundStyle(t.fg4)
+                        .lineLimit(1)
                     Text(Self.fmt(m.totals.totalTokens))
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg)
                         .frame(width: 64, alignment: .trailing)
                 }
-                .padding(.leading, 8)
             }
             TahoeHair()
+        }
+    }
+
+    static func rangeBlurb(_ range: String) -> String {
+        switch range {
+        case "today", "24h": return "today"
+        case "7d":  return "in the past 7 days"
+        case "30d": return "in the past 30 days"
+        case "90d": return "in the past 90 days"
+        case "all": return "all-time"
+        default:     return "in the past 7 days"
         }
     }
 
@@ -172,6 +224,28 @@ private struct TokensByModelSection: View {
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1e6) }
         if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1e3) }
         return "\(n)"
+    }
+}
+
+/// Thin horizontal proportion bar (0…1) used by the tokens-by-model section.
+private struct ProportionBar: View {
+    @Environment(\.tahoe) private var t
+    var fraction: Double
+    var color: Color
+    var height: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.06))
+                Capsule(style: .continuous)
+                    .fill(LinearGradient(colors: [color.opacity(0.95), color.opacity(0.5)],
+                                         startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(2, geo.size.width * CGFloat(min(1, max(0, fraction)))))
+            }
+        }
+        .frame(height: height)
     }
 }
 

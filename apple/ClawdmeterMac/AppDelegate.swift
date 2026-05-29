@@ -317,6 +317,21 @@ final class ProviderStatusController: NSObject {
     private var popover: NSPopover?
     private var cancellables: Set<AnyCancellable> = []
 
+    /// This controller's provider, derived from the AppModel config.
+    private var providerCase: TahoeProvider {
+        switch model.config.id {
+        case "claude": return .claude
+        case "codex":  return .codex
+        case "gemini": return .gemini
+        case "cursor": return .cursor
+        default:       return .claude
+        }
+    }
+    /// #38: controller-owned selection driver so each open re-targets the
+    /// (cached) popover's tab to THIS provider, instead of leaving whatever
+    /// tab the user last switched to inside the popover.
+    private lazy var selection = MenuBarPopoverSelection(initial: providerCase)
+
     init(model: AppModel, runtime: AppRuntime) {
         self.model = model
         self.runtime = runtime
@@ -375,15 +390,6 @@ final class ProviderStatusController: NSObject {
         // hadn't completed when the status item was eagerly built at
         // launch. NSPopover never re-rendered the SwiftUI content, so
         // the demo data stuck around forever.
-        let providerCase: TahoeProvider = {
-            switch model.config.id {
-            case "claude": return .claude
-            case "codex":  return .codex
-            case "gemini": return .gemini
-            case "cursor": return .cursor
-            default:       return .claude
-            }
-        }()
         let popoverView: MacMenubarPopover
         if let runtime {
             popoverView = MacMenubarPopover(
@@ -404,6 +410,8 @@ final class ProviderStatusController: NSObject {
                 // Thread the live Cursor poller so the Cursor popover tab shows
                 // real usage instead of the hardcoded stale 0% row.
                 cursorModel: runtime.cursorModel,
+                // #38: controller-owned driver re-targets the tab on each open.
+                selectionDriver: selection,
                 // v0.22.30: thread the usage history store so the
                 // OpenCode tab renders Today + This-week dollar tiles.
                 usageHistoryStore: runtime.usageHistoryStore
@@ -500,6 +508,10 @@ final class ProviderStatusController: NSObject {
                 runtime.codexModel.forcePoll()
                 runtime.geminiModel.forcePoll()
             }
+            // #38: re-target the cached popover to this provider's tab so
+            // re-opening always lands on the clicked provider, not the last
+            // tab the user manually switched to inside the popover.
+            selection.request(providerCase)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             // Keep the popover keyed to the active window so menu bar
             // interaction doesn't immediately dismiss it.

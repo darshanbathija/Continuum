@@ -48,6 +48,8 @@ struct PairingSettingsView: View {
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     /// Active Tahoe accent (Halo blue by default; tracks the user's theme).
     @Environment(\.tahoe) private var t
+    /// #21: pause the 1Hz TTL-countdown re-render when the window is inactive.
+    @Environment(\.controlActiveState) private var controlActiveState
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
@@ -58,20 +60,25 @@ struct PairingSettingsView: View {
     @AppStorage("clawdmeter.pairing.preferTLS") private var preferTLS: Bool = false
 
     var body: some View {
-        Form {
+        // #37: Tahoe primitives instead of a nested grouped `Form`. The pane is
+        // embedded inside a SettingsCard glass card; a `Form { Section }` rendered
+        // macOS inset-grouped chrome inside the card, clashing with the rest of
+        // Settings. Now each section is a `tahoeSection` (uppercased header +
+        // content + muted footer) separated by `TahoeHair`, matching MacSettingsView.
+        VStack(alignment: .leading, spacing: 18) {
             relayPairSection
+            TahoeHair()
             scanRootsSection
+            TahoeHair()
             supervisorSection
+            TahoeHair()
             relaySecuritySection
+            TahoeHair()
             legacyTailscaleSection
+            TahoeHair()
             pluginsSection
         }
-        .formStyle(.grouped)
-        // Was `.frame(width: 520, height: 760)` — a rigid block whose fixed
-        // height forced a nested scroll viewport inside the responsive
-        // settings card + outer ScrollView. Size to content and fill the
-        // card's width instead so it participates in the page's single scroll.
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             tokenForDisplay = PairingTokenStore.shared.currentToken()
             resolvedHost = TailscaleHost.resolve()
@@ -81,7 +88,7 @@ struct PairingSettingsView: View {
             plugins = PluginRegistry.discover()
             refreshRelayQR()
         }
-        .onReceive(ticker) { now = $0 }
+        .onReceive(ticker) { if controlActiveState != .inactive { now = $0 } }
         .onChange(of: pairingService.bundleURL) { _, _ in refreshRelayQR() }
     }
 
@@ -90,10 +97,36 @@ struct PairingSettingsView: View {
         return false
     }
 
+    /// #37: Tahoe section wrapper — an uppercased header, the content, and an
+    /// optional muted footer. Footers are rendered via `LocalizedStringKey` so
+    /// the inline `code` spans (backtick paths) keep formatting like before.
+    @ViewBuilder
+    private func tahoeSection<Content: View>(
+        _ title: String,
+        footer: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased())
+                .font(TahoeFont.body(11.5, weight: .bold))
+                .tracking(0.5)
+                .foregroundStyle(t.fg3)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let footer {
+                Text(LocalizedStringKey(footer))
+                    .font(TahoeFont.body(11))
+                    .foregroundStyle(t.fg4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     // MARK: - Relay pair section (E7 primary)
 
     private var relayPairSection: some View {
-        Section {
+        tahoeSection("Pair with iPhone", footer: "Open Clawdmeter on your iPhone and scan the QR. The pairing bundle includes a relay session ID + per-peer bearer tokens + an X25519 public key — no Tailscale or LAN required. The bundle expires after 15 minutes.") {
             switch pairingService.phase {
             case .unpaired:
                 relayUnpairedRow
@@ -107,12 +140,6 @@ struct PairingSettingsView: View {
             case .scanning, .keyExchanged, .readyButNotConnected:
                 relayBundleRow
             }
-        } header: {
-            Text("Pair with iPhone")
-        } footer: {
-            Text("Open Clawdmeter on your iPhone and scan the QR. The pairing bundle includes a relay session ID + per-peer bearer tokens + an X25519 public key — no Tailscale or LAN required. The bundle expires after 15 minutes.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -241,7 +268,7 @@ struct PairingSettingsView: View {
     // MARK: - Relay security section
 
     private var relaySecuritySection: some View {
-        Section {
+        tahoeSection("Pairing security", footer: "Forget pairing wipes the in-memory keypair and bundle on this Mac. The iPhone keeps its derived key until it scans a fresh QR or the bundle TTL expires. Relaunching Clawdmeter also invalidates the bundle by design — keys are ephemeral per pairing.") {
             HStack(spacing: 12) {
                 Button("Forget pairing", role: .destructive) {
                     pairingService.reset()
@@ -249,19 +276,13 @@ struct PairingSettingsView: View {
                 .disabled(pairingService.phase == .unpaired)
                 Spacer()
             }
-        } header: {
-            Text("Pairing security")
-        } footer: {
-            Text("Forget pairing wipes the in-memory keypair and bundle on this Mac. The iPhone keeps its derived key until it scans a fresh QR or the bundle TTL expires. Relaunching Clawdmeter also invalidates the bundle by design — keys are ephemeral per pairing.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 
     // MARK: - Legacy Tailscale section (collapsed by default)
 
     private var legacyTailscaleSection: some View {
-        Section {
+        tahoeSection("Legacy transport", footer: "Pre-E7 Tailscale-based pairing — bundles host + ports + bearer token into a `clawdmeter://` URL. Kept for users who explicitly want LAN-only / no-relay operation. The relay flow above is the recommended default and survives IP changes, NAT, and not having Tailscale installed at all.") {
             DisclosureGroup(isExpanded: $showLegacyTailscaleAdvanced) {
                 VStack(alignment: .leading, spacing: 10) {
                     legacyTailscaleConnectivityToggles
@@ -295,12 +316,6 @@ struct PairingSettingsView: View {
                         .background(.quaternary, in: Capsule())
                 }
             }
-        } header: {
-            Text("Legacy transport")
-        } footer: {
-            Text("Pre-E7 Tailscale-based pairing — bundles host + ports + bearer token into a `clawdmeter://` URL. Kept for users who explicitly want LAN-only / no-relay operation. The relay flow above is the recommended default and survives IP changes, NAT, and not having Tailscale installed at all.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -383,7 +398,7 @@ struct PairingSettingsView: View {
     // MARK: - Scan roots section (unchanged from pre-E7)
 
     private var scanRootsSection: some View {
-        Section {
+        tahoeSection("Scan roots", footer: "Comma-separated directories to scan for `.git` repos beyond `~/.claude/projects/` and `~/.codex/sessions/`. Empty by default; common picks: `~/Downloads`, `~/Desktop`, `~/code`.") {
             TextField(
                 "e.g. ~/Downloads, ~/code",
                 text: $scanRoots,
@@ -398,17 +413,11 @@ struct PairingSettingsView: View {
                 UserDefaults.standard.set(roots, forKey: RepoIndex.scanRootsKey)
                 Task { await runtime.repoIndex.refresh() }
             }
-        } header: {
-            Text("Scan roots")
-        } footer: {
-            Text("Comma-separated directories to scan for `.git` repos beyond `~/.claude/projects/` and `~/.codex/sessions/`. Empty by default; common picks: `~/Downloads`, `~/Desktop`, `~/code`.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 
     private var supervisorSection: some View {
-        Section {
+        tahoeSection("Supervisor") {
             LabeledContent("Status") {
                 if runtime.tmuxSupervisor.isRecoveryBlocked {
                     HStack(spacing: 8) {
@@ -430,13 +439,11 @@ struct PairingSettingsView: View {
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-        } header: {
-            Text("Supervisor")
         }
     }
 
     private var pluginsSection: some View {
-        Section {
+        tahoeSection("Plugins", footer: "Read-only inventory of MCP servers and plugins from `~/.codex/config.toml` and `~/.claude/settings.json`. Enable or disable from the CLI configs.") {
             if plugins.isEmpty {
                 Text("No MCP servers or plugins detected.")
                     .font(.callout)
@@ -464,12 +471,6 @@ struct PairingSettingsView: View {
                     }
                 }
             }
-        } header: {
-            Text("Plugins")
-        } footer: {
-            Text("Read-only inventory of MCP servers and plugins from `~/.codex/config.toml` and `~/.claude/settings.json`. Enable or disable from the CLI configs.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 

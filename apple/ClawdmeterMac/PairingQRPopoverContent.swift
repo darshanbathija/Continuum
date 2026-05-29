@@ -27,6 +27,8 @@ struct PairingQRPopoverContent: View {
     /// halo, and Copy URL CTA stay on-brand instead of leaking the legacy
     /// terra-cotta heritage color from SessionsV2Theme.accent.
     @Environment(\.tahoe) private var t
+    /// #21: pause the 1Hz countdown re-render when the window is inactive.
+    @Environment(\.controlActiveState) private var controlActiveState
 
     init(runtime: AppRuntime) {
         self.runtime = runtime
@@ -58,7 +60,7 @@ struct PairingQRPopoverContent: View {
         .frame(width: 300)
         .onAppear { refreshQR() }
         .onChange(of: pairingService.bundleURL) { _, _ in refreshQR() }
-        .onReceive(ticker) { now = $0 }
+        .onReceive(ticker) { if controlActiveState != .inactive { now = $0 } }
     }
 
     // MARK: - Empty / unpaired state

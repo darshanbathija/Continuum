@@ -34,6 +34,9 @@ struct SessionActivityStrip: View {
     }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// #21: pause the 1Hz re-render when the window is inactive — a background
+    /// strip doesn't need live duration ticks.
+    @Environment(\.controlActiveState) private var controlActiveState
 
     /// Drives a 1Hz re-render so the duration text updates live without
     /// the user having to scroll or type. SwiftUI's `Text(_, style: .timer)`
@@ -61,7 +64,7 @@ struct SessionActivityStrip: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .onReceive(ticker) { stamp in now = stamp }
+        .onReceive(ticker) { stamp in if controlActiveState != .inactive { now = stamp } }
     }
 
     // MARK: - Indicator (per-agent style)

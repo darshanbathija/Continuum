@@ -60,6 +60,7 @@ final class GeminiProviderLaneATests: XCTestCase {
             today: WindowTotals(totals: totals, byRepo: [], restCount: 0),
             past7d: .empty,
             past30d: .empty,
+            past90d: .empty,
             allTime: .empty,
             byDay: [:]
         )

@@ -52,6 +52,40 @@ enum AnalyticsRangeAdapter {
         }
     }
 
+    /// Windowed per-model token totals for the Usage tab's tokens-by-model
+    /// section. Mirrors the exact date spans the dollar charts use
+    /// (today/7d/30d/90d) by summing the snapshot's `byDayByModel`; "all"
+    /// returns the precomputed all-time `tokensByModel` aggregate. Keyed by
+    /// raw model name; this is token volume, not dollars, so unpriced models
+    /// (Grok, free OpenRouter models, etc.) are included.
+    static func tokensByModel(snapshot: UsageHistorySnapshot, range: String) -> [String: TokenTotals] {
+        if range == "all" {
+            if !snapshot.tokensByModel.isEmpty { return snapshot.tokensByModel }
+            // Fallback for older snapshots that predate the aggregate field.
+            var out: [String: TokenTotals] = [:]
+            for (_, modelMap) in snapshot.byDayByModel {
+                for (model, totals) in modelMap { out[model, default: .zero] += totals }
+            }
+            return out
+        }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let startOffset: Int
+        switch range {
+        case "today", "24h": startOffset = 0
+        case "7d":           startOffset = 6
+        case "30d":          startOffset = 29
+        case "90d":          startOffset = (7 * 11) + 6   // 84-day span, matches weekly12
+        default:             startOffset = 6
+        }
+        let start = cal.date(byAdding: .day, value: -startOffset, to: today) ?? today
+        var out: [String: TokenTotals] = [:]
+        for (day, modelMap) in snapshot.byDayByModel where day >= start && day <= today {
+            for (model, totals) in modelMap { out[model, default: .zero] += totals }
+        }
+        return out
+    }
+
     // MARK: - Today: a single bar showing today's per-provider spend
 
     private static func today(_ snapshot: UsageHistorySnapshot) -> TahoeDemo.RangeData {
@@ -124,12 +158,10 @@ enum AnalyticsRangeAdapter {
         let start = cal.date(byAdding: .day, value: -(7 * 11) - 6, to: today) ?? today
         let end = cal.date(byAdding: .day, value: 1, to: today) ?? today
         let totals = self.totalsForRange(snapshot, start: start, end: end, label: "90d")
-        // Repos: the snapshot's byDay carries no per-repo dimension and there's
-        // no .past90d window, so a true trailing-90d per-repo split isn't
-        // derivable here (see cross-file note). Use .past30d — a real window
-        // that can't overcount past the headline — instead of the .allTime
-        // lifetime split, which both overcounted and could exceed the total.
-        let repos = self.reposFor(snapshot, range: .past30d)
+        // #2: true trailing-90d per-repo split. ProviderTotals.past90d is built
+        // over the same 84-day span as this chart, so the repo rows align with
+        // the headline above instead of falling back to the narrower 30d window.
+        let repos = self.reposFor(snapshot) { $0.past90d }
         return TahoeDemo.RangeData(
             label: "90d",
             ticks: ticks,
@@ -309,16 +341,16 @@ enum AnalyticsRangeAdapter {
     /// row's per-provider tint shows what fraction came from where.
     /// Mirrors the demo shape: top 4 by total + "Other" rest bucket.
     private static func reposFor(_ snapshot: UsageHistorySnapshot, range: UsageHistorySnapshot.Window) -> [TahoeDemo.SpendRepo] {
+        reposFor(snapshot) { $0.window(range) }
+    }
+
+    /// Shared repo-merge body. `select` picks the WindowTotals — a Window enum
+    /// case via the overload above, or the non-enum `past90d` window used by
+    /// the 90d card for a true trailing-90d per-repo split (#2).
+    private static func reposFor(_ snapshot: UsageHistorySnapshot, select: (ProviderTotals) -> WindowTotals) -> [TahoeDemo.SpendRepo] {
         var byRepo: [RepoKey: (c: Decimal, x: Decimal, g: Decimal, o: Decimal)] = [:]
         for (provider, providerTotals) in snapshot.byProvider {
-            let window: WindowTotals = {
-                switch range {
-                case .today:   return providerTotals.today
-                case .past7d:  return providerTotals.past7d
-                case .past30d: return providerTotals.past30d
-                case .allTime: return providerTotals.allTime
-                }
-            }()
+            let window = select(providerTotals)
             // Skip the synthetic rollup row UsageHistorySnapshot stores under
             // "__rest__" (repos ranked 9+) — otherwise it renders as a literal
             // "__rest__" row AND double-counts those dollars against the real
