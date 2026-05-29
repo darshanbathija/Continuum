@@ -80,3 +80,8 @@ jq \
 KEYS=$(jq '.models | length' "$OUT")
 OVERRIDE_KEYS=$(jq '.overrides | length' "$OVERRIDES")
 echo "Wrote $OUT ($KEYS models, including $OVERRIDE_KEYS manual overrides)"
+
+# Keep the bundled overrides copy (loaded by PricingUpdater's runtime daily
+# refresh) in sync with the canonical tools/pricing-overrides.json.
+cp "$OVERRIDES" "$REPO_ROOT/apple/ClawdmeterShared/Sources/ClawdmeterShared/Analytics/pricing-overrides.json"
+echo "Synced bundled overrides copy for runtime refresh."
