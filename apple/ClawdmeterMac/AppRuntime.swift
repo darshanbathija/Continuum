@@ -561,6 +561,25 @@ final class AppRuntime: ObservableObject {
                 await MainActor.run { self?.usageHistoryStore.forceRefresh() }
             }
         }
+        // v0.29.31: warm the Cursor + OpenRouter model probes on launch so the
+        // model pickers show the full live lists immediately, and force a fresh
+        // re-probe at most once per 24h so a long-running instance picks up
+        // newly-released models without a relaunch. (The probes also self-refresh
+        // on a 60s TTL whenever a picker opens — this keeps the cache warm and
+        // gives the "auto-check for new models daily" guarantee. First-party
+        // Claude/OpenAI/Gemini stay hand-curated in ModelCatalog.bundled.)
+        Task.detached(priority: .utility) {
+            let key = "clawdmeter.models.lastProbeRefresh"
+            let now = Date()
+            let last = UserDefaults.standard.object(forKey: key) as? Date
+            if last == nil || now.timeIntervalSince(last!) >= 24 * 60 * 60 {
+                await CursorModelProbe.shared.invalidate()
+                await OpenRouterModelProbe.shared.invalidate()
+                UserDefaults.standard.set(now, forKey: key)
+            }
+            _ = await CursorModelProbe.shared.currentModels()
+            _ = await OpenRouterModelProbe.shared.currentModels()
+        }
         Task(priority: .utility) { @MainActor in
             OpencodeProcessManager.shared.prepareRuntimeHost()
         }

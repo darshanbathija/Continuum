@@ -155,7 +155,7 @@ final class ComposerStoreTests: XCTestCase {
         s.planMode = true
         s.resetChipsForRepo("/r2", defaults: .default)
         XCTAssertEqual(s.repoKey, "/r2")
-        XCTAssertEqual(s.modelId, "claude-opus-4-7-1m")
+        XCTAssertEqual(s.modelId, "claude-opus-4-8-1m")
         XCTAssertEqual(s.effort, .max)
         XCTAssertEqual(s.mode, .worktree)
         XCTAssertFalse(s.planMode)
