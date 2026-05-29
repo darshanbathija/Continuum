@@ -340,7 +340,12 @@ private struct AnalyticsRow: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
+        // Bind the range adapter once per body pass — `data` is an uncached
+        // computed getter and SwiftUI does NOT cache computed-property reads
+        // within a body, so reading it inline (6× below) re-ran the full
+        // AnalyticsRangeAdapter aggregation on every render.
+        let data = self.data
+        return VStack(spacing: 12) {
             HStack(spacing: 12) {
                 Text("ANALYTICS")
                     .font(TahoeFont.body(11.5, weight: .bold))
@@ -384,7 +389,11 @@ private struct Legend: View {
     @Environment(\.tahoe) private var t
     var body: some View {
         HStack(spacing: 14) {
-            ForEach(TahoeProvider.allCases) { p in
+            // Only the four providers the SpendChart actually stacks
+            // (c/x/g/o → claude/codex/gemini/opencode). `.cursor` has no
+            // SpendPoint lane, so a Cursor chip here would key a bar
+            // segment that never renders.
+            ForEach(TahoeProvider.allCases.filter { $0 != .cursor }) { p in
                 HStack(spacing: 6) {
                     // v0.29.4: match the SpendChart's bar gradient
                     // (`halo → glow`) instead of the previous

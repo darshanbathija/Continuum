@@ -439,8 +439,12 @@ public struct MacSettingsView: View {
                     .font(TahoeFont.body(12))
                     .foregroundStyle(.primary)
                 Button("Open changelog") {
-                    let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("CHANGELOG.md")
-                    NSWorkspace.shared.open(url)
+                    // Root-cause: a launched app's CWD is `/`, so the old
+                    // file:///CHANGELOG.md target never existed and the button
+                    // was a silent no-op. Point at the repo-hosted changelog.
+                    if let url = URL(string: "https://github.com/darshanbathija/Clawdmeter/blob/main/CHANGELOG.md") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)

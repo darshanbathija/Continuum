@@ -3,6 +3,13 @@ import ClawdmeterShared
 
 /// Token-analytics row on the macOS dashboard. Shown beneath the existing
 /// Claude + Codex provider columns. Plan A1: always-visible, no navigation.
+///
+/// DEAD as of the Tahoe redesign: zero callsites (its old host
+/// `DashboardView` no longer exists). The Usage tab now routes through
+/// `MacRootView` → `Tahoe/MacUsageView`, which is the canonical, live
+/// analytics surface — land analytics fixes there, not here. Kept (not
+/// deleted) pending a separate decision on removing this orphan + the
+/// shared Analytics/Views consumers.
 @available(macOS 13, *)
 struct AnalyticsView: View {
 

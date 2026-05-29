@@ -25,13 +25,23 @@ struct PairingSettingsView: View {
 
     @ObservedObject var runtime: AppRuntime
     @ObservedObject var pairingService: RelayPairingService
-    @AppStorage(RepoIndex.scanRootsKey) private var scanRoots: String = ""
+    /// Plain @State (not @AppStorage) seeded from the array-typed default:
+    /// the scanRootsKey is read as [String] by RepoIndex / PathAllowList, so
+    /// an @AppStorage(String) bound here would dual-type the key and silently
+    /// clobber the array consumers on every keystroke. onChange is the sole
+    /// writer, and it only ever writes [String].
+    @State private var scanRoots: String = ""
     @State private var qrImage: NSImage?
     @State private var tokenForDisplay: String = ""
     @State private var didCopyRelay: Bool = false
     @State private var didCopyLegacy: Bool = false
     @State private var resolvedHost: TailscaleHost.Resolved = TailscaleHost.Resolved(host: "127.0.0.1", kind: .loopback)
     @State private var showLegacyTailscaleAdvanced: Bool = false
+    /// Read-only plugin inventory, loaded once in .onAppear. Was previously
+    /// `PluginRegistry.discover()` (two synchronous disk reads) inside the
+    /// body — the 1s ticker invalidates the whole body, so it re-scanned disk
+    /// on the main thread every second.
+    @State private var plugins: [PluginInfo] = []
     /// Live ticker so the "expires in N:NN" label re-renders without a
     /// state change from the pairing service.
     @State private var now: Date = Date()
@@ -57,10 +67,18 @@ struct PairingSettingsView: View {
             pluginsSection
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 760)
+        // Was `.frame(width: 520, height: 760)` — a rigid block whose fixed
+        // height forced a nested scroll viewport inside the responsive
+        // settings card + outer ScrollView. Size to content and fill the
+        // card's width instead so it participates in the page's single scroll.
+        .frame(maxWidth: .infinity)
         .onAppear {
             tokenForDisplay = PairingTokenStore.shared.currentToken()
             resolvedHost = TailscaleHost.resolve()
+            // Seed the editable String from the array-typed default the rest
+            // of the app reads, so we never round-trip through a String key.
+            scanRoots = (UserDefaults.standard.stringArray(forKey: RepoIndex.scanRootsKey) ?? []).joined(separator: ", ")
+            plugins = PluginRegistry.discover()
             refreshRelayQR()
         }
         .onReceive(ticker) { now = $0 }
@@ -419,7 +437,6 @@ struct PairingSettingsView: View {
 
     private var pluginsSection: some View {
         Section {
-            let plugins = PluginRegistry.discover()
             if plugins.isEmpty {
                 Text("No MCP servers or plugins detected.")
                     .font(.callout)

@@ -38,6 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowCloseObserver: NSObjectProtocol?
     private var showDashboardObserver: NSObjectProtocol?
 
+    /// Perf: `UserDefaults.didChangeNotification` (object:nil) fires on EVERY
+    /// app-wide defaults write, so `applyVisibilityFromPrefs` must filter to
+    /// the 4 `menuBarShown` keys it cares about — otherwise unrelated pref
+    /// writes thrash `setVisible(_:)` across all controllers. `nil` means
+    /// "not yet applied" so the first call always runs.
+    private var lastAppliedVisibility: (claude: Bool, codex: Bool, gemini: Bool, opencode: Bool)?
+
     /// Notification posted by the menu bar popover's "Show dashboard" button.
     /// Handled here so the AppDelegate can flip the activation policy and
     /// surface the SwiftUI window.
@@ -286,6 +293,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // menu-bar item is a separate explicit step (matches how iOS
         // Live tab toggle behaves).
         let opencodeShown = defaults.object(forKey: ProviderStatusController.prefKey("opencode")) as? Bool ?? false
+        // Perf: this fires on every app-wide defaults write via
+        // `didChangeNotification`; bail unless one of the 4 menu-bar keys
+        // actually moved so we don't re-toggle every NSStatusItem on
+        // unrelated pref changes.
+        let next = (claude: claudeShown, codex: codexShown, gemini: geminiShown, opencode: opencodeShown)
+        guard lastAppliedVisibility == nil || lastAppliedVisibility! != next else { return }
+        lastAppliedVisibility = next
         claudeController?.setVisible(claudeShown)
         codexController?.setVisible(codexShown)
         geminiController?.setVisible(geminiShown)
@@ -387,6 +401,9 @@ final class ProviderStatusController: NSObject {
                 claudeModel: runtime.claudeModel,
                 codexModel: runtime.codexModel,
                 geminiModel: runtime.geminiModel,
+                // Thread the live Cursor poller so the Cursor popover tab shows
+                // real usage instead of the hardcoded stale 0% row.
+                cursorModel: runtime.cursorModel,
                 // v0.22.30: thread the usage history store so the
                 // OpenCode tab renders Today + This-week dollar tiles.
                 usageHistoryStore: runtime.usageHistoryStore
@@ -456,7 +473,8 @@ final class ProviderStatusController: NSObject {
             return MenuBarGaugeView.renderLabel(
                 for: usage,
                 assetName: model.config.logoAssetName,
-                template: template
+                template: template,
+                hasWeekly: model.config.hasWeeklyWindow
             )
         }
         return MenuBarGaugeView.renderEmptyLabel(

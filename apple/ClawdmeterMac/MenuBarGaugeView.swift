@@ -33,6 +33,9 @@ struct MenuBarGaugeView {
         let assetName: String
         let template: Bool
         let notStarted: Bool
+        // Part of the key: a no-weekly provider renders a different label
+        // (session-only, no phantom weekly), so it can't share a cache slot.
+        let hasWeekly: Bool
     }
     nonisolated(unsafe) private static var labelCache: [LabelKey: NSImage] = [:]
 
@@ -45,7 +48,11 @@ struct MenuBarGaugeView {
     /// The countdown uses `usage.sessionResetMins`/`usage.weeklyResetMins`,
     /// which the poller fills in at poll time. They're stable until the next
     /// poll (60s cadence), which matches the label's minute precision.
-    static func renderLabel(for usage: UsageData, assetName: String, template: Bool) -> NSImage {
+    ///
+    /// `hasWeekly` mirrors `ProviderConfig.hasWeeklyWindow`: providers without
+    /// a weekly window (Gemini/Antigravity) must NOT render a weekly segment,
+    /// otherwise the label shows a phantom "0% —" reading.
+    static func renderLabel(for usage: UsageData, assetName: String, template: Bool, hasWeekly: Bool) -> NSImage {
         let notStarted = (usage.status == .notStarted)
         let key = LabelKey(
             sessionPct: usage.sessionPct,
@@ -54,7 +61,8 @@ struct MenuBarGaugeView {
             weeklyResetMins: usage.weeklyResetMins,
             assetName: assetName,
             template: template,
-            notStarted: notStarted
+            notStarted: notStarted,
+            hasWeekly: hasWeekly
         )
         cacheLock.lock()
         if let cached = labelCache[key] {
@@ -83,21 +91,26 @@ struct MenuBarGaugeView {
             composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
         }
 
-        let badgeSize: CGFloat = 18
-        let attach = NSTextAttachment()
-        attach.image = providerBadgeImage(
-            assetName: assetName,
-            size: badgeSize,
-            template: template
-        )
-        attach.bounds = CGRect(x: 0, y: -4, width: badgeSize, height: badgeSize)
-        composite.append(NSAttributedString(attachment: attach))
+        // No-weekly providers (Gemini/Antigravity) stop after the session
+        // portion — the badge separator + weekly segment only make sense
+        // when there's a real weekly window to read.
+        if hasWeekly {
+            let badgeSize: CGFloat = 18
+            let attach = NSTextAttachment()
+            attach.image = providerBadgeImage(
+                assetName: assetName,
+                size: badgeSize,
+                template: template
+            )
+            attach.bounds = CGRect(x: 0, y: -4, width: badgeSize, height: badgeSize)
+            composite.append(NSAttributedString(attachment: attach))
 
-        composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
-        composite.append(NSAttributedString(
-            string: "\(usage.weeklyPct)% \(compactTime(usage.weeklyResetMins))",
-            attributes: textAttrs
-        ))
+            composite.append(NSAttributedString(string: "  ", attributes: textAttrs))
+            composite.append(NSAttributedString(
+                string: "\(usage.weeklyPct)% \(compactTime(usage.weeklyResetMins))",
+                attributes: textAttrs
+            ))
+        }
 
         let image = imageFromAttributedString(composite, template: template)
         cacheLock.lock()

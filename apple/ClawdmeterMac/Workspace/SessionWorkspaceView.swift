@@ -211,6 +211,11 @@ struct SessionWorkspaceView: View {
                                 }
                             }
                         )
+                        // Root cause: unlike the sibling CenterThread (which is
+                        // .id(session.id)), ReviewPane kept structural identity
+                        // across a session switch, so its panes (Artifacts, etc.)
+                        // showed the previous session's state until refresh.
+                        .id(session.id)
                     }
                     // Diff is the one pane that's useless at the default
                     // 380pt width — readers need to see ±50 cols at once.
@@ -622,6 +627,11 @@ private struct SidebarPane: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    // Used to pause the 1Hz "external activity" tick when the window isn't
+    // active (app backgrounded / occluded by another window). The tick only
+    // drives cosmetic relative-time / "live now" freshness, so there's
+    // nothing to refresh while the user can't see it.
+    @Environment(\.controlActiveState) private var controlActiveState
     @FocusState private var searchFocused: Bool
 
     /// Persisted sidebar grouping + sorting + status-filter preferences.
@@ -776,6 +786,11 @@ private struct SidebarPane: View {
             SessionComparisonSheet(pair: pair, model: model)
         }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now in
+            // Skip cosmetic freshness ticks while the window is inactive —
+            // no visible relative-time/green-dot to refresh. (Same-window
+            // hidden-tab gating needs an active-tab flag from MacRootView;
+            // see cross-file note.)
+            guard controlActiveState != .inactive else { return }
             guard model.repos.contains(where: { !$0.recentSessions.isEmpty }) else { return }
             externalActivityNow = now
         }
@@ -3832,6 +3847,13 @@ private struct ChatThreadScroll: View {
     @State private var findQuery = ""
     @State private var selectedMatchIndex: Int?
     @State private var projectionCache = SingleSlotProjectionCache<TranscriptProjectionCacheKey, TranscriptProjection>()
+    // Caches the find-bar scan keyed on (query, transcript cursor). The
+    // find result was previously a plain computed var recomputed up to
+    // 3× per body render PLUS once per visible message row (highlightState),
+    // i.e. O(rows × messages). Now a single full O(messages) scan per
+    // query/transcript change feeds every reader, with an id Set for O(1)
+    // per-row membership.
+    @State private var findMatchCache = SingleSlotProjectionCache<FindMatchKey, FindMatchResult>()
     @FocusState private var findFocused: Bool
 
     var body: some View {
@@ -4055,14 +4077,36 @@ private struct ChatThreadScroll: View {
     // the passed-in density. Kept out of ChatThreadScroll so the row
     // doesn't need a reference back to the parent.
 
-    private var findMatches: [SessionChatStore.ChatMessage] {
+    /// Cache key for the find scan: the trimmed query + the transcript
+    /// cursor. A stable (query, cursor) pair is a cache hit, so the scan
+    /// runs once even though several readers ask for it within one render.
+    private struct FindMatchKey: Equatable {
+        let query: String
+        let updateCounter: UInt64
+    }
+
+    private struct FindMatchResult {
+        let matches: [SessionChatStore.ChatMessage]
+        let matchedIds: Set<String>
+    }
+
+    private var findResult: FindMatchResult {
         let q = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return [] }
-        return messagesSlice.messages.filter {
-            $0.body.localizedCaseInsensitiveContains(q)
-                || $0.title.localizedCaseInsensitiveContains(q)
-                || ($0.detail?.localizedCaseInsensitiveContains(q) == true)
+        return findMatchCache.value(
+            for: FindMatchKey(query: q, updateCounter: messagesSlice.updateCounter)
+        ) {
+            guard !q.isEmpty else { return FindMatchResult(matches: [], matchedIds: []) }
+            let matches = messagesSlice.messages.filter {
+                $0.body.localizedCaseInsensitiveContains(q)
+                    || $0.title.localizedCaseInsensitiveContains(q)
+                    || ($0.detail?.localizedCaseInsensitiveContains(q) == true)
+            }
+            return FindMatchResult(matches: matches, matchedIds: Set(matches.map(\.id)))
         }
+    }
+
+    private var findMatches: [SessionChatStore.ChatMessage] {
+        findResult.matches
     }
 
     private func transcriptFindBar(_ proxy: ScrollViewProxy) -> some View {
@@ -4607,13 +4651,13 @@ private struct ChatThreadScroll: View {
     /// three discrete cases. Pre-computed once per body pass so the
     /// row's `==` doesn't have to walk the full match array.
     private func highlightState(for msg: SessionChatStore.ChatMessage) -> ChatItemRowPayload.HighlightState {
-        let matches = findMatches
-        guard !matches.isEmpty,
-              matches.contains(where: { $0.id == msg.id })
+        let result = findResult
+        guard !result.matchedIds.isEmpty,
+              result.matchedIds.contains(msg.id)
         else { return .none }
         if let selectedMatchIndex,
-           matches.indices.contains(selectedMatchIndex),
-           matches[selectedMatchIndex].id == msg.id {
+           result.matches.indices.contains(selectedMatchIndex),
+           result.matches[selectedMatchIndex].id == msg.id {
             return .selectedMatch
         }
         return .match
@@ -5006,6 +5050,11 @@ private struct TahoeDiffPreviewPane: View {
     let repoCwd: String
     @ObservedObject var presentationStore: SessionPresentationStore
     @State private var lines: [DiffLine] = []
+    // A12 — derived indices built once per `load()` so the hover summary
+    // (diffSummary), mark-all-viewed (contentHash), file-list (changedPaths),
+    // and intra-line highlighting (nearestOppositeLine) read O(1)/bounded
+    // lookups instead of re-scanning the whole `lines` array per file/row.
+    @State private var index = DiffIndex()
     @State private var isLoading = false
     @State private var focusedPath: String?
     @State private var hoveredPath: String?
@@ -5081,7 +5130,9 @@ private struct TahoeDiffPreviewPane: View {
 
     @ViewBuilder
     private func diffLineRow(_ line: DiffLine) -> some View {
-        if let path = Self.path(fromDiffHeader: line.text) {
+        // A12 — use the precomputed header flag + path instead of
+        // re-parsing the line text per rendered row.
+        if line.isFileHeader, let path = line.path {
             let viewed = isViewed(path)
             let focused = focusedPath == path
             HStack(spacing: 8) {
@@ -5348,28 +5399,36 @@ private struct TahoeDiffPreviewPane: View {
     }
 
     private func nearestOppositeLine(for line: DiffLine) -> DiffLine? {
+        // A12 — bounded lookup over only this hunk's add/del lines (built
+        // once per load) instead of filtering the entire `lines` array on
+        // every rendered add/del row.
+        guard let hunkId = line.hunkId else { return nil }
         let opposite: DiffLine.Kind = line.kind == .add ? .del : .add
-        return lines
-            .filter { $0.hunkId == line.hunkId && $0.kind == opposite && abs($0.index - line.index) <= 6 }
+        let candidates = opposite == .add ? index.hunkAdds[hunkId] : index.hunkDels[hunkId]
+        return candidates?
+            .filter { abs($0.index - line.index) <= 6 }
             .min { abs($0.index - line.index) < abs($1.index - line.index) }
     }
 
     private func diffSummary(for path: String) -> String {
-        let block = diffBlock(for: path)
-        let additions = block.filter { $0.hasPrefix("+") && !$0.hasPrefix("+++") }.count
-        let removals = block.filter { $0.hasPrefix("-") && !$0.hasPrefix("---") }.count
-        let hunks = block.filter { $0.hasPrefix("@@") }.count
-        return "\(hunks) hunk\(hunks == 1 ? "" : "s") · +\(additions) -\(removals)"
+        // A12 — precomputed once per load; hovering a file row no longer
+        // re-walks the whole diff to recount hunks/additions/removals.
+        index.pathSummaries[path] ?? ""
     }
 
     @MainActor
     private func load() async {
         isLoading = true
         let cwd = repoCwd
-        let loaded = await Task.detached(priority: .utility) {
-            Self.loadGitDiff(cwd: cwd)
+        let (loaded, builtIndex) = await Task.detached(priority: .utility) { () -> ([DiffLine], DiffIndex) in
+            let lines = Self.loadGitDiff(cwd: cwd)
+            // Build the derived indices on the same background hop so the
+            // O(files × lines) summary/block/opposite-line work happens
+            // once off-main, not per-render on the main actor.
+            return (lines, Self.buildIndex(lines))
         }.value
         lines = loaded
+        index = builtIndex
         isLoading = false
     }
 
@@ -5415,21 +5474,26 @@ private struct TahoeDiffPreviewPane: View {
         var currentPath: String?
         var currentHunk: String?
         return rawLines.enumerated().map { index, text in
+            var isHeader = false
             if let path = path(fromDiffHeader: text) {
                 currentPath = path
                 currentHunk = nil
+                isHeader = true
             } else if text.hasPrefix("@@") {
                 currentHunk = "\(currentPath ?? "diff"):\(text)"
             }
-            return DiffLine(text, index: index, hunkId: currentHunk, path: currentPath)
+            return DiffLine(text, index: index, hunkId: currentHunk, path: currentPath, isFileHeader: isHeader)
         }
     }
 
     private var visibleLines: [DiffLine] {
         var output: [DiffLine] = []
+        output.reserveCapacity(lines.count)
         var skippingHunk: String?
         for line in lines {
-            if Self.path(fromDiffHeader: line.text) != nil {
+            // A12 — precomputed header flag instead of re-parsing the line
+            // text (hasPrefix + split) for every line on every body render.
+            if line.isFileHeader {
                 skippingHunk = nil
                 output.append(line)
                 continue
@@ -5455,8 +5519,9 @@ private struct TahoeDiffPreviewPane: View {
     }
 
     private var changedPaths: [String] {
-        var seen: Set<String> = []
-        return lines.compactMap { Self.path(fromDiffHeader: $0.text) }.filter { seen.insert($0).inserted }
+        // A12 — read the precomputed ordered path list instead of
+        // re-scanning + re-parsing every line on each access.
+        index.orderedPaths
     }
 
     private var unviewedPaths: [String] {
@@ -5510,18 +5575,10 @@ private struct TahoeDiffPreviewPane: View {
     }
 
     private func diffBlock(for path: String) -> [String] {
-        var block: [String] = []
-        var collecting = false
-        for line in lines {
-            if let headerPath = Self.path(fromDiffHeader: line.text) {
-                if collecting { break }
-                collecting = headerPath == path
-            }
-            if collecting {
-                block.append(line.text)
-            }
-        }
-        return block
+        // A12 — precomputed per-path block; avoids an O(lines) walk +
+        // per-line `path(fromDiffHeader:)` reparse on every call (the
+        // hover summary + mark-all-viewed hot paths hit this per file).
+        index.pathBlocks[path] ?? []
     }
 
     private func open(_ path: String) {
@@ -5561,12 +5618,18 @@ private struct TahoeDiffPreviewPane: View {
         let kind: Kind
         let hunkId: String?
         let path: String?
+        // A12 — precomputed once in `annotate` so the hot-path body
+        // checks ("is this row a `diff --git` file header?") are O(1)
+        // field reads instead of re-running `path(fromDiffHeader:)`
+        // (hasPrefix + split) per visible row on every layout pass.
+        let isFileHeader: Bool
 
-        init(_ text: String, index: Int, hunkId: String? = nil, path: String? = nil, forcedKind: Kind? = nil) {
+        init(_ text: String, index: Int, hunkId: String? = nil, path: String? = nil, isFileHeader: Bool = false, forcedKind: Kind? = nil) {
             self.text = text
             self.index = index
             self.hunkId = hunkId
             self.path = path
+            self.isFileHeader = isFileHeader
             if let forcedKind {
                 self.kind = forcedKind
             } else if text.hasPrefix("@@") {
@@ -5616,6 +5679,54 @@ private struct TahoeDiffPreviewPane: View {
             default: return .clear
             }
         }
+    }
+
+    /// A12 — derived view of `[DiffLine]` precomputed once per `load()`.
+    /// Collapses the per-render O(files × lines) scans (hover summary,
+    /// mark-all-viewed content hashing, file-list, intra-line opposite
+    /// lookup) into single linear-build lookups so re-renders stay cheap.
+    private struct DiffIndex {
+        /// File paths in diff order (replaces the per-access scan in `changedPaths`).
+        var orderedPaths: [String] = []
+        /// path → raw line texts for that file's block (replaces `diffBlock`'s walk).
+        var pathBlocks: [String: [String]] = [:]
+        /// path → "N hunks · +A -D" summary (replaces `diffSummary`'s recount).
+        var pathSummaries: [String: String] = [:]
+        /// hunkId → its `.add` lines, in `index` order (bounded ±6 lookup in `nearestOppositeLine`).
+        var hunkAdds: [String: [DiffLine]] = [:]
+        /// hunkId → its `.del` lines, in `index` order.
+        var hunkDels: [String: [DiffLine]] = [:]
+    }
+
+    nonisolated private static func buildIndex(_ lines: [DiffLine]) -> DiffIndex {
+        var index = DiffIndex()
+        var currentPath: String?
+        for line in lines {
+            if line.isFileHeader, let path = line.path {
+                currentPath = path
+                if index.pathBlocks[path] == nil {
+                    index.orderedPaths.append(path)
+                    index.pathBlocks[path] = []
+                }
+            }
+            if let currentPath {
+                index.pathBlocks[currentPath, default: []].append(line.text)
+            }
+            if let hunkId = line.hunkId {
+                switch line.kind {
+                case .add: index.hunkAdds[hunkId, default: []].append(line)
+                case .del: index.hunkDels[hunkId, default: []].append(line)
+                default: break
+                }
+            }
+        }
+        for (path, block) in index.pathBlocks {
+            let additions = block.filter { $0.hasPrefix("+") && !$0.hasPrefix("+++") }.count
+            let removals = block.filter { $0.hasPrefix("-") && !$0.hasPrefix("---") }.count
+            let hunks = block.filter { $0.hasPrefix("@@") }.count
+            index.pathSummaries[path] = "\(hunks) hunk\(hunks == 1 ? "" : "s") · +\(additions) -\(removals)"
+        }
+        return index
     }
 
     /// A12 — in-process cache for the legacy `[DiffLine]` shape this
@@ -5983,23 +6094,28 @@ private struct TahoePRCompactPane: View {
     @MainActor
     private func rerunCheck(runID: String, state: PRCoordinator.Snapshot?) async {
         guard let state, let identity = PRCoordinator.approvalIdentity(for: state) else { return }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["gh", "run", "rerun", runID, "--repo", identity.repo]
-        let errorPipe = Pipe()
-        process.standardError = errorPipe
-        do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus == 0 {
-                localActionError = nil
-            } else {
+        // Root cause: `process.waitUntilExit()` does NOT suspend the actor, so
+        // running the `gh run rerun` subprocess inline froze the UI for the full
+        // network round-trip. Mirror `load()` and run it off the main actor.
+        let repo = identity.repo
+        localActionError = await Task.detached(priority: .utility) { () -> String? in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["gh", "run", "rerun", runID, "--repo", repo]
+            let errorPipe = Pipe()
+            process.standardError = errorPipe
+            do {
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus == 0 {
+                    return nil
+                }
                 let stderr = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                localActionError = stderr.isEmpty ? "Failed to rerun check \(runID)." : String(stderr.prefix(220))
+                return stderr.isEmpty ? "Failed to rerun check \(runID)." : String(stderr.prefix(220))
+            } catch {
+                return "Failed to run gh: \(error.localizedDescription)"
             }
-        } catch {
-            localActionError = "Failed to run gh: \(error.localizedDescription)"
-        }
+        }.value
     }
 
     private func failedCheckRunIDs(_ state: PRCoordinator.Snapshot) -> [String] {

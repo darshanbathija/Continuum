@@ -68,7 +68,7 @@ public struct MacTerminalView: NSViewRepresentable {
     // MARK: - Coordinator: WS lifecycle + SwiftTerm delegate
 
     @MainActor
-    public final class Coordinator: NSObject, @preconcurrency TerminalViewDelegate {
+    public final class Coordinator: NSObject, ObservableObject, @preconcurrency TerminalViewDelegate {
         let sessionId: UUID
         let host: String
         let wsPort: Int
@@ -79,6 +79,21 @@ public struct MacTerminalView: NSViewRepresentable {
         weak var terminalView: TerminalView?
         private var task: URLSessionWebSocketTask?
         private var sawOutput = false
+
+        /// Live WS reachability the view can surface (e.g. a "reconnecting…"
+        /// banner). Flipped false on read-loop failure, true once a frame
+        /// arrives after a (re)connect.
+        @Published public private(set) var isConnected = false
+
+        /// Exp-backoff schedule between WS reconnect attempts, mirroring the
+        /// iOS chat-subscribe ladder (1→30s, capped) so a daemon restart
+        /// doesn't strand the terminal silently.
+        private static let backoffSchedule: [TimeInterval] = [1, 2, 4, 8, 16, 30]
+        /// Stop after this many consecutive failures so a permanently-dead
+        /// daemon doesn't spin forever.
+        private static let maxReconnectAttempts = 8
+        private var reconnectAttempt = 0
+        private var reconnectTask: Task<Void, Never>?
 
         init(
             sessionId: UUID,
@@ -97,6 +112,10 @@ public struct MacTerminalView: NSViewRepresentable {
         }
 
         func connect() {
+            // A pending backoff retry may have fired this; clear it so we
+            // don't leave a dangling timer that re-arms a second socket.
+            reconnectTask?.cancel()
+            reconnectTask = nil
             // Use URLSessionWebSocketTask here too — server-side is via
             // Network.framework, but for the client we keep things simple.
             guard let url = URL(string: "ws://\(host):\(wsPort)/") else { return }
@@ -126,8 +145,11 @@ public struct MacTerminalView: NSViewRepresentable {
         }
 
         func disconnect() {
+            reconnectTask?.cancel()
+            reconnectTask = nil
             task?.cancel(with: .goingAway, reason: nil)
             task = nil
+            isConnected = false
         }
 
         private func readLoop() {
@@ -135,13 +157,45 @@ public struct MacTerminalView: NSViewRepresentable {
                 guard let self else { return }
                 switch result {
                 case .failure(let error):
+                    // Root cause: this arm previously only logged and returned,
+                    // so the receive recursion died on the first WS error and
+                    // the terminal silently froze with no reconnect. Surface a
+                    // disconnected state and schedule a bounded backoff retry.
                     macTermLogger.debug("read: \(error.localizedDescription)")
+                    Task { @MainActor in
+                        self.scheduleReconnect()
+                    }
                 case .success(let message):
                     Task { @MainActor in
+                        if !self.isConnected { self.isConnected = true }
+                        self.reconnectAttempt = 0
                         self.dispatch(message: message)
                         self.readLoop()
                     }
                 }
+            }
+        }
+
+        /// Re-`connect()` after an exp-backoff delay (with 0-20% jitter),
+        /// giving up after `maxReconnectAttempts` consecutive failures.
+        private func scheduleReconnect() {
+            isConnected = false
+            // A retry is already in flight; don't stack timers.
+            guard reconnectTask == nil else { return }
+            guard reconnectAttempt < Self.maxReconnectAttempts else {
+                macTermLogger.debug("read: giving up after \(self.reconnectAttempt) reconnect attempts")
+                return
+            }
+            reconnectAttempt += 1
+            let idx = min(reconnectAttempt - 1, Self.backoffSchedule.count - 1)
+            let base = Self.backoffSchedule[idx]
+            // 0-20% jitter so a herd of terminals doesn't reconnect in lockstep.
+            let delay = base + base * Double.random(in: 0...0.2)
+            reconnectTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard let self, !Task.isCancelled else { return }
+                self.reconnectTask = nil
+                self.connect()
             }
         }
 

@@ -39,6 +39,13 @@ public struct MacMenubarPopover: View {
     /// observable for `body` to re-fire correctly on any of their
     /// `@Published.usage` changes).
     @ObservedObject private var liveSource: MenuBarLiveSource
+    /// v(audit): optional controller-owned selection driver. The shared
+    /// NSPopover is reused across status items, so without this the tab
+    /// stays on whatever `initialProvider` seeded `selected` at first
+    /// build. When non-nil, the controller re-targets the active tab on
+    /// each open and `body` reconciles `selected` to it. Nil for preview /
+    /// legacy paths (seed-once behavior preserved).
+    @ObservedObject private var selectionDriver: MenuBarPopoverSelection
     /// v0.22.30: optional UsageHistoryStore so the OpenCode tab can
     /// render its dollar-cost tile (`$X today / $Y this week` per A2).
     /// When nil (preview path or when opencode isn't wired) the
@@ -69,6 +76,9 @@ public struct MacMenubarPopover: View {
         self.onSyncIPhone = onSyncIPhone
         self.liveSource = MenuBarLiveSource()  // no live models
         self.usageHistoryStore = UsageHistoryStore()
+        // Self-owned driver never bumps `epoch`, so the preview path keeps
+        // the original seed-once selection behavior.
+        self.selectionDriver = MenuBarPopoverSelection(initial: initialProvider)
     }
 
     /// Production init — wires live per-provider AppModels so meters
@@ -81,6 +91,14 @@ public struct MacMenubarPopover: View {
         claudeModel: AppModel,
         codexModel: AppModel,
         geminiModel: AppModel,
+        // Optional so the existing call site compiles before it's wired;
+        // when non-nil the cursor tab renders live usage instead of a stale
+        // hardcoded literal.
+        cursorModel: AppModel? = nil,
+        // Optional controller-owned driver to re-target the active tab on
+        // each open (see MenuBarPopoverSelection). Nil → self-owned driver,
+        // preserving the original seed-once selection behavior.
+        selectionDriver: MenuBarPopoverSelection? = nil,
         usageHistoryStore: UsageHistoryStore
     ) {
         self.data = .demo  // fallback never used when liveSource is wired
@@ -88,8 +106,9 @@ public struct MacMenubarPopover: View {
         self.onOpenDashboard = onOpenDashboard
         self.onSyncIPhone = onSyncIPhone
         self.liveSource = MenuBarLiveSource(
-            claude: claudeModel, codex: codexModel, gemini: geminiModel
+            claude: claudeModel, codex: codexModel, gemini: geminiModel, cursor: cursorModel
         )
+        self.selectionDriver = selectionDriver ?? MenuBarPopoverSelection(initial: initialProvider)
         self.usageHistoryStore = usageHistoryStore
     }
 
@@ -103,17 +122,22 @@ public struct MacMenubarPopover: View {
             claude: liveRow(model: models.claude, provider: .claude),
             codex:  liveRow(model: models.codex,  provider: .codex),
             gemini: liveRow(model: models.gemini, provider: .gemini),
-            cursor: TahoeLiveRow(
-                sessionPercent: 0,
-                weeklyPercent: 0,
-                sessionResetIn: "-",
-                weeklyResetIn: "",
-                modelName: "Cursor Auto",
-                autoReviveOn: false,
-                supportsAutoRevive: false,
-                hasWeekly: false,
-                stale: true
-            )
+            // Bug fix: the cursor tab was hardcoded to a stale 0%/"-" literal,
+            // so it never reflected cursorModel.usage. Build it from the live
+            // model like every other provider; fall back to the honest
+            // "Connecting…" row when the cursor model isn't wired yet.
+            cursor: models.cursor.map { liveRow(model: $0, provider: .cursor) }
+                ?? TahoeLiveRow(
+                    sessionPercent: 0,
+                    weeklyPercent: 0,
+                    sessionResetIn: "-",
+                    weeklyResetIn: "",
+                    modelName: "Cursor Auto",
+                    autoReviveOn: false,
+                    supportsAutoRevive: false,
+                    hasWeekly: false,
+                    stale: true
+                )
         )
     }
 
@@ -251,6 +275,17 @@ public struct MacMenubarPopover: View {
         }
         .padding(14)
         .frame(width: 388)
+        // Re-target the active tab when the controller requests a provider
+        // on popover open. Keys off `epoch` (not `requested`) so clicking
+        // the same provider's status item still reactivates the tab; a
+        // self-owned driver never bumps `epoch`, so the preview / legacy
+        // paths keep seed-once behavior.
+        .onChange(of: selectionDriver.epoch) { _, _ in
+            guard selected != selectionDriver.requested else { return }
+            var tx = Transaction()
+            tx.disablesAnimations = true
+            withTransaction(tx) { selected = selectionDriver.requested }
+        }
     }
 
     /// v0.22.8: extracted into its own builder so the per-button state
@@ -339,13 +374,20 @@ private struct OpencodeDollarTile: View {
         }
     }
 
-    private static func format(_ v: Decimal) -> String {
+    // Perf: the popover body re-runs on every SSE append (UsageHistoryStore
+    // is @Observable), and two tiles call `format` per pass — so configure
+    // the currency formatter once instead of allocating one per render.
+    private static let formatter: NumberFormatter = {
         let f = NumberFormatter()
         f.numberStyle = .currency
         f.currencyCode = "USD"
         f.maximumFractionDigits = 2
         f.minimumFractionDigits = 2
-        return f.string(from: v as NSDecimalNumber) ?? "$0.00"
+        return f
+    }()
+
+    private static func format(_ v: Decimal) -> String {
+        formatter.string(from: v as NSDecimalNumber) ?? "$0.00"
     }
 }
 
@@ -395,6 +437,10 @@ final class MenuBarLiveSource: ObservableObject {
         let claude: AppModel
         let codex: AppModel
         let gemini: AppModel
+        // Optional: the production call site passes the real cursorModel when
+        // available; nil keeps the demo/legacy path compiling and falls back
+        // to the honest "Connecting…" row.
+        let cursor: AppModel?
     }
 
     let models: Models?
@@ -408,14 +454,14 @@ final class MenuBarLiveSource: ObservableObject {
     /// Production init: subscribes to each model's `objectWillChange`
     /// and re-emits via our own publisher so the popover's
     /// `@ObservedObject` dependency tracker fires on every poll.
-    init(claude: AppModel, codex: AppModel, gemini: AppModel) {
-        self.models = Models(claude: claude, codex: codex, gemini: gemini)
+    init(claude: AppModel, codex: AppModel, gemini: AppModel, cursor: AppModel? = nil) {
+        self.models = Models(claude: claude, codex: codex, gemini: gemini, cursor: cursor)
         // Forward each provider's objectWillChange to our own. The
         // popover view subscribes to MenuBarLiveSource (this) rather
         // than the three AppModels directly, because @ObservedObject
         // needs a single observable to track. The forwarders fan-in
         // updates to a single edge.
-        for model in [claude, codex, gemini] {
+        for model in [claude, codex, gemini, cursor].compactMap({ $0 }) {
             model.objectWillChange
                 .sink { [weak self] _ in
                     // Hop one runloop tick: AppModel's @Published
@@ -428,5 +474,32 @@ final class MenuBarLiveSource: ObservableObject {
                 }
                 .store(in: &cancellables)
         }
+    }
+}
+
+// MARK: - Menu-bar popover selection driver
+
+/// Lets the controller re-target the popover's active tab on each open.
+/// The NSPopover + NSHostingController is built once per status item and
+/// reused, so the popover's `@State selected` is seeded once at init and
+/// never reactivates when a different provider's status item is clicked.
+/// The controller bumps `requested` (+ `epoch` so re-clicking the same
+/// provider still fires) in its toggle handler; the popover observes this
+/// and reconciles `selected` via `.onChange`. Optional on the view so the
+/// preview / legacy call sites keep the original seed-once behavior.
+@MainActor
+public final class MenuBarPopoverSelection: ObservableObject {
+    @Published public var requested: TahoeProvider
+    /// Bumped alongside `requested` so re-selecting the already-requested
+    /// provider still publishes a distinct change the view can observe.
+    @Published public var epoch: Int = 0
+
+    public init(initial: TahoeProvider) {
+        self.requested = initial
+    }
+
+    public func request(_ provider: TahoeProvider) {
+        requested = provider
+        epoch &+= 1
     }
 }

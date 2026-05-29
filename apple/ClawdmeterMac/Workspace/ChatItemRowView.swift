@@ -406,8 +406,23 @@ struct ChatItemRowContent: View {
             TahoeProviderGlyph(provider: payload.providerGlyph, size: 26)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
-                MarkdownRenderer(source: msg.body, syntaxTheme: payload.syntaxTheme)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // Perf: while THIS row is the actively-streaming tail, render the
+                // (growing) body as plain `Text` instead of `MarkdownRenderer`.
+                // The renderer re-kicks a detached whole-body markdown parse on
+                // every `source` change, so a streaming burst parsed the full
+                // body once per token. The parse runs once at turn completion,
+                // when `isStreamingTail` flips false and the row routes back
+                // through `ChatItemRowView` → `MarkdownRenderer`.
+                if payload.isStreamingTail {
+                    Text(msg.body)
+                        .font(.system(size: 13, design: .serif))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    MarkdownRenderer(source: msg.body, syntaxTheme: payload.syntaxTheme)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 pathLinkStripIfAny(body: msg.body)
             }
             Spacer(minLength: 64)
@@ -781,9 +796,18 @@ func ClawdmeterMac_runningStepSubtitle(forTool toolTitle: String, body: String) 
 /// `[review](/Users/.../review/SKILL.md)`. In the Code tab that reads like
 /// leaked implementation detail. The prompt/transcript body stays unchanged;
 /// views call this helper only for the visible label.
+/// Compiled once. The previous form rebuilt the `NSRegularExpression` on
+/// every call — and this runs per message-row body (userBubble + MacChatV2
+/// MessageRow), so a long transcript recompiled the same pattern hundreds of
+/// times per render pass. Global `let` initializers are lazy + thread-safe.
+private let clawdmeterMacSkillInvocationRegex: NSRegularExpression? =
+    try? NSRegularExpression(pattern: #"\[([^\]\n]+)\]\(([^)\n]*SKILL\.md)\)"#)
+
 func ClawdmeterMac_displaySkillInvocations(in text: String) -> String {
-    let pattern = #"\[([^\]\n]+)\]\(([^)\n]*SKILL\.md)\)"#
-    guard let regex = try? NSRegularExpression(pattern: pattern) else {
+    // Fast path: the pattern needs both a `](` link and a `SKILL.md` target.
+    // Most message bodies have neither, so skip the regex entirely for them.
+    guard text.contains("]("), text.contains("SKILL.md") else { return text }
+    guard let regex = clawdmeterMacSkillInvocationRegex else {
         return text
     }
 

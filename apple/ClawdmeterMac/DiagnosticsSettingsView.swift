@@ -52,8 +52,16 @@ struct DiagnosticsSettingsView: View {
         }
         .padding(.vertical, 12)
         .frame(minWidth: 560, minHeight: 400)
-        .task(id: refreshTick) { await reload() }
-        .task(id: selectedKind) { await reload() }
+        // Single source of truth: two `.task(id:)` modifiers both fired on
+        // first appear → reload() ran twice (one redundant disk read per open).
+        .task(id: ReloadKey(tick: refreshTick, kind: selectedKind)) { await reload() }
+    }
+
+    /// Coalesces the two reload triggers (manual refresh + stream switch) into
+    /// one `.task(id:)` so a single state change runs reload() exactly once.
+    private struct ReloadKey: Hashable {
+        let tick: Int
+        let kind: AuditKind
     }
 
     private var surfacePicker: some View {
