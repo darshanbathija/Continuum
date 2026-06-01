@@ -14,14 +14,21 @@ struct WorkspaceReviewPane: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var tabPill
 
     var body: some View {
         VStack(spacing: 0) {
             tabBar
             TahoeHairline()
             tabContent
+                .id(selectedTab)
+                .transition(.opacity)
         }
         .background(Color.clear)
+        // P5/P6: the selected-tab pill slides (matchedGeometry) and the pane
+        // body cross-fades on switch (160ms) instead of an instant hard cut.
+        .animation(SessionsV2Theme.segmentedSelection(reduceMotion: reduceMotion), value: selectedTab)
     }
 
     private var tabBar: some View {
@@ -62,13 +69,20 @@ struct WorkspaceReviewPane: View {
             .frame(height: 30)
             .frame(maxWidth: .infinity)
             .foregroundStyle(isSelected ? t.fg : t.fg3)
-            .background(isSelected ? (t.dark ? Color.white.opacity(0.10) : Color.white) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .shadow(color: isSelected ? Color.black.opacity(0.10) : .clear, radius: 2, x: 0, y: 1)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isSelected ? t.hairline : .clear, lineWidth: 0.5)
-            )
+            // P5: the active-tab pill is a single matched-geometry view that
+            // SLIDES to the tapped segment rather than hard-cutting on/off.
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(t.dark ? Color.white.opacity(0.10) : Color.white)
+                        .shadow(color: Color.black.opacity(0.10), radius: 2, x: 0, y: 1)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(t.hairline, lineWidth: 0.5)
+                        )
+                        .matchedGeometryEffect(id: "reviewTabPill", in: tabPill)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())

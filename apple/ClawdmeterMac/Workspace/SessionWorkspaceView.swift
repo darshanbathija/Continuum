@@ -197,6 +197,11 @@ struct SessionWorkspaceView: View {
                     // Terminal) stay compact so the center chat keeps its
                     // breathing room.
                     .frame(width: reviewPaneWidth)
+                    // P7: animate the Diff width morph (~58% expand) on tab
+                    // switch. Keyed on the selected pane — NOT workspaceWidth —
+                    // so window resizes still track the cursor instantly.
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2),
+                               value: workbenchState.selectedRightPane)
                     .padding(.leading, 5)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
