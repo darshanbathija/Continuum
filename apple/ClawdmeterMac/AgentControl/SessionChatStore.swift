@@ -1205,6 +1205,26 @@ public final class SessionChatStore {
     public nonisolated static func resolveSessionFileURL(repoCwd: String) -> URL? {
         let home = ClawdmeterRealHome.url()
         let projects = home.appendingPathComponent(".claude/projects")
+        return resolveSessionFileURL(repoCwd: repoCwd, projectsRoot: projects, homePath: home.path)
+    }
+
+    /// Testable core. `homePath` bounds the parent-walk: we match the
+    /// session's own cwd first (always legitimate), then climb only into
+    /// directories *strictly below* `$HOME`. The walk exists to catch the
+    /// "Claude launched from a parent of the git repo" case (e.g.
+    /// `~/Downloads/CC Watch/` wrapping `Clawdmeter/`) — but it must NEVER
+    /// reach `$HOME` itself as a *climbed* ancestor: `~/.claude/projects/
+    /// -Users-<user>/` almost always exists, so an unbounded walk returns
+    /// an unrelated session's newest transcript for any session whose own
+    /// JSONL hasn't been written yet (brand-new sessions, or a worktree on
+    /// an unborn branch). That manifested as a foreign conversation
+    /// appearing in a just-spawned session's chat.
+    nonisolated static func resolveSessionFileURL(
+        repoCwd: String,
+        projectsRoot projects: URL,
+        homePath: String
+    ) -> URL? {
+        let home = (homePath as NSString).standardizingPath
         var current = (repoCwd as NSString).standardizingPath
         while !current.isEmpty, current != "/" {
             if let url = newestJSONL(in: projects, claudeEncoded: encodeCwd(current)) {
@@ -1212,6 +1232,10 @@ public final class SessionChatStore {
             }
             let parent = (current as NSString).deletingLastPathComponent
             if parent == current { break }
+            // Stop before climbing to `$HOME` or any path outside it. The
+            // session's own cwd was already tried above; only a strict
+            // descendant of home is a valid launch-parent candidate.
+            if parent == home || !parent.hasPrefix(home + "/") { break }
             current = parent
         }
         return nil
