@@ -4,6 +4,20 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.42 build 181] - 2026-06-02 - Stop the recurring "access data from other apps" prompt (`fix/continuum-cross-app-prompt`)
+
+### Fixed
+
+- **No more "Continuum would like to access data from other apps" prompt every few minutes.** A provider you have enabled but aren't logged into (e.g. Codex or Gemini/Antigravity) used to make the usage poller retry its cross-app read (`~/.codex`, `~/.gemini`) on every tick, re-triggering the macOS Tahoe consent prompt. The poller now backs off for 6 hours on terminal auth failures and re-attempts only when you reopen the app, so the prompt stops instead of repeating.
+
+### Changed
+
+- **Quiet machines do near-zero cross-app reads.** `UsagePoller` now skips a provider's full poll when its data directory is unchanged since the last successful read (new stat-only `AISource.dataChangedSince` probe, overridden by the Codex and Antigravity/Gemini sources). Opening the app or refreshing (`forcePoll`) always does a fresh read. This cuts both work and the cross-app touches that surface the prompt.
+
+### Added
+
+- **One-time Full Disk Access opt-in (Settings → Providers).** A banner deep-links to System Settings → Privacy & Security → Full Disk Access while a cross-app provider is enabled and access is missing. Because the Release build runs without the App Sandbox, granting Full Disk Access durably stops the prompt for the shipped app — the powerful one-time opt-in that replaces the recurring nag.
+
 ## [0.29.34 build 173] - 2026-06-01 - Fix Claude CLI discovery under the sandbox (`darshanbathija/sandbox-claude-bin`)
 
 ### Fixed
