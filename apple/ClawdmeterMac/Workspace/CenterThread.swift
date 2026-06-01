@@ -349,7 +349,7 @@ struct CenterThread: View {
                             .font(.system(size: 11, weight: .semibold))
                             .frame(width: 26, height: 26)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .foregroundStyle(t.fg3)
                     .background(t.surfaceSolid2.opacity(0.70), in: RoundedRectangle(cornerRadius: 8))
                     .keyboardShortcut(.cancelAction)
@@ -484,7 +484,7 @@ struct CenterThread: View {
                     workbenchState.clearQueuedSends(sessionId: session.id)
                 }
                 .font(.system(size: 10, weight: .medium))
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .foregroundStyle(.secondary)
             }
             ForEach(workbenchState.queuedSends(for: session.id)) { draft in
@@ -525,7 +525,7 @@ struct CenterThread: View {
                 Image(systemName: "paperplane.fill")
                     .font(.system(size: 11, weight: .semibold))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .disabled(session.status == .running || isDispatchingQueuedSend)
             .help(session.status == .running ? "Dispatches when the current turn finishes" : "Send queued follow-up now")
             .padding(.top, 6)
@@ -535,7 +535,7 @@ struct CenterThread: View {
                 Image(systemName: "trash")
                     .font(.system(size: 11, weight: .semibold))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .help("Delete queued follow-up")
             .padding(.top, 6)
         }
@@ -560,7 +560,7 @@ struct CenterThread: View {
                 Task { await prepareCheckpointRestore(checkpoint) }
             }
             .font(.system(size: 10, weight: .semibold))
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .help("Preview and restore this checkpoint")
         }
         .padding(.horizontal, 14)
@@ -1050,7 +1050,11 @@ struct CenterThread: View {
               let port = runtime.agentControlServer.boundPort
         else { return }
         let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
-        try? await sender.interrupt(sessionId: session.id)
+        do {
+            try await sender.interrupt(sessionId: session.id)
+        } catch {
+            WorkspaceFeedback.failure("Couldn't stop the run", detail: error.localizedDescription)
+        }
     }
 
     /// Translate a `PermissionMode` pick into an argv respawn. Picks of

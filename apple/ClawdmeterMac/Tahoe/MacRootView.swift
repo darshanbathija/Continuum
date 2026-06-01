@@ -330,6 +330,14 @@ struct MacRootView: View {
     private var transientToastOverlay: some View {
         if let toast = transientToast {
             HStack(spacing: 10) {
+                if toast.severity != .info {
+                    Image(systemName: toast.severity == .success
+                          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(toast.severity == .success
+                                         ? SessionsV2Theme.success : SessionsV2Theme.danger)
+                        .transition(.scale.combined(with: .opacity))
+                }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(toast.title)
                         .font(.system(size: 12, weight: .semibold))

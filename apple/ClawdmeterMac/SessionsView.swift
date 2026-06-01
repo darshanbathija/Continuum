@@ -2215,6 +2215,26 @@ public final class SessionsModel: ObservableObject {
     /// The chip picker calls this with the new entry's id; if `entry.cliAlias`
     /// is set, we pass the alias (e.g. "opus") since claude --model accepts
     /// both aliases and full ids.
+    /// Surface the outcome of a mid-session config swap so it never fails
+    /// silently. Failure always toasts with the daemon's reason; success is a
+    /// brief confirmation (the chip itself already reflects the new value).
+    private func surfaceSwap(
+        _ result: SessionConfigChanger.SwapResult,
+        succeeded: String,
+        failed: String
+    ) {
+        switch result {
+        case .swapped:
+            WorkspaceFeedback.success(succeeded)
+        case .resumeFailed(let restoredOriginal):
+            WorkspaceFeedback.failure(failed, detail: restoredOriginal
+                ? "Couldn't resume — restored the previous session."
+                : "Couldn't resume the session.")
+        case .spawnError(let message):
+            WorkspaceFeedback.failure(failed, detail: message)
+        }
+    }
+
     public func switchModel(sessionId: UUID, to entry: ModelCatalogEntry, effort: ReasoningEffort? = nil) async {
         guard let runtime = AppDelegate.runtime else { return }
         let changer = SessionConfigChanger(
@@ -2223,7 +2243,8 @@ public final class SessionsModel: ObservableObject {
             repoEnvResolver: repoEnvResolver
         )
         let modelToUse = entry.cliAlias ?? entry.id
-        _ = await changer.swap(sessionId: sessionId, newModel: modelToUse, newEffort: .some(effort))
+        let result = await changer.swap(sessionId: sessionId, newModel: modelToUse, newEffort: .some(effort))
+        surfaceSwap(result, succeeded: "Model → \(entry.displayName)", failed: "Couldn't switch model")
     }
 
     /// Sessions v2 Phase 1: swap the effort dial mid-session.
@@ -2234,7 +2255,8 @@ public final class SessionsModel: ObservableObject {
             tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
-        _ = await changer.swap(sessionId: sessionId, newEffort: .some(effort))
+        let result = await changer.swap(sessionId: sessionId, newEffort: .some(effort))
+        surfaceSwap(result, succeeded: "Reasoning effort updated", failed: "Couldn't change effort")
     }
 
     /// Sessions v2 Phase 1: toggle plan/code mid-session (Claude only).
@@ -2245,7 +2267,10 @@ public final class SessionsModel: ObservableObject {
             tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
-        _ = await changer.swap(sessionId: sessionId, newPlanMode: planMode)
+        let result = await changer.swap(sessionId: sessionId, newPlanMode: planMode)
+        surfaceSwap(result,
+                    succeeded: planMode ? "Switched to Plan mode" : "Switched to Code mode",
+                    failed: "Couldn't change mode")
     }
 
     /// Apply a new `PermissionMode` to a live session. Resolves to the
@@ -2278,7 +2303,8 @@ public final class SessionsModel: ObservableObject {
             tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
-        _ = await changer.swap(sessionId: sessionId, newPlanMode: newMode == .plan)
+        let result = await changer.swap(sessionId: sessionId, newPlanMode: newMode == .plan)
+        surfaceSwap(result, succeeded: "Permission mode updated", failed: "Couldn't change permission mode")
     }
 
     public func endSession(id: UUID) async {
@@ -2414,6 +2440,10 @@ public final class SessionsModel: ObservableObject {
                         planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
                     )
                     try? await registry.updateStatus(id: id, status: .degraded)
+                    WorkspaceFeedback.failure(
+                        "Can't approve plan",
+                        detail: "Cursor needs a real chat id — start Cursor in code mode or import a session with a proven id."
+                    )
                     return
                 }
                 providerResumeId = cursorResumeId
@@ -2448,7 +2478,10 @@ public final class SessionsModel: ObservableObject {
             )
             try await registry.markPlanApproved(id: id)
             try await registry.updateStatus(id: id, status: .running)
-        } catch {}
+            WorkspaceFeedback.success("Plan approved — running")
+        } catch {
+            WorkspaceFeedback.failure("Couldn't approve the plan", detail: error.localizedDescription)
+        }
     }
 
     private func cleanupUnregisteredWorktree(

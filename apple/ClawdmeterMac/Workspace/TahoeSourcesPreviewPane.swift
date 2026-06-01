@@ -44,7 +44,7 @@ struct TahoeSourcesPreviewPane: View {
                             .padding(.vertical, 10)
                             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableButtonStyle())
                     }
                 }
             }

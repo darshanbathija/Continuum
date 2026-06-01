@@ -71,7 +71,7 @@ struct WorkspaceReviewPane: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     private func tabLabel(_ tab: WorkbenchPaneTab) -> String {

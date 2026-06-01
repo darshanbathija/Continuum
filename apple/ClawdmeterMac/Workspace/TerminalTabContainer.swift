@@ -47,7 +47,7 @@ struct TerminalTabContainer: View {
                     .foregroundStyle(t.fg3)
                     .background(t.surfaceSolid2.opacity(0.65), in: RoundedRectangle(cornerRadius: 7))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .help("New terminal pane")
             Spacer()
         }
@@ -91,7 +91,7 @@ struct TerminalTabContainer: View {
                         .stroke(isSelected ? t.accentAlpha(0.45) : t.hairline, lineWidth: 0.5)
                 )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             if let paneRef, !isPrimary {
                 Button(action: {
                     Task {
@@ -105,7 +105,7 @@ struct TerminalTabContainer: View {
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(t.fg4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .help("Close pane")
             }
         }

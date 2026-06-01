@@ -74,12 +74,12 @@ struct TahoeDiffPreviewPane: View {
             .labelsHidden()
             Button("Next") { jumpToNextUnviewed(proxy: proxy) }
                 .font(TahoeFont.body(11, weight: .semibold))
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .disabled(unviewedPaths.isEmpty)
                 .help("Jump to the next unviewed file")
             Button("Mark all viewed") { markAllViewed() }
                 .font(TahoeFont.body(11, weight: .semibold))
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .disabled(changedPaths.isEmpty)
                 .help("Persist viewed state for all changed files")
         }
@@ -122,21 +122,21 @@ struct TahoeDiffPreviewPane: View {
                     try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .approved)
                 }
                 .font(TahoeFont.body(10.5, weight: .semibold))
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 Button("Flag changes") {
                     try? presentationStore.setFileReviewDisposition(sessionId: sessionId, path: path, disposition: .changesRequested)
                 }
                 .font(TahoeFont.body(10.5, weight: .semibold))
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 Button(viewed ? "Viewed" : "Mark viewed") {
                     markViewed(path)
                 }
                 .font(TahoeFont.body(10.5, weight: .semibold))
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .disabled(viewed)
                 Button("Open") { open(path) }
                     .font(TahoeFont.body(10.5, weight: .semibold))
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
             }
             .id(Self.headerID(for: path))
             .padding(.horizontal, 14)
@@ -162,7 +162,7 @@ struct TahoeDiffPreviewPane: View {
                     Image(systemName: collapsed ? "chevron.right" : "chevron.down")
                         .font(.system(size: 10, weight: .bold))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 Text(line.text)
                     .font(TahoeFont.mono(11.5, weight: .semibold))
                     .foregroundStyle(t.fg3)
@@ -172,7 +172,7 @@ struct TahoeDiffPreviewPane: View {
                     ComposerInsertionInbox.shared.enqueue(text: "Explain this diff hunk:\n\n```diff\n\(hunkText(hunkId))\n```\n", autoSend: false)
                 }
                 .font(TahoeFont.body(10.5, weight: .semibold))
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 5)

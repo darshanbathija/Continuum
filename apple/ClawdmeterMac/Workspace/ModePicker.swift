@@ -51,7 +51,7 @@ struct ModePicker: View {
             .opacity(isDisabled ? 0.55 : 1.0)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .disabled(isDisabled)
         .help(tooltip(option))
     }

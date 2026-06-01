@@ -235,7 +235,7 @@ struct ChatThreadScroll: View {
                             .background(.thinMaterial, in: Capsule())
                             .overlay(Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .keyboardShortcut(.downArrow, modifiers: [.command])
                     .help("Jump to latest message (⌘↓)")
                     .padding(.trailing, 16)
@@ -352,7 +352,7 @@ struct ChatThreadScroll: View {
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .disabled(findMatches.isEmpty)
             .help("Previous match (⌘⇧G)")
             .accessibilityLabel("Previous match")
@@ -361,7 +361,7 @@ struct ChatThreadScroll: View {
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .disabled(findMatches.isEmpty)
             .help("Next match (⌘G)")
             .accessibilityLabel("Next match")
@@ -374,7 +374,7 @@ struct ChatThreadScroll: View {
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .help("Close find")
             .accessibilityLabel("Close find")
         }
@@ -498,7 +498,7 @@ struct ChatThreadScroll: View {
                 .background(t.hair2, in: Capsule(style: .continuous))
                 .overlay(Capsule(style: .continuous).stroke(t.hairline, lineWidth: 0.5))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .disabled(isLoadingEarlierHistory)
             .help("Load the previous 200 messages")
             Spacer()
@@ -673,7 +673,7 @@ struct ChatThreadScroll: View {
                     icon: isOpen ? "chevron.down" : "chevron.right"
                 )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .help(isOpen ? "Collapse hidden transcript rows" : "Show hidden transcript rows")
         } else {
             collapsedDisclosureLabel(turn, icon: "clock")
@@ -715,7 +715,7 @@ struct ChatThreadScroll: View {
                             tint: artifact.kind == .markdown ? t.accent : t.fg3
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .help(helpText(for: artifact))
                 }
                 ForEach(files.prefix(6)) { file in

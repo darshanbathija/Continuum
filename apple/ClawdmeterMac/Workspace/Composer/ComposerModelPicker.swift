@@ -201,7 +201,7 @@ public struct ComposerModelPicker: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help(entry.tooltip)
     }
 
@@ -266,7 +266,7 @@ public struct ComposerModelPicker: View {
                     TahoeIcon("x", size: 11)
                         .foregroundStyle(t.fg4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .help("Clear search")
             }
         }
@@ -322,7 +322,7 @@ public struct ComposerModelPicker: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(isFav ? t.accent : t.fg4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .help(isFav ? "Unstar" : "Star")
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -361,7 +361,7 @@ public struct ComposerModelPicker: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .keyboardShortcut(shortcut.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) })
     }
 

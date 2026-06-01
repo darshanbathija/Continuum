@@ -209,7 +209,7 @@ struct EmptyStateCenteredComposer: View {
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .foregroundStyle(.secondary)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
     }

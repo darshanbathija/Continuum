@@ -56,7 +56,7 @@ struct EffortDial: View {
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .accessibilityLabel("Effort \(label(for: effort))\(isSelected ? ", selected" : "")")
     }
 

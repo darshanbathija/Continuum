@@ -61,7 +61,7 @@ struct FollowUpSchedulerSheet: View {
                             Image(systemName: "trash")
                                 .font(.system(size: 10))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableButtonStyle())
                     }
                 }
             }

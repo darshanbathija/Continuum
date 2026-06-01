@@ -685,7 +685,7 @@ struct GitDiffPane: View {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 10, weight: .semibold))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .help("Refresh diff")
         }
         .padding(.horizontal, 12)
@@ -777,7 +777,7 @@ struct GitDiffPane: View {
                 .padding(.vertical, 5)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
 
             if isExpanded {
                 ForEach(file.hunks) { hunk in

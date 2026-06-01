@@ -359,7 +359,7 @@ struct SidebarPane: View {
                         .font(.system(size: 11))
                         .foregroundStyle(t.fg3)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
             }
             Text("⌘K")
                 .font(TahoeFont.body(10.5, weight: .semibold))
@@ -448,7 +448,7 @@ struct SidebarPane: View {
                 in: RoundedRectangle(cornerRadius: 5)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     private func statusCount(_ filter: SessionStatusFilter) -> Int {
@@ -667,7 +667,7 @@ struct SidebarPane: View {
             .padding(.top, 8)
             .padding(.bottom, 6)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("Scan ~/.claude and ~/.codex for recent sessions. Folder/data access is requested only when you tap this.")
     }
 
@@ -704,7 +704,7 @@ struct SidebarPane: View {
             .padding(.top, 8)
             .padding(.bottom, 3)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help(historyExpanded ? "Hide older external sessions" : "Show older external sessions")
     }
 
@@ -833,7 +833,7 @@ struct SidebarPane: View {
         }) {
             recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     private func isPrioritySectionExpanded(_ id: String) -> Bool {
@@ -987,7 +987,7 @@ struct SidebarPane: View {
                     showRepoChip: true
                 )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
         }
     }
 
@@ -1026,7 +1026,7 @@ struct SidebarPane: View {
                         }) {
                             recentSessionRow(recent, isOpen: model.openOutsideJSONLPath == recent.path, repo: repo)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableButtonStyle())
                     }
                 }
                 if visibleSessions.isEmpty && recentSessions.isEmpty {
@@ -1045,7 +1045,7 @@ struct SidebarPane: View {
                         .padding(.vertical, 5)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                 }
             }
         }
@@ -1277,7 +1277,7 @@ struct SidebarPane: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
 
             Spacer()
 
@@ -1306,7 +1306,7 @@ struct SidebarPane: View {
                     .frame(width: 22, height: 22)
                     .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .help("New workspace — Codex · gpt-5.5 · max effort · plan mode (option-click to customize)")
             // Option/Alt-click escape hatch: power users who want to
             // pick a different agent/model/effort/path get the full
@@ -1543,7 +1543,7 @@ struct SidebarPane: View {
             .padding(.horizontal, 6)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .onHover { inside in
             if inside {
                 hoveredSessionId = session.id
@@ -1909,7 +1909,7 @@ struct SidebarPane: View {
             .shadow(color: t.accentDeep.color(opacity: 0.25), radius: 8, x: 0, y: 5)
             .foregroundStyle(.white)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .keyboardShortcut("n", modifiers: [.command])
         .padding(10)
     }
