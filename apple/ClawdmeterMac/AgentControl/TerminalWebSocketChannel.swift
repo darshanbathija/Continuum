@@ -66,6 +66,15 @@ public final class TerminalWebSocketChannel: WSChannel {
 
     private func streamOutputToClient() async {
         let stream = await tmux.subscribeToPane(paneId)
+        // Guarantee the client receives a non-empty first frame immediately so
+        // the "Waiting for visible shell output" overlay always clears — even
+        // when the pane is idle (no live %output) or its snapshot fails. This
+        // was the cause of terminals hanging forever: capture-pane errored on a
+        // stale pane id (tmux server restarted → "degraded" session), the error
+        // was swallowed, no frame was ever sent, and an idle/dead pane emits
+        // nothing. The clear-screen + cursor-home is a safe, always-available
+        // first frame; scrollback (or a degraded notice) follows.
+        await sendFrame(tag: .output, payload: Data("\u{1B}[2J\u{1B}[H".utf8))
         await sendInitialPaneSnapshot()
         for await bytes in stream {
             if Task.isCancelled { break }
@@ -75,7 +84,9 @@ public final class TerminalWebSocketChannel: WSChannel {
 
     /// A remote iOS terminal often attaches after the desktop session has
     /// already produced output. Seed the SwiftTerm client with the current
-    /// tmux pane contents before live `%output` bytes arrive.
+    /// tmux pane contents before live `%output` bytes arrive. Best-effort: the
+    /// clear-screen frame in `streamOutputToClient()` has already unblocked the
+    /// UI, so a failure here only means "no scrollback", not "stuck terminal".
     private func sendInitialPaneSnapshot() async {
         do {
             let result = try await tmux.command([
@@ -86,14 +97,19 @@ public final class TerminalWebSocketChannel: WSChannel {
                 "-E", "-",
             ])
             let snapshot = result.lines.joined(separator: "\r\n")
-            var bytes = Data("\u{1B}[2J\u{1B}[H".utf8)
-            if !snapshot.isEmpty {
-                bytes.append(Data(snapshot.utf8))
-                bytes.append(Data("\r\n".utf8))
-            }
+            guard !snapshot.isEmpty else { return }
+            var bytes = Data(snapshot.utf8)
+            bytes.append(Data("\r\n".utf8))
             await sendFrame(tag: .output, payload: bytes)
         } catch {
-            wsLogger.debug("Initial terminal snapshot failed: \(error.localizedDescription)")
+            // The pane almost certainly no longer exists — the tmux server was
+            // restarted (e.g. app relaunch) and reassigned pane ids, leaving
+            // this session's recorded `tmuxPaneId` stale ("degraded"). Surface
+            // that to the user instead of a silent blank terminal so they know
+            // to revive/restart the session rather than stare at a dead pane.
+            wsLogger.warning("capture-pane for \(self.paneId, privacy: .public) failed (pane likely gone / session degraded): \(error.localizedDescription)")
+            let notice = "\u{1B}[33m[Continuum]\u{1B}[0m This terminal isn’t connected — the tmux session was restarted and this pane (\(paneId)) is gone.\r\nRevive or restart the session to reconnect a live shell.\r\n"
+            await sendFrame(tag: .output, payload: Data(notice.utf8))
         }
     }
 
