@@ -352,6 +352,11 @@ public actor TmuxControlClient {
         child: [String],
         environment: [String: String] = [:]
     ) async throws -> WindowRef {
+        // Spawned agent panes must run with the user's real PATH so the
+        // agent's own tooling resolves — most visibly Claude Code's
+        // node-based SessionStart hooks, which fail with "node: command not
+        // found" under launchd's minimal GUI PATH. See SpawnPathResolver.
+        let environment = SpawnPathResolver.merged(into: environment)
         // E4: tmux's `new-window` accepts `-c <cwd>` natively — no shell
         // concat. The child argv is joined for tmux's own parser; tmux
         // then re-tokenizes for execve.

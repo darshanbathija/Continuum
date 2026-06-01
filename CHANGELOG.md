@@ -4,6 +4,12 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.32 build 171] - 2026-06-01 - Spawned agent panes inherit the real PATH (`darshanbathija/spawn-node-path`)
+
+### Fixed
+
+- **Agent hooks that need `node` (and other CLI tools) now work in spawned sessions.** Continuum is a GUI app, so it only inherited launchd's minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`); the tmux panes it spawns for agents inherited that too. Claude Code's `node`-based `SessionStart` hooks then failed with `node: command not found` because Homebrew's `/opt/homebrew/bin` wasn't on the path. New sessions now run with the user's real login-shell `PATH` (resolved once and cached), with the Homebrew/`/usr/local/bin` dirs as a backstop. A caller-supplied `PATH` (e.g. from a repo `.env`) keeps precedence; the enriched dirs are appended so tooling stays discoverable.
+
 ## [0.29.31 build 170] - 2026-06-01 - Workflow test-fixes: correct new-session transcripts + Tahoe conformance (`darshanbathija/test-fixes`)
 
 End-to-end testing of the three core workflows (import a repo, start a session, send a chat) against the live daemon surfaced two real bugs, plus a Tahoe design-conformance sweep across the Mac and iOS surfaces.
@@ -16,6 +22,7 @@ End-to-end testing of the three core workflows (import a repo, start a session, 
 ### Changed
 
 - **Tahoe design conformance.** Degraded session status now renders in the danger red (`#ff5f57`) instead of a muted gray; the pairing QR image renders at its native 224px instead of a half-resolution 160px buffer; adding a project that's already imported now shows a "Already in your projects" toast instead of silently doing nothing; the settings toggle animation uses the spec `cubic-bezier(0.3, 0.7, 0.4, 1)` curve; the first plan step's badge is accent-highlighted on Mac and iOS; the Chat composer's idle placeholder reads "Ask anything. Use / for skills, @ for files."; the "+ Add project" button is the spec 24px / 10px-radius size; the Code review-pane tabs are pinned to 30px with the spec active-tab shadow + hairline; and the iPhone-sync settings row is labeled "Sync with iPhone".
+## [0.29.30 build 169] - 2026-05-28 - Collapsed transcript projection (`darshanbathija/collapse-status`)
 
 ### Added
 
