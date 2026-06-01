@@ -447,7 +447,8 @@ public actor WorktreeManager {
         slug: String,
         branchName: String? = nil,
         baseBranch: String? = nil,
-        filesToCopy: WorkspaceFilesToCopySettings = WorkspaceFilesToCopySettings()
+        filesToCopy: WorkspaceFilesToCopySettings = WorkspaceFilesToCopySettings(),
+        setupScript: String? = nil
     ) async throws -> ProvisionedWorktree {
         let added = try await addWithLayout(
             repoRoot: repoRoot,
@@ -501,6 +502,14 @@ public actor WorktreeManager {
                     failureSummary: "Skipped — \(error.localizedDescription)"
                 )
             }
+            // Conductor parity: run the per-repo Setup Script INSIDE the fresh
+            // worktree before the agent starts (e.g. `npm install`, or symlink
+            // node_modules from $CONTINUUM_REPO_ROOT). Non-fatal — a failed
+            // setup must never block the session; we log and proceed.
+            if let setupScript,
+               !setupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                await runSetupScript(setupScript, worktreePath: path, repoRoot: repoRoot, branch: branch)
+            }
             let metadata = WorktreeProvisioningMetadata(
                 ownershipMarkerId: markerId,
                 branchName: branch,
@@ -520,6 +529,50 @@ public actor WorktreeManager {
                 attachedPanePaths: []
             )
             throw error
+        }
+    }
+
+    /// Run the per-repo Setup Script in a freshly-provisioned worktree.
+    /// NEVER throws — setup is a convenience, not a precondition for the
+    /// session. Runs under a login zsh (real PATH via SpawnPathResolver) with
+    /// the worktree as cwd and CONTINUUM_WORKTREE / CONTINUUM_REPO_ROOT /
+    /// CONTINUUM_BRANCH exported, so the script can install deps or symlink
+    /// caches (e.g. `ln -s "$CONTINUUM_REPO_ROOT/node_modules" node_modules`).
+    private func runSetupScript(
+        _ script: String,
+        worktreePath: String,
+        repoRoot: String,
+        branch: String?
+    ) async {
+        worktreeLogger.info("Running setup script in \(worktreePath, privacy: .public)")
+        // Seed from the app's real environment (HOME, USER, SHELL, TMPDIR,
+        // LANG, …) BEFORE enriching PATH. ShellRunner REPLACES the child env
+        // with this dict, so a bare [CONTINUUM_*] would strip $HOME and break
+        // npm/pnpm cache + config, `~` expansion, and ~/.zshrc shims
+        // (nvm / asdf / rbenv) — i.e. the whole point of a setup script.
+        // CONTINUUM_* override last.
+        var env = SpawnPathResolver.merged(into: ProcessInfo.processInfo.environment)
+        env["CONTINUUM_WORKTREE"] = worktreePath
+        env["CONTINUUM_REPO_ROOT"] = repoRoot
+        env["CONTINUUM_BRANCH"] = branch ?? ""
+        do {
+            // 10-minute ceiling: long enough for a cold `npm install`, bounded
+            // so a hung setup doesn't strand the session forever.
+            let result = try await ShellRunner.shared.run(
+                executable: "/bin/zsh",
+                arguments: ["-lc", script],
+                cwd: worktreePath,
+                environment: env,
+                timeout: 600
+            )
+            if result.exitStatus == 0 {
+                worktreeLogger.info("Setup script completed for \(worktreePath, privacy: .public)")
+            } else {
+                let tail = String(result.stderrString.suffix(500))
+                worktreeLogger.error("Setup script exited \(result.exitStatus, privacy: .public) for \(worktreePath, privacy: .public): \(tail, privacy: .public)")
+            }
+        } catch {
+            worktreeLogger.error("Setup script failed (non-fatal) for \(worktreePath, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 
