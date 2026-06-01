@@ -23,8 +23,23 @@
 	  The pasted-token flow keeps working in the sandboxed build via
 	  the keychain-access-groups entry below.
 	-->
+	<!-- v0.29.35: App Sandbox DISABLED (was ON). The sandbox denied every
+	     git / tmux / agent-CLI subprocess access to the user's repos AND to
+	     the worktree storage root (~/Clawdmeter/workspaces), so Sessions/Code
+	     and real-agent Chat could not run at all: git died with "getcwd:
+	     Operation not permitted", tmux exited non-zero (ShellError 2), and
+	     Chat broadcast reported "only 1 provider spawned". Making it work
+	     under the sandbox would require security-scoped bookmarks on every
+	     repo + worktree root + read-write exceptions for ~/.claude and
+	     ~/.codex — which hollows out the sandbox anyway, since the Claude /
+	     Codex agents we launch run arbitrary shell commands in those repos.
+	     A DMG-distributed dev tool that orchestrates CLI agents is the same
+	     posture as Cursor / VS Code / Warp / iTerm — none sandboxed. Hardened
+	     runtime + notarization remain ON. The Debug build was already
+	     unsandboxed; this realigns Release. The audit-P0 rationale in the
+	     comment above is retained for history but no longer applies. -->
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<!-- The Mac daemon listens on Tailscale CGNAT; the entitlement is

@@ -1360,7 +1360,7 @@ private struct ComposerBar: View {
             case .frontier(let groupId):
                 let children = client.frontierChildren(groupId: groupId)
                 guard children.count >= 2 else {
-                    return "Broadcast needs at least two live children; continue from one selected answer instead."
+                    return "Broadcast compares two or more providers, but only one is still live here. Star its answer to keep it as a single chat, or start a new broadcast."
                 }
                 let perChild = await uploadAndBuildPerChildPrompts(base: trimmed, sessionIds: children.map(\.id))
                 guard let response = await client.sendFrontierPrompt(
@@ -1397,8 +1397,8 @@ private struct ComposerBar: View {
                     // missing creds, etc.).
                     guard created.hasMinimumBroadcast else {
                         let reasons = created.failedSlots.compactMap(\.reason)
-                        let detail = reasons.isEmpty ? "" : "\n" + reasons.joined(separator: "\n")
-                        return "Broadcast needs at least two providers; only \(created.successfulSlots.count) spawned.\(detail)"
+                        let detail = reasons.isEmpty ? "" : "\n\n" + reasons.joined(separator: "\n")
+                        return "Broadcast compares two or more providers side by side, but only \(created.successfulSlots.count) could start.\(detail)\n\nCheck those providers in Settings → Providers, pick different ones, or send to a single provider instead."
                     }
                     openTarget = .frontier(created.groupId)
                     let sessionIds = created.successfulSlots.compactMap(\.sessionId)
