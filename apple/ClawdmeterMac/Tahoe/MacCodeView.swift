@@ -1636,22 +1636,6 @@ private struct ComposerBar: View {
                         }
                     }
                     .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
-                    .overlay(alignment: .topLeading) {
-                        // Floats ABOVE the input (negative Y) like the older
-                        // composer; only in production (composerText wired).
-                        if showSlashPalette, composerText != nil {
-                            CommandPaletteView(
-                                catalog: skillCatalog,
-                                agent: paletteAgent,
-                                query: $slashQuery,
-                                onSelect: applyPaletteSelection,
-                                onDismiss: { showSlashPalette = false }
-                            )
-                            .offset(y: -290)
-                            .transition(.opacity)
-                            .zIndex(2)
-                        }
-                    }
 
                     HStack(spacing: 6) {
                         // v0.22.9: chips are now actually clickable.
@@ -1706,6 +1690,24 @@ private struct ComposerBar: View {
                 updateSlashTrigger(newText)
             }
             .onAppear { skillCatalog.refreshIfStale() }
+            // Palette floats flush ABOVE the composer, attached HERE — outside
+            // the inner TahoeGlass, whose `.clipShape` was clipping (hiding) it
+            // when it sat inside. `alignmentGuide(.top){ $0[.bottom] }` shifts
+            // it up by its own height so it opens right where the user types.
+            .overlay(alignment: .topLeading) {
+                if showSlashPalette, composerText != nil {
+                    CommandPaletteView(
+                        catalog: skillCatalog,
+                        agent: paletteAgent,
+                        query: $slashQuery,
+                        onSelect: applyPaletteSelection,
+                        onDismiss: { showSlashPalette = false }
+                    )
+                    .alignmentGuide(VerticalAlignment.top) { $0[.bottom] }
+                    .transition(.opacity)
+                    .zIndex(2)
+                }
+            }
         }
         .padding(.horizontal, 18).padding(.bottom, 18)
     }
