@@ -171,7 +171,7 @@ public enum AgentControlWireVersion {
     /// catalog/device checks plus explicit terminal-launched CLI install/auth
     /// actions and repo-env preview/import routes backed by PR 201's
     /// `RepoEnvStore` + Keychain custody.
-    public static let current: Int = 24
+    public static let current: Int = 25
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -344,6 +344,11 @@ public enum AgentControlWireVersion {
     /// `/vendor-provisioning/vendors/:id/env/preview`, and
     /// `/vendor-provisioning/vendors/:id/env/import`.
     public static let vendorProvisioningMinimum: Int = 24
+    /// v25: minimum wire version exposing `POST /sessions/:id/revive`
+    /// (respawn a degraded session's dead tmux pane). Older Macs 404 the
+    /// route; iOS hides the Revive button + shows "Update Clawdmeter on the
+    /// Mac" when the paired Mac is below this.
+    public static let reviveMinimum: Int = 25
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -471,6 +476,11 @@ public enum AgentControlWireVersion {
     public static func supportsVendorProvisioning(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= vendorProvisioningMinimum
+    }
+
+    public static func supportsRevive(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= reviveMinimum
     }
 
     /// Whether the paired Mac honors the v16 idempotency key + receipt
@@ -1769,6 +1779,8 @@ public enum MobileCommandKind: String, Codable, Hashable, Sendable, CaseIterable
     case cloneFromGitHub = "clone_from_github"
     case quickStartRepo = "quick_start_repo"
     case wakeMac = "wake_mac"
+    /// v25: respawn a degraded session's dead tmux pane.
+    case revive
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -1874,6 +1886,17 @@ public struct MobileCommandReceipt: Codable, Hashable, Sendable, Identifiable {
 /// a re-issued Stop. Server tolerates empty / missing body and treats
 /// the request as no-key (i.e. always-process).
 public struct InterruptRequest: Codable, Sendable {
+    public let idempotencyKey: String?
+
+    public init(idempotencyKey: String? = nil) {
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+/// `POST /sessions/:id/revive` body (v25). Respawns a degraded session's
+/// dead tmux pane. Carries only the optional idempotency key so a retried
+/// revive replays the cached response instead of double-spawning.
+public struct ReviveRequest: Codable, Sendable {
     public let idempotencyKey: String?
 
     public init(idempotencyKey: String? = nil) {
