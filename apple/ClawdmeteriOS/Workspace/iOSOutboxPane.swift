@@ -123,6 +123,7 @@ private extension MobileCommandKind {
         case .cloneFromGitHub: return "Clone from GitHub"
         case .quickStartRepo: return "Quick start"
         case .wakeMac: return "Wake Mac"
+        case .revive: return "Revive session"
         }
     }
 }

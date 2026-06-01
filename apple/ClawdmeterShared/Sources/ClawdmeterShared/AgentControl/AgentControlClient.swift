@@ -699,6 +699,11 @@ public final class AgentControlClient: ObservableObject {
     }
 
     @MainActor
+    public var supportsRevive: Bool {
+        AgentControlWireVersion.supportsRevive(serverWireVersion: serverWireVersion)
+    }
+
+    @MainActor
     public var supportsCodeWorkbenchRemote: Bool {
         AgentControlWireVersion.supportsCodeWorkbenchRemote(serverWireVersion: serverWireVersion)
     }
@@ -912,6 +917,19 @@ public final class AgentControlClient: ObservableObject {
         await postJSON(
             path: "/sessions/\(sessionId.uuidString)/mode",
             body: ChangeModeRequest(mode: mode, planMode: planMode, idempotencyKey: idempotencyKey)
+        )
+    }
+
+    /// Revive a degraded session: respawn its agent into a fresh tmux pane
+    /// (same config + resume). Returns the updated session (new tmuxPaneId)
+    /// so the caller can reconnect the terminal. v25 — gated on
+    /// `supportsRevive`; older Macs 404 the route.
+    @MainActor
+    @discardableResult
+    public func revive(sessionId: UUID, idempotencyKey: String? = nil) async -> AgentSession? {
+        await postJSON(
+            path: "/sessions/\(sessionId.uuidString)/revive",
+            body: ReviveRequest(idempotencyKey: idempotencyKey)
         )
     }
 
