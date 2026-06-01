@@ -175,6 +175,93 @@ public final class SessionConfigChanger {
         }
     }
 
+    /// Revive a degraded session whose tmux pane died — the tmux server
+    /// restarted (e.g. app relaunch) and reassigned pane ids, leaving the
+    /// session's recorded `tmuxPaneId` stale. Respawns the agent into a FRESH
+    /// window with the SAME config + `--resume`, then updates the registry's
+    /// pane ids + status so the terminal can reconnect to a live shell.
+    ///
+    /// Unlike `swap`, this skips `kill-pane` when the old pane is already gone
+    /// (kill-pane on a missing target throws) and returns a clean result
+    /// instead of routing through swap's resume-fail rescue branch.
+    @discardableResult
+    public func revive(sessionId: UUID) async -> SwapResult {
+        guard let session = registry.session(id: sessionId) else {
+            return .spawnError(message: "Session not found")
+        }
+        let providerResumeId: String
+        if session.agent == .cursor {
+            guard let cursorResumeId = Self.cursorResumeId(for: session) else {
+                return .spawnError(message: "cursor_resume_id_missing")
+            }
+            providerResumeId = cursorResumeId
+        } else {
+            providerResumeId = sessionId.uuidString
+        }
+        let argv = AgentSpawner.respawnArgv(
+            agent: session.agent,
+            resumeSessionId: providerResumeId,
+            model: session.model,
+            planMode: session.status == .planning,
+            effort: session.effort,
+            autopilot: AutopilotState.shared.isEnabled(sessionId: sessionId),
+            acceptEdits: PermissionModeStore.shared.acceptEdits(sessionId: sessionId),
+            workspacePath: session.effectiveCwd
+        )
+        if argv.isEmpty {
+            return .spawnError(message: "Could not locate agent binary on PATH")
+        }
+        let cwd: String
+        switch session.mode {
+        case .local:    cwd = session.repoKey ?? session.effectiveCwd
+        case .worktree: cwd = session.effectiveCwd
+        case .cloud:    cwd = session.repoKey ?? session.effectiveCwd
+        }
+        let env: [String: String]
+        do {
+            env = try repoEnvResolver?.resolveForLaunch(session: session, cwd: cwd)?.environment ?? [:]
+        } catch {
+            return .spawnError(message: error.localizedDescription)
+        }
+        // Kill the stale pane only if it still exists. A degraded session's
+        // recorded pane is usually already gone (server restart), and
+        // kill-pane on a missing target throws — which we don't want to treat
+        // as a revive failure.
+        if let oldPaneId = session.tmuxPaneId ?? session.tmuxWindowId,
+           await Self.paneExists(oldPaneId, tmux: tmux) {
+            try? await tmux.killPane(oldPaneId)
+        }
+        do {
+            let newWindow = try await tmux.newWindow(cwd: cwd, child: argv, environment: env)
+            try await registry.updateRuntime(
+                id: sessionId,
+                worktreePath: session.worktreePath,
+                runtimeCwd: .some(cwd),
+                tmuxWindowId: newWindow.windowId,
+                tmuxPaneId: newWindow.paneId,
+                mode: session.mode
+            )
+            try await registry.updateStatus(id: sessionId, status: .running)
+            AgentEventStream.recordEvent(
+                sessionId: sessionId,
+                kind: .statusChanged,
+                payload: ["status": "running", "reason": "revive"]
+            )
+            return .swapped(newPaneId: newWindow.paneId)
+        } catch {
+            swapLogger.error("Revive failed for session \(sessionId.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            try? await registry.updateStatus(id: sessionId, status: .degraded)
+            return .spawnError(message: error.localizedDescription)
+        }
+    }
+
+    /// Cheap liveness probe: does `paneId` still exist on the tmux server?
+    /// `list-panes -t <id>` throws when the pane is gone.
+    private static func paneExists(_ paneId: String, tmux: TmuxControlClient) async -> Bool {
+        do { _ = try await tmux.command(["list-panes", "-t", paneId]); return true }
+        catch { return false }
+    }
+
     private static func cursorResumeId(for session: AgentSession) -> String? {
         let candidate = session.runtimeBinding?.externalSessionId
             ?? session.runtimeBinding?.externalThreadId
