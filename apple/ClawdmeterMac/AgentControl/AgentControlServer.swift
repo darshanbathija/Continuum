@@ -4891,7 +4891,8 @@ public final class AgentControlServer {
                     slug: slug,
                     branchName: slug,
                     baseBranch: req.baseBranch,
-                    filesToCopy: filesToCopySettings(forRepoRoot: req.repoKey)
+                    filesToCopy: filesToCopySettings(forRepoRoot: req.repoKey),
+                    setupScript: RepoSetupScriptStore.script(forRepoRoot: req.repoKey)
                 )
                 worktreePath = provisioned.path
                 provisioning = provisioned.metadata

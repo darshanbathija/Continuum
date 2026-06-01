@@ -35,6 +35,8 @@ struct NewSessionMacSheet: View {
     @State private var mode: SessionMode = .worktree
     @State private var isSpawning: Bool = false
     @State private var errorMessage: String?
+    // Conductor parity: per-repo setup script run in each new worktree.
+    @State private var setupScript: String = ""
 
     init(model: SessionsModel, preselectedRepoKey: String? = nil) {
         self.model = model
@@ -96,6 +98,13 @@ struct NewSessionMacSheet: View {
                 TextField("Goal", text: $goal,
                           prompt: Text("Optional. Used by done-detector + worktree slug."))
 
+                TextField("Setup script", text: $setupScript,
+                          prompt: Text("Optional. e.g. npm install — runs in the new worktree"),
+                          axis: .vertical)
+                    .lineLimit(2...6)
+                    .font(.system(.caption, design: .monospaced))
+                    .help("Per-repo. Runs once in each new worktree before the agent, under a login shell with the repo's PATH. $CONTINUUM_WORKTREE and $CONTINUUM_REPO_ROOT are exported (e.g. ln -s \"$CONTINUUM_REPO_ROOT/node_modules\" node_modules).")
+
                 // Plan mode applies to both agents. Claude maps it to
                 // `--permission-mode plan`; Codex maps it to
                 // `--sandbox read-only` (E&S verified against
@@ -146,7 +155,11 @@ struct NewSessionMacSheet: View {
         .frame(width: 500)
         .onAppear {
             if let selected = model.selectedRepoKey { repoPath = selected }
+            setupScript = RepoSetupScriptStore.script(forRepoRoot: repoPath) ?? ""
             ensureSelectedModelIsAvailable()
+        }
+        .onChange(of: repoPath) { _, newValue in
+            setupScript = RepoSetupScriptStore.script(forRepoRoot: newValue) ?? ""
         }
         .task {
             await launcher.refreshProviderAvailability()
@@ -207,6 +220,10 @@ struct NewSessionMacSheet: View {
         isSpawning = true
         errorMessage = nil
         defer { isSpawning = false }
+        // Persist the per-repo setup script BEFORE spawning so this session
+        // (and future quick "+" spawns in this repo) pick it up via
+        // RepoSetupScriptStore inside WorktreeManager.provision.
+        RepoSetupScriptStore.setScript(setupScript, forRepoRoot: repoPath)
         guard let runtime = AppDelegate.runtime else {
             errorMessage = "Daemon not started — relaunch Clawdmeter."
             return
@@ -1375,7 +1392,8 @@ public final class SessionsModel: ObservableObject {
                     repoRoot: repoPath,
                     slug: slug,
                     branchName: slug,
-                    filesToCopy: filesToCopySettings(forRepoRoot: repoPath)
+                    filesToCopy: filesToCopySettings(forRepoRoot: repoPath),
+                    setupScript: RepoSetupScriptStore.script(forRepoRoot: repoPath)
                 )
                 worktreePath = provisioned.path
                 provisioning = provisioned.metadata
@@ -1824,7 +1842,8 @@ public final class SessionsModel: ObservableObject {
                     repoRoot: repoPath,
                     slug: slug,
                     branchName: slug,
-                    filesToCopy: filesToCopySettings(forRepoRoot: repoPath)
+                    filesToCopy: filesToCopySettings(forRepoRoot: repoPath),
+                    setupScript: RepoSetupScriptStore.script(forRepoRoot: repoPath)
                 )
                 cwd = provisioned.path
                 worktreePath = provisioned.path
@@ -2124,7 +2143,8 @@ public final class SessionsModel: ObservableObject {
                     repoRoot: sessionRepoKey,
                     slug: slug,
                     branchName: slug,
-                    filesToCopy: filesToCopySettings(forRepoRoot: sessionRepoKey)
+                    filesToCopy: filesToCopySettings(forRepoRoot: sessionRepoKey),
+                    setupScript: RepoSetupScriptStore.script(forRepoRoot: sessionRepoKey)
                 )
                 newWorktree = provisioned.path
                 newProvisioning = provisioned.metadata

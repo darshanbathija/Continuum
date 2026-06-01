@@ -1595,6 +1595,13 @@ private struct ComposerBar: View {
     /// Disable the send button while a send is in flight.
     var sending: Bool = false
     @State private var pulse: Bool = false
+    // Slash-command (skills) palette — typing `/` at the start of a line in
+    // the Code chat box brings up the installed Claude Code skills, mirroring
+    // the older ComposerInputCore composer. SkillCatalog.shared walks
+    // ~/.claude/skills (+ Codex built-ins for Codex sessions).
+    @ObservedObject private var skillCatalog = SkillCatalog.shared
+    @State private var showSlashPalette = false
+    @State private var slashQuery = ""
 
     var body: some View {
         let running = state == .running
@@ -1629,6 +1636,22 @@ private struct ComposerBar: View {
                         }
                     }
                     .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
+                    .overlay(alignment: .topLeading) {
+                        // Floats ABOVE the input (negative Y) like the older
+                        // composer; only in production (composerText wired).
+                        if showSlashPalette, composerText != nil {
+                            CommandPaletteView(
+                                catalog: skillCatalog,
+                                agent: paletteAgent,
+                                query: $slashQuery,
+                                onSelect: applyPaletteSelection,
+                                onDismiss: { showSlashPalette = false }
+                            )
+                            .offset(y: -290)
+                            .transition(.opacity)
+                            .zIndex(2)
+                        }
+                    }
 
                     HStack(spacing: 6) {
                         // v0.22.9: chips are now actually clickable.
@@ -1679,8 +1702,47 @@ private struct ComposerBar: View {
             .onChange(of: reduceMotion) { _, newValue in
                 if newValue { pulse = false }
             }
+            .onChange(of: composerText?.wrappedValue ?? "") { _, newText in
+                updateSlashTrigger(newText)
+            }
+            .onAppear { skillCatalog.refreshIfStale() }
         }
         .padding(.horizontal, 18).padding(.bottom, 18)
+    }
+
+    // MARK: - Slash-command (skills) palette
+
+    /// The session's agent mapped to AgentKind so the palette filters to the
+    /// right command set (Claude skills vs Codex built-ins). The idle/empty
+    /// composer (no session yet) defaults to Claude so the skill list shows.
+    private var paletteAgent: AgentKind {
+        guard let prov = session?.agent else { return .claude }
+        return AgentKind.allCases.first { $0.tahoeProvider == prov } ?? .claude
+    }
+
+    /// Show the palette while the composer's last line starts with `/`.
+    private func updateSlashTrigger(_ text: String) {
+        if let lastLine = text.split(separator: "\n", omittingEmptySubsequences: false).last,
+           lastLine.hasPrefix("/") {
+            slashQuery = String(lastLine.dropFirst())
+            showSlashPalette = true
+        } else {
+            showSlashPalette = false
+        }
+    }
+
+    /// Replace the trailing `/query` line with `/<cmd.id> ` and keep focus so
+    /// the user can add arguments before sending (Enter runs it). We do NOT
+    /// auto-send — skills like `/code-review high` take arguments.
+    private func applyPaletteSelection(_ cmd: PaletteCommand) {
+        guard let composerText else { showSlashPalette = false; return }
+        var lines = composerText.wrappedValue
+            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if !lines.isEmpty { lines.removeLast() }
+        lines.append("/\(cmd.id) ")
+        composerText.wrappedValue = lines.joined(separator: "\n")
+        showSlashPalette = false
+        slashQuery = ""
     }
 
     // MARK: - v0.22.9: composer chip helpers
