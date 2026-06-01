@@ -241,20 +241,13 @@ struct NewSessionMacSheet: View {
             )
             dismiss()
         } catch {
-            errorMessage = (error as? TmuxControlClient.TmuxError).map(humanize)
-                ?? error.localizedDescription
+            errorMessage = SessionsModel.humanize(spawnError: error)
         }
     }
 
-    private func humanize(_ err: TmuxControlClient.TmuxError) -> String {
-        switch err {
-        case .notStarted: return "tmux not started — try again in a moment"
-        case .commandFailed(let s): return "tmux: \(s)"
-        case .serverExited: return "tmux server exited"
-        case .ptyClosed: return "PTY closed unexpectedly"
-        case .invalidArgument(let s): return "tmux: invalid argument (\(s))"
-        }
-    }
+    // (former TmuxError-only humanizer removed — startSession() now routes
+    // every failure through SessionsModel.humanize(spawnError:) so worktree
+    // and access errors are humanized too, not just tmux ones.)
 }
 
 struct PendingFirstSendRecovery: Equatable {
@@ -539,8 +532,8 @@ public final class SessionsModel: ObservableObject {
                 // Stay out of the sheet. Make the failure loud + actionable.
                 NSLog("[Clawdmeter] quickSpawnInRepo failed for repo=%@: %@", repoKey, "\(error)")
                 Self.postQuickSpawnFailureToast(
-                    title: "Couldn't spawn session in \((repoKey as NSString).lastPathComponent)",
-                    detail: "\(Self.humanize(spawnError: error)) — hold Option and click + to open the full New Session sheet."
+                    title: "Couldn’t start a session in \((repoKey as NSString).lastPathComponent)",
+                    detail: Self.humanize(spawnError: error)
                 )
             }
         }
@@ -558,24 +551,53 @@ public final class SessionsModel: ObservableObject {
         )
     }
 
-    /// `localizedDescription` on `Swift.Error` collapses to "The operation
-    /// couldn't be completed" for our domain errors. Pull out the
-    /// human-meaningful payload from each known case so the toast says
-    /// something useful.
-    private static func humanize(spawnError error: Error) -> String {
-        if let spawn = error as? SpawnError {
-            return spawn.errorDescription ?? "spawn failed"
-        }
-        if let tmux = error as? TmuxControlClient.TmuxError {
-            switch tmux {
-            case .notStarted: return "tmux not started"
-            case .commandFailed(let s): return "tmux: \(s)"
-            case .serverExited: return "tmux server exited"
-            case .ptyClosed: return "PTY closed unexpectedly"
-            case .invalidArgument(let s): return "tmux: invalid argument (\(s))"
+    /// Collapse the spawn / worktree / tmux / shell error zoo into ONE human,
+    /// actionable line. Raw git/tmux/shell stderr — e.g. "fatal: Unable to
+    /// read current working directory: Operation not permitted" or the
+    /// "(…ShellError error 2.)" NSError fallback — must never reach the UI
+    /// verbatim. Match the known low-level failures and say what to do next.
+    /// Internal (not private) so `NewSessionMacSheet` can route its sheet
+    /// errors through the same humanizer the quick-spawn toast uses.
+    static func humanize(spawnError error: Error) -> String {
+        // Failures that look identical across git, tmux, and the agent CLIs
+        // are matched on the underlying stderr/text, regardless of the Swift
+        // error type that wrapped them.
+        func classify(_ raw: String) -> String? {
+            let s = raw.lowercased()
+            if s.contains("operation not permitted")
+                || s.contains("permission denied")
+                || s.contains("unable to read current working directory") {
+                return "Continuum couldn’t access that folder. If you just updated the app, fully quit it (⌘Q) and reopen so the new permissions take effect — then try again."
             }
+            if s.contains("not a git repository") {
+                return "That folder isn’t a git repository. Pick a folder that contains a “.git”, or use Clone or Quick Start to set one up."
+            }
+            if s.contains("no such file") || s.contains("does not exist") {
+                return "That path no longer exists. Pick the repo again from the list."
+            }
+            return nil
         }
-        return error.localizedDescription
+        switch error {
+        case let spawn as SpawnError:
+            return spawn.errorDescription ?? "Couldn’t start the agent."
+        case let wt as WorktreeManager.WorktreeError:
+            if case .gitFailed(_, let stderr) = wt, let friendly = classify(stderr) { return friendly }
+            if case .gitNotFound = wt {
+                return "git wasn’t found. Install the Xcode command-line tools (run “xcode-select --install”) or Homebrew git, then try again."
+            }
+            return wt.errorDescription ?? "Couldn’t create the worktree."
+        case let tmux as TmuxControlClient.TmuxError:
+            switch tmux {
+            case .notStarted:           return "The terminal backend isn’t ready yet — try again in a moment."
+            case .serverExited:         return "The terminal backend stopped unexpectedly. Try again; if it persists, fully quit and reopen Continuum."
+            case .ptyClosed:            return "The terminal session closed unexpectedly. Try again."
+            case .commandFailed(let s): return classify(s) ?? "The terminal backend reported: \(s)"
+            case .invalidArgument(let s): return "Internal error talking to the terminal backend (\(s))."
+            }
+        default:
+            let desc = (error as NSError).localizedDescription
+            return classify(desc) ?? "Couldn’t start the session. \(desc)"
+        }
     }
 
     /// Persist a user-facing code-session label through the registry-backed

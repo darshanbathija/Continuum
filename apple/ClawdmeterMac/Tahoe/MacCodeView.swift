@@ -624,14 +624,26 @@ private struct Sidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
                     if repos.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 10) {
                             Text("No repositories yet")
                                 .font(TahoeFont.body(13, weight: .semibold))
                                 .foregroundStyle(t.fg2)
-                            Text("Add a scan root in Settings or start a session via the menu bar.")
+                            Text("Start a session in any git repo and it shows up here. Continuum also auto-discovers repos from your recent Claude Code and Codex activity; add more under Settings → Sessions.")
                                 .font(TahoeFont.body(11.5))
                                 .foregroundStyle(t.fg3)
                                 .fixedSize(horizontal: false, vertical: true)
+                            Button(action: { onNewSession(nil) }) {
+                                Text("Start a session…")
+                                    .font(TahoeFont.body(12, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12).padding(.vertical, 6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(t.accent)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 2)
                         }
                         .padding(.horizontal, 10).padding(.vertical, 14)
                     } else if filteredRepos.isEmpty {

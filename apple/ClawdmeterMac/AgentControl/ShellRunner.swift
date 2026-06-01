@@ -38,11 +38,34 @@ public actor ShellRunner {
 
     /// Errors that surface to the caller. Specific cases (per E2 + Section 2):
     /// `Process` constructor failures vs. non-zero exit are different concerns.
-    public enum ShellError: Error, Sendable {
+    public enum ShellError: Error, Sendable, LocalizedError {
         case executableNotFound(path: String)
         case spawnFailed(underlying: String)
         case nonZeroExit(exitStatus: Int32, stderr: String)
         case timedOut(after: TimeInterval)
+
+        // Without LocalizedError, `localizedDescription` collapses to the
+        // useless "The operation couldn’t be completed. (…ShellError error 2.)"
+        // — which is exactly what leaked into the UI as "tmux_spawn_failed:
+        // …ShellError error 2". Every caller that surfaces a ShellError via
+        // `error.localizedDescription` (tmux spawn, frontier slot reasons,
+        // chat-cwd create) now gets a message that names the failure + the
+        // process's own stderr.
+        public var errorDescription: String? {
+            switch self {
+            case .executableNotFound(let path):
+                return "Couldn’t find an executable at \(path)."
+            case .spawnFailed(let underlying):
+                return "Failed to launch the process: \(underlying)"
+            case .nonZeroExit(let exitStatus, let stderr):
+                let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                return detail.isEmpty
+                    ? "Process exited with status \(exitStatus)."
+                    : "Process exited with status \(exitStatus): \(detail)"
+            case .timedOut(let after):
+                return "Process timed out after \(Int(after))s."
+            }
+        }
     }
 
     public init() {}
