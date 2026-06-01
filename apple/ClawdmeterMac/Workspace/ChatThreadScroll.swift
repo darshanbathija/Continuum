@@ -109,6 +109,15 @@ struct ChatThreadScroll: View {
                                     .id(turn.id)
                                     .padding(rowInsets)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                    // P4: a newly-arrived turn fades + rises in
+                                    // (Codex/Claude-smooth). Fires only on turn
+                                    // INSERTION — streaming tokens mutate an
+                                    // existing turn.id, so this never animates
+                                    // per-token and the Equatable row path is
+                                    // untouched.
+                                    .transition(reduceMotion
+                                        ? .opacity
+                                        : .opacity.combined(with: .move(edge: .bottom)))
                             }
                         }
                         if showPlanHalo {
@@ -140,6 +149,11 @@ struct ChatThreadScroll: View {
                             .id(Self.bottomSentinelId)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    // Drives the P4 turn-entrance transition — keyed on the
+                    // turn COUNT so it fires on insert, not on per-token content
+                    // updates to the streaming tail.
+                    .animation(SessionsV2Theme.disclosureToggle(reduceMotion: reduceMotion),
+                               value: projection.turns.count)
                 }
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
