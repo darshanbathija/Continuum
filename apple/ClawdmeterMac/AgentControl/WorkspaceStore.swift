@@ -37,6 +37,10 @@ public final class WorkspaceStore: ObservableObject {
         self.sessionsURL = sessionsURL
         load()
         migrateFromSessionsIfNeeded()
+        // Drop cards for repos that no longer exist on disk (throwaway/QA
+        // clones deleted out from under us) so the sidebar doesn't show stale
+        // duplicates of the same project.
+        _ = pruneOrphanedWorkspaces()
     }
 
     public nonisolated static func defaultStoreURL() -> URL {
@@ -95,6 +99,37 @@ public final class WorkspaceStore: ObservableObject {
             save()
             return record
         }
+    }
+
+    /// Remove a workspace record by id ("Remove from list" in the sidebar).
+    /// Forgets the managed-workspace card only — it does NOT delete the repo
+    /// on disk or archive its sessions. Returns true if a record was removed.
+    @discardableResult
+    public func delete(id: UUID) -> Bool {
+        guard let idx = workspaces.firstIndex(where: { $0.id == id }) else { return false }
+        workspaces.remove(at: idx)
+        save()
+        return true
+    }
+
+    /// Drop workspace records whose `repoRoot` directory no longer exists on
+    /// disk. These accrue from throwaway/QA clones deleted without the app
+    /// being told, and otherwise linger forever as stale cards (the same
+    /// project showing up multiple times). Called once on launch. Returns the
+    /// number pruned.
+    @discardableResult
+    public func pruneOrphanedWorkspaces() -> Int {
+        let survivors = workspaces.filter { rec in
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: rec.repoRoot, isDirectory: &isDir) && isDir.boolValue
+        }
+        let pruned = workspaces.count - survivors.count
+        if pruned > 0 {
+            workspaceStoreLogger.info("Pruned \(pruned) orphaned workspace(s) with a missing repoRoot")
+            workspaces = survivors
+            save()
+        }
+        return pruned
     }
 
     /// Updates only the provider defaults for an existing workspace.
