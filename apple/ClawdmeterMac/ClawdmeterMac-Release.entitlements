@@ -135,6 +135,14 @@
 		     enough: we don't write to the cursor-agent install tree.
 		-->
 		<string>/.local/share/cursor-agent/</string>
+		<!-- v0.29.34: Claude Code's binary moved to
+		     ~/.local/share/claude/versions/<ver>; ~/.local/bin/claude is a
+		     symlink to it. Same symlink-exec trap as cursor-agent above —
+		     without this exception the kernel denies executing the real
+		     binary and locateBinary("claude") falls through to "claude CLI
+		     not on PATH", breaking session spawn + the Claude provider
+		     probe. Read-only is enough; we never modify the install tree. -->
+		<string>/.local/share/claude/</string>
 	</array>
 
 	<!--

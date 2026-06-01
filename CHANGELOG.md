@@ -4,6 +4,12 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.34 build 173] - 2026-06-01 - Fix Claude CLI discovery under the sandbox (`darshanbathija/sandbox-claude-bin`)
+
+### Fixed
+
+- **"claude CLI not on PATH" — Claude sessions and the Claude provider now work again.** A recent Claude Code update moved its binary to `~/.local/share/claude/versions/<ver>`, with `~/.local/bin/claude` as a symlink to it. The sandbox follows that symlink at exec time, but the app's entitlements granted `~/.local/bin/` and `~/.local/share/cursor-agent/` without `~/.local/share/claude/`, so the kernel denied executing the real binary and `locateBinary("claude")` fell through to "not on PATH." Added the read-only `~/.local/share/claude/` exception (mirroring the existing cursor-agent one). Independent of how the app is launched.
+
 ## [0.29.33 build 172] - 2026-06-01 - Simplify provider onboarding and settings (`darshanbathija/settings-onboarding`)
 
 ### Changed
