@@ -2334,6 +2334,12 @@ private struct SidebarPane: View {
         let isPinned = presentationStore.snapshot.pinnedSessionIds.contains(session.id)
         let isUnread = presentationStore.snapshot.unreadSessionIds.contains(session.id)
         let isMuted = presentationStore.snapshot.mutedSessionIds.contains(session.id)
+        if session.status == .degraded {
+            Button("Revive session", systemImage: "arrow.clockwise.circle") {
+                Task { @MainActor in await model.revive(sessionId: session.id) }
+            }
+            Divider()
+        }
         Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin.fill") {
             try? presentationStore.togglePin(session.id)
         }
@@ -6339,7 +6345,11 @@ private struct WorkspaceTerminalPane: View {
                     paneId: paneId,
                     onFirstOutput: { sawOutput = true }
                 )
-                .id(paneId ?? "primary")
+                // Include the session's primary pane id so a revive (which
+                // respawns into a NEW pane and updates tmuxPaneId) changes the
+                // view identity → SwiftUI tears down the dead-pane WS and opens
+                // a fresh subscription to the live pane.
+                .id(paneId ?? session.tmuxPaneId ?? "primary")
                 if !sawOutput {
                     terminalPendingOverlay
                 }
@@ -6578,7 +6588,7 @@ private struct TerminalTabContainer: View {
                 paneId: targetPaneId,
                 onFirstOutput: { sawOutput = true }
             )
-            .id(targetPaneId ?? "primary")
+            .id(targetPaneId ?? session.tmuxPaneId ?? "primary")
             if !sawOutput {
                 terminalPendingOverlay
             }

@@ -4,6 +4,16 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.44 build 183] - 2026-06-02 - Revive degraded sessions (respawn dead tmux panes) (`fix/session-revive-on-attach`)
+
+### Added
+
+- **Revive a degraded session.** When the tmux server restarts (e.g. on app relaunch) it reassigns pane ids, leaving sessions `degraded` with a dead `tmuxPaneId` and a terminal that can't reconnect. Right-click a degraded session → **Revive session** respawns the agent into a fresh tmux pane with the same model/effort/mode and `--resume`, so the conversation continues and the terminal reconnects to a live shell. New `SessionConfigChanger.revive(sessionId:)` skips killing an already-dead pane and updates the registry's pane ids + status.
+
+### Fixed
+
+- **The terminal reconnects after a pane changes.** The primary terminal tab's view identity now includes the session's `tmuxPaneId`, so when a revive (or any respawn) moves the session to a new pane, the WebSocket tears down the dead-pane subscription and opens a fresh one to the live pane — instead of staying stuck on the old pane.
+
 ## [0.29.43 build 182] - 2026-06-02 - Terminal no longer hangs + per-workspace management (`feat/terminal-and-workspace-mgmt`)
 
 ### Fixed
