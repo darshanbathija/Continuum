@@ -212,9 +212,12 @@ struct CommandPaletteView: View {
                     }
                 }
             }
-            .frame(maxHeight: 280)
+            // Sized to match the model-family selector popover (520×440): the
+            // list grows to ~400 (≈440 total with the header) when showing the
+            // full skill catalog, then shrinks naturally as the query filters.
+            .frame(maxHeight: 400)
         }
-        .frame(width: 420)
+        .frame(width: 520)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
