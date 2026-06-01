@@ -4,6 +4,12 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.45 build 184] - 2026-06-02 - Revive degraded sessions from iPhone (`fix/ios-revive-endpoint`)
+
+### Added
+
+- **Revive a degraded session from the paired iPhone.** New `POST /sessions/:id/revive` daemon endpoint (wire v25) respawns a degraded session's dead tmux pane with the same config + `--resume`. The iOS session controls strip shows a **Revive** button on degraded sessions; it's gated on the Mac's wire version, so an iPhone paired to an older Mac hides the button instead of failing. The endpoint shares the same rate-limit + idempotency contract as the other config-swap commands, so a double-tap or offline retry can't double-spawn the agent. (Mac-side Revive shipped in 0.29.44; this brings it to mobile.)
+
 ## [0.29.44 build 183] - 2026-06-02 - Revive degraded sessions (respawn dead tmux panes) (`fix/session-revive-on-attach`)
 
 ### Added
