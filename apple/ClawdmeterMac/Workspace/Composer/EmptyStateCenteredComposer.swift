@@ -15,6 +15,9 @@ struct EmptyStateCenteredComposer: View {
     @ObservedObject var presentationStore: SessionPresentationStore
     private let workspaceDraft: WorkspaceDraftTab?
     @StateObject private var store: ComposerStore
+    /// Drives the one-shot fade+rise entrance when the empty state appears.
+    @State private var appeared = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         model: SessionsModel,
@@ -88,7 +91,14 @@ struct EmptyStateCenteredComposer: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 18)
+        // Restrained entrance (DESIGN.md: no oversized hero) — the block fades
+        // and rises 10pt once on appear; instant under Reduce Motion.
+        .opacity(appeared ? 1 : 0)
+        .offset(y: (appeared || reduceMotion) ? 0 : 10)
         .onAppear {
+            withAnimation(SessionsV2Theme.bannerSlideUp(reduceMotion: reduceMotion)) {
+                appeared = true
+            }
             // Seed repo to the most recently active one if available.
             if workspaceDraft == nil, store.repoKey == nil, let firstRepo = model.repos.first {
                 store.resetChipsForRepo(

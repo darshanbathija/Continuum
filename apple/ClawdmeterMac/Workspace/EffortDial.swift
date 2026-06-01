@@ -15,6 +15,7 @@ struct EffortDial: View {
     let onChange: (ReasoningEffort) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var effortPill
 
     var body: some View {
         HStack(spacing: 2) {
@@ -24,6 +25,9 @@ struct EffortDial: View {
         }
         .padding(2)
         .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: SessionsV2Theme.Radius.chip + 1))
+        // P3 (consistency): the accent pill SLIDES between effort segments,
+        // matching ModePicker, instead of a per-segment fill cross-fade.
+        .animation(SessionsV2Theme.segmentedSelection(reduceMotion: reduceMotion), value: selected)
         .opacity(supportsEffort ? 1.0 : 0.5)
         .disabled(!supportsEffort)
         .help(supportsEffort
@@ -39,20 +43,19 @@ struct EffortDial: View {
         let isSelected = (effort == selected)
         Button {
             guard !isSelected else { return }
-            withAnimation(SessionsV2Theme.chipSwapAnimation(reduceMotion: reduceMotion)) {
-                onChange(effort)
-            }
+            onChange(effort)
         } label: {
             Text(label(for: effort))
                 .font(.system(size: 10, weight: isSelected ? .semibold : .medium))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .background(
-                    isSelected
-                        ? AnyShapeStyle(SessionsV2Theme.accent)
-                        : AnyShapeStyle(Color.clear),
-                    in: RoundedRectangle(cornerRadius: SessionsV2Theme.Radius.chip - 1)
-                )
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: SessionsV2Theme.Radius.chip - 1)
+                            .fill(SessionsV2Theme.accent)
+                            .matchedGeometryEffect(id: "effortPill", in: effortPill)
+                    }
+                }
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                 .contentShape(Rectangle())
         }
