@@ -4,6 +4,17 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.33 build 172] - 2026-06-01 - Simplify provider onboarding and settings (`darshanbathija/settings-onboarding`)
+
+### Changed
+
+- **One compact provider card, shared by Settings → Providers and first-run onboarding.** Each provider row shows just the glyph/name, an opt-in toggle, and a default-model menu, in chat vendor order (ChatGPT, Claude, Antigravity, Cursor, OpenRouter). Enablement stays in `ProviderEnablement` / `runtime.setProviderEnabled` and model defaults in `ProviderDefaultsStore`.
+- **Disabled providers stay fully passive.** Cursor/OpenRouter model and auth-file discovery is now gated behind provider enablement across Settings, `/models`, `/chat-providers`, and session-launch availability — a disabled provider triggers no catalog refreshes or auth probes.
+
+### Removed
+
+- Unused legacy `ProvidersSettingsView.swift` and its stale Xcode project references.
+
 ## [0.29.32 build 171] - 2026-06-01 - Spawned agent panes inherit the real PATH (`darshanbathija/spawn-node-path`)
 
 ### Fixed
