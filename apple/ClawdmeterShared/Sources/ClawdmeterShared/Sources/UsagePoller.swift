@@ -25,6 +25,14 @@ public final class UsagePoller: @unchecked Sendable {
         public var foregroundInterval: TimeInterval = 60
         public var backgroundInterval: TimeInterval = 300
         public var maxBackoffSeconds: TimeInterval = 600
+        /// Terminal auth failures (provider CLI not logged in / read denied) get
+        /// a LONG backoff so the poll loop stops re-reading the provider's
+        /// cross-app dir (~/.codex, ~/.gemini, …) every tick — that recurring
+        /// read is what re-fires the macOS "access data from other apps" prompt.
+        /// Reserved for terminal auth states ONLY; transient errors
+        /// (network/rate-limit) keep `maxBackoffSeconds`. Reset to 0 on the
+        /// explicit foreground path (`forcePoll`).
+        public var authFailureBackoffSeconds: TimeInterval = 21_600 // 6h
         /// Time-Sensitive `WarningGate` for predictor (V1.5 surface).
         public var predictorEnabled: Bool = true
 
@@ -64,6 +72,11 @@ public final class UsagePoller: @unchecked Sendable {
 
     private var lastUsage: UsageData?
     private var currentBackoffSeconds: TimeInterval = 0
+    /// Timestamp of the last successful poll, used by the quiet-machine gate:
+    /// if the source's data dir hasn't changed since this instant, the next
+    /// background tick republishes the cached usage instead of re-reading the
+    /// cross-app dir (avoiding the macOS "data from other apps" prompt).
+    private var lastSourceMtimeProbeDate: Date?
     private var fiveMinGate: BurnRatePredictor.WarningGate
     private var task: Task<Void, Never>?
 
@@ -117,14 +130,33 @@ public final class UsagePoller: @unchecked Sendable {
     /// Single poll cycle. Public so apps can also `forcePoll()` on foreground.
     @discardableResult
     public func forcePoll() async -> Event {
-        await tick()
+        // Explicit foreground / user action (popover open, reviveNow, refresh):
+        // clear any long auth backoff and bypass the quiet-machine gate so we
+        // re-attempt the cross-app read right now (re-surfacing the OS prompt
+        // here is acceptable — the user just asked for fresh data).
+        currentBackoffSeconds = 0
+        return await tick(force: true)
     }
 
     @discardableResult
-    private func tick() async -> Event {
+    private func tick(force: Bool = false) async -> Event {
+        // Quiet-machine gate: on a background tick (not forced), if we already
+        // have a cached value, aren't in backoff, and the source's data dir is
+        // unchanged since the last successful poll, republish the cached usage
+        // WITHOUT re-reading the cross-app dir. A no-op `dataChangedSince`
+        // default keeps every other source on the always-poll path.
+        if !force,
+           let prev = lastUsage,
+           currentBackoffSeconds == 0,
+           !source.dataChangedSince(lastSourceMtimeProbeDate) {
+            let event = Event.usage(prev)
+            publish(event)
+            return event
+        }
         do {
             let fresh = try await source.poll()
             currentBackoffSeconds = 0
+            lastSourceMtimeProbeDate = Date()
 
             // Plan E3 + E14: merge using (epoch, updatedAt) tuple ordering.
             if let prev = lastUsage, !prev.shouldReplace(with: fresh) {
@@ -166,6 +198,11 @@ public final class UsagePoller: @unchecked Sendable {
                 logger.info("Token refreshed; next tick will retry.")
             } catch AISourceError.authExpired {
                 logger.error("OAuth refresh exhausted (E7 bound). User must re-auth.")
+                // Terminal auth state: stop the loop re-reading the provider's
+                // cross-app dir every tick (which re-fires the macOS "data from
+                // other apps" prompt) until the user logs back in / foregrounds
+                // the app (forcePoll resets this to 0).
+                currentBackoffSeconds = configuration.authFailureBackoffSeconds
                 let event = Event.unauthenticatedNeedsReauth
                 publish(event)
                 return event
@@ -188,6 +225,10 @@ public final class UsagePoller: @unchecked Sendable {
 
         case .authExpired:
             logger.error("Auth expired (caller must surface re-auth UNNotification per plan).")
+            // Terminal auth state — long backoff (see authFailureBackoffSeconds)
+            // so we stop the every-tick cross-app re-read that re-triggers the
+            // macOS TCC prompt. forcePoll() clears it on the next foreground.
+            currentBackoffSeconds = configuration.authFailureBackoffSeconds
             let event = Event.unauthenticatedNeedsReauth
             publish(event)
             return event
