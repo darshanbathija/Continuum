@@ -644,7 +644,7 @@ public final class CodexSubscriptionRelay {
         public var errorDescription: String? {
             switch self {
             case .sdkNotProvisioned:
-                return "Codex SDK not provisioned. Toggle SDK mode in Settings → Codex SDK."
+                return "Codex SDK not provisioned. Enable it in Settings → Advanced → Runtime setup."
             case .nodeBinaryMissing:
                 return "Node binary not found. Install Node 18+ or run tools/download-bundled-node.sh."
             case .sidecarScriptMissing:

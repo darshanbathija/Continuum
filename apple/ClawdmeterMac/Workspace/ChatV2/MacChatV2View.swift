@@ -109,11 +109,10 @@ private struct ChatRoot: View {
         // draw (radial-gradient orbs + base gradients) on every resize / tab
         // switch. Drop the local instance; the root wallpaper bleeds through.
         .task {
-            await client.refreshSessions()
-            await client.refreshModelCatalog()
-            await client.refreshProviderDefaults()
-            store.applyProviderDefaults(client.providerDefaults, catalog: client.modelCatalog)
-            providerMatrix = await client.fetchChatProviders()
+            await refreshProviderSurface()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
+            Task { await refreshProviderSurface() }
         }
         .onChange(of: client.providerDefaults) { _, defaults in
             store.applyProviderDefaults(defaults, catalog: client.modelCatalog)
@@ -121,6 +120,14 @@ private struct ChatRoot: View {
         .onReceive(client.$modelCatalog) { catalog in
             store.applyProviderDefaults(client.providerDefaults, catalog: catalog)
         }
+    }
+
+    private func refreshProviderSurface() async {
+        await client.refreshSessions()
+        await client.refreshModelCatalog()
+        await client.refreshProviderDefaults()
+        store.applyProviderDefaults(client.providerDefaults, catalog: client.modelCatalog)
+        providerMatrix = await client.refreshChatProviders()
     }
 
     private var frontierChildren: [AgentSession] {
@@ -1114,29 +1121,41 @@ private struct ComposerBar: View {
     @ViewBuilder
     private var providerControls: some View {
         HStack(spacing: 7) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(store.selectedVendors, id: \.self) { vendor in
-                        let selected = store.isVendorSelected(vendor)
-                        let available = isVendorAvailable(vendor)
-                        Button {
-                            openVendorPicker = vendor
-                        } label: {
-                            providerChip(vendor: vendor, selected: selected, available: available)
+            if providerEnabledVendors.isEmpty {
+                Text("No providers enabled")
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(t.fg4)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 7)
+                    .frame(height: 32)
+                    .background(Color.white.opacity(0.045), in: Capsule())
+                    .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(store.selectedVendors, id: \.self) { vendor in
+                            let selected = store.isVendorSelected(vendor)
+                            let available = isVendorAvailable(vendor)
+                            Button {
+                                openVendorPicker = vendor
+                            } label: {
+                                providerChip(vendor: vendor, selected: selected, available: available)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!ProviderEnablement.isEnabled(vendor))
+                            .popover(isPresented: Binding(
+                                get: { openVendorPicker == vendor },
+                                set: { if !$0, openVendorPicker == vendor { openVendorPicker = nil } }
+                            ), arrowEdge: .bottom) {
+                                providerPickerPopover(for: vendor)
+                            }
+                            .help(providerUnavailableReason(vendor) ?? "\(vendor.displayName) model picker")
                         }
-                        .buttonStyle(.plain)
-                        .popover(isPresented: Binding(
-                            get: { openVendorPicker == vendor },
-                            set: { if !$0, openVendorPicker == vendor { openVendorPicker = nil } }
-                        ), arrowEdge: .bottom) {
-                            providerPickerPopover(for: vendor)
-                        }
-                        .help(providerUnavailableReason(vendor) ?? "\(vendor.displayName) model picker")
                     }
+                    .padding(.vertical, 1)
                 }
-                .padding(.vertical, 1)
+                .frame(maxWidth: 344, alignment: .leading)
             }
-            .frame(maxWidth: 344, alignment: .leading)
 
             Button {
                 addVendorPickerPresented = true
@@ -1155,6 +1174,8 @@ private struct ComposerBar: View {
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
+            .disabled(providerEnabledVendors.isEmpty)
+            .help(providerEnabledVendors.isEmpty ? "Enable a provider in Settings → Providers." : "Configure selected providers")
             .popover(isPresented: Binding(
                 get: { addVendorPickerPresented },
                 set: { addVendorPickerPresented = $0 }
@@ -1168,7 +1189,7 @@ private struct ComposerBar: View {
                     store: store,
                     defaultsStore: providerDefaultsStore,
                     catalog: client.modelCatalog,
-                    enabledVendors: ChatVendor.allCases,
+                    enabledVendors: providerPickerVendors,
                     mode: .multi,
                     vendorAvailability: { isVendorAvailable($0) },
                     vendorUnavailableReason: { providerUnavailableReason($0) },
@@ -1213,11 +1234,6 @@ private struct ComposerBar: View {
         // "Add / Configure" button opens the same component in .multi mode
         // (broadcast), and MacChatModelSelectorPanel was retired.
         //
-        // We pass every ChatVendor so the picker's rail is a true
-        // cross-provider switcher — the user can navigate to a vendor that
-        // isn't currently in `store.selectedVendors` and pick a model for
-        // it. (A future Settings → Providers "enabled" toggle will narrow
-        // this list; until that ships, we surface all vendors.)
         ComposerModelPicker(
             initialVendor: vendor,
             store: store,
@@ -1226,7 +1242,7 @@ private struct ComposerBar: View {
             // OpenRouter live models, Opus 4.8) instead of the static .bundled
             // fallback that showed only "Auto" / 5 OpenRouter entries.
             catalog: client.modelCatalog,
-            enabledVendors: ChatVendor.allCases,
+            enabledVendors: providerPickerVendors,
             onClose: { openVendorPicker = nil }
         )
     }
@@ -1420,6 +1436,9 @@ private struct ComposerBar: View {
     }
 
     private func isProviderAvailable(_ provider: AgentKind) -> Bool {
+        guard ProviderEnablement.isEnabled(provider) else {
+            return false
+        }
         guard let entries = providerMatrix?.providers.filter({ $0.provider == provider }),
               !entries.isEmpty else {
             return true
@@ -1428,6 +1447,9 @@ private struct ComposerBar: View {
     }
 
     private func isVendorAvailable(_ vendor: ChatVendor) -> Bool {
+        guard ProviderEnablement.isEnabled(vendor) else {
+            return false
+        }
         let provider = vendor.backingProvider
         guard let entries = providerMatrix?.providers.filter({ $0.provider == provider }),
               !entries.isEmpty else {
@@ -1440,6 +1462,9 @@ private struct ComposerBar: View {
     }
 
     private func providerUnavailableReason(_ vendor: ChatVendor) -> String? {
+        guard ProviderEnablement.isEnabled(vendor) else {
+            return "Enable \(vendor.displayName) in Settings → Providers."
+        }
         guard !isVendorAvailable(vendor) else { return nil }
         let provider = vendor.backingProvider
         if vendor == .chatgpt {
@@ -1448,6 +1473,18 @@ private struct ComposerBar: View {
             }?.reason
         }
         return providerMatrix?.providers.first { $0.provider == provider && !$0.capabilityProbePassed }?.reason
+    }
+
+    private var providerEnabledVendors: [ChatVendor] {
+        ProviderEnablement.enabledChatVendors()
+    }
+
+    private var providerPickerVendors: [ChatVendor] {
+        var vendors = providerEnabledVendors
+        for vendor in store.selectedVendors where !vendors.contains(vendor) {
+            vendors.append(vendor)
+        }
+        return vendors
     }
 
     private func compactModelLabel(for vendor: ChatVendor) -> String? {
@@ -1467,7 +1504,7 @@ private struct ComposerBar: View {
     }
 
     private var firstConfigurableVendor: ChatVendor {
-        ChatV2Store.defaultChatVendorOrder.first { vendor in
+        providerEnabledVendors.first { vendor in
             !store.isVendorSelected(vendor) && isVendorAvailable(vendor)
         } ?? store.primaryVendor
     }

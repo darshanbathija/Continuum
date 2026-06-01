@@ -28,6 +28,7 @@ struct ModelEffortChip: View {
     @Binding var selectedModelId: String?
     @Binding var selectedEffort: ReasoningEffort?
     let modelSupportsEffort: Bool
+    var enabledVendors: [ChatVendor] = ChatV2Store.defaultChatVendorOrder
     /// v0.29.31: when the rich picker's rail switches to another vendor, map
     /// that vendor back to its AgentKind so the host can align the session's
     /// agent. Lets the model picker subsume provider selection (the separate
@@ -47,7 +48,10 @@ struct ModelEffortChip: View {
     @StateObject private var pickerScratchStore = ChatV2Store()
 
     var body: some View {
-        Button(action: { showingPopover.toggle() }) {
+        Button(action: {
+            guard !enabledVendors.isEmpty else { return }
+            showingPopover.toggle()
+        }) {
             HStack(spacing: 6) {
                 Text(summaryText)
                     .font(.system(size: 12, weight: .semibold))
@@ -68,7 +72,8 @@ struct ModelEffortChip: View {
         }
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
-        .help("Change model or effort (⌘⌥M)")
+        .disabled(enabledVendors.isEmpty)
+        .help(enabledVendors.isEmpty ? "Enable a provider in Settings → Providers." : "Change model or effort (⌘⌥M)")
         .accessibilityLabel("Model and effort")
         .accessibilityValue(summaryText)
         .accessibilityIdentifier("code.composer.model-effort")
@@ -96,6 +101,7 @@ struct ModelEffortChip: View {
                 store: pickerScratchStore,
                 defaultsStore: providerDefaults,
                 catalog: catalog,
+                enabledVendors: enabledVendors,
                 onClose: { showingPopover = false },
                 onSelectModel: { vendor, modelId, effort in
                     // Align the session's agent to the picked vendor (the rail

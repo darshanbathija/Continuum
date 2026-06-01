@@ -324,6 +324,7 @@ struct ComposerInputCore: View {
                 selectedModelId: $store.modelId,
                 selectedEffort: $store.effort,
                 modelSupportsEffort: modelSupportsEffort,
+                enabledVendors: enabledModelPickerVendors,
                 onSelectAgent: { newAgent in
                     // v0.29.31: provider switching for a NEW session now flows
                     // through the model picker's vendor rail (the standalone
@@ -430,6 +431,13 @@ struct ComposerInputCore: View {
             return [.ask, .acceptEdits, .bypass]
         }
         return [.ask, .acceptEdits, .plan, .bypass]
+    }
+
+    private var enabledModelPickerVendors: [ChatVendor] {
+        if case .emptyState = store.modeKind {
+            return ProviderEnablement.enabledChatVendors()
+        }
+        return ChatV2Store.defaultChatVendorOrder
     }
 
     private var attachButton: some View {

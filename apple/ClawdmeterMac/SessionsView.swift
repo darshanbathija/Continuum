@@ -66,12 +66,18 @@ struct NewSessionMacSheet: View {
                 TextField("Or enter a path", text: $repoPath,
                           prompt: Text("/Users/.../my-repo"))
 
-                Picker("Agent", selection: $agent) {
-                    ForEach(launcher.selectableAgents, id: \.self) { kind in
-                        Text(kind.tahoeProvider.displayName).tag(kind)
+                if launcher.selectableAgents.isEmpty {
+                    Text("Enable a provider in Settings → Providers.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Agent", selection: $agent) {
+                        ForEach(launcher.selectableAgents, id: \.self) { kind in
+                            Text(kind.tahoeProvider.displayName).tag(kind)
+                        }
                     }
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
 
                 HStack {
                     Text("Model")
@@ -84,6 +90,7 @@ struct NewSessionMacSheet: View {
                         selectedModelId = entry.id
                         selectedModelWasUserChosen = true
                     }
+                    .disabled(launcher.selectableAgents.isEmpty)
                 }
 
                 TextField("Goal", text: $goal,
@@ -132,7 +139,7 @@ struct NewSessionMacSheet: View {
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .tint(SessionsV2Theme.accent)
-                .disabled(repoPath.isEmpty || isSpawning)
+                .disabled(repoPath.isEmpty || isSpawning || launcher.selectableAgents.isEmpty)
             }
         }
         .padding(24)
@@ -158,9 +165,20 @@ struct NewSessionMacSheet: View {
         .onChange(of: launcher.modelCatalog.updatedAt) { _, _ in
             ensureSelectedModelIsAvailable()
         }
+        .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
+            Task {
+                await launcher.refreshProviderAvailability()
+                normalizeAgentAvailability()
+                ensureSelectedModelIsAvailable()
+            }
+        }
     }
 
     private func ensureSelectedModelIsAvailable() {
+        guard !launcher.selectableAgents.isEmpty else {
+            selectedModelId = nil
+            return
+        }
         selectedModelId = launcher.resolvedModelId(
             for: agent,
             selectedModelId: selectedModelWasUserChosen ? selectedModelId : nil
@@ -168,7 +186,10 @@ struct NewSessionMacSheet: View {
     }
 
     private func normalizeAgentAvailability() {
-        let normalized = launcher.availableAgentOrDefault(agent)
+        guard let normalized = launcher.availableAgentOrDefault(agent) else {
+            selectedModelId = nil
+            return
+        }
         if normalized != agent {
             agent = normalized
             selectedModelWasUserChosen = false
@@ -188,6 +209,10 @@ struct NewSessionMacSheet: View {
         defer { isSpawning = false }
         guard let runtime = AppDelegate.runtime else {
             errorMessage = "Daemon not started — relaunch Clawdmeter."
+            return
+        }
+        guard launcher.selectableAgents.contains(agent) else {
+            errorMessage = "Enable a provider in Settings → Providers."
             return
         }
         // Seed effort from ComposerStore.ChipDefaults while model comes from
@@ -1227,6 +1252,23 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
+    private func assertProviderEnabled(_ agent: AgentKind) throws {
+        guard ProviderEnablement.isEnabled(agent) else {
+            throw SpawnError.unsupportedMode("Enable \(providerDisplayName(agent)) in Settings → Providers.")
+        }
+    }
+
+    private func providerDisplayName(_ agent: AgentKind) -> String {
+        switch agent {
+        case .claude: return "Claude"
+        case .codex: return "ChatGPT"
+        case .gemini: return "Antigravity"
+        case .cursor: return "Cursor"
+        case .opencode: return "OpenRouter"
+        case .unknown: return "this provider"
+        }
+    }
+
     public func spawnSession(
         repoPath: String,
         agent: AgentKind,
@@ -1252,6 +1294,7 @@ public final class SessionsModel: ObservableObject {
         // that don't have a composer (resume flows, daemon-side spawns).
         initialMessage: String? = nil
     ) async throws -> AgentSession {
+        try assertProviderEnabled(agent)
         // v0.8.0 agy-migration — Gemini sessions fork off here BEFORE the
         // tmux pipeline runs. Antigravity 2's agentapi is HTTP-RPC, not a
         // terminal CLI; there's no pane to spawn. Tier-2 v0.42 chat is
@@ -1443,6 +1486,7 @@ public final class SessionsModel: ObservableObject {
         initialMessage: String? = nil,
         inheritedContextSourceIds: [UUID] = []
     ) async throws -> AgentSession {
+        try assertProviderEnabled(agent)
         let paths = Self.existingWorkspaceRecordPaths(
             repoPath: repoPath,
             workspacePath: workspacePath,

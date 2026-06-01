@@ -261,6 +261,11 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var advancedSettings: some View {
+        SettingsCard(title: "Runtime setup",
+                     sub: "Explicit setup for runtimes that need local provisioning.") {
+            CodexSDKProviderRow()
+        }
+
         VendorProvisioningSettingsView(
             service: runtime?.vendorProvisioningService,
             workspaceStore: runtime?.workspaceStore,
@@ -1144,6 +1149,7 @@ struct ProviderPreferenceRows: View {
                     runtime.setProviderEnabled(id, newValue)
                 } else {
                     ProviderEnablement.setEnabled(id, newValue)
+                    Task { await invalidateProviderCaches(for: id) }
                 }
                 if newValue {
                     Task { await refreshCatalogIfAllowed(for: vendor) }
@@ -1184,6 +1190,15 @@ struct ProviderPreferenceRows: View {
                 next = next.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
             }
             catalog = next
+        }
+    }
+
+    private func invalidateProviderCaches(for id: String) async {
+        await ChatProviderProbe.shared.invalidate()
+        if id == "cursor" {
+            await CursorModelProbe.shared.invalidate()
+        } else if id == "opencode" {
+            await OpenRouterModelProbe.shared.invalidate()
         }
     }
 

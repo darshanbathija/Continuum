@@ -308,6 +308,9 @@ struct SessionWorkspaceView: View {
         .task {
             await launcher.refreshProviderAvailability()
         }
+        .onReceive(NotificationCenter.default.publisher(for: ProviderEnablement.changedNotification)) { _ in
+            Task { await launcher.refreshProviderAvailability() }
+        }
         .background(KeyboardShortcuts(
             model: model
         ))
