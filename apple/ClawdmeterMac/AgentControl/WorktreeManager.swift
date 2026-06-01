@@ -475,13 +475,32 @@ public actor WorktreeManager {
                     createdAt: Date()
                 )
             )
-            let summary = try await copyConfiguredFiles(
-                repoRoot: repoRoot,
-                worktreePath: path,
-                gitDir: gitDir,
-                markerId: markerId,
-                settings: filesToCopy
-            )
+            // Files-to-copy is a best-effort convenience (Conductor's "Files
+            // to copy"), NOT a precondition for the session. A repo with a huge
+            // gitignored tree (node_modules, .next, …) trips the copy cap and
+            // throws — which previously failed the ENTIRE spawn, the symptom
+            // users hit as "the + button creates a branch but never starts a
+            // session." Degrade gracefully: log, record the failure in the
+            // summary, and keep the worktree + agent. The worktree + ownership
+            // marker are already written above, so cleanup still works later.
+            let summary: WorktreeFileCopySummary
+            do {
+                summary = try await copyConfiguredFiles(
+                    repoRoot: repoRoot,
+                    worktreePath: path,
+                    gitDir: gitDir,
+                    markerId: markerId,
+                    settings: filesToCopy
+                )
+            } catch {
+                worktreeLogger.error("files-to-copy skipped (non-fatal) for \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                summary = WorktreeFileCopySummary(
+                    source: .disabled,
+                    mode: filesToCopy.mode,
+                    patterns: [],
+                    failureSummary: "Skipped — \(error.localizedDescription)"
+                )
+            }
             let metadata = WorktreeProvisioningMetadata(
                 ownershipMarkerId: markerId,
                 branchName: branch,
@@ -914,7 +933,7 @@ public actor WorktreeManager {
                 patterns: contents.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
             )
         }
-        let usesDefault = settings.mode == .allIgnored
+        let usesDefault = settings.mode == .patterns
             && settings.patterns == WorkspaceFilesToCopySettings.defaultPatterns
             && settings.maxFiles == WorkspaceFilesToCopySettings.defaultMaxFiles
             && settings.maxBytesPerFile == WorkspaceFilesToCopySettings.defaultMaxBytesPerFile
