@@ -41,6 +41,17 @@ ARCHIVE_PATH="$BUILD_DIR/${APP_NAME}.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
 STAGING_DIR="$BUILD_DIR/staging"
 
+# Regenerate the Xcode project FIRST (xcodegen is the source of truth) so the
+# version read below reflects the CURRENT project.yml MARKETING_VERSION rather
+# than a stale .xcodeproj left by a prior build. Reading it before xcodegen
+# mis-named every DMG one version behind the app actually inside it.
+if command -v xcodegen >/dev/null 2>&1; then
+  ( cd apple && xcodegen >/dev/null )
+  echo "✓ Xcode project regenerated via xcodegen"
+else
+  echo "⚠ xcodegen not installed — using whatever's already in $PROJECT"
+fi
+
 # Pull the marketing version from the Mac target's Info.plist via xcodebuild.
 VERSION="$(/usr/bin/xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
     -configuration Release -showBuildSettings 2>/dev/null \
@@ -71,15 +82,9 @@ rm -rf "$ARCHIVE_PATH" "$EXPORT_DIR" "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 
 # ────────────────────────────────────────────────────────────────────────
-# 2. Regenerate the Xcode project (xcodegen is the source of truth)
+# 2. Bundled tmux (the Xcode project was already regenerated above, before
+#    the version read, so the DMG name matches the app inside it)
 # ────────────────────────────────────────────────────────────────────────
-
-if command -v xcodegen >/dev/null 2>&1; then
-  ( cd apple && xcodegen >/dev/null )
-  echo "✓ Xcode project regenerated via xcodegen"
-else
-  echo "⚠ xcodegen not installed — using whatever's already in $PROJECT"
-fi
 
 if [[ "${CLAWDMETER_SKIP_BUNDLED_TMUX:-0}" != "1" ]]; then
   ./tools/download-bundled-tmux.sh

@@ -95,8 +95,10 @@ struct ComposerInputCore: View {
     var body: some View {
         // Claude-Code-style stack: input box on top, attachments chip strip,
         // then a single compact bottom bar with all controls + the usage
-        // chip on the right. The palette / mention popovers float ABOVE the
-        // input row (negative Y offset) as before.
+        // chip on the right. The palette / mention popovers float flush ABOVE
+        // the composer — attached as an overlay OUTSIDE TahoeGlass (see below),
+        // because the glass `.clipShape` was clipping them when they lived
+        // inside it.
         TahoeGlass(radius: 18, tone: .raised) {
             VStack(spacing: 6) {
                 // A13 — optimistic pending bubble strip. Renders as a row
@@ -116,34 +118,6 @@ struct ComposerInputCore: View {
                 inputRow
                     .opacity(planApprovalMode ? 0.56 : 1)
                     .disabled(planApprovalMode)
-                    .overlay(alignment: .topLeading) {
-                        if showingPalette {
-                            CommandPaletteView(
-                                catalog: skillCatalog,
-                                agent: store.agent,
-                                query: $paletteQuery,
-                                onSelect: applyPaletteSelection,
-                                onDismiss: { showingPalette = false }
-                            )
-                            .offset(y: -290)
-                            .transition(.opacity)
-                            .zIndex(2)
-                        }
-                        if showingMentions {
-                            let triple = mentionSourceProvider()
-                            MentionPicker(
-                                openSessions: triple.sessions,
-                                sourceEntries: triple.sourceEntries,
-                                recentJSONLs: triple.recents,
-                                query: $mentionQuery,
-                                onSelect: applyMentionSelection,
-                                onDismiss: { showingMentions = false }
-                            )
-                            .offset(y: -290)
-                            .transition(.opacity)
-                            .zIndex(2)
-                        }
-                    }
                 chipRow
                 if let err = store.lastError {
                     Text(err.localizedDescription)
@@ -168,6 +142,40 @@ struct ComposerInputCore: View {
                 .stroke(sessionIsRunning ? t.accentAlpha(0.45) : .clear, lineWidth: 1)
                 .shadow(color: sessionIsRunning ? t.accentAlpha(0.30) : .clear, radius: 11)
         )
+        // Palette / mention popovers float flush ABOVE the composer. They are
+        // attached HERE — outside the inner `TahoeGlass`, whose `.clipShape`
+        // was clipping (hiding) them entirely when they sat inside it. The
+        // `alignmentGuide(.top){ $0[.bottom] }` shifts each up by its own
+        // height so its bottom edge meets the composer's top edge — i.e. it
+        // opens right where the user is typing, in every layout (centered
+        // empty-state + bottom workbench).
+        .overlay(alignment: .topLeading) {
+            if showingPalette {
+                CommandPaletteView(
+                    catalog: skillCatalog,
+                    agent: store.agent,
+                    query: $paletteQuery,
+                    onSelect: applyPaletteSelection,
+                    onDismiss: { showingPalette = false }
+                )
+                .alignmentGuide(VerticalAlignment.top) { $0[.bottom] }
+                .transition(.opacity)
+                .zIndex(2)
+            } else if showingMentions {
+                let triple = mentionSourceProvider()
+                MentionPicker(
+                    openSessions: triple.sessions,
+                    sourceEntries: triple.sourceEntries,
+                    recentJSONLs: triple.recents,
+                    query: $mentionQuery,
+                    onSelect: applyMentionSelection,
+                    onDismiss: { showingMentions = false }
+                )
+                .alignmentGuide(VerticalAlignment.top) { $0[.bottom] }
+                .transition(.opacity)
+                .zIndex(2)
+            }
+        }
         .padding(.horizontal, 18)
         .padding(.vertical, 18)
         .onReceive(dictation.$partialTranscript) { newPartial in
@@ -269,16 +277,17 @@ struct ComposerInputCore: View {
     }
 
     private func applyPaletteSelection(_ cmd: PaletteCommand) {
-        // Replace the current last line ("/foo") with "/<cmd.id>". onSend()
-        // below appends the terminal newline (ComposerStore.renderPromptBody).
+        // Insert "/<cmd.id> " in place of the typed "/query" and KEEP the
+        // composer open (no auto-send) so the user can add arguments before
+        // sending — matches Claude Code's slash-command UX (selection inserts;
+        // Enter sends). Auto-sending fired arg-taking skills with no input.
         var lines = store.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if !lines.isEmpty {
             lines.removeLast()
         }
-        lines.append("/\(cmd.id)")
+        lines.append("/\(cmd.id) ")
         store.text = lines.joined(separator: "\n")
         showingPalette = false
-        requestProgrammaticSend()
     }
 
     private func applyMentionSelection(_ pick: MentionPicker.Suggestion) {
