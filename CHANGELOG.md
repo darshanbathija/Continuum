@@ -4,6 +4,21 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.46 build 185] - 2026-06-02 - Code tab world-class pass: live feedback, motion, and a themeable accent (`darshanbathija/code-tab-audit-revamp`)
+
+### Added
+
+- **Every Code-tab action now tells you what happened.** Interrupting a run, switching model/effort/mode, and approving a plan used to call the daemon and show nothing — a working button looked identical whether it succeeded or failed. Each now surfaces a success or failure toast (with a severity glyph + tint), so a failed mode-swap or a rejected plan-approval is visible instead of silently swallowed.
+- **Press feedback on every button.** A new shared `PressableButtonStyle` (subtle 0.97 press, 120ms, Reduce-Motion-aware) replaces the dead-feeling default across the workbench — clicks now register visibly.
+- **Loading skeletons** replace bare spinners on the Diff and Artifacts review panes, so panes read as filling in rather than stalled.
+- **XCTest visual analyzer** (`CodeTabVisualSnapshotTests`) renders the chips, skeletons, and buttons to PNGs headlessly so the design can be regression-diffed without launching the app.
+
+### Changed
+
+- **Motion across the Code tab.** The composer's running rim now breathes at 1.8s (the one DESIGN.md motion spec that was unimplemented); new chat turns fade and rise in; the Mode and Effort chips slide their selection pill between segments; the review-pane tab indicator slides and the body cross-fades on switch; the Diff pane animates its width expand. All of it collapses to static under Reduce Motion.
+- **One accent for the whole tab.** The Mode/Effort chips followed a hardcoded terra-cotta while the buttons, composer send, and rim followed the user's chosen Tahoe accent — so the header mixed two colors. The chips now follow the Tahoe accent too (Halo blue by default, themeable in Settings).
+- **`SessionWorkspaceView.swift` decomposed** from a 6,631-line monolith into 14 per-surface files (Sidebar, CenterThread, ChatThreadScroll, ReviewPane, the review/terminal panes). Pure moves — behavior unchanged, the streaming/Equatable perf path untouched.
+
 ## [0.29.45 build 184] - 2026-06-02 - Revive degraded sessions from iPhone (`fix/ios-revive-endpoint`)
 
 ### Added
