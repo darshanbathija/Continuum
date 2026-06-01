@@ -1444,18 +1444,21 @@ public final class AgentControlServer {
         ], on: connection)
     }
 
+    private func providerEnabledModelCatalog() async -> ModelCatalog {
+        var catalog = ModelCatalog.bundled
+        if ProviderEnablement.isEnabled("cursor") {
+            catalog = catalog.replacingCursor(await CursorModelProbe.shared.currentModels())
+        }
+        if ProviderEnablement.isEnabled("opencode") {
+            catalog = catalog.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+        }
+        return catalog
+    }
+
     private func handleGetModels(connection: NWConnection) async {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let cursorModels = ProviderEnablement.isEnabled("cursor")
-            ? await CursorModelProbe.shared.currentModels()
-            : ModelCatalog.bundled.cursor
-        let openRouterModels = ProviderEnablement.isEnabled("opencode")
-            ? await OpenRouterModelProbe.shared.currentModels()
-            : ModelCatalog.bundled.opencode
-        let catalog = ModelCatalog.bundled
-            .replacingCursor(cursorModels)
-            .replacingOpenRouter(openRouterModels)
+        let catalog = await providerEnabledModelCatalog()
         if let body = try? encoder.encode(catalog) {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
@@ -1484,11 +1487,7 @@ public final class AgentControlServer {
             return
         }
 
-        let cursorModels = await CursorModelProbe.shared.currentModels()
-        let openRouterModels = await OpenRouterModelProbe.shared.currentModels()
-        let catalog = ModelCatalog.bundled
-            .replacingCursor(cursorModels)
-            .replacingOpenRouter(openRouterModels)
+        let catalog = await providerEnabledModelCatalog()
         if let model = req.model,
            !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !vendor.models(in: catalog).contains(where: { $0.id == model || $0.cliAlias == model }) {
@@ -1519,9 +1518,7 @@ public final class AgentControlServer {
         }
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        let liveCatalog = ModelCatalog.bundled
-            .replacingCursor(await CursorModelProbe.shared.currentModels())
-            .replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+        let liveCatalog = await providerEnabledModelCatalog()
         guard !req.model.isEmpty, liveCatalog.entry(forId: req.model) != nil else {
             sendResponse(.badRequest, on: connection); return
         }

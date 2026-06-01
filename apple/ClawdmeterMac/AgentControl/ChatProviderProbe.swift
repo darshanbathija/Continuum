@@ -113,6 +113,8 @@ public actor ChatProviderProbe {
             openRouterModelState: OpenRouterModelProbeState,
             cursorState: CursorModelProbeState
         ) = await Task.detached {
+            let opencodeEnabled = ProviderEnablement.isEnabled("opencode")
+            let cursorEnabled = ProviderEnablement.isEnabled("cursor")
             let claudeAvailable = ShellRunner.locateBinary("claude") != nil
             let codexAvailable = ShellRunner.locateBinary("codex") != nil
             // CodexSDKManager is @MainActor — hop for the read.
@@ -123,37 +125,61 @@ public actor ChatProviderProbe {
                 return false
             }
             let opencodeAvailable = await MainActor.run {
-                OpencodeProcessManager.shared.locateBinary() != nil
+                opencodeEnabled && OpencodeProcessManager.shared.locateBinary() != nil
             }
-            let opencodeProviderIds = await OpencodeAuthFile.shared.providerIds()
+            let opencodeProviderIds = opencodeEnabled
+                ? await OpencodeAuthFile.shared.providerIds()
+                : []
             let opencodeAuthProviderCount = opencodeProviderIds.count
-            let opencodeEnvironmentAuthAvailable = ProcessInfo.processInfo.environment.contains { key, value in
-                guard !value.isEmpty else { return false }
-                switch key {
-                case "OPENROUTER_API_KEY",
-                     "ANTHROPIC_API_KEY",
-                     "OPENAI_API_KEY",
-                     "GOOGLE_GENERATIVE_AI_API_KEY",
-                     "GEMINI_API_KEY",
-                     "MISTRAL_API_KEY",
-                     "GROQ_API_KEY",
-                     "XAI_API_KEY",
-                     "DEEPSEEK_API_KEY",
-                     "MOONSHOT_API_KEY",
-                     "MOONSHOTAI_API_KEY":
-                    return true
-                default:
-                    return false
+            let opencodeEnvironmentAuthAvailable: Bool = {
+                guard opencodeEnabled else { return false }
+                return ProcessInfo.processInfo.environment.contains { key, value in
+                    guard !value.isEmpty else { return false }
+                    switch key {
+                    case "OPENROUTER_API_KEY",
+                         "ANTHROPIC_API_KEY",
+                         "OPENAI_API_KEY",
+                         "GOOGLE_GENERATIVE_AI_API_KEY",
+                         "GEMINI_API_KEY",
+                         "MISTRAL_API_KEY",
+                         "GROQ_API_KEY",
+                         "XAI_API_KEY",
+                         "DEEPSEEK_API_KEY",
+                         "MOONSHOT_API_KEY",
+                         "MOONSHOTAI_API_KEY":
+                        return true
+                    default:
+                        return false
+                    }
                 }
-            }
-            let opencodeOpenRouterAuthAvailable = opencodeProviderIds.contains("openrouter")
-                || (ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?.isEmpty == false)
-            let openRouterModelState = await OpenRouterModelProbe.shared.currentState()
+            }()
+            let opencodeOpenRouterAuthAvailable = opencodeEnabled
+                && (opencodeProviderIds.contains("openrouter")
+                    || (ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?.isEmpty == false))
+            let disabledOpenRouterState = OpenRouterModelProbeState(
+                models: ModelCatalog.bundled.opencode,
+                authenticated: false,
+                discoverySucceeded: false,
+                reason: "Provider disabled",
+                probedAt: Date()
+            )
+            let openRouterModelState = opencodeEnabled
+                ? await OpenRouterModelProbe.shared.currentState()
+                : disabledOpenRouterState
             // Passive provider discovery must not launch cursor-agent or
             // touch Cursor's login Keychain item. In dev/AI test builds,
             // those reads can surface SecurityAgent prompts repeatedly
             // because every build may have a new signing requirement.
-            let cursorState = await CursorModelProbe.shared.passiveState()
+            let disabledCursorState = CursorModelProbeState(
+                binaryPath: nil,
+                models: [CursorModelCatalog.autoEntry],
+                authenticated: false,
+                reason: "Provider disabled",
+                probedAt: Date()
+            )
+            let cursorState = cursorEnabled
+                ? await CursorModelProbe.shared.passiveState()
+                : disabledCursorState
             return (
                 claudeAvailable,
                 codexAvailable,

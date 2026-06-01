@@ -1,8 +1,9 @@
 import SwiftUI
 import ClawdmeterShared
 
-/// First-run provider opt-in. Providers start off by default and only read
-/// credentials once the user enables them here or in Settings.
+/// First-run welcome. Providers are opt-in and default off; this sheet uses
+/// the same simple provider rows as Settings so onboarding and later changes
+/// stay in sync.
 struct OnboardingSheet: View {
     @Environment(\.tahoe) private var t
     var runtime: AppRuntime?
@@ -14,24 +15,14 @@ struct OnboardingSheet: View {
                 Text("Choose providers")
                     .font(TahoeFont.body(20, weight: .bold))
                     .foregroundStyle(t.fg)
-                Text("Turn on the providers Continuum should use. You can change this later in Settings.")
+                Text("Choose the providers and default models you want to use.")
                     .font(TahoeFont.body(12.5))
                     .foregroundStyle(t.fg3)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             TahoeGlass(radius: 16, tone: .panel) {
-                VStack(alignment: .leading, spacing: 12) {
-                    ProviderEnableToggleRow(id: "claude", label: "Claude", runtime: runtime)
-                    TahoeHair()
-                    ProviderEnableToggleRow(id: "codex", label: "Codex", runtime: runtime)
-                    TahoeHair()
-                    ProviderEnableToggleRow(id: "gemini", label: "Antigravity", runtime: runtime)
-                    TahoeHair()
-                    ProviderEnableToggleRow(id: "cursor", label: "Cursor", runtime: runtime)
-                    TahoeHair()
-                    ProviderEnableToggleRow(id: "opencode", label: "OpenCode", runtime: runtime)
-                }
+                ProviderPreferenceRows(client: runtime?.loopbackClient, runtime: runtime)
                 .padding(16)
             }
 
@@ -52,7 +43,7 @@ struct OnboardingSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 430)
+        .frame(width: 600)
         .background(t.surfaceSolid)
     }
 }

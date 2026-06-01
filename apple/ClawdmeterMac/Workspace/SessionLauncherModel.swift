@@ -44,18 +44,30 @@ final class SessionLauncherModel: ObservableObject {
     }
 
     func refreshProviderAvailability() async {
-        await OpencodeProcessManager.shared.refreshAuthStatus()
-        let opencodeReady = OpencodeProcessManager.shared.binaryPath != nil
-            && !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
+        let opencodeEnabled = ProviderEnablement.isEnabled("opencode")
+        let cursorEnabled = ProviderEnablement.isEnabled("cursor")
 
-        let openRouterModels = await OpenRouterModelProbe.shared.currentModels()
-        let cursorState = await CursorModelProbe.shared.currentState()
-        modelCatalog = ModelCatalog.bundled
-            .replacingCursor(cursorState.models)
-            .replacingOpenRouter(openRouterModels)
+        var opencodeReady = false
+        var cursorReady = false
+        var nextCatalog = ModelCatalog.bundled
+
+        if opencodeEnabled {
+            await OpencodeProcessManager.shared.refreshAuthStatus()
+            opencodeReady = OpencodeProcessManager.shared.binaryPath != nil
+                && !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
+            nextCatalog = nextCatalog.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+        }
+
+        if cursorEnabled {
+            let cursorState = await CursorModelProbe.shared.currentState()
+            nextCatalog = nextCatalog.replacingCursor(cursorState.models)
+            cursorReady = cursorState.binaryPath != nil && cursorState.authenticated
+        }
+
+        modelCatalog = nextCatalog
         availability = SessionLauncherAvailability(
             opencodeReady: opencodeReady,
-            cursorReady: cursorState.binaryPath != nil && cursorState.authenticated
+            cursorReady: cursorReady
         )
     }
 
