@@ -23,7 +23,9 @@ public struct TahoeToggleView: View {
                 .padding(2)
         }
         .frame(width: 34, height: 22)
-        .animation(.easeOut(duration: 0.15), value: on)
+        // DESIGN.md Toggles: 150ms with cubic-bezier (0.3, 0.7, 0.4, 1) —
+        // accelerate-then-decelerate, not easeOut's decelerate-only.
+        .animation(.timingCurve(0.3, 0.7, 0.4, 1, duration: 0.15), value: on)
         .contentShape(Capsule())
         .onTapGesture { on.toggle() }
     }

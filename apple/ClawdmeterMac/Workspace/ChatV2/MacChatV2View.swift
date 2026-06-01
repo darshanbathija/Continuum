@@ -1319,7 +1319,9 @@ private struct ComposerBar: View {
         if openTarget?.isReadOnlyTranscript == true { return "Archived transcript is read-only" }
         if openTarget?.isFrontier == true { return "Follow up with all agents…" }
         if openTarget != nil { return "Reply to this chat…" }
-        return store.selectedVendorCount == 1 ? "Ask \(store.primaryVendor.displayName)…" : "Ask selected providers…"
+        // DESIGN.md Composer: the idle placeholder copy is fixed. Provider
+        // selection is conveyed by the provider chips, not the placeholder.
+        return "Ask anything. Use / for skills, @ for files."
     }
 
     private var estimatedCost: String {
