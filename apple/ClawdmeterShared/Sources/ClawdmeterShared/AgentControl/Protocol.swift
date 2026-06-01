@@ -1458,8 +1458,15 @@ public struct WorkspaceFilesToCopySettings: Codable, Hashable, Sendable {
     public let allowDirectories: Bool
 
     public init(
+        // Default is `.patterns` with `.env*`, NOT `.allIgnored`. `.allIgnored`
+        // copies EVERY gitignored file into the new worktree — for a real
+        // project that means node_modules / .next / build caches (axtior-platform
+        // = 315k ignored files, 2.6 GB), which trips the file/byte cap, throws,
+        // and fails the entire session spawn ("the + button makes a branch but
+        // never starts a session"). Conductor copies a small curated set
+        // (`.env`), and so do we now. Users can still opt into `.allIgnored`.
         enabled: Bool = true,
-        mode: WorkspaceFilesToCopyMode = .allIgnored,
+        mode: WorkspaceFilesToCopyMode = .patterns,
         patterns: [String] = WorkspaceFilesToCopySettings.defaultPatterns,
         maxFiles: Int = WorkspaceFilesToCopySettings.defaultMaxFiles,
         maxBytesPerFile: Int64 = WorkspaceFilesToCopySettings.defaultMaxBytesPerFile,
@@ -1478,7 +1485,7 @@ public struct WorkspaceFilesToCopySettings: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? true
-        self.mode = (try? c.decodeIfPresent(WorkspaceFilesToCopyMode.self, forKey: .mode)) ?? .allIgnored
+        self.mode = (try? c.decodeIfPresent(WorkspaceFilesToCopyMode.self, forKey: .mode)) ?? .patterns
         self.patterns = (try? c.decodeIfPresent([String].self, forKey: .patterns)) ?? Self.defaultPatterns
         self.maxFiles = (try? c.decodeIfPresent(Int.self, forKey: .maxFiles)) ?? Self.defaultMaxFiles
         self.maxBytesPerFile = (try? c.decodeIfPresent(Int64.self, forKey: .maxBytesPerFile)) ?? Self.defaultMaxBytesPerFile

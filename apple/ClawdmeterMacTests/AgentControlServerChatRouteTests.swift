@@ -439,18 +439,21 @@ final class AgentControlServerChatRouteTests: XCTestCase {
                 XCTAssertFalse(worktreePath.contains("/.claude/worktrees/"))
                 XCTAssertEqual(session.mode, .worktree)
                 XCTAssertEqual(session.provisioning?.storageRoot, WorktreeManager.defaultWorkspaceStorageRoot())
-                XCTAssertEqual(session.provisioning?.filesToCopy.mode, .allIgnored)
+                XCTAssertEqual(session.provisioning?.filesToCopy.mode, .patterns)
                 XCTAssertTrue(
                     FileManager.default.fileExists(atPath: (worktreePath as NSString).appendingPathComponent(".env.local")),
                     "\(agent.rawValue) did not copy ignored .env.local"
                 )
-                XCTAssertTrue(
+                // Default copy is `.env*` only now — node_modules / cache are
+                // gitignored but must NOT be copied. Copying every ignored file
+                // tripped the file/byte cap on real repos and failed the spawn.
+                XCTAssertFalse(
                     FileManager.default.fileExists(atPath: (worktreePath as NSString).appendingPathComponent("node_modules/pkg/index.js")),
-                    "\(agent.rawValue) did not copy ignored dependency directory"
+                    "\(agent.rawValue) should not copy the ignored dependency directory by default"
                 )
-                XCTAssertTrue(
+                XCTAssertFalse(
                     FileManager.default.fileExists(atPath: (worktreePath as NSString).appendingPathComponent("cache/empty")),
-                    "\(agent.rawValue) did not copy ignored empty directory"
+                    "\(agent.rawValue) should not copy the ignored empty directory by default"
                 )
                 XCTAssertGreaterThan(
                     session.provisioning?.filesToCopy.copiedFileCount ?? 0,

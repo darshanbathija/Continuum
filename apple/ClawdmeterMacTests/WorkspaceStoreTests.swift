@@ -278,7 +278,7 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(providerOnly?.filesToCopy.maxFiles, 1)
     }
 
-    func test_worktreeProvisionCopiesAllIgnoredByDefaultAndWritesManifest() async throws {
+    func test_worktreeProvisionCopiesEnvPatternsByDefaultAndWritesManifest() async throws {
         let repo = try makeGitRepo(name: "copy-default")
         try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
         try write(".env*\nnode_modules/\ncache/\n*.sqlite*\n", to: repo.appendingPathComponent(".gitignore"))
@@ -302,21 +302,26 @@ final class WorkspaceStoreTests: XCTestCase {
             filesToCopy: WorkspaceFilesToCopySettings()
         )
 
+        // tracked.txt is committed, so it's present via the worktree checkout.
         XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("tracked.txt")))
+        // Default copy is now `.patterns` with `.env*` — only env files cross over.
         XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent(".env.local")))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("node_modules/pkg/index.js")))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("dev.sqlite")))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("dev.sqlite-wal")))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("dev.sqlite-shm")))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("cache/empty")))
+        // node_modules / sqlite / cache are gitignored but NOT `.env*`, so the
+        // default no longer copies them. Copying every ignored file tripped the
+        // file/byte cap on real repos (node_modules) and failed the whole spawn.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("node_modules/pkg/index.js")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("dev.sqlite")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("dev.sqlite-wal")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("dev.sqlite-shm")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: (provisioned.path as NSString).appendingPathComponent("cache/empty")))
         XCTAssertTrue(provisioned.path.hasPrefix(workspaceStorageRoot.path + "/copy-default/"))
         XCTAssertFalse(provisioned.path.contains("/.claude/worktrees/"))
         XCTAssertFalse(provisioned.path.hasPrefix(NSHomeDirectory() + "/conductor/workspaces/"))
         XCTAssertEqual(provisioned.metadata.filesToCopy.source, .defaultPatterns)
-        XCTAssertEqual(provisioned.metadata.filesToCopy.mode, .allIgnored)
-        XCTAssertEqual(provisioned.metadata.filesToCopy.patterns, [])
-        XCTAssertEqual(provisioned.metadata.filesToCopy.copiedFileCount, 5)
-        XCTAssertGreaterThanOrEqual(provisioned.metadata.filesToCopy.copiedDirectoryCount, 3)
+        XCTAssertEqual(provisioned.metadata.filesToCopy.mode, .patterns)
+        XCTAssertEqual(provisioned.metadata.filesToCopy.patterns, [".env*"])
+        XCTAssertEqual(provisioned.metadata.filesToCopy.copiedFileCount, 1)
+        XCTAssertEqual(provisioned.metadata.filesToCopy.copiedDirectoryCount, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: provisioned.metadata.filesToCopy.manifestPath ?? ""))
         _ = try await manager.cleanupProvisionedWorktree(
             repoRoot: repo.path,
