@@ -30,13 +30,10 @@ struct TahoeDiffPreviewPane: View {
                     // for the <500ms acceptance budget.
                     LazyVStack(alignment: .leading, spacing: 0) {
                     if isLoading {
-                        HStack(spacing: 7) {
-                            ProgressView().controlSize(.small)
-                            Text("Loading diff...")
-                                .font(TahoeFont.body(11.5))
-                                .foregroundStyle(t.fg3)
-                        }
-                        .padding(16)
+                        // P8: a diff-shaped shimmer reads as "filling in" rather
+                        // than the bare spinner+"Loading diff..." that looked stalled.
+                        SkeletonLines(count: 7, label: "Loading diff…")
+                            .padding(16)
                     } else if lines.isEmpty {
                         TahoeEmptyReviewState(icon: "diff", title: "No local diff", body: "The worktree has no visible git diff.")
                             .frame(minWidth: 330)

@@ -114,7 +114,11 @@ struct WorkspaceReviewPane: View {
                 if let chatStore {
                     ArtifactsPane(session: session, chatStore: chatStore)
                 } else {
-                    placeholder(text: "Waiting for agent JSONL…")
+                    // P8: shimmer rather than a lone spinner while the chat
+                    // store warms up.
+                    SkeletonLines(count: 4, label: "Waiting for the agent…")
+                        .padding(16)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             }
         case .browser:
