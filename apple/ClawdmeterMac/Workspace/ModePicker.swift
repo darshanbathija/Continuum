@@ -14,6 +14,7 @@ struct ModePicker: View {
 
     @Namespace private var pillNamespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.tahoe) private var t
 
     var body: some View {
         HStack(spacing: 4) {
@@ -47,7 +48,7 @@ struct ModePicker: View {
             .background {
                 if isSelected {
                     RoundedRectangle(cornerRadius: 5)
-                        .fill(terraCotta)
+                        .fill(t.accent)
                         .matchedGeometryEffect(id: "modePill", in: pillNamespace)
                 }
             }
@@ -89,6 +90,4 @@ struct ModePicker: View {
             return "Remote-Mac mode — coming in G3."
         }
     }
-
-    private var terraCotta: Color { SessionsV2Theme.accent }
 }

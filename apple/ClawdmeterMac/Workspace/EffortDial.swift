@@ -15,6 +15,7 @@ struct EffortDial: View {
     let onChange: (ReasoningEffort) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.tahoe) private var t
     @Namespace private var effortPill
 
     var body: some View {
@@ -52,7 +53,7 @@ struct EffortDial: View {
                 .background {
                     if isSelected {
                         RoundedRectangle(cornerRadius: SessionsV2Theme.Radius.chip - 1)
-                            .fill(SessionsV2Theme.accent)
+                            .fill(t.accent)
                             .matchedGeometryEffect(id: "effortPill", in: effortPill)
                     }
                 }

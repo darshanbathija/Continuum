@@ -33,6 +33,11 @@ final class CodeTabVisualSnapshotTests: XCTestCase {
             .padding(14)
             .background(Color(red: 0.06, green: 0.06, blue: 0.07))
             .environment(\.colorScheme, .dark)
+            // Inject the SAME theme the app injects so `t.accent` resolves to the
+            // user's chosen Tahoe accent (Halo blue by default) — now that the
+            // mode/effort chips follow it, the snapshot proves chips + buttons
+            // share one accent.
+            .tahoeTheme(TahoeThemeStore.loaded())
         let content: AnyView = width.map { AnyView(panel.frame(width: $0)) } ?? AnyView(panel)
 
         let renderer = ImageRenderer(content: content)
