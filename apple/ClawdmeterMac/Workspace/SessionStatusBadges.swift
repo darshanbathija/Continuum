@@ -90,39 +90,28 @@ struct AttentionBadge: View {
     }
 }
 
-/// Pin / mute / archive triplet shown when the user hovers a sidebar
-/// row. Pure-closure surface — the parent owns all the side-effects.
+/// Archive action shown when the user hovers a sidebar row. Archive is the
+/// only hover action (pin/mute were removed — they cluttered the row and live
+/// in the right-click menu). Sized 22×22 — at or below the row's natural
+/// content height — so revealing it on hover does NOT grow the row.
+/// Pure-closure surface; the parent owns the side-effect.
 struct SessionHoverActions: View {
-    let isPinned: Bool
-    let isMuted: Bool
-    let onPin: () -> Void
-    let onMute: () -> Void
     let onArchive: () -> Void
 
     var body: some View {
-        HStack(spacing: 3) {
-            hoverButton(icon: isPinned ? "pin.slash" : "pin", label: isPinned ? "Unpin" : "Pin", action: onPin)
-            hoverButton(icon: isMuted ? "bell" : "bell.slash", label: isMuted ? "Unmute" : "Mute", action: onMute)
-            hoverButton(icon: "archivebox", label: "Archive", action: onArchive)
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 3)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-    }
-
-    private func hoverButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
+        Button(action: onArchive) {
+            Image(systemName: "archivebox")
                 .font(.system(size: 11, weight: .semibold))
-                .frame(width: 30, height: 30)
+                .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
         .codeHoverChrome(
-            cornerRadius: 7,
-            help: label,
-            accessibilityLabel: label,
-            accessibilityIdentifier: "code.session.action.\(label.lowercased().replacingOccurrences(of: " ", with: "-"))"
+            cornerRadius: 6,
+            help: "Archive",
+            accessibilityLabel: "Archive",
+            accessibilityIdentifier: "code.session.action.archive"
         )
     }
 }
