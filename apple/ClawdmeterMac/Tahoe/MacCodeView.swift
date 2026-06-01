@@ -1993,7 +1993,8 @@ private struct ReviewPane: View {
                         .font(TahoeFont.body(11.5, weight: active ? .bold : .semibold))
                         .foregroundStyle(active ? t.fg : t.fg3)
                         .padding(.horizontal, 0)
-                        .frame(maxWidth: .infinity, minHeight: 30)
+                        // DESIGN.md Review Pane: each tab is exactly 30px high.
+                        .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30)
                         // v0.22.14: explicit hit shape so the whole
                         // pill is tappable. Without this, taps fell
                         // through the spacing between the icon and
@@ -2001,9 +2002,15 @@ private struct ReviewPane: View {
                         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .background {
                             if active {
+                                // DESIGN.md: active tab fill white@10% (dark) / #fff
+                                // (light) with `0 1px 2px black@10%, 0 0 0 0.5px black@8%`.
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(t.dark ? Color(.sRGB, white: 1, opacity: 0.10) : .white)
-                                    .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
+                                    .shadow(color: Color.black.opacity(0.10), radius: 2, x: 0, y: 1)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+                                    )
                             }
                         }
                     }

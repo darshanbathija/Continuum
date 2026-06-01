@@ -70,13 +70,16 @@ struct InlinePlanHalo: View {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
                             HStack(alignment: .top, spacing: 12) {
+                                // DESIGN.md Plan Card: step badges use hair2/fg2,
+                                // EXCEPT step 1 which uses accent@18% fill + accent
+                                // text to mark the entry point.
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(t.hair2)
+                                    .fill(index == 0 ? t.accentAlpha(0.18) : t.hair2)
                                     .frame(width: 20, height: 20)
                                     .overlay(
                                         Text("\(index + 1)")
                                             .font(TahoeFont.mono(11, weight: .bold))
-                                            .foregroundStyle(t.fg2)
+                                            .foregroundStyle(index == 0 ? t.accent : t.fg2)
                                     )
                                 Text(step)
                                     .font(TahoeFont.body(13))

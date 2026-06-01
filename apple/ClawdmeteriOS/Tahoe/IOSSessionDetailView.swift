@@ -1923,8 +1923,9 @@ private struct IOSPlanHaloMini: View {
                             ForEach(Array(steps.prefix(3).enumerated()), id: \.offset) { i, step in
                                 HStack(alignment: .top, spacing: 9) {
                                     ZStack {
-                                        RoundedRectangle(cornerRadius: 5, style: .continuous).fill(t.hair2)
-                                        Text("\(i+1)").font(TahoeFont.mono(10, weight: .bold)).foregroundStyle(t.fg2)
+                                        // DESIGN.md Plan Card: step 1 badge uses accent@18% + accent text.
+                                        RoundedRectangle(cornerRadius: 5, style: .continuous).fill(i == 0 ? t.accentAlpha(0.18) : t.hair2)
+                                        Text("\(i+1)").font(TahoeFont.mono(10, weight: .bold)).foregroundStyle(i == 0 ? t.accent : t.fg2)
                                     }
                                     .frame(width: 18, height: 18)
                                     Text(step)

@@ -313,7 +313,7 @@ public struct MacSettingsView: View {
                 TahoeToggleView(on: autoReviveBinding)
             }
             TahoeHair().padding(.vertical, 14)
-            SettingsRow(label: "Mirror to iPhone",
+            SettingsRow(label: "Sync with iPhone",
                         hint: "Live gauges sync through the pairing service when a phone is paired. No separate toggle exists yet.") {
                 SettingsUnavailableBadge()
             }

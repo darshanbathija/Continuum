@@ -531,7 +531,10 @@ struct PairingSettingsView: View {
         let scaleFactor: CGFloat = 8
         let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: scaleFactor, y: scaleFactor))
         guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: 160, height: 160))
+        // DESIGN.md Pairing: the QR renders inside a 224px inner block
+        // (280px popover). Match the native pixel size so the code isn't
+        // upscaled from a half-res buffer (degrades scan reliability).
+        return NSImage(cgImage: cg, size: NSSize(width: 224, height: 224))
     }
 
     // MARK: - TTL helpers

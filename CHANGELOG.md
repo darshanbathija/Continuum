@@ -4,7 +4,18 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
-## [0.29.30 build 169] - 2026-05-28 - Collapsed transcript projection (`darshanbathija/collapse-status`)
+## [0.29.31 build 170] - 2026-06-01 - Workflow test-fixes: correct new-session transcripts + Tahoe conformance (`darshanbathija/test-fixes`)
+
+End-to-end testing of the three core workflows (import a repo, start a session, send a chat) against the live daemon surfaced two real bugs, plus a Tahoe design-conformance sweep across the Mac and iOS surfaces.
+
+### Fixed
+
+- **A just-spawned session no longer shows another session's transcript.** The chat-snapshot JSONL resolver walked parent directories with no lower bound, so any session whose own transcript hadn't been written yet (a brand-new session, or a worktree on an unborn branch) resolved to `~/.claude/projects/-Users-<user>/` and surfaced an unrelated conversation. The parent-walk is now bounded to strict descendants of `$HOME`, so it still catches the "launched one level above the repo" case but never climbs into the home directory's own history. Covered by a new 4-case regression test.
+- **Quick-started repos are now immediately usable for sessions.** "Quick start" ran `git init` but never made a commit, leaving the repo on an unborn branch — so the default worktree-based new-session flow landed the agent in a commit-less worktree. Quick start now makes an initial empty commit (with an identity fallback) so a worktree can branch from a real HEAD.
+
+### Changed
+
+- **Tahoe design conformance.** Degraded session status now renders in the danger red (`#ff5f57`) instead of a muted gray; the pairing QR image renders at its native 224px instead of a half-resolution 160px buffer; adding a project that's already imported now shows a "Already in your projects" toast instead of silently doing nothing; the settings toggle animation uses the spec `cubic-bezier(0.3, 0.7, 0.4, 1)` curve; the first plan step's badge is accent-highlighted on Mac and iOS; the Chat composer's idle placeholder reads "Ask anything. Use / for skills, @ for files."; the "+ Add project" button is the spec 24px / 10px-radius size; the Code review-pane tabs are pinned to 30px with the spec active-tab shadow + hairline; and the iPhone-sync settings row is labeled "Sync with iPhone".
 
 ### Added
 

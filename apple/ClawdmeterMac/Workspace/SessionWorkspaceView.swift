@@ -841,7 +841,19 @@ private struct SidebarPane: View {
                 Task {
                     do { _ = try await model.repoOnboarding.openLocalFolder() }
                     catch let err as RepoOnboardingError {
-                        if case .alreadyRegistered = err { return }
+                        if case .alreadyRegistered = err {
+                            // RepoOnboarding still fires onWorkspaceRegistered so
+                            // the sidebar highlights the existing repo — confirm to
+                            // the user with a toast instead of silently no-op'ing.
+                            await MainActor.run {
+                                NotificationCenter.default.post(
+                                    name: .clawdmeterShowTransientToast,
+                                    object: nil,
+                                    userInfo: ["toast": TransientToast(title: "Already in your projects")]
+                                )
+                            }
+                            return
+                        }
                         await MainActor.run { presentRepoOnboardingError(err) }
                     } catch {
                         await MainActor.run { presentRepoOnboardingError(error) }
@@ -861,15 +873,17 @@ private struct SidebarPane: View {
                 Label("Quick start", systemImage: "plus.rectangle.on.folder")
             }
         } label: {
+            // DESIGN.md: sidebar inline icon buttons are 24px with the 10px
+            // small-radius token.
             TahoeIcon("folderPlus", size: 15, weight: .semibold)
                 .foregroundStyle(t.accent)
-                .frame(width: 30, height: 30)
+                .frame(width: 24, height: 24)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(t.accentAlpha(t.dark ? 0.18 : 0.12))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(t.accentAlpha(0.32), lineWidth: 0.5)
                 )
         }
@@ -2477,7 +2491,8 @@ private struct SidebarPane: View {
         case .running: return .green
         case .paused: return .yellow
         case .done: return terraCotta
-        case .degraded: return .secondary
+        // DESIGN.md Session Status: degraded → #ff5f57 (danger), not a muted gray.
+        case .degraded: return Color(.sRGB, red: 1.0, green: 95.0 / 255.0, blue: 87.0 / 255.0, opacity: 1.0)
         }
     }
 
@@ -3749,7 +3764,8 @@ private struct CenterThread: View {
         case .running: return .green
         case .paused: return .yellow
         case .done: return terraCotta
-        case .degraded: return .secondary
+        // DESIGN.md Session Status: degraded → #ff5f57 (danger), not a muted gray.
+        case .degraded: return Color(.sRGB, red: 1.0, green: 95.0 / 255.0, blue: 87.0 / 255.0, opacity: 1.0)
         }
     }
 

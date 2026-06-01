@@ -268,6 +268,29 @@ public final class RepoOnboarding {
             throw RepoOnboardingError.gitInitFailed(stderr: result.stderrString)
         }
 
+        // A `git init`-only repo has no HEAD commit — a degenerate state:
+        // the default new-session flow creates a worktree (`git worktree
+        // add`), which then branches off an unborn branch and lands the
+        // agent in a commit-less worktree. Make an initial empty commit so
+        // a Quick Started repo is immediately usable for sessions. Prefer
+        // the user's configured git identity; fall back to a neutral one
+        // if none is set (otherwise `git commit` errors with "Please tell
+        // me who you are"). Best-effort: if the commit can't be made we
+        // still register the workspace (no worse than the prior behavior).
+        let commitArgs = ["commit", "--allow-empty", "-m", "Initial commit"]
+        let commitResult = try? await ShellRunner.shared.run(
+            executable: git, arguments: commitArgs, cwd: destPath, timeout: 30
+        )
+        if commitResult?.exitStatus != 0 {
+            _ = try? await ShellRunner.shared.run(
+                executable: git,
+                arguments: ["-c", "user.email=continuum@localhost",
+                            "-c", "user.name=Continuum"] + commitArgs,
+                cwd: destPath,
+                timeout: 30
+            )
+        }
+
         let record = try await registerWorkspace(at: destPath, allowNonGit: false)
         quickStartSucceeded = true
         return record
