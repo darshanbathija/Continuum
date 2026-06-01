@@ -443,5 +443,23 @@ public final class AntigravitySource: AISource, @unchecked Sendable {
             detail: "Gemini first-poll \(reason) — no cached usage yet, UI stays at Connecting…"
         )
     }
+
+    // MARK: - Quiet-machine change probe
+
+    /// Stat-only: did the Gemini/Antigravity OAuth credential change since
+    /// `date`? The poll path reads `~/.gemini/oauth_creds.json` (the user's OWN
+    /// home dir) for the access token; statting it is cheap. Quota changes
+    /// server-side, but on a quiet menu-bar machine we'd rather skip the
+    /// recurring token read (which re-fires the macOS cross-app prompt) and
+    /// refresh on foreground — `forcePoll()` bypasses this gate. When the creds
+    /// file can't be statted we poll, so we never silently strand a user who
+    /// just signed in.
+    public func dataChangedSince(_ date: Date?) -> Bool {
+        guard let date else { return true }
+        let creds = ClawdmeterRealHome.url().appendingPathComponent(".gemini/oauth_creds.json")
+        guard let m = (try? creds.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate else { return true }
+        return m > date
+    }
 }
 #endif

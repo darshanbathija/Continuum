@@ -23,7 +23,11 @@ struct WorkspaceTerminalPane: View {
                     paneId: paneId,
                     onFirstOutput: { sawOutput = true }
                 )
-                .id(paneId ?? "primary")
+                // Include the session's primary pane id so a revive (which
+                // respawns into a NEW pane and updates tmuxPaneId) changes the
+                // view identity → SwiftUI tears down the dead-pane WS and opens
+                // a fresh subscription to the live pane.
+                .id(paneId ?? session.tmuxPaneId ?? "primary")
                 if !sawOutput {
                     terminalPendingOverlay
                 }

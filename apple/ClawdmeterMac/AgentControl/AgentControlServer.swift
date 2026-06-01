@@ -1316,6 +1316,9 @@ public final class AgentControlServer {
         t.register(method: "POST", pattern: "/sessions/:id/interrupt") { [weak self] req, conn, params in
             await self?.handleInterrupt(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
+        t.register(method: "POST", pattern: "/sessions/:id/revive") { [weak self] req, conn, params in
+            await self?.handleRevive(sessionId: params["id"] ?? "", request: req, connection: conn)
+        }
         t.register(method: "POST", pattern: "/sessions/:id/permission-respond") { [weak self] req, conn, params in
             await self?.handlePermissionRespond(sessionId: params["id"] ?? "", request: req, connection: conn)
         }
@@ -1613,6 +1616,39 @@ public final class AgentControlServer {
             uuid: uuid,
             idempotencyKey: req.idempotencyKey,
             kind: .changeMode,
+            payloadHash: payloadHash,
+            connection: connection
+        )
+    }
+
+    /// v25: respawn a degraded session whose tmux pane died. Same rate-limit
+    /// + idempotency contract as the other config-swap commands so a retried
+    /// or double-tapped revive can't double-spawn the agent.
+    private func handleRevive(sessionId: String, request: HTTPRequest, connection: NWConnection) async {
+        guard let uuid = UUID(uuidString: sessionId), registry.session(id: uuid) != nil else {
+            sendResponse(.notFound, on: connection); return
+        }
+        // Body is optional: an empty POST (no idempotency key) is valid.
+        let req = (try? JSONDecoder().decode(ReviveRequest.self, from: request.body)) ?? ReviveRequest()
+        if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
+        let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        guard RateLimiter.shared.tryAcquireSwap(sessionId: uuid) else {
+            sendResponse(.tooManyRequestsSwap, on: connection); return
+        }
+        let changer = SessionConfigChanger(registry: registry, tmux: tmux, repoEnvResolver: repoEnvResolver)
+        let result = await changer.revive(sessionId: uuid)
+        guard isSuccessfulSwap(result) else {
+            sendResponse(.internalError, on: connection); return
+        }
+        let peer = Self.endpointString(connection.endpoint)
+        await AuditLog.shared.recordSwap(
+            sessionId: uuid, sourcePeer: peer,
+            from: nil, to: "(revive)", effort: nil
+        )
+        await respondWithSession(
+            uuid: uuid,
+            idempotencyKey: req.idempotencyKey,
+            kind: .revive,
             payloadHash: payloadHash,
             connection: connection
         )

@@ -240,6 +240,14 @@ public struct MacSettingsView: View {
         SettingsCard(title: "Providers", sub: nil) {
             ProviderPreferenceRows(client: runtime?.loopbackClient, runtime: runtime)
         }
+
+        // One-time Full Disk Access opt-in. Continuum reads other tools' usage
+        // (~/.codex, ~/.gemini, OpenCode); without access macOS re-prompts every
+        // few minutes. The Release build is non-sandboxed (#230), so FDA durably
+        // stops the "access data from other apps" prompt for the shipped app.
+        if FullDiskAccessBanner.shouldShow() {
+            FullDiskAccessBanner()
+        }
     }
 
     @ViewBuilder
@@ -2373,5 +2381,72 @@ private enum ClaudeCLIProbe {
             .appendingPathComponent(".claude/projects", isDirectory: true)
         let kids = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
         return !kids.isEmpty
+    }
+}
+
+// MARK: - Full Disk Access opt-in (one-time)
+
+/// One-time affordance that replaces the recurring macOS "access data from
+/// other apps" prompt with a single, durable grant. Deep-links to System
+/// Settings → Privacy & Security → Full Disk Access. Continuum's Release build
+/// runs without the App Sandbox (#230), so FDA durably stops the prompt for the
+/// shipped app (FDA overrides app-data container protection for non-sandboxed
+/// apps). Shown only while a cross-app provider is enabled AND an FDA-gated read
+/// currently fails — it auto-hides once access is granted.
+private struct FullDiskAccessBanner: View {
+    @Environment(\.tahoe) private var t
+
+    /// FDA pane deep-link; NSWorkspace.open follows x-apple.systempreferences.
+    private static let settingsURL = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
+
+    static func shouldShow() -> Bool {
+        let crossApp = ["codex", "gemini", "opencode"].contains { ProviderEnablement.isEnabled($0) }
+            || ProviderEnablement.usageDataAccessGranted
+        return crossApp && !hasFullDiskAccess()
+    }
+
+    /// Probe a path that genuinely requires FDA (NOT ~/.codex — that's the
+    /// user's own home, readable without it). Only an explicit permission
+    /// denial counts as "missing"; a not-found probe file (no Safari history)
+    /// counts as "has access" so we don't nag on machines that lack the file.
+    private static func hasFullDiskAccess() -> Bool {
+        let probe = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Safari/Bookmarks.plist")
+        do { _ = try Data(contentsOf: probe); return true }
+        catch let e as NSError {
+            return !(e.domain == NSCocoaErrorDomain && e.code == NSFileReadNoPermissionError)
+        }
+    }
+
+    var body: some View {
+        SettingsCard(title: "Full Disk Access",
+                     sub: "Stop the repeated “access data from other apps” prompt.") {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 24))
+                    .foregroundStyle(t.accent)
+                    .frame(width: 32)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Grant once, never asked again")
+                        .font(TahoeFont.body(14, weight: .semibold))
+                        .foregroundStyle(t.fg)
+                    Text("Continuum reads your usage from other coding tools (Codex, Gemini/Antigravity, OpenCode). Full Disk Access lets it do that without macOS prompting every few minutes.")
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Button {
+                    NSWorkspace.shared.open(Self.settingsURL)
+                } label: {
+                    Text("Open Settings")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Opens System Settings → Privacy & Security → Full Disk Access. Add Continuum and toggle it on.")
+            }
+        }
     }
 }

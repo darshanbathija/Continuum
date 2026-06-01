@@ -362,6 +362,11 @@ public final class MobileCommandOutbox: ObservableObject {
                 adminOverride: body.adminOverride,
                 idempotencyKey: envelope.idempotencyKey
             ) != nil
+        case .revive:
+            return await client.revive(
+                sessionId: sessionId,
+                idempotencyKey: envelope.idempotencyKey
+            ) != nil
         case .permissionResponse, .terminalInput, .pickWinner, .updateWorkspace:
             // Pre-wired outbox kinds we don't surface enqueue helpers
             // for yet. Treat as success so a stale entry from a future

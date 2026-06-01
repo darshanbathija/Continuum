@@ -2273,6 +2273,22 @@ public final class SessionsModel: ObservableObject {
                     failed: "Couldn't change mode")
     }
 
+    /// Revive a degraded session: respawn its agent into a fresh tmux pane
+    /// (same config + resume) when the recorded pane died (server restart).
+    /// The terminal reconnects automatically once the registry's tmuxPaneId
+    /// updates.
+    @discardableResult
+    public func revive(sessionId: UUID) async -> Bool {
+        guard let runtime = AppDelegate.runtime else { return false }
+        let changer = SessionConfigChanger(
+            registry: registry,
+            tmux: runtime.tmuxClient,
+            repoEnvResolver: repoEnvResolver
+        )
+        if case .swapped = await changer.revive(sessionId: sessionId) { return true }
+        return false
+    }
+
     /// Apply a new `PermissionMode` to a live session. Resolves to the
     /// (planMode, autopilot, acceptEdits) tuple and triggers a respawn.
     /// Caller is responsible for trust-gating `.bypass` BEFORE calling

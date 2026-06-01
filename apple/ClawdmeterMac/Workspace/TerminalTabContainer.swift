@@ -132,7 +132,7 @@ struct TerminalTabContainer: View {
                 paneId: targetPaneId,
                 onFirstOutput: { sawOutput = true }
             )
-            .id(targetPaneId ?? "primary")
+            .id(targetPaneId ?? session.tmuxPaneId ?? "primary")
             if !sawOutput {
                 terminalPendingOverlay
             }

@@ -613,6 +613,36 @@ public final class CodexSource: AISource {
         return entries.prefix(limit).map { $0.url }
     }
 
+    // MARK: - Quiet-machine change probe
+
+    /// Stat-only: did Codex write anything since `date`? Compares the newest
+    /// mtime across `~/.codex/auth.json` and the freshest rollout under
+    /// `~/.codex/sessions`. When unchanged, `UsagePoller` republishes cached
+    /// usage instead of re-reading these files — which is what re-fires the
+    /// macOS "access data from other apps" prompt on a quiet machine.
+    /// `~/.codex` is the user's OWN home dir, so the stat is cheap. (During
+    /// active Codex use the rollouts change, so this returns true and live
+    /// polling continues normally.)
+    public func dataChangedSince(_ date: Date?) -> Bool {
+        guard let date else { return true }            // no baseline yet → poll
+        guard let newest = newestDataMtime() else { return true } // can't stat → poll
+        return newest > date
+    }
+
+    private func newestDataMtime() -> Date? {
+        var newest: Date?
+        func consider(_ url: URL) {
+            if let m = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate, newest == nil || m > newest! {
+                newest = m
+            }
+        }
+        let codexRoot = ClawdmeterRealHome.url().appendingPathComponent(".codex", isDirectory: true)
+        consider(codexRoot.appendingPathComponent("auth.json"))
+        if let freshest = recentSessionFiles(limit: 1).first { consider(freshest) }
+        return newest
+    }
+
     // MARK: - JSONL parse
 
     private struct RateLimitsPayload: Decodable {

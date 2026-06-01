@@ -766,14 +766,77 @@ struct SidebarPane: View {
                 isExpanded: isExpanded,
                 sessionCount: section.sessions.count,
                 subtitle: workspaceSubtitle(for: section.workspacePath),
+                gearMenu: AnyView(workspaceGearMenu(section)),
                 onToggle: { togglePrioritySection(sectionID) }
             )
+            .contextMenu { workspaceMenuItems(section) }
             if isExpanded {
                 ForEach(section.sessions) { session in
                     sessionRow(session, isOpen: model.openSessionId == session.id, depth: 0)
                 }
             }
         }
+    }
+
+    // MARK: - Workspace management (gear / context menu)
+
+    /// The persisted workspace record backing a sidebar repo, matched by
+    /// canonical root (`repo.key` is `RepoIdentity.normalize(repoRoot)`).
+    /// Nil for external / unmanaged repos.
+    private func managedWorkspace(for repo: AgentRepo) -> CodeWorkspaceRecord? {
+        model.workspaceStore.all().first { RepoIdentity.normalize($0.repoRoot) == repo.key }
+    }
+
+    /// Open the app's Settings window (Env Variables + every other setting
+    /// live there). Standard AppKit action so we don't need cross-scene
+    /// navigation plumbing from the sidebar.
+    private func openSettingsWindow() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    }
+
+    @ViewBuilder
+    private func workspaceMenuItems(_ section: SidebarWorkspaceSection) -> some View {
+        Button { model.quickSpawnInRepo(section.repo.key) } label: {
+            Label("New session here", systemImage: "plus")
+        }
+        if !section.sessions.isEmpty {
+            Button {
+                let ids = section.sessions.map(\.id)
+                Task { for id in ids { try? await model.registry.archive(id: id) } }
+            } label: {
+                Label("Archive all sessions (\(section.sessions.count))", systemImage: "archivebox")
+            }
+        }
+        Divider()
+        Button { openSettingsWindow() } label: {
+            Label("Settings & Env Variables…", systemImage: "gearshape")
+        }
+        if let ws = managedWorkspace(for: section.repo) {
+            Divider()
+            Button(role: .destructive) {
+                _ = model.workspaceStore.delete(id: ws.id)
+            } label: {
+                Label("Remove “\(section.repo.displayName)” from list", systemImage: "trash")
+            }
+        }
+    }
+
+    /// Trailing gear button in a managed workspace header. Opens the same
+    /// actions as the row's right-click menu (Archive, Settings/Env, Remove).
+    private func workspaceGearMenu(_ section: SidebarWorkspaceSection) -> some View {
+        Menu {
+            workspaceMenuItems(section)
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(t.fg3)
+                .frame(width: 22, height: 22)
+                .background(t.hair2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Workspace settings — archive, env variables, remove")
     }
 
     private func externalRepoSection(_ section: SidebarExternalRepoSection) -> some View {
@@ -1251,6 +1314,7 @@ struct SidebarPane: View {
         isExpanded: Bool,
         sessionCount: Int,
         subtitle: String? = nil,
+        gearMenu: AnyView? = nil,
         onToggle: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 8) {
@@ -1297,6 +1361,9 @@ struct SidebarPane: View {
                         .foregroundStyle(.green)
                 }
                 .help("\(repo.liveSessionCount) live JSONL — Conductor / Cursor / Terminal-launched agents writing now.")
+            }
+            if let gearMenu {
+                gearMenu
             }
             Button {
                 model.quickSpawnInRepo(repo.key)
@@ -1646,6 +1713,12 @@ struct SidebarPane: View {
         let isPinned = presentationStore.snapshot.pinnedSessionIds.contains(session.id)
         let isUnread = presentationStore.snapshot.unreadSessionIds.contains(session.id)
         let isMuted = presentationStore.snapshot.mutedSessionIds.contains(session.id)
+        if session.status == .degraded {
+            Button("Revive session", systemImage: "arrow.clockwise.circle") {
+                Task { @MainActor in await model.revive(sessionId: session.id) }
+            }
+            Divider()
+        }
         Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin.fill") {
             try? presentationStore.togglePin(session.id)
         }
