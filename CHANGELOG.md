@@ -4,6 +4,17 @@ All notable changes to Clawdmeter are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.29.43 build 182] - 2026-06-02 - Terminal no longer hangs + per-workspace management (`feat/terminal-and-workspace-mgmt`)
+
+### Fixed
+
+- **The in-app Terminal no longer hangs on "Waiting for visible shell output."** When a session's tmux pane was gone (the tmux server restarts on app relaunch and reassigns pane ids, leaving "degraded" sessions with a stale `tmuxPaneId`), `capture-pane` errored, the error was swallowed, and no frame was ever sent — so an idle/dead pane left the terminal spinning forever. The channel now always sends an initial frame so the overlay clears, and when the pane is genuinely gone it shows a clear "session was restarted — revive to reconnect" notice instead of a silent blank. Newly-started sessions get a working live terminal.
+
+### Added
+
+- **Per-workspace management in the sidebar.** Each managed workspace row now has a gear (and right-click menu): New session here, Archive all sessions, Settings & Env Variables…, and Remove from list. "Remove from list" forgets the workspace card without touching the repo on disk.
+- **Auto-prune of orphaned workspaces.** On launch, workspace cards whose repo directory no longer exists on disk (throwaway/QA clones deleted out from under the app) are dropped, so the same project no longer shows up as multiple stale duplicates.
+
 ## [0.29.42 build 181] - 2026-06-02 - Stop the recurring "access data from other apps" prompt (`fix/continuum-cross-app-prompt`)
 
 ### Fixed
