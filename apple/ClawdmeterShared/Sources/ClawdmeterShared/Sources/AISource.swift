@@ -25,6 +25,25 @@ public protocol AISource: AnyObject, Sendable {
     /// (plan E7: 2 attempts per 10-min window).
     /// - Returns: true on success, false on hard refresh failure (user must re-auth).
     func refreshCredentialsIfNeeded() async throws -> Bool
+
+    /// Cheap, stat-only check: has this source's on-disk data changed since
+    /// `date`? Lets `UsagePoller` skip a full `poll()` on a quiet machine so it
+    /// does NOT re-read the provider's cross-app dir every tick (the read that
+    /// surfaces the macOS "access data from other apps" prompt). Default
+    /// returns `true` (always poll); file-backed sources that read another
+    /// tool's directory override it to stat their data dir's newest mtime.
+    /// Must be a protocol requirement (not just an extension method) so it
+    /// dispatches dynamically through `any AISource`.
+    /// - Parameter date: the last successful-poll timestamp, or nil if none yet.
+    /// - Returns: true if the data may have changed (poll), false if unchanged.
+    func dataChangedSince(_ date: Date?) -> Bool
+}
+
+public extension AISource {
+    /// Default: always poll. Sources that don't read a cross-app data dir
+    /// (keychain-backed Claude/Cursor, network-only sources, test stubs) inherit
+    /// this and keep their existing every-tick behavior.
+    func dataChangedSince(_ date: Date?) -> Bool { true }
 }
 
 /// Errors any `AISource` can throw. Stable across platforms.
