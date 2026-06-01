@@ -2083,10 +2083,6 @@ private struct SidebarPane: View {
                 Spacer()
                 if isHovered {
                     SessionHoverActions(
-                        isPinned: isPinned,
-                        isMuted: isMuted,
-                        onPin: { try? presentationStore.togglePin(session.id) },
-                        onMute: { try? presentationStore.setMuted(session.id, muted: !isMuted) },
                         onArchive: {
                             // F2-wire: registry mutation is now async
                             // throws. SwiftUI button closures are sync,
