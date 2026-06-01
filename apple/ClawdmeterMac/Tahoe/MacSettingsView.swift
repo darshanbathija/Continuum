@@ -237,44 +237,8 @@ public struct MacSettingsView: View {
 
     @ViewBuilder
     private var providerSettings: some View {
-        // v0.29.32: opt-in enable toggles. Off by default — enabling a provider
-        // reads its credentials + starts its poller live (no relaunch).
-        SettingsCard(title: "Enabled providers",
-                     sub: "Turn on the providers you use. Off by default — Continuum reads a provider's keychain and usage only once it's enabled.") {
-            VStack(alignment: .leading, spacing: 14) {
-                ProviderEnableToggleRow(id: "claude", label: "Claude", runtime: runtime)
-                TahoeHair()
-                ProviderEnableToggleRow(id: "codex", label: "Codex", runtime: runtime)
-                TahoeHair()
-                ProviderEnableToggleRow(id: "gemini", label: "Antigravity / Gemini", runtime: runtime)
-                TahoeHair()
-                ProviderEnableToggleRow(id: "cursor", label: "Cursor", runtime: runtime)
-                TahoeHair()
-                ProviderEnableToggleRow(id: "opencode", label: "OpenCode", runtime: runtime)
-            }
-        }
-
-        // Providers card. All providers use the same row shape so
-        // their visual rhythm matches: glyph + title + one-line status +
-        // single trailing control (button or toggle).
-        SettingsCard(title: "Providers",
-                     sub: "External agent runtimes Continuum can drive.") {
-            VStack(alignment: .leading, spacing: 14) {
-                ClaudeCLIProviderRow(claudeModel: claudeModel)
-                TahoeHair()
-                OpencodeProviderRow()
-                TahoeHair()
-                CodexSDKProviderRow()
-                TahoeHair()
-                AntigravitySDKProviderRow()
-                TahoeHair()
-                CursorSDKProviderRow()
-            }
-        }
-
-        SettingsCard(title: "Provider defaults",
-                     sub: "Default model and effort for new chat and code sessions.") {
-            ProviderDefaultsSettingsRows(client: runtime?.loopbackClient)
+        SettingsCard(title: "Providers") {
+            ProviderSetupSettingsRows(client: runtime?.loopbackClient, runtime: runtime)
         }
     }
 
@@ -892,7 +856,11 @@ struct ProviderEnableToggleRow: View {
                 get: { on },
                 set: { newValue in
                     on = newValue
-                    runtime?.setProviderEnabled(id, newValue)
+                    if let runtime {
+                        runtime.setProviderEnabled(id, newValue)
+                    } else {
+                        ProviderEnablement.setEnabled(id, newValue)
+                    }
                 }
             ))
         }
@@ -1152,29 +1120,29 @@ private struct AccentPicker: View {
     }
 }
 
-// MARK: - Providers (PR #31 chunk 2)
+// MARK: - Providers
 
-private struct ProviderDefaultsSettingsRows: View {
+private struct ProviderSetupSettingsRows: View {
     @Environment(\.tahoe) private var t
     let client: AgentControlClient?
+    let runtime: AppRuntime?
     @StateObject private var localStore = ProviderDefaultsStore()
     @State private var snapshot: ProviderDefaultsSnapshot = .empty
     @State private var catalog: ModelCatalog = .bundled
-    @State private var refreshingVendor: ChatVendor?
+
+    private let providerOrder: [ChatVendor] = [.claude, .chatgpt, .antigravity, .cursor, .openrouter]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(ChatV2Store.defaultChatVendorOrder, id: \.self) { vendor in
-                ProviderDefaultControlRow(
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(providerOrder, id: \.self) { vendor in
+                ProviderSetupControlRow(
                     vendor: vendor,
                     snapshot: snapshot,
                     catalog: catalog,
-                    isRefreshing: refreshingVendor == vendor,
                     onSelectModel: { entry in update(vendor: vendor, model: entry.id) },
-                    onSelectEffort: { effort in update(vendor: vendor, effort: effort) },
-                    onRefresh: { refreshCatalog(for: vendor, force: true) }
+                    onToggle: { enabled in setProviderEnabled(vendor: vendor, enabled: enabled) }
                 )
-                if vendor != ChatV2Store.defaultChatVendorOrder.last {
+                if vendor != providerOrder.last {
                     TahoeHair()
                 }
             }
@@ -1185,7 +1153,6 @@ private struct ProviderDefaultsSettingsRows: View {
     private func refreshAll() async {
         if let client {
             await client.refreshHealth()
-            await client.refreshModelCatalog()
             await client.refreshProviderDefaults()
             catalog = client.modelCatalog
             snapshot = client.providerDefaults
@@ -1193,33 +1160,6 @@ private struct ProviderDefaultsSettingsRows: View {
             localStore.refresh()
             catalog = .bundled
             snapshot = localStore.snapshot
-        }
-    }
-
-    private func refreshCatalog(for vendor: ChatVendor, force: Bool) {
-        Task {
-            refreshingVendor = vendor
-            if force {
-                switch vendor {
-                case .cursor:
-                    await CursorModelProbe.shared.invalidate()
-                case .openrouter:
-                    await OpenRouterModelProbe.shared.invalidate()
-                default:
-                    break
-                }
-            }
-            if let client {
-                await client.refreshModelCatalog()
-                await client.refreshProviderDefaults()
-                catalog = client.modelCatalog
-                snapshot = client.providerDefaults
-            } else {
-                localStore.refresh()
-                catalog = .bundled
-                snapshot = localStore.snapshot
-            }
-            refreshingVendor = nil
         }
     }
 
@@ -1253,17 +1193,60 @@ private struct ProviderDefaultsSettingsRows: View {
             }
         }
     }
+
+    private func setProviderEnabled(vendor: ChatVendor, enabled: Bool) {
+        let id = vendor.backingProvider.rawValue
+        if let runtime {
+            runtime.setProviderEnabled(id, enabled)
+        } else {
+            ProviderEnablement.setEnabled(id, enabled)
+        }
+        Task { await refreshCatalogAfterProviderToggle(vendor: vendor) }
+    }
+
+    private func refreshCatalogAfterProviderToggle(vendor: ChatVendor) async {
+        if vendor == .cursor {
+            await CursorModelProbe.shared.invalidate()
+        } else if vendor == .openrouter {
+            await OpenRouterModelProbe.shared.invalidate()
+        }
+
+        if let client {
+            await client.refreshModelCatalog()
+            await client.refreshProviderDefaults()
+            catalog = client.modelCatalog
+            snapshot = client.providerDefaults
+        } else {
+            localStore.refresh()
+            catalog = .bundled
+            snapshot = localStore.snapshot
+        }
+    }
 }
 
-private struct ProviderDefaultControlRow: View {
+private struct ProviderSetupControlRow: View {
     @Environment(\.tahoe) private var t
     let vendor: ChatVendor
     let snapshot: ProviderDefaultsSnapshot
     let catalog: ModelCatalog
-    let isRefreshing: Bool
     let onSelectModel: (ModelCatalogEntry) -> Void
-    let onSelectEffort: (ReasoningEffort?) -> Void
-    let onRefresh: () -> Void
+    let onToggle: (Bool) -> Void
+    @State private var isOn: Bool
+
+    init(
+        vendor: ChatVendor,
+        snapshot: ProviderDefaultsSnapshot,
+        catalog: ModelCatalog,
+        onSelectModel: @escaping (ModelCatalogEntry) -> Void,
+        onToggle: @escaping (Bool) -> Void
+    ) {
+        self.vendor = vendor
+        self.snapshot = snapshot
+        self.catalog = catalog
+        self.onSelectModel = onSelectModel
+        self.onToggle = onToggle
+        _isOn = State(initialValue: ProviderEnablement.isEnabled(vendor.backingProvider.rawValue))
+    }
 
     private var selectedModelId: String? {
         snapshot.modelId(for: vendor, catalog: catalog)
@@ -1274,44 +1257,42 @@ private struct ProviderDefaultControlRow: View {
         return vendor.models(in: catalog).first { $0.id == selectedModelId || $0.cliAlias == selectedModelId }
     }
 
-    private var supportsEffort: Bool {
-        ProviderModelPickerSupport.supportsEffort(
-            vendor: vendor,
-            modelId: selectedModelId,
-            catalog: catalog
-        )
+    private var providerId: String {
+        vendor.backingProvider.rawValue
+    }
+
+    private var providerName: String {
+        switch vendor {
+        case .chatgpt: return "Codex"
+        case .claude: return "Claude"
+        case .antigravity: return "Antigravity"
+        case .cursor: return "Cursor"
+        case .openrouter: return "OpenCode"
+        }
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 28)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(vendor.displayName)
-                    .font(TahoeFont.body(13.5, weight: .semibold))
-                    .foregroundStyle(t.fg)
-                Text(selectedEntry.map(ProviderModelPickerSupport.metadataLine(for:)) ?? "Catalog default")
-                    .font(TahoeFont.body(11.5))
-                    .foregroundStyle(t.fg3)
-                    .lineLimit(2)
-            }
+            Text(providerName)
+                .font(TahoeFont.body(14, weight: .semibold))
+                .foregroundStyle(t.fg)
+                .frame(width: 132, alignment: .leading)
             Spacer(minLength: 12)
-            VStack(alignment: .trailing, spacing: 8) {
-                HStack(spacing: 8) {
-                    if vendor == .cursor || vendor == .openrouter {
-                        Button(action: onRefresh) {
-                            if isRefreshing {
-                                ProgressView().controlSize(.small)
-                            } else {
-                                TahoeIcon("refresh", size: 11)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .help(vendor == .cursor ? "Refresh Cursor account models" : "Refresh OpenRouter model catalog")
-                    }
-                    modelMenu
+            modelMenu
+            TahoeToggleView(on: Binding(
+                get: { isOn },
+                set: { next in
+                    isOn = next
+                    onToggle(next)
                 }
-                effortControl
-            }
+            ))
+            .accessibilityIdentifier("settings.provider.\(providerId).enabled")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings.provider.\(providerId)")
+        .onAppear {
+            isOn = ProviderEnablement.isEnabled(providerId)
         }
     }
 
@@ -1345,53 +1326,12 @@ private struct ProviderDefaultControlRow: View {
             .foregroundStyle(t.fg)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .frame(maxWidth: 260, alignment: .trailing)
+            .frame(width: 260, alignment: .trailing)
             .background(Color.white.opacity(0.055), in: Capsule())
             .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
         }
         .menuStyle(.borderlessButton)
-    }
-
-    @ViewBuilder
-    private var effortControl: some View {
-        if supportsEffort {
-            HStack(spacing: 4) {
-                ForEach(ReasoningEffort.allCases, id: \.self) { effort in
-                    let selected = snapshot.effort(for: vendor) == effort
-                    Button {
-                        onSelectEffort(effort)
-                    } label: {
-                        Text(effortLabel(effort))
-                            .font(TahoeFont.body(10.5, weight: .semibold))
-                            .foregroundStyle(selected ? t.accent : t.fg3)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 4)
-                            .background(selected ? t.accent.opacity(0.14) : Color.white.opacity(0.035), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        } else {
-            Text("Auto")
-                .font(TahoeFont.body(10.5, weight: .semibold))
-                .foregroundStyle(t.fg4)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color.white.opacity(0.035), in: Capsule())
-                .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
-                .help(vendor == .cursor ? "Cursor exposes effort as Auto until account models report effort support." : "This model does not expose effort controls.")
-        }
-    }
-
-    private func effortLabel(_ effort: ReasoningEffort) -> String {
-        switch effort {
-        case .minimal: return "Min"
-        case .low: return "Low"
-        case .medium: return "Med"
-        case .high: return "High"
-        case .xhigh: return "xHigh"
-        case .max: return "Max"
-        }
+        .accessibilityIdentifier("settings.provider.\(providerId).model")
     }
 }
 

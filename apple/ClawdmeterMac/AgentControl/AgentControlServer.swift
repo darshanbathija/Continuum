@@ -1447,8 +1447,12 @@ public final class AgentControlServer {
     private func handleGetModels(connection: NWConnection) async {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let cursorModels = await CursorModelProbe.shared.currentModels()
-        let openRouterModels = await OpenRouterModelProbe.shared.currentModels()
+        let cursorModels = ProviderEnablement.isEnabled("cursor")
+            ? await CursorModelProbe.shared.currentModels()
+            : ModelCatalog.bundled.cursor
+        let openRouterModels = ProviderEnablement.isEnabled("opencode")
+            ? await OpenRouterModelProbe.shared.currentModels()
+            : ModelCatalog.bundled.opencode
         let catalog = ModelCatalog.bundled
             .replacingCursor(cursorModels)
             .replacingOpenRouter(openRouterModels)
