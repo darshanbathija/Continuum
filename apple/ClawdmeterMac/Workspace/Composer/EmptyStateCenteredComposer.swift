@@ -91,7 +91,10 @@ struct EmptyStateCenteredComposer: View {
         .onAppear {
             // Seed repo to the most recently active one if available.
             if workspaceDraft == nil, store.repoKey == nil, let firstRepo = model.repos.first {
-                store.resetChipsForRepo(firstRepo.key, defaults: launcher.chipDefaults(for: .claude))
+                store.resetChipsForRepo(
+                    firstRepo.key,
+                    defaults: launcher.chipDefaults(for: launcher.selectableAgents.first ?? .claude)
+                )
             }
             launcher.normalize(store)
         }
@@ -143,7 +146,10 @@ struct EmptyStateCenteredComposer: View {
                     get: { store.repoKey ?? "" },
                     set: { newKey in
                         let key = newKey.isEmpty ? nil : newKey
-                        store.resetChipsForRepo(key, defaults: launcher.chipDefaults(for: .claude))
+                        store.resetChipsForRepo(
+                            key,
+                            defaults: launcher.chipDefaults(for: launcher.selectableAgents.first ?? .claude)
+                        )
                     }
                 )) {
                     Text("(custom path)").tag("")
@@ -231,6 +237,10 @@ struct EmptyStateCenteredComposer: View {
         }
         guard let repoKey = store.repoKey, !repoKey.isEmpty else {
             store.endSend(error: .spawnFailed(message: "Pick a repo first."))
+            return
+        }
+        guard launcher.selectableAgents.contains(store.agent) else {
+            store.endSend(error: .spawnFailed(message: "Enable a provider in Settings → Providers."))
             return
         }
         let prompt = store.text.trimmingCharacters(in: .whitespacesAndNewlines)

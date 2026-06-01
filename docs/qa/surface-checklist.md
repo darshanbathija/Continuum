@@ -71,7 +71,7 @@ Files: `Tahoe/MacUsageView.swift`, `Tahoe/AnalyticsRangeAdapter.swift`, `Analyti
 - ✅ Totals match `ccusage daily` (ground truth) for the same window.
 
 ## 5. Settings
-Files: `Tahoe/MacSettingsView.swift`, `PairingSettingsView.swift`, `DiagnosticsSettingsView.swift`, `ProvidersSettingsView.swift`
+Files: `Tahoe/MacSettingsView.swift`, `PairingSettingsView.swift`, `DiagnosticsSettingsView.swift`
 
 - ✅ Pairing pane shows the QR + URL; Plugins section lists detected MCP servers/plugins.
   - 🐞 (S5) Opening/scrolling the Pairing pane does NOT re-scan disk on every render

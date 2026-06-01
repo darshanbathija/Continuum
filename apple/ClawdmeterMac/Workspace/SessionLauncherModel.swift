@@ -3,10 +3,22 @@ import Combine
 import ClawdmeterShared
 
 struct SessionLauncherAvailability: Equatable {
+    var claudeEnabled: Bool
+    var codexEnabled: Bool
+    var geminiEnabled: Bool
     var opencodeReady: Bool
     var cursorReady: Bool
 
-    init(opencodeReady: Bool = false, cursorReady: Bool = false) {
+    init(
+        claudeEnabled: Bool = false,
+        codexEnabled: Bool = false,
+        geminiEnabled: Bool = false,
+        opencodeReady: Bool = false,
+        cursorReady: Bool = false
+    ) {
+        self.claudeEnabled = claudeEnabled
+        self.codexEnabled = codexEnabled
+        self.geminiEnabled = geminiEnabled
         self.opencodeReady = opencodeReady
         self.cursorReady = cursorReady
     }
@@ -33,7 +45,16 @@ final class SessionLauncherModel: ObservableObject {
     }
 
     static func selectableAgents(for availability: SessionLauncherAvailability) -> [AgentKind] {
-        var agents: [AgentKind] = [.claude, .codex, .gemini]
+        var agents: [AgentKind] = []
+        if availability.claudeEnabled {
+            agents.append(.claude)
+        }
+        if availability.codexEnabled {
+            agents.append(.codex)
+        }
+        if availability.geminiEnabled {
+            agents.append(.gemini)
+        }
         if availability.opencodeReady {
             agents.append(.opencode)
         }
@@ -44,23 +65,41 @@ final class SessionLauncherModel: ObservableObject {
     }
 
     func refreshProviderAvailability() async {
-        await OpencodeProcessManager.shared.refreshAuthStatus()
-        let opencodeReady = OpencodeProcessManager.shared.binaryPath != nil
-            && !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
+        let claudeEnabled = ProviderEnablement.isEnabled("claude")
+        let codexEnabled = ProviderEnablement.isEnabled("codex")
+        let geminiEnabled = ProviderEnablement.isEnabled("gemini")
+        let opencodeEnabled = ProviderEnablement.isEnabled("opencode")
+        let cursorEnabled = ProviderEnablement.isEnabled("cursor")
 
-        let openRouterModels = await OpenRouterModelProbe.shared.currentModels()
-        let cursorState = await CursorModelProbe.shared.currentState()
-        modelCatalog = ModelCatalog.bundled
-            .replacingCursor(cursorState.models)
-            .replacingOpenRouter(openRouterModels)
+        var opencodeReady = false
+        var cursorReady = false
+        var nextCatalog = ModelCatalog.bundled
+
+        if opencodeEnabled {
+            await OpencodeProcessManager.shared.refreshAuthStatus()
+            opencodeReady = OpencodeProcessManager.shared.binaryPath != nil
+                && !(OpencodeProcessManager.shared.authStatus ?? [:]).isEmpty
+            nextCatalog = nextCatalog.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+        }
+
+        if cursorEnabled {
+            let cursorState = await CursorModelProbe.shared.currentState()
+            nextCatalog = nextCatalog.replacingCursor(cursorState.models)
+            cursorReady = cursorState.binaryPath != nil && cursorState.authenticated
+        }
+
+        modelCatalog = nextCatalog
         availability = SessionLauncherAvailability(
+            claudeEnabled: claudeEnabled,
+            codexEnabled: codexEnabled,
+            geminiEnabled: geminiEnabled,
             opencodeReady: opencodeReady,
-            cursorReady: cursorState.binaryPath != nil && cursorState.authenticated
+            cursorReady: cursorReady
         )
     }
 
-    func availableAgentOrDefault(_ agent: AgentKind) -> AgentKind {
-        selectableAgents.contains(agent) ? agent : .claude
+    func availableAgentOrDefault(_ agent: AgentKind) -> AgentKind? {
+        selectableAgents.contains(agent) ? agent : selectableAgents.first
     }
 
     func defaultModelId(for agent: AgentKind) -> String? {
@@ -105,7 +144,11 @@ final class SessionLauncherModel: ObservableObject {
     }
 
     func normalize(_ store: ComposerStore) {
-        let normalizedAgent = availableAgentOrDefault(store.agent)
+        guard let normalizedAgent = availableAgentOrDefault(store.agent) else {
+            store.modelId = nil
+            store.effort = nil
+            return
+        }
         if normalizedAgent != store.agent {
             store.resetChipsForAgent(normalizedAgent, catalog: modelCatalog)
         } else {

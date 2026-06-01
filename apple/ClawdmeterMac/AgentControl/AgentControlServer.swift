@@ -1444,14 +1444,21 @@ public final class AgentControlServer {
         ], on: connection)
     }
 
+    private func providerEnabledModelCatalog() async -> ModelCatalog {
+        var catalog = ModelCatalog.bundled
+        if ProviderEnablement.isEnabled("cursor") {
+            catalog = catalog.replacingCursor(await CursorModelProbe.shared.currentModels())
+        }
+        if ProviderEnablement.isEnabled("opencode") {
+            catalog = catalog.replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+        }
+        return catalog
+    }
+
     private func handleGetModels(connection: NWConnection) async {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let cursorModels = await CursorModelProbe.shared.currentModels()
-        let openRouterModels = await OpenRouterModelProbe.shared.currentModels()
-        let catalog = ModelCatalog.bundled
-            .replacingCursor(cursorModels)
-            .replacingOpenRouter(openRouterModels)
+        let catalog = await providerEnabledModelCatalog()
         if let body = try? encoder.encode(catalog) {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
@@ -1480,11 +1487,7 @@ public final class AgentControlServer {
             return
         }
 
-        let cursorModels = await CursorModelProbe.shared.currentModels()
-        let openRouterModels = await OpenRouterModelProbe.shared.currentModels()
-        let catalog = ModelCatalog.bundled
-            .replacingCursor(cursorModels)
-            .replacingOpenRouter(openRouterModels)
+        let catalog = await providerEnabledModelCatalog()
         if let model = req.model,
            !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !vendor.models(in: catalog).contains(where: { $0.id == model || $0.cliAlias == model }) {
@@ -1515,9 +1518,7 @@ public final class AgentControlServer {
         }
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        let liveCatalog = ModelCatalog.bundled
-            .replacingCursor(await CursorModelProbe.shared.currentModels())
-            .replacingOpenRouter(await OpenRouterModelProbe.shared.currentModels())
+        let liveCatalog = await providerEnabledModelCatalog()
         guard !req.model.isEmpty, liveCatalog.entry(forId: req.model) != nil else {
             sendResponse(.badRequest, on: connection); return
         }
@@ -4791,6 +4792,11 @@ public final class AgentControlServer {
             return
         }
 
+        if let reason = providerDisabledReason(provider: req.agent) {
+            sendProviderDisabled(provider: req.agent, reason: reason, on: connection)
+            return
+        }
+
         if req.agent == .cursor {
             guard !req.planMode else {
                 sendResponse(HTTPResponse(
@@ -5272,6 +5278,10 @@ public final class AgentControlServer {
             sendResponse(.badRequest, on: connection)
             return
         }
+        if let reason = providerDisabledReason(provider: req.provider, vendor: metadata.vendor) {
+            sendProviderDisabled(provider: req.provider, reason: reason, on: connection)
+            return
+        }
         // v0.9: Gemini chat dispatches to Antigravity 2's agentapi via
         // a new daemon-side handler. Chat has no repoKey, so the helper
         // picks the first available Antigravity project as a scratch
@@ -5600,6 +5610,42 @@ public final class AgentControlServer {
             return row.reason ?? "\(provider.rawValue) is unavailable"
         }
         return nil
+    }
+
+    private func providerDisabledReason(provider: AgentKind, vendor: ChatVendor? = nil) -> String? {
+        guard ProviderEnablement.isEnabled(provider) else {
+            return "Enable \(vendor?.displayName ?? providerDisplayName(provider)) in Settings → Providers."
+        }
+        return nil
+    }
+
+    private func providerDisplayName(_ provider: AgentKind) -> String {
+        switch provider {
+        case .claude: return "Claude"
+        case .codex: return "ChatGPT"
+        case .gemini: return "Antigravity"
+        case .cursor: return "Cursor"
+        case .opencode: return "OpenRouter"
+        case .unknown: return "this provider"
+        }
+    }
+
+    private func sendProviderDisabled(provider: AgentKind, reason: String, on connection: NWConnection) {
+        let body = [
+            "error": "provider_disabled",
+            "provider": provider.rawValue,
+            "reason": reason,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            sendResponse(.internalError, on: connection)
+            return
+        }
+        sendResponse(HTTPResponse(
+            status: 403,
+            reason: "Forbidden",
+            contentType: "application/json",
+            body: data
+        ), on: connection)
     }
 
     private func sendChatProviderUnavailable(provider: AgentKind, reason: String, on connection: NWConnection) {
@@ -6077,6 +6123,10 @@ public final class AgentControlServer {
             )
         } catch let error as ChatRuntimeValidationError {
             throw SpawnFailure.message(chatRuntimeValidationMessage(error))
+        }
+
+        if let reason = providerDisabledReason(provider: slot.provider, vendor: metadata.vendor) {
+            throw SpawnFailure.message(reason)
         }
 
         if let reason = await frontierProviderUnavailableReason(

@@ -655,6 +655,14 @@ final class AppRuntime: ObservableObject {
             if enabled { model.start() } else { model.stop() }
         }
         UserDefaults.standard.set(enabled, forKey: "clawdmeter.\(id).menuBarShown")
+        Task {
+            await ChatProviderProbe.shared.invalidate()
+            if id == "cursor" {
+                await CursorModelProbe.shared.invalidate()
+            } else if id == "opencode" {
+                await OpenRouterModelProbe.shared.invalidate()
+            }
+        }
         runtimeLogger.info("Provider \(id, privacy: .public) \(enabled ? "enabled" : "disabled", privacy: .public)")
     }
 

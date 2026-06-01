@@ -78,7 +78,7 @@ public actor ChatProviderAuthObserver {
         await ChatProviderProbe.shared.setAuthOverride(
             providerKey: "codex:sdk",
             authenticated: false,
-            reason: message ?? "Codex SDK auth expired — toggle SDK mode off + on in Settings → Codex SDK."
+                reason: message ?? "Codex SDK auth expired — toggle SDK mode off + on in Settings → Advanced → Runtime setup."
         )
         _ = sessionId
     }

@@ -15,6 +15,9 @@ import Foundation
 /// across the Mac target and the shared analytics store.
 public enum ProviderEnablement {
 
+    public static let changedNotification = Notification.Name("clawdmeter.providerEnablement.changed")
+    public static let changedProviderIdUserInfoKey = "providerId"
+
     /// UserDefaults key gating a provider's poller + credential reads.
     public static func key(for id: String) -> String { "clawdmeter.provider.\(id).enabled" }
 
@@ -33,6 +36,25 @@ public enum ProviderEnablement {
 
     public static func setEnabled(_ id: String, _ on: Bool) {
         UserDefaults.standard.set(on, forKey: key(for: id))
+        NotificationCenter.default.post(
+            name: changedNotification,
+            object: nil,
+            userInfo: [changedProviderIdUserInfoKey: id]
+        )
+    }
+
+    public static func isEnabled(_ provider: AgentKind) -> Bool {
+        isEnabled(provider.rawValue)
+    }
+
+    public static func isEnabled(_ vendor: ChatVendor) -> Bool {
+        isEnabled(vendor.backingProvider)
+    }
+
+    public static func enabledChatVendors(
+        in order: [ChatVendor] = [.chatgpt, .claude, .antigravity, .cursor, .openrouter]
+    ) -> [ChatVendor] {
+        order.filter { isEnabled($0) }
     }
 
     /// Analytics (Usage tab) reads other apps' data (~/.codex, ~/.gemini,
