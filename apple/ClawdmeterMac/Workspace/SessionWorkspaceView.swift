@@ -2117,7 +2117,10 @@ private struct SidebarPane: View {
                         .help("Muted")
                         .accessibilityLabel("Muted")
                 }
-                ForEach(reasons.prefix(2), id: \.self) { reason in
+                // Plan-status doc badges removed from the row per design — the
+                // orange "plan ready" doc was the `.planReady` attention badge;
+                // other attention reasons (PR, checks failed, input needed) stay.
+                ForEach(reasons.filter { $0 != .planReady }.prefix(2), id: \.self) { reason in
                     AttentionBadge(reason: reason)
                 }
                 if session.archivedAt != nil {
@@ -2127,13 +2130,8 @@ private struct SidebarPane: View {
                         .help("Archived")
                         .accessibilityLabel("Archived")
                 }
-                if session.planText != nil {
-                    Image(systemName: "doc.text.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(terraCotta)
-                        .help("Plan approval pending")
-                        .accessibilityLabel("Plan approval pending")
-                }
+                // (Red "plan approval pending" doc removed from the row per
+                // design; the plan + its Approve action live in the session.)
                 if model.chatStore(for: session)?.pendingPermissionPrompt != nil {
                     Image(systemName: "hand.raised.fill")
                         .font(.system(size: 10))
