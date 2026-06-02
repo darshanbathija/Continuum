@@ -1,0 +1,17 @@
+{
+  "_comment": "Captured 2026-06-02 from `cursor-agent acp` by sending an ACP initialize (run with an isolated HOME). Use as a decode fixture for the ACP initialize result.",
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "loadSession": true,
+      "mcpCapabilities": { "http": true, "sse": true },
+      "promptCapabilities": { "audio": false, "embeddedContext": false, "image": true },
+      "sessionCapabilities": { "list": {} }
+    },
+    "authMethods": [
+      { "id": "cursor_login", "name": "Cursor Login", "description": "Authenticate using existing Cursor login credentials. Run 'agent login' first if not logged in." }
+    ]
+  }
+}
