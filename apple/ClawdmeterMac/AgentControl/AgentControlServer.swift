@@ -4148,19 +4148,18 @@ public final class AgentControlServer {
         }
     }
 
-    /// Opt-in (default off): route new Codex sessions through the native
-    /// `codex app-server` harness driver instead of the tmux/SDK paths.
-    /// The Settings → Providers "ChatGPT" (Codex) toggle IS the opt-in:
-    /// enabling the provider routes new Codex sessions through app-server.
-    /// `CLAWDMETER_PROVIDER_CODEX_ENABLED` still wins for CI/power users.
+    /// The `codex app-server` harness is the DEFAULT Codex drive path now
+    /// (Sessions + Chat). The legacy tmux/SDK Codex paths are deprecated. This
+    /// stays a kill-switch only: during live-verify, opt OUT of the harness with
+    /// `defaults write com.clawdmeter.mac clawdmeter.codex.appServer.enabled -bool false`.
     static var codexAppServerEnabled: Bool {
-        ProviderEnablement.isEnabled(AgentKind.codex)
+        UserDefaults.standard.object(forKey: "clawdmeter.codex.appServer.enabled") as? Bool ?? true
     }
-    /// Opt-in (default off): drive new Gemini sessions over the Antigravity
-    /// Cascade gRPC harness instead of agentapi one-shot. The Settings →
-    /// Providers "Antigravity" (Gemini) toggle IS the opt-in.
+    /// The Antigravity Cascade gRPC harness is the DEFAULT Gemini drive path now.
+    /// The legacy agentapi one-shot path is deprecated. Kill-switch only:
+    /// `defaults write com.clawdmeter.mac clawdmeter.antigravity.grpc.enabled -bool false`.
     static var antigravityGrpcEnabled: Bool {
-        ProviderEnablement.isEnabled(AgentKind.gemini)
+        UserDefaults.standard.object(forKey: "clawdmeter.antigravity.grpc.enabled") as? Bool ?? true
     }
 
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
@@ -5238,10 +5237,9 @@ public final class AgentControlServer {
                 })
             return
         }
-        // (2) Codex over `codex app-server` — opt-in via the Settings →
-        // Providers "ChatGPT" (Codex) toggle (default off). When the Codex
-        // provider is enabled, new Codex sessions route through app-server
-        // instead of the legacy tmux/SDK paths.
+        // (2) Codex over `codex app-server` — the DEFAULT Codex drive path.
+        // The legacy tmux/SDK codex paths are deprecated; `codexAppServerEnabled`
+        // is now a live-verify kill-switch (default on).
         if req.agent == .codex, Self.codexAppServerEnabled {
             let display = providerDisplayName(req.agent)
             await handleSpawnHarnessSession(
@@ -5255,10 +5253,9 @@ public final class AgentControlServer {
                 })
             return
         }
-        // (3) Antigravity Cascade over gRPC — opt-in via the Settings →
-        // Providers "Antigravity" (Gemini) toggle (default off). When the
-        // Antigravity provider is enabled, new Gemini sessions drive over the
-        // Cascade gRPC harness instead of the legacy agentapi one-shot path.
+        // (3) Antigravity Cascade over gRPC — the DEFAULT Gemini drive path.
+        // The legacy agentapi one-shot path is deprecated; `antigravityGrpcEnabled`
+        // is now a live-verify kill-switch (default on).
         if req.agent == .gemini, Self.antigravityGrpcEnabled {
             let display = providerDisplayName(req.agent)
             let projectsDir = ClawdmeterRealHome.url()
