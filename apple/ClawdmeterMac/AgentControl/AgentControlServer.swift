@@ -5788,6 +5788,14 @@ public final class AgentControlServer {
         // to route to CodexSubscriptionRelay; Phase 4.5 wires that. For
         // CLI chat (claude / codex+.cli) we spawn a tmux window now.
         let updatedSession = registry.session(id: session.id) ?? session
+        // Claude chat: pre-trust the throwaway chat-cwd so the CLI boots
+        // straight to the composer instead of blocking at the first-run trust
+        // dialog. Without this the warmup poll still dismisses the prompt, but
+        // the ~9s it takes exceeds the mobile send timeout. (No-op for other
+        // agents — they don't read ~/.claude.json.)
+        if updatedSession.agent == .claude {
+            ChatCwdManager.markTrustedForClaude(path: chatCwd)
+        }
         let argv = AgentSpawner.argv(for: updatedSession)
         if argv.isEmpty && updatedSession.agent == .codex && updatedSession.codexChatBackend == .sdk {
             // SDK chat: pre-create the SDK-only SessionChatStore via the
@@ -7514,26 +7522,36 @@ public final class AgentControlServer {
             // is a throwaway /tmp sandbox, so auto-accept it — otherwise the TUI
             // sits at the prompt, the first /send pastes into the dialog instead
             // of the composer, no reply ever streams, and the client times out.
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            var claudeCap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-            if claudeCap.contains("Do you trust")
-                || claudeCap.localizedCaseInsensitiveContains("trust the files")
-                || claudeCap.localizedCaseInsensitiveContains("trust the contents") {
-                serverLogger.info("chat warmup: auto-accepting Claude trust prompt for \(session.id.uuidString, privacy: .public)")
-                // Wake the dialog's input handler (Down/Up keeps the default
-                // "Yes, proceed" highlighted), then accept — same choreography as
-                // the Codex trust dialog.
-                try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
-                claudeCap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
-                // Belt: if a confirm dialog is still up, a bare Enter accepts it.
-                if claudeCap.contains("Do you trust") {
-                    try? await tmux.command(["send-keys", "-t", paneId, "Enter"])
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
-                }
+            // Claude Code's first-run dialog (verified live 2026-06-03):
+            //   "Quick safety check: Is this a project you created or one you
+            //    trust? ... ❯ 1. Yes, I trust this folder / 2. No, exit"
+            // It renders ~5-7s after launch (a single 1.5s capture missed it),
+            // so POLL for it, accept it (Down/Up wakes the handler + keeps the
+            // default "Yes" highlighted, Enter confirms — verified to reach the
+            // composer), then settle before the first paste. Without this the TUI
+            // sits at the prompt, /send pastes into the dialog, and the client
+            // times out.
+            func isClaudeTrustPrompt(_ s: String) -> Bool {
+                s.contains("Quick safety check")
+                    || s.localizedCaseInsensitiveContains("trust this folder")
+                    || s.localizedCaseInsensitiveContains("Is this a project you created")
+                    || s.contains("Do you trust")
             }
-            // Let the TUI finish wiring its input handler before the first paste.
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            var claudeAccepted = false
+            for _ in 0..<9 {   // ~9 × 1.2s ≈ 11s render window
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                let cap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
+                if isClaudeTrustPrompt(cap) {
+                    serverLogger.info("chat warmup: auto-accepting Claude trust prompt for \(session.id.uuidString, privacy: .public)")
+                    try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
+                    claudeAccepted = true
+                    break
+                }
+                // Already at the composer (logged in, no trust needed) → done.
+                if cap.contains("? for shortcuts") || cap.contains("Welcome back") { break }
+            }
+            // Settle so the composer's input handler is wired before the paste.
+            try? await Task.sleep(nanoseconds: claudeAccepted ? 3_000_000_000 : 1_500_000_000)
         case .gemini:
             break
         case .opencode:
