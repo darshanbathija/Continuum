@@ -5859,37 +5859,87 @@ public final class AgentControlServer {
     /// through past the codex-SDK / antigravity-agentapi branches to
     /// `.harnessBridge` once the bridge is live. Mirrors `handleSpawnHarnessSession`
     /// Steps 2-4 but over a chat session + sandbox cwd (no worktree).
-    private func handleCreateHarnessChatSession(
-        req: CreateChatSessionRequest,
-        metadata: ResolvedChatRuntimeMetadata,
-        connection: NWConnection
-    ) async {
+    /// Errors from the harness chat-session core. The Solo handler maps these to
+    /// HTTP responses; the Frontier per-child path maps them to a slot reason.
+    private enum HarnessChatSpawnError: Error {
+        case createFailed(String)
+        case cwdFailed(String)
+        case storeAcquireFailed
+        case noAntigravityProjects
+        case unsupportedProvider
+        case startFailed(String)
+
+        var slotReason: String {
+            switch self {
+            case .createFailed(let d): return "create_failed: \(d)"
+            case .cwdFailed(let d): return "chat_cwd_create_failed: \(d)"
+            case .storeAcquireFailed: return "chat_store_acquire_failed"
+            case .noAntigravityProjects: return "antigravity_no_projects"
+            case .unsupportedProvider: return "unsupported_provider"
+            case .startFailed(let d): return "acp_start_failed: \(d)"
+            }
+        }
+    }
+
+    /// Whether a provider's CHAT/FRONTIER child drives through the harness (vs a
+    /// legacy backend). Mirrors the Solo-chat routing in handlePostChatSession:
+    /// grok/cursor always (ACP); codex/gemini behind their kill-switch (default
+    /// on); claude → tmux, opencode → SSE (never harness).
+    private func isChatHarnessEligible(_ provider: AgentKind) -> Bool {
+        switch provider {
+        case .grok, .cursor: return true
+        case .codex: return Self.codexAppServerEnabled
+        case .gemini: return Self.antigravityGrpcEnabled
+        default: return false
+        }
+    }
+
+    /// Core harness chat-session creation — NO HTTP response. Builds + starts +
+    /// registers an AcpHarnessBridge for a non-Claude provider over a chat
+    /// session + sandbox cwd, returning the created AgentSession (throws
+    /// HarnessChatSpawnError on any failure, cleaning up partial state).
+    ///
+    /// Shared by the Solo Chat create handler AND the Frontier per-child spawn.
+    /// The session is created WITHOUT the SDK/agentapi backend axes
+    /// (codexChatBackend nil, no agentapi conversation) so SessionCommandRouter
+    /// resolves `.harnessBridge` once the bridge is live. frontierGroupId /
+    /// frontierChildIndex bind a broadcast child to its group (nil for Solo).
+    private func createHarnessChatSessionCore(
+        provider: AgentKind,
+        model: String?,
+        effort: ReasoningEffort?,
+        deepResearch: Bool?,
+        chatVendor: ChatVendor?,
+        billingProvider: String?,
+        frontierGroupId: UUID? = nil,
+        frontierChildIndex: Int? = nil
+    ) async throws -> AgentSession {
         // Step 1: write-ahead the chat session. codexChatBackend stays nil so
         // SessionCommandRouter does NOT resolve `.codexSDK` for this session.
         let session: AgentSession
         do {
             session = try await registry.createChat(
-                provider: req.provider,
-                model: req.model,
+                provider: provider,
+                model: model,
                 chatCwd: "",  // patched after cwd creation
                 codexChatBackend: nil,
-                effort: req.effort,
-                deepResearch: req.deepResearch,
-                chatVendor: metadata.vendor,
-                billingProvider: metadata.billingProvider
+                effort: effort,
+                frontierGroupId: frontierGroupId,
+                frontierChildIndex: frontierChildIndex,
+                deepResearch: deepResearch ?? false,
+                chatVendor: chatVendor,
+                billingProvider: billingProvider
             )
         } catch {
-            serverLogger.error("harness chat createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection); return
+            throw HarnessChatSpawnError.createFailed(error.localizedDescription)
         }
-        // Step 2: per-session sandbox cwd (same as the legacy chat path).
+        // Step 2: per-session sandbox cwd.
         let chatCwd: String
         do {
             chatCwd = try ChatCwdManager.ensure(for: session.id).path
         } catch {
-            serverLogger.error("harness chat-cwd create failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
             try? await registry.delete(id: session.id)
-            sendResponse(.internalError, on: connection); return
+            throw HarnessChatSpawnError.cwdFailed(error.localizedDescription)
         }
         try? await registry.updateRuntime(
             id: session.id, worktreePath: chatCwd,
@@ -5899,48 +5949,44 @@ public final class AgentControlServer {
         // Step 3: acquire the per-session chat store the bridge projects into
         // (long-lived writer — pin against idle eviction; released on teardown).
         guard let store = chatStoreRegistry.acquire(for: staged) else {
-            serverLogger.error("harness chat store acquire failed for \(session.id, privacy: .public)")
             try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
-            sendResponse(.internalError, on: connection); return
+            throw HarnessChatSpawnError.storeAcquireFailed
         }
-        // Step 4: build the per-provider bridge. Codex → `codex app-server`.
-        // (grok/cursor over ACP + gemini over gRPC land in the follow-up slices.)
-        let display = providerDisplayName(req.provider)
+        // Step 4: build the per-provider bridge.
+        let display = providerDisplayName(provider)
         let binary: String?
         let arguments: [String]
         let bridge: AcpHarnessBridge
-        switch req.provider {
+        switch provider {
         case .codex:
             binary = "codex"
             arguments = ["app-server"]
             bridge = .codexAppServer(
                 sessionId: session.id, store: store,
-                model: req.model, agentDisplayName: display
+                model: model, agentDisplayName: display
             )
         case .grok, .cursor:
             // ACP stdio agents. Chat has no repoKey → no fs trust gate; the
             // agent's fs/terminal caps stay unadvertised and it runs in the
             // per-session sandbox cwd.
-            guard let support = Self.acpSupport(for: req.provider) else {
-                serverLogger.error("harness chat: no ACP support for \(req.provider.rawValue, privacy: .public)")
+            guard let support = Self.acpSupport(for: provider) else {
                 chatStoreRegistry.release(sessionId: session.id)
                 try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
-                sendResponse(.internalError, on: connection); return
+                throw HarnessChatSpawnError.unsupportedProvider
             }
             binary = support.binaryName
             arguments = support.spawnArgv(model: nil, effort: nil, alwaysApprove: false)
             bridge = .acp(
                 sessionId: session.id, support: support, store: store,
-                model: req.model, agentDisplayName: display,
+                model: model, agentDisplayName: display,
                 trustGate: nil, onFileAccess: nil
             )
         case .gemini:
-            // Antigravity Cascade over gRPC. Chat has no repoKey, so (like the
-            // legacy agentapi chat path) the first open Antigravity project is
-            // the scratch workspace. The gRPC driver owns its transport (no
-            // stdio child), so binary stays nil.
+            // Antigravity Cascade over gRPC. Chat has no repoKey, so the first
+            // open Antigravity project is the scratch workspace. The gRPC driver
+            // owns its transport (no stdio child), so binary stays nil.
             let projectsDir = ClawdmeterRealHome.url()
                 .appendingPathComponent(".gemini/config/projects", isDirectory: true)
             let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
@@ -5948,31 +5994,24 @@ public final class AgentControlServer {
                 chatStoreRegistry.release(sessionId: session.id)
                 try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
-                sendResponse(HTTPResponse(
-                    status: 503, reason: "Service Unavailable", contentType: "application/json",
-                    body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first."}"#.utf8)
-                ), on: connection)
-                return
+                throw HarnessChatSpawnError.noAntigravityProjects
             }
             let lsClient = LanguageServerClient()
             binary = nil
             arguments = []
             bridge = .transportOwning(
                 sessionId: session.id, store: store,
-                model: req.model, agentDisplayName: display,
+                model: model, agentDisplayName: display,
                 driver: AntigravityCascadeDriver(languageServer: lsClient, projectId: projectId)
             )
         default:
-            // Not yet routed to the harness — should be unreachable (the caller
-            // gates on provider). Fail closed rather than spawn the wrong driver.
-            serverLogger.error("harness chat unsupported provider \(req.provider.rawValue, privacy: .public)")
             chatStoreRegistry.release(sessionId: session.id)
             try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
-            sendResponse(.internalError, on: connection); return
+            throw HarnessChatSpawnError.unsupportedProvider
         }
-        // Chat has no repoKey/repo-env; the child inherits the daemon env (PATH/
-        // HOME) and runs in the sandbox cwd.
+        // Step 5: start the bridge. Chat inherits the daemon env (PATH/HOME) and
+        // runs in the sandbox cwd.
         let childEnv = ProcessInfo.processInfo.environment
         do {
             try await bridge.start(
@@ -5980,29 +6019,55 @@ public final class AgentControlServer {
                 cwd: chatCwd, env: childEnv, effort: nil, alwaysApprove: false
             )
         } catch {
-            serverLogger.error("harness chat bridge.start failed: \(error.localizedDescription, privacy: .public)")
             await bridge.teardown()
             chatStoreRegistry.release(sessionId: session.id)
             try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
-            let payload = ["error": "acp_start_failed", "detail": String(describing: error)]
+            throw HarnessChatSpawnError.startFailed(error.localizedDescription)
+        }
+        // Step 6: register the live bridge + return.
+        harnessRegistry.register(bridge, for: session.id)
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["chat": "true", "provider": provider.rawValue, "harness": "true",
+                      "frontier": frontierGroupId != nil ? "true" : "false"]
+        )
+        return registry.session(id: session.id) ?? staged
+    }
+
+    /// Solo Chat-tab create over the harness — thin wrapper over the core that
+    /// maps spawn errors to HTTP responses.
+    private func handleCreateHarnessChatSession(
+        req: CreateChatSessionRequest,
+        metadata: ResolvedChatRuntimeMetadata,
+        connection: NWConnection
+    ) async {
+        do {
+            let session = try await createHarnessChatSessionCore(
+                provider: req.provider, model: req.model, effort: req.effort,
+                deepResearch: req.deepResearch, chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(session) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch HarnessChatSpawnError.noAntigravityProjects {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable", contentType: "application/json",
+                body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first."}"#.utf8)
+            ), on: connection)
+        } catch let HarnessChatSpawnError.startFailed(detail) {
+            let payload = ["error": "acp_start_failed", "detail": detail]
             let body = (try? JSONSerialization.data(withJSONObject: payload))
                 ?? Data(#"{"error":"acp_start_failed"}"#.utf8)
             sendResponse(HTTPResponse(status: 503, reason: "Service Unavailable",
                                       contentType: "application/json", body: body), on: connection)
-            return
-        }
-        harnessRegistry.register(bridge, for: session.id)
-        AgentEventStream.recordEvent(
-            sessionId: session.id, kind: .sessionCreated,
-            payload: ["chat": "true", "provider": req.provider.rawValue, "harness": "true"]
-        )
-        let finalSession = registry.session(id: session.id) ?? staged
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        if let body = try? encoder.encode(finalSession) {
-            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
-        } else {
+        } catch {
+            serverLogger.error("harness chat create failed: \(String(describing: error), privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
     }
@@ -6407,6 +6472,15 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSend(sessionId: session.id) else {
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "rate_limited")
         }
+        // Harness-driven children (codex app-server / gemini gRPC / grok+cursor
+        // ACP) drive through their live bridge — not the legacy per-agent dispatch
+        // below. A registered bridge is authoritative (mirrors the Solo send path's
+        // SessionCommandRouter `.harnessBridge` route).
+        if let bridge = harnessRegistry.bridge(for: session.id) {
+            await bridge.prompt(text)
+            await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
+        }
         // agentapi (Gemini)
         if session.geminiBackend == .agentapi,
            let conversationId = session.antigravityConversationId {
@@ -6523,6 +6597,8 @@ public final class AgentControlServer {
             billingProvider: existing.runtimeBinding?.billingProvider
         )
         // Delete the old session (cleans up chat-cwd + chat store entry).
+        // Stop a harness child first (no-op for legacy children).
+        await harnessRegistry.remove(existing.id)
         await teardownSDKChat(sessionId: existing.id)
         if let wiring = sessionWiring.removeValue(forKey: existing.id) {
             wiring.stop()
@@ -6600,6 +6676,9 @@ public final class AgentControlServer {
         // Archive the losers. Existing archive path persists archivedAt
         // and the sidebar's Show-Archived toggle keeps them reachable.
         for child in allChildren where child.id != winner.id && child.archivedAt == nil {
+            // Stop the loser's harness child process (ACP/app-server/gRPC) so
+            // archiving doesn't leak a running agent. No-op for legacy children.
+            await harnessRegistry.remove(child.id)
             try? await registry.archive(id: child.id)
         }
         // Promote the winner out of the Frontier group. From this point
@@ -6688,6 +6767,24 @@ public final class AgentControlServer {
             codexBackend: metadata.codexBackend
         ) {
             throw SpawnFailure.message(reason)
+        }
+
+        // Harness is the default drive path for non-Claude broadcast children
+        // (codex app-server / gemini gRPC / grok+cursor ACP), exactly as Solo
+        // chat. Reuse the shared core; map its errors to a slot failure reason.
+        // Claude → tmux + opencode → SSE (and any kill-switched codex/gemini)
+        // fall through to the legacy per-provider switch below.
+        if isChatHarnessEligible(slot.provider) {
+            do {
+                return try await createHarnessChatSessionCore(
+                    provider: slot.provider, model: slot.model, effort: slot.effort,
+                    deepResearch: slot.deepResearch, chatVendor: metadata.vendor,
+                    billingProvider: metadata.billingProvider,
+                    frontierGroupId: groupId, frontierChildIndex: childIndex
+                )
+            } catch let harnessError as HarnessChatSpawnError {
+                throw SpawnFailure.message(harnessError.slotReason)
+            }
         }
 
         switch slot.provider {
