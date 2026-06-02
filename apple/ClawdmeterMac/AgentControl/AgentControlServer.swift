@@ -5646,6 +5646,16 @@ public final class AgentControlServer {
             sendProviderDisabled(provider: req.provider, reason: reason, on: connection)
             return
         }
+        // Harness is the DEFAULT Chat drive path for non-Claude providers now:
+        // a chat session created here gets a live AcpHarnessBridge, and the
+        // send/interrupt/permission handlers already route to that bridge
+        // (SessionCommandRouter `.harnessBridge`). The legacy SDK/agentapi/tmux
+        // chat paths below are deprecated, reachable only via the per-provider
+        // kill-switch (default off). Codex → `codex app-server`.
+        if req.provider == .codex, Self.codexAppServerEnabled {
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
+        }
         // v0.9: Gemini chat dispatches to Antigravity 2's agentapi via
         // a new daemon-side handler. Chat has no repoKey, so the helper
         // picks the first available Antigravity project as a scratch
@@ -5809,6 +5819,120 @@ public final class AgentControlServer {
             payload: ["chat": "true", "provider": req.provider.rawValue]
         )
         let finalSession = registry.session(id: session.id) ?? session
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(finalSession) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Create a Chat session driven by the harness (no tmux pane). The chat
+    /// send/interrupt/permission handlers already route to a live
+    /// `AcpHarnessBridge` (`SessionCommandRouter.harnessBridge`); this wires
+    /// chat-CREATE to build + register one for a non-Claude provider.
+    ///
+    /// CRUCIAL: the session is created WITHOUT the SDK/agentapi backend axes
+    /// (`codexChatBackend: nil`, no agentapi conversation), so the router falls
+    /// through past the codex-SDK / antigravity-agentapi branches to
+    /// `.harnessBridge` once the bridge is live. Mirrors `handleSpawnHarnessSession`
+    /// Steps 2-4 but over a chat session + sandbox cwd (no worktree).
+    private func handleCreateHarnessChatSession(
+        req: CreateChatSessionRequest,
+        metadata: ResolvedChatRuntimeMetadata,
+        connection: NWConnection
+    ) async {
+        // Step 1: write-ahead the chat session. codexChatBackend stays nil so
+        // SessionCommandRouter does NOT resolve `.codexSDK` for this session.
+        let session: AgentSession
+        do {
+            session = try await registry.createChat(
+                provider: req.provider,
+                model: req.model,
+                chatCwd: "",  // patched after cwd creation
+                codexChatBackend: nil,
+                effort: req.effort,
+                deepResearch: req.deepResearch,
+                chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
+            )
+        } catch {
+            serverLogger.error("harness chat createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection); return
+        }
+        // Step 2: per-session sandbox cwd (same as the legacy chat path).
+        let chatCwd: String
+        do {
+            chatCwd = try ChatCwdManager.ensure(for: session.id).path
+        } catch {
+            serverLogger.error("harness chat-cwd create failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            try? await registry.delete(id: session.id)
+            sendResponse(.internalError, on: connection); return
+        }
+        try? await registry.updateRuntime(
+            id: session.id, worktreePath: chatCwd,
+            tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
+        )
+        let staged = registry.session(id: session.id) ?? session
+        // Step 3: acquire the per-session chat store the bridge projects into
+        // (long-lived writer — pin against idle eviction; released on teardown).
+        guard let store = chatStoreRegistry.acquire(for: staged) else {
+            serverLogger.error("harness chat store acquire failed for \(session.id, privacy: .public)")
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(.internalError, on: connection); return
+        }
+        // Step 4: build the per-provider bridge. Codex → `codex app-server`.
+        // (grok/cursor over ACP + gemini over gRPC land in the follow-up slices.)
+        let display = providerDisplayName(req.provider)
+        let binary: String?
+        let arguments: [String]
+        let bridge: AcpHarnessBridge
+        switch req.provider {
+        case .codex:
+            binary = "codex"
+            arguments = ["app-server"]
+            bridge = .codexAppServer(
+                sessionId: session.id, store: store,
+                model: req.model, agentDisplayName: display
+            )
+        default:
+            // Not yet routed to the harness — should be unreachable (the caller
+            // gates on provider). Fail closed rather than spawn the wrong driver.
+            serverLogger.error("harness chat unsupported provider \(req.provider.rawValue, privacy: .public)")
+            chatStoreRegistry.release(sessionId: session.id)
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            sendResponse(.internalError, on: connection); return
+        }
+        // Chat has no repoKey/repo-env; the child inherits the daemon env (PATH/
+        // HOME) and runs in the sandbox cwd.
+        let childEnv = ProcessInfo.processInfo.environment
+        do {
+            try await bridge.start(
+                binary: binary, arguments: arguments,
+                cwd: chatCwd, env: childEnv, effort: nil, alwaysApprove: false
+            )
+        } catch {
+            serverLogger.error("harness chat bridge.start failed: \(error.localizedDescription, privacy: .public)")
+            await bridge.teardown()
+            chatStoreRegistry.release(sessionId: session.id)
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            let payload = ["error": "acp_start_failed", "detail": String(describing: error)]
+            let body = (try? JSONSerialization.data(withJSONObject: payload))
+                ?? Data(#"{"error":"acp_start_failed"}"#.utf8)
+            sendResponse(HTTPResponse(status: 503, reason: "Service Unavailable",
+                                      contentType: "application/json", body: body), on: connection)
+            return
+        }
+        harnessRegistry.register(bridge, for: session.id)
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["chat": "true", "provider": req.provider.rawValue, "harness": "true"]
+        )
+        let finalSession = registry.session(id: session.id) ?? staged
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let body = try? encoder.encode(finalSession) {
