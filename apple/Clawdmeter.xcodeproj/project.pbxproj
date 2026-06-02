@@ -87,6 +87,7 @@
 		36C488FE08B36947E3A98EF9 /* F1cWireChatParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 483357794C2704F3A1892570 /* F1cWireChatParityTests.swift */; };
 		370187D5FB528DC613BE368B /* SessionConfigChanger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCD917577DAE8F4BE5BCA99 /* SessionConfigChanger.swift */; };
 		37E0278B4547981DAF8C596E /* ChatCwdManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A81E6EE66C111C5A4B527B7F /* ChatCwdManager.swift */; };
+		38356C2847F68DC3D3B2D88A /* AcpHarnessBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EDDCC84A2922E9085FDCAEA /* AcpHarnessBridgeTests.swift */; };
 		389C34543E4E3E857E98DC40 /* GeminiLogo.svg in Resources */ = {isa = PBXBuildFile; fileRef = 61DCEB1020CBB0E324C60959 /* GeminiLogo.svg */; };
 		38CE5326CE59E154BC2EC14A /* SessionInterruptDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A0D29A023D0668311B4735 /* SessionInterruptDispatcher.swift */; };
 		3C1B58E34AA8D8FC4831DBAF /* ClawdmeterMacWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748E1F1BC9C3BDE9E666458C /* ClawdmeterMacWidgets.swift */; };
@@ -531,6 +532,7 @@
 		4BC8A2A65523DC9639BAB4F9 /* RepoOnboardingIdempotencyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoOnboardingIdempotencyStore.swift; sourceTree = "<group>"; };
 		4D2A6ACB7ED52F90032E358F /* TailscaleWhoisIpOnlyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailscaleWhoisIpOnlyTests.swift; sourceTree = "<group>"; };
 		4D756AA3164D675DD4D9C56C /* GlobalCommandPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalCommandPalette.swift; sourceTree = "<group>"; };
+		4EDDCC84A2922E9085FDCAEA /* AcpHarnessBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpHarnessBridgeTests.swift; sourceTree = "<group>"; };
 		4F690351D86C85E3CEA21685 /* CloneRepoSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloneRepoSheet.swift; sourceTree = "<group>"; };
 		4FA0A2EA3B5F097F12B28E4B /* WSChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WSChannel.swift; sourceTree = "<group>"; };
 		4FCD917577DAE8F4BE5BCA99 /* SessionConfigChanger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionConfigChanger.swift; sourceTree = "<group>"; };
@@ -1155,6 +1157,7 @@
 		6E4F3C864DD3FBCB30E9CE74 /* ClawdmeterMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				4EDDCC84A2922E9085FDCAEA /* AcpHarnessBridgeTests.swift */,
 				614324F44782E06C1986B651 /* AgentControlServerChatRouteTests.swift */,
 				A85BF84E12DA02025E9E3C09 /* AgentControlServerRelayIntegrationTests.swift */,
 				EDDCD753507E1F92989E0CB5 /* AgentControlServerVendorProvisioningRouteTests.swift */,
@@ -1869,6 +1872,7 @@
 				B62E7439075E9AC5ACABDADB /* APNSGatewayIntegrationTests.swift in Sources */,
 				0729DFC4B2B45293EBF0047C /* APNSGatewaySettingsTests.swift in Sources */,
 				32A535E2FF277284D1278202 /* APNSPushDeviceTokenStoreTests.swift in Sources */,
+				38356C2847F68DC3D3B2D88A /* AcpHarnessBridgeTests.swift in Sources */,
 				01B028A41B041C03E1587068 /* AgentControlServerChatRouteTests.swift in Sources */,
 				C4B93AD5F77D956396E2E99A /* AgentControlServerRelayIntegrationTests.swift in Sources */,
 				6515A6FA3F4FBFE797F2E54A /* AgentControlServerVendorProvisioningRouteTests.swift in Sources */,

@@ -6,24 +6,29 @@ import ClawdmeterShared
 final class SessionLauncherModelTests: XCTestCase {
 
     func test_selectableAgentsOnlyIncludesReadyDynamicProviders() {
+        // Static providers (claude/codex/gemini) are gated by ProviderEnablement,
+        // so enable them explicitly — this test is about the DYNAMIC providers
+        // (opencode/cursor) being gated by their *ready* flag on top of an enabled
+        // static base. A default all-false availability (pre-probe) yields [].
+        let base = SessionLauncherAvailability(claudeEnabled: true, codexEnabled: true, geminiEnabled: true)
+        XCTAssertEqual(SessionLauncherModel.selectableAgents(for: base), [.claude, .codex, .gemini])
         XCTAssertEqual(
-            SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability()),
-            [.claude, .codex, .gemini]
-        )
-        XCTAssertEqual(
-            SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability(opencodeReady: true)),
+            SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability(
+                claudeEnabled: true, codexEnabled: true, geminiEnabled: true, opencodeReady: true)),
             [.claude, .codex, .gemini, .opencode]
         )
         XCTAssertEqual(
-            SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability(cursorReady: true)),
+            SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability(
+                claudeEnabled: true, codexEnabled: true, geminiEnabled: true, cursorReady: true)),
             [.claude, .codex, .gemini, .cursor]
         )
         XCTAssertEqual(
-            SessionLauncherModel.selectableAgents(
-                for: SessionLauncherAvailability(opencodeReady: true, cursorReady: true)
-            ),
+            SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability(
+                claudeEnabled: true, codexEnabled: true, geminiEnabled: true,
+                opencodeReady: true, cursorReady: true)),
             [.claude, .codex, .gemini, .opencode, .cursor]
         )
+        XCTAssertEqual(SessionLauncherModel.selectableAgents(for: SessionLauncherAvailability()), [])
     }
 
     func test_liveCursorCatalogDrivesDefaultsAndEffort() {
