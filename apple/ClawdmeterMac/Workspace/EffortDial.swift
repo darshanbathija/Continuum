@@ -29,6 +29,9 @@ struct EffortDial: View {
         // P3 (consistency): the accent pill SLIDES between effort segments,
         // matching ModePicker, instead of a per-segment fill cross-fade.
         .animation(SessionsV2Theme.segmentedSelection(reduceMotion: reduceMotion), value: selected)
+        // P10: a brief success ring confirms the effort change landed — cheaper
+        // than a toast for this high-frequency chip (toast is dropped for effort).
+        .confirmationPulse(selected, cornerRadius: SessionsV2Theme.Radius.chip + 1)
         .opacity(supportsEffort ? 1.0 : 0.5)
         .disabled(!supportsEffort)
         .help(supportsEffort

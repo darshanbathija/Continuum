@@ -214,6 +214,38 @@ final class SessionSidebarGrouperTests: XCTestCase {
         XCTAssertFalse(nearHead.truncated)
     }
 
+    func test_recencySortingOrdersNewestFirstWithinGroup() {
+        let now = Date(timeIntervalSince1970: 1_700_002_000)
+        let sessions = [
+            session(status: .running, lastEventAt: now.addingTimeInterval(-300), goal: "Charlie"),
+            session(status: .running, lastEventAt: now.addingTimeInterval(-10),  goal: "Alpha"),
+            session(status: .running, lastEventAt: now.addingTimeInterval(-120), goal: "Bravo"),
+        ]
+        let groups = SessionSidebarGrouper.group(
+            sessions: sessions, repos: [], grouping: .status, sorting: .recency,
+            statusFilter: .all, reviewSessionIds: [], now: now
+        )
+        let active = groups.first { $0.title == "Active" }
+        XCTAssertEqual(active?.sessions.map(\.goal), ["Alpha", "Bravo", "Charlie"],
+                       "recency sorts by lastEventAt descending (newest first)")
+    }
+
+    func test_nameSortingOrdersCaseInsensitiveAlphabeticalWithinGroup() {
+        let now = Date(timeIntervalSince1970: 1_700_002_000)
+        let sessions = [
+            session(status: .running, lastEventAt: now.addingTimeInterval(-10),  goal: "charlie"),
+            session(status: .running, lastEventAt: now.addingTimeInterval(-300), goal: "Alpha"),
+            session(status: .running, lastEventAt: now.addingTimeInterval(-120), goal: "bravo"),
+        ]
+        let groups = SessionSidebarGrouper.group(
+            sessions: sessions, repos: [], grouping: .status, sorting: .name,
+            statusFilter: .all, reviewSessionIds: [], now: now
+        )
+        let active = groups.first { $0.title == "Active" }
+        XCTAssertEqual(active?.sessions.map(\.goal), ["Alpha", "bravo", "charlie"],
+                       "name sorts case-insensitively by goal, independent of activity time")
+    }
+
     private func session(
         id: UUID = UUID(),
         status: AgentSessionStatus,

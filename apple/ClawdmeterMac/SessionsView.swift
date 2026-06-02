@@ -2221,11 +2221,14 @@ public final class SessionsModel: ObservableObject {
     private func surfaceSwap(
         _ result: SessionConfigChanger.SwapResult,
         succeeded: String,
-        failed: String
+        failed: String,
+        successToast: Bool = true
     ) {
         switch result {
         case .swapped:
-            WorkspaceFeedback.success(succeeded)
+            // Some chips (EffortDial) confirm success with an inline pulse, so
+            // they pass successToast:false to avoid a redundant toast.
+            if successToast { WorkspaceFeedback.success(succeeded) }
         case .resumeFailed(let restoredOriginal):
             WorkspaceFeedback.failure(failed, detail: restoredOriginal
                 ? "Couldn't resume — restored the previous session."
@@ -2256,7 +2259,7 @@ public final class SessionsModel: ObservableObject {
             repoEnvResolver: repoEnvResolver
         )
         let result = await changer.swap(sessionId: sessionId, newEffort: .some(effort))
-        surfaceSwap(result, succeeded: "Reasoning effort updated", failed: "Couldn't change effort")
+        surfaceSwap(result, succeeded: "Reasoning effort updated", failed: "Couldn't change effort", successToast: false)
     }
 
     /// Sessions v2 Phase 1: toggle plan/code mid-session (Claude only).
