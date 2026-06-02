@@ -9,6 +9,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
     case antigravity
     case cursor
     case openrouter
+    case grok
 
     public var id: String { rawValue }
 
@@ -19,6 +20,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .antigravity: return "Antigravity"
         case .cursor: return "Cursor"
         case .openrouter: return "OpenRouter"
+        case .grok: return "Grok"
         }
     }
 
@@ -29,6 +31,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .antigravity: return .gemini
         case .cursor: return .cursor
         case .openrouter: return .opencode
+        case .grok: return .grok
         }
     }
 
@@ -46,7 +49,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
     public var defaultEffort: ReasoningEffort? {
         switch self {
         case .chatgpt, .claude, .openrouter: return .high
-        case .antigravity, .cursor: return nil
+        case .antigravity, .cursor, .grok: return nil
         }
     }
 
@@ -57,6 +60,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .antigravity: return catalog.gemini
         case .cursor: return catalog.cursor
         case .openrouter: return catalog.opencode
+        case .grok: return catalog.grok
         }
     }
 
@@ -71,7 +75,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .gemini: return .antigravity
         case .cursor: return .cursor
         case .opencode: return .openrouter
-        case .grok: return nil // Chat-tab vendor mapping pending; Grok ships in the Code/Sessions harness first
+        case .grok: return .grok
         case .unknown: return nil
         }
     }
@@ -218,7 +222,7 @@ public final class ChatV2Store: ObservableObject {
         effort(for: primaryVendor)
     }
 
-    public static let defaultChatVendorOrder: [ChatVendor] = [.chatgpt, .claude, .antigravity, .cursor, .openrouter]
+    public static let defaultChatVendorOrder: [ChatVendor] = [.chatgpt, .claude, .antigravity, .cursor, .openrouter, .grok]
     public static let broadcastCapableProviders: Set<AgentKind> = Set(defaultChatVendorOrder.map(\.backingProvider))
     public static let defaultBroadcastProviderOrder: [AgentKind] = defaultChatVendorOrder.map(\.backingProvider)
 

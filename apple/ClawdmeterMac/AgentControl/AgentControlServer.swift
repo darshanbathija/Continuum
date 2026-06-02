@@ -5656,6 +5656,12 @@ public final class AgentControlServer {
             await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
             return
         }
+        if req.provider == .grok {
+            // Grok chat drives over ACP via the harness — Grok has no legacy chat
+            // path (it was Sessions/Code-only before), so it always uses the harness.
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
+        }
         // v0.9: Gemini chat dispatches to Antigravity 2's agentapi via
         // a new daemon-side handler. Chat has no repoKey, so the helper
         // picks the first available Antigravity project as a scratch

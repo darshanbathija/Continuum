@@ -4945,7 +4945,10 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         self.model = try c.decodeIfPresent(String.self, forKey: .model)
         self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
         self.codexChatBackend = try c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)
-        self.chatVendor = try c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)
+        // Lenient: an unknown vendor rawValue (a newer client's vendor) decodes
+        // to nil instead of failing the whole session decode. Forward-compat —
+        // mirrors the wire's decodeIfPresent philosophy.
+        self.chatVendor = (try? c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)) ?? nil
         self.billingProvider = try c.decodeIfPresent(String.self, forKey: .billingProvider)
         self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
     }
@@ -5009,7 +5012,10 @@ public struct FrontierModelSlot: Codable, Sendable {
         self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
         self.codexChatBackend = try c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)
         self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
-        self.chatVendor = try c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)
+        // Lenient: an unknown vendor rawValue (a newer client's vendor) decodes
+        // to nil instead of failing the whole session decode. Forward-compat —
+        // mirrors the wire's decodeIfPresent philosophy.
+        self.chatVendor = (try? c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)) ?? nil
         self.billingProvider = try c.decodeIfPresent(String.self, forKey: .billingProvider)
     }
 }
