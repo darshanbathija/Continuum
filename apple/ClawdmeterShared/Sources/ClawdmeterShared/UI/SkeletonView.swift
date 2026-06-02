@@ -42,13 +42,20 @@ public struct SkeletonBlock: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.linear(duration: SessionsV2Theme.AnimationDuration.spinner)
-                    .repeatForever(autoreverses: false)) {
-                    animate = true
-                }
-            }
+            .onAppear { startShimmer() }
+            .onChange(of: reduceMotion) { _, _ in startShimmer() }
+            .onDisappear { animate = false }
+    }
+
+    private func startShimmer() {
+        // Honor Reduce Motion live (not just at first appear), and restart the
+        // sweep cleanly when a recycled view reappears with `animate` stuck true.
+        animate = false
+        guard !reduceMotion else { return }
+        withAnimation(.linear(duration: SessionsV2Theme.AnimationDuration.spinner)
+            .repeatForever(autoreverses: false)) {
+            animate = true
+        }
     }
 }
 

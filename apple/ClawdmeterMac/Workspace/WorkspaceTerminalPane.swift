@@ -47,6 +47,12 @@ struct WorkspaceTerminalPane: View {
         .onChange(of: terminalTab.id) { _, _ in
             sawOutput = false
         }
+        // A revive respawns into a NEW pane (session.tmuxPaneId changes) and
+        // recreates MacTerminalView via .id; reset sawOutput so the "starting"
+        // overlay tracks the fresh reconnect instead of lying from the dead pane.
+        .onChange(of: paneId ?? session.tmuxPaneId ?? "primary") { _, _ in
+            sawOutput = false
+        }
     }
 
     private var paneId: String? {

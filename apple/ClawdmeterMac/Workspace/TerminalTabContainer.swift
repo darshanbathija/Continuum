@@ -23,6 +23,12 @@ struct TerminalTabContainer: View {
         .onChange(of: selectedSecondaryId) { _, _ in
             sawOutput = false
         }
+        // Revive respawns the primary pane (session.tmuxPaneId changes) and
+        // re-ids the terminal view; reset so the "starting" state tracks the
+        // reconnect rather than reporting connected from the dead pane.
+        .onChange(of: session.tmuxPaneId) { _, _ in
+            sawOutput = false
+        }
     }
 
     private var tabStrip: some View {

@@ -1048,7 +1048,10 @@ struct CenterThread: View {
     private func performInterrupt() async {
         guard let runtime = AppDelegate.runtime,
               let port = runtime.agentControlServer.boundPort
-        else { return }
+        else {
+            WorkspaceFeedback.failure("Couldn't stop the run", detail: "Local control server is unavailable.")
+            return
+        }
         let sender = MacComposerSender(port: Int(port), token: (AppDelegate.runtime?.agentControlServer.localLoopbackToken ?? ""))
         do {
             try await sender.interrupt(sessionId: session.id)

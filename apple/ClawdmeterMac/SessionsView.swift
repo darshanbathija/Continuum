@@ -2300,6 +2300,11 @@ public final class SessionsModel: ObservableObject {
         // right argv. Order matters: write state first, then respawn —
         // SessionConfigChanger reads the stores when building newArgv.
         let store = PermissionModeStore.shared
+        // Snapshot the prior flags so we can roll the optimistic store write
+        // back if the respawn fails — otherwise the permission chip would
+        // claim a mode the restored CLI isn't actually running.
+        let priorAcceptEdits = store.acceptEdits(sessionId: sessionId)
+        let priorBypass = AutopilotState.shared.isEnabled(sessionId: sessionId)
         switch newMode {
         case .ask:
             store.setAcceptEdits(false, sessionId: sessionId)
@@ -2320,6 +2325,12 @@ public final class SessionsModel: ObservableObject {
             repoEnvResolver: repoEnvResolver
         )
         let result = await changer.swap(sessionId: sessionId, newPlanMode: newMode == .plan)
+        if case .swapped = result {} else {
+            // Respawn didn't take — restore the flags so the chip reflects the
+            // CLI that's actually running, not the mode the user attempted.
+            store.setAcceptEdits(priorAcceptEdits, sessionId: sessionId)
+            store.setBypass(priorBypass, sessionId: sessionId)
+        }
         surfaceSwap(result, succeeded: "Permission mode updated", failed: "Couldn't change permission mode")
     }
 
@@ -2447,6 +2458,7 @@ public final class SessionsModel: ObservableObject {
               session.status == .planning,
               (session.planText?.isEmpty == false || session.agent == .codex || session.agent == .cursor)
         else { return }
+        var windowKilled = false
         do {
             let providerResumeId: String
             if session.agent == .cursor {
@@ -2475,10 +2487,14 @@ public final class SessionsModel: ObservableObject {
                 autopilot: false,
                 workspacePath: session.effectiveCwd
             )
-            guard !argv.isEmpty else { return }
+            guard !argv.isEmpty else {
+                WorkspaceFeedback.failure("Can't approve plan", detail: "Couldn't build the relaunch command for this agent.")
+                return
+            }
             let cwd = session.effectiveCwd
             let resolvedEnv = try resolveRepoEnv(session: session, cwd: cwd)
             try await runtime.tmuxClient.killWindow(windowId)
+            windowKilled = true
             let window = try await runtime.tmuxClient.newWindow(
                 cwd: cwd,
                 child: argv,
@@ -2496,6 +2512,12 @@ public final class SessionsModel: ObservableObject {
             try await registry.updateStatus(id: id, status: .running)
             WorkspaceFeedback.success("Plan approved — running")
         } catch {
+            if windowKilled {
+                // The plan-mode pane is already dead; flag degraded so the user
+                // gets the Revive affordance instead of a session pointed at a
+                // killed window.
+                try? await registry.updateStatus(id: id, status: .degraded)
+            }
             WorkspaceFeedback.failure("Couldn't approve the plan", detail: error.localizedDescription)
         }
     }
