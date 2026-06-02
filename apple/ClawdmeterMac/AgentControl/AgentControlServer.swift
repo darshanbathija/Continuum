@@ -1676,13 +1676,28 @@ public final class AgentControlServer {
         guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
             sendResponse(.badRequest, on: connection); return
         }
+        // Phase 1: resolve the owning backend ONCE via SessionCommandRouter
+        // (the tested single source of truth for the precedence below). Each
+        // branch now checks its route instead of re-deriving the predicate;
+        // the branch ORDER + bodies are unchanged — rate-limit still sits
+        // between the agentapi branch and the rest, exactly as before.
+        let routeCtx = SessionCommandRouter.SessionContext(
+            agent: session.agent,
+            kind: session.kind,
+            codexChatBackend: session.codexChatBackend,
+            geminiBackend: session.geminiBackend,
+            hasAntigravityConversation: session.antigravityConversationId != nil,
+            runtimeIsACPDriven: session.runtimeBinding?.runtimeKind.isACPDriven == true,
+            hasLiveBridge: harnessRegistry.bridge(for: uuid) != nil
+        )
+        let route = SessionCommandRouter.resolve(routeCtx)
         // v0.8.1 agy-migration (Codex P1.3): Antigravity 2 agentapi
         // sessions have no tmux pane — sends route through
         // `LanguageServerClient.sendMessage` against the running
         // language_server. Same rate-limit + audit-log path as tmux
         // sends; the only difference is the transport. This branch
         // runs BEFORE the chat-tab SDK dispatch + paneId guard below.
-        if session.geminiBackend == .agentapi,
+        if route == .antigravityAgentapi,
            let conversationId = session.antigravityConversationId {
             guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
                 sendResponse(.tooManyRequestsSend, on: connection); return
@@ -1722,9 +1737,7 @@ public final class AgentControlServer {
         // v0.8 Phase 4.5: SDK chat sessions route to CodexSubscriptionRelay
         // instead of tmux. Detect via (kind=.chat, agent=.codex,
         // backend=.sdk) — those sessions have no tmux pane.
-        if session.kind == .chat
-            && session.agent == .codex
-            && session.codexChatBackend == .sdk {
+        if route == .codexSDK {
             await sendChatSDKPrompt(
                 session: session,
                 prompt: req.text,
@@ -1740,7 +1753,7 @@ public final class AgentControlServer {
         // events that OpencodeSSEAdapter routes into the session's
         // SessionChatStore — clients reading the chat-subscribe WS see
         // the assistant turn appear without an additional poll.
-        if session.agent == .opencode {
+        if route == .opencodeServe {
             await sendOpencodePrompt(
                 session: session,
                 prompt: req.text,
@@ -1756,7 +1769,7 @@ public final class AgentControlServer {
         // appear with no extra poll, like the opencode/agentapi paths. Keyed
         // off the bridge registry so legacy tmux sessions (no bridge) fall
         // through to the tmux path below.
-        if let bridge = harnessRegistry.bridge(for: uuid) {
+        if route == .harnessBridge, let bridge = harnessRegistry.bridge(for: uuid) {
             await bridge.prompt(req.text)
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
@@ -1773,7 +1786,7 @@ public final class AgentControlServer {
         // An ACP session whose bridge died (daemon restart) has no tmux pane —
         // return an explicit 503 ("paste succeeded" ≠ "provider accepted")
         // instead of falling into the tmux-guard 500. Revive is Phase-1.
-        if session.runtimeBinding?.runtimeKind.isACPDriven == true {
+        if SessionCommandRouter.acpExpectedButNoBridge(routeCtx) {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
                 contentType: "application/json",
