@@ -4150,13 +4150,17 @@ public final class AgentControlServer {
 
     /// Opt-in (default off): route new Codex sessions through the native
     /// `codex app-server` harness driver instead of the tmux/SDK paths.
+    /// The Settings → Providers "ChatGPT" (Codex) toggle IS the opt-in:
+    /// enabling the provider routes new Codex sessions through app-server.
+    /// `CLAWDMETER_PROVIDER_CODEX_ENABLED` still wins for CI/power users.
     static var codexAppServerEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "clawdmeter.codex.appServer.enabled")
+        ProviderEnablement.isEnabled(AgentKind.codex)
     }
     /// Opt-in (default off): drive new Gemini sessions over the Antigravity
-    /// Cascade gRPC harness instead of agentapi one-shot.
+    /// Cascade gRPC harness instead of agentapi one-shot. The Settings →
+    /// Providers "Antigravity" (Gemini) toggle IS the opt-in.
     static var antigravityGrpcEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "clawdmeter.antigravity.grpc.enabled")
+        ProviderEnablement.isEnabled(AgentKind.gemini)
     }
 
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
@@ -5234,9 +5238,10 @@ public final class AgentControlServer {
                 })
             return
         }
-        // (2) Codex over `codex app-server` — flag-gated (default off). The
-        // existing tmux/SDK codex paths stay default for back-compat until this
-        // is live-verified; set clawdmeter.codex.appServer.enabled to opt in.
+        // (2) Codex over `codex app-server` — opt-in via the Settings →
+        // Providers "ChatGPT" (Codex) toggle (default off). When the Codex
+        // provider is enabled, new Codex sessions route through app-server
+        // instead of the legacy tmux/SDK paths.
         if req.agent == .codex, Self.codexAppServerEnabled {
             let display = providerDisplayName(req.agent)
             await handleSpawnHarnessSession(
@@ -5250,9 +5255,10 @@ public final class AgentControlServer {
                 })
             return
         }
-        // (3) Antigravity Cascade over gRPC — flag-gated (default off). agentapi
-        // one-shot + the SQLite-WAL ingestor stay the default drive/observe paths
-        // for back-compat; set clawdmeter.antigravity.grpc.enabled to opt in.
+        // (3) Antigravity Cascade over gRPC — opt-in via the Settings →
+        // Providers "Antigravity" (Gemini) toggle (default off). When the
+        // Antigravity provider is enabled, new Gemini sessions drive over the
+        // Cascade gRPC harness instead of the legacy agentapi one-shot path.
         if req.agent == .gemini, Self.antigravityGrpcEnabled {
             let display = providerDisplayName(req.agent)
             let projectsDir = ClawdmeterRealHome.url()
