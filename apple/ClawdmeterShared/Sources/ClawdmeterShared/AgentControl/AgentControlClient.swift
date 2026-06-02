@@ -688,6 +688,13 @@ public final class AgentControlClient: ObservableObject {
         AgentControlWireVersion.supportsCursor(serverWireVersion: serverWireVersion)
     }
 
+    /// True when the paired Mac can drive ACP harness agents (Grok). Gates the
+    /// Grok option in the mobile new-session sheet; older Macs hide it.
+    @MainActor
+    public var supportsGrok: Bool {
+        AgentControlWireVersion.supportsGrok(serverWireVersion: serverWireVersion)
+    }
+
     @MainActor
     public var supportsWorkspaces: Bool {
         AgentControlWireVersion.supportsWorkspaces(serverWireVersion: serverWireVersion)
