@@ -5678,9 +5678,14 @@ public final class AgentControlServer {
             await handlePostOpencodeChatSession(request: req, metadata: metadata, connection: connection)
             return
         }
-        if req.provider == .cursor,
-           let reason = await chatProviderUnavailableReason(provider: .cursor) {
-            sendChatProviderUnavailable(provider: .cursor, reason: reason, on: connection)
+        if req.provider == .cursor {
+            if let reason = await chatProviderUnavailableReason(provider: .cursor) {
+                sendChatProviderUnavailable(provider: .cursor, reason: reason, on: connection)
+                return
+            }
+            // Cursor chat drives over ACP via the harness (the legacy tmux argv
+            // path is deprecated; Phase 9 removes it).
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
             return
         }
         // Determine the Codex backend choice for this session. For non-
@@ -5896,6 +5901,24 @@ public final class AgentControlServer {
             bridge = .codexAppServer(
                 sessionId: session.id, store: store,
                 model: req.model, agentDisplayName: display
+            )
+        case .grok, .cursor:
+            // ACP stdio agents. Chat has no repoKey → no fs trust gate; the
+            // agent's fs/terminal caps stay unadvertised and it runs in the
+            // per-session sandbox cwd.
+            guard let support = Self.acpSupport(for: req.provider) else {
+                serverLogger.error("harness chat: no ACP support for \(req.provider.rawValue, privacy: .public)")
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                sendResponse(.internalError, on: connection); return
+            }
+            binary = support.binaryName
+            arguments = support.spawnArgv(model: nil, effort: nil, alwaysApprove: false)
+            bridge = .acp(
+                sessionId: session.id, support: support, store: store,
+                model: req.model, agentDisplayName: display,
+                trustGate: nil, onFileAccess: nil
             )
         default:
             // Not yet routed to the harness — should be unreachable (the caller
