@@ -1,5 +1,11 @@
 import Foundation
+// On Linux, URLRequest/URLSession live in FoundationNetworking, not Foundation.
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(os)
 import os
+#endif
 
 /// Keeps the *installed* app's pricing current without a rebuild.
 ///
@@ -16,7 +22,27 @@ import os
 public actor PricingUpdater {
     public static let shared = PricingUpdater()
 
+    #if canImport(os)
     private let logger = Logger(subsystem: "com.clawdmeter.shared", category: "PricingUpdater")
+    #endif
+
+    // Best-effort logging: os.Logger on Apple, stderr on Linux. Keeps the
+    // `os`-only privacy interpolation off the cross-platform call sites.
+    private func logError(_ message: String) {
+        #if canImport(os)
+        logger.error("\(message, privacy: .public)")
+        #else
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+        #endif
+    }
+    private func logInfo(_ message: String) {
+        #if canImport(os)
+        logger.info("\(message, privacy: .public)")
+        #else
+        _ = message  // info-level cache chatter stays quiet on Linux
+        #endif
+    }
+
     private static let source = URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")!
     /// Same provider filter as tools/refresh-pricing.sh.
     private static let providerPattern = "^(claude-|gpt-|o[0-9]+($|-)|chatgpt-|gemini-|gemma-|grok-|xai/)"
@@ -47,13 +73,13 @@ public actor PricingUpdater {
         do {
             var request = URLRequest(url: Self.source)
             request.timeoutInterval = 20
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await Self.fetchData(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                logger.error("PricingUpdater: HTTP \(http.statusCode, privacy: .public)")
+                logError("PricingUpdater: HTTP \(http.statusCode)")
                 return false
             }
             guard let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                logger.error("PricingUpdater: unexpected JSON shape")
+                logError("PricingUpdater: unexpected JSON shape")
                 return false
             }
 
@@ -86,11 +112,29 @@ public actor PricingUpdater {
             )
             try out.write(to: cacheURL, options: .atomic)
             Pricing.shared.reload(from: out)
-            logger.info("PricingUpdater cached \(models.count, privacy: .public) models from LiteLLM")
+            logInfo("PricingUpdater cached \(models.count) models from LiteLLM")
             return true
         } catch {
-            logger.error("PricingUpdater refresh failed: \(String(describing: error), privacy: .public)")
+            logError("PricingUpdater refresh failed: \(String(describing: error))")
             return false
+        }
+    }
+
+    /// Cross-version data fetch. The async `URLSession.data(for:)` only exists on
+    /// Apple + Linux Swift 6.0+; bridging the completion-handler `dataTask` through a
+    /// continuation keeps the shared package compiling on Linux Swift 5.10 too.
+    private static func fetchData(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        try await withCheckedThrowingContinuation { continuation in
+            let task = URLSession.shared.dataTask(with: request) { data, response, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let data, let response {
+                    continuation.resume(returning: (data, response))
+                } else {
+                    continuation.resume(throwing: URLError(.badServerResponse))
+                }
+            }
+            task.resume()
         }
     }
 
