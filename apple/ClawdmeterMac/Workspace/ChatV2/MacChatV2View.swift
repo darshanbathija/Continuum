@@ -498,7 +498,8 @@ private struct SoloTranscript: View {
                 TranscriptScroll(
                     items: store.snapshot.items,
                     updateCounter: store.snapshot.updateCounter,
-                    pathRoot: Self.transcriptPathRoot(for: session)
+                    pathRoot: Self.transcriptPathRoot(for: session),
+                    turnState: store.snapshot.currentTurnState
                 )
             } else {
                 ProgressView().controlSize(.small)
@@ -728,13 +729,15 @@ private struct ProviderColumn: View {
                     TranscriptScroll(
                         items: snapshot.items,
                         updateCounter: snapshot.updateCounter,
-                        pathRoot: Self.transcriptPathRoot(for: session)
+                        pathRoot: Self.transcriptPathRoot(for: session),
+                        turnState: frontierChild?.currentTurnState ?? .idle
                     )
                 } else if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
                     TranscriptScroll(
                         items: store.snapshot.items,
                         updateCounter: store.snapshot.updateCounter,
-                        pathRoot: Self.transcriptPathRoot(for: session)
+                        pathRoot: Self.transcriptPathRoot(for: session),
+                        turnState: store.snapshot.currentTurnState
                     )
                 } else {
                     ProgressView().controlSize(.small)
@@ -763,10 +766,33 @@ private struct TranscriptScroll: View {
     var hasOlderHistory: Bool = false
     var isLoadingOlder: Bool = false
     var onLoadOlder: (() async -> Void)? = nil
+    /// Live per-turn state. When `.streaming` with no assistant text yet, a
+    /// thinking indicator renders so the user sees the model is working in the
+    /// gap between sending and the first streamed token (every provider).
+    var turnState: TurnState = .idle
     @State private var pinned = true
     @State private var expandedTurns: Set<String> = []
     @State private var projectionCache = SingleSlotProjectionCache<TranscriptProjectionCacheKey, TranscriptProjection>()
     private static let bottomSentinelId = "chat-v2-bottom-sentinel"
+    private static let thinkingRowId = "chat-v2-thinking"
+
+    /// Show the thinking dots only while a turn is streaming AND no assistant
+    /// *text* has appeared yet — the growing text is its own feedback, so the
+    /// indicator covers the send→first-token gap (and tool work before any
+    /// answer text). Find the most-recent item: assistant text → hide; anything
+    /// else (the user's prompt, a tool run) → still waiting.
+    private func isThinking(_ projection: TranscriptProjection) -> Bool {
+        guard turnState == .streaming else { return false }
+        for turn in projection.turns.reversed() {
+            for item in turn.visibleItems.reversed() {
+                switch item {
+                case .message(let m): return m.kind != .assistantText
+                case .toolRun: return true
+                }
+            }
+        }
+        return true   // streaming with an empty transcript → definitely thinking
+    }
 
     private var transcriptProjection: TranscriptProjection {
         projectionCache.value(
@@ -810,6 +836,11 @@ private struct TranscriptScroll: View {
                         collapsedTurnRow(turn)
                             .id(turn.id)
                     }
+                    if isThinking(projection) {
+                        ThinkingDotsRow()
+                            .id(Self.thinkingRowId)
+                            .transition(.opacity)
+                    }
                     Color.clear.frame(height: 12).id(Self.bottomSentinelId)
                 }
                 .padding(14)
@@ -833,6 +864,14 @@ private struct TranscriptScroll: View {
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
+                    proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+                }
+            }
+            .onChange(of: turnState) { _, _ in
+                // When a send flips the turn to streaming the thinking row
+                // appears with no updateCounter bump — scroll so it's visible.
+                guard pinned else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
                 }
             }
@@ -965,6 +1004,39 @@ private struct TranscriptScroll: View {
         case .media: return "play.rectangle"
         case .archive: return "archivebox"
         }
+    }
+}
+
+/// Animated three-dot "thinking" indicator shown in the send→first-token gap.
+/// Styled as a left-aligned assistant bubble; dots pulse in a wave using the
+/// heritage terra-cotta accent. Provider-agnostic — every model shows it.
+@available(macOS 14, *)
+private struct ThinkingDotsRow: View {
+    @Environment(\.tahoe) private var t
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(t.accent)
+                    .frame(width: 6, height: 6)
+                    .opacity(animating ? 1.0 : 0.3)
+                    .scaleEffect(animating ? 1.0 : 0.65)
+                    .animation(
+                        .easeInOut(duration: 0.55)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.18),
+                        value: animating
+                    )
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(t.hairline, lineWidth: 0.5))
+        .onAppear { animating = true }
+        .accessibilityLabel("Waiting for a response")
     }
 }
 
