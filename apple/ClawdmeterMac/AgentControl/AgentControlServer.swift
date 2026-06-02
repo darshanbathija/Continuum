@@ -6684,8 +6684,15 @@ public final class AgentControlServer {
         // and the sidebar's Show-Archived toggle keeps them reachable.
         for child in allChildren where child.id != winner.id && child.archivedAt == nil {
             // Stop the loser's harness child process (ACP/app-server/gRPC) so
-            // archiving doesn't leak a running agent. No-op for legacy children.
+            // archiving doesn't leak a running agent, AND release the chat store
+            // the harness child acquired at create (createHarnessChatSessionCore)
+            // so it can idle-evict. Legacy children used snapshotStore (no
+            // acquire), so only release when this was actually a harness child.
+            let wasHarness = harnessRegistry.contains(child.id)
             await harnessRegistry.remove(child.id)
+            if wasHarness {
+                chatStoreRegistry.release(sessionId: child.id)
+            }
             try? await registry.archive(id: child.id)
         }
         // Promote the winner out of the Frontier group. From this point

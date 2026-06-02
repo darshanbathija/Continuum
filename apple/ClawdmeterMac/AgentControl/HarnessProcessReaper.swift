@@ -53,23 +53,31 @@ final class HarnessProcessReaper {
     /// spawn (this daemon's children re-register themselves afterward).
     func reapOrphans() {
         let prior = loadFromDisk()
-        var reapedPids: [Int32] = []
+        var reaped: [HarnessPidRecord] = []
         for rec in prior.values {
             guard Self.processAlive(rec.pid) else { continue }
             let ownerAlive = Self.processAlive(rec.ownerPid)
-            let comm = Self.liveComm(rec.pid)
-            guard HarnessOrphanReaper.shouldReap(record: rec, liveComm: comm, ownerAlive: ownerAlive) else { continue }
+            guard HarnessOrphanReaper.shouldReap(record: rec, liveComm: Self.liveComm(rec.pid), ownerAlive: ownerAlive) else { continue }
             reaperLogger.warning("reaping orphan harness child pid=\(rec.pid, privacy: .public) binary=\(rec.binary, privacy: .public) session=\(rec.sessionId.uuidString, privacy: .public)")
             kill(rec.pid, SIGTERM)
-            reapedPids.append(rec.pid)
+            reaped.append(rec)
         }
-        if !reapedPids.isEmpty {
-            // SIGKILL any survivors after a short grace.
+        if !reaped.isEmpty {
+            // SIGKILL survivors after a short grace — but RE-VERIFY first. The OS
+            // can recycle a pid during the grace window, so re-run the full guard
+            // (owner dead + live comm STILL matches the recorded binary) before
+            // escalating, so we never SIGKILL a freshly-recycled, unrelated process.
+            let toEscalate = reaped
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                for pid in reapedPids where Self.processAlive(pid) { kill(pid, SIGKILL) }
+                for rec in toEscalate where Self.processAlive(rec.pid) {
+                    let ownerAlive = Self.processAlive(rec.ownerPid)
+                    if HarnessOrphanReaper.shouldReap(record: rec, liveComm: Self.liveComm(rec.pid), ownerAlive: ownerAlive) {
+                        kill(rec.pid, SIGKILL)
+                    }
+                }
             }
-            reaperLogger.info("reaped \(reapedPids.count, privacy: .public) orphan harness child(ren)")
+            reaperLogger.info("reaped \(reaped.count, privacy: .public) orphan harness child(ren)")
         }
         // Fresh slate for this daemon; its children re-register as they spawn.
         records = [:]
