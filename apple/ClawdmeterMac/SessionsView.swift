@@ -119,6 +119,7 @@ struct NewSessionMacSheet: View {
                         case .gemini: return "Gemini runs in --approval-mode plan: reads + proposes, doesn't write until approved."
                         case .opencode: return "OpenCode handles tool-call approval inside `opencode serve` — plan mode here is a UI hint only."
                         case .cursor: return "Cursor Agent starts in code mode until Cursor resume ids are available."
+                        case .grok: return "Grok runs its own approval flow; plan mode here is a UI hint."
                         case .unknown: return "Plan mode: reads + proposes, doesn't write until approved."
                         }
                     }())
@@ -1304,6 +1305,7 @@ public final class SessionsModel: ObservableObject {
         case .gemini: return "Antigravity"
         case .cursor: return "Cursor"
         case .opencode: return "OpenRouter"
+        case .grok: return "Grok"
         case .unknown: return "this provider"
         }
     }
@@ -1450,9 +1452,9 @@ public final class SessionsModel: ObservableObject {
                 resumeSessionId: resumeSessionId,
                 workspacePath: cwd
             ) ?? []
-        case .unknown:
-            // X3: forward-compat unknown kind — no spawn argv path. The
-            // missingBinary throw below surfaces a clean error.
+        case .grok, .unknown:
+            // grok is ACP (no tmux argv); unknown is X3 forward-compat. Both
+            // fall through to the missingBinary throw below.
             argv = []
         }
         guard !argv.isEmpty else {
@@ -1610,7 +1612,7 @@ public final class SessionsModel: ObservableObject {
                 resumeSessionId: nil,
                 workspacePath: cwd
             ) ?? []
-        case .gemini, .opencode, .unknown:
+        case .gemini, .opencode, .grok, .unknown:
             argv = []
         }
         guard !argv.isEmpty else {
@@ -2028,8 +2030,8 @@ public final class SessionsModel: ObservableObject {
             // The JSONL importer cannot prove that yet, so leave imported
             // Cursor rows read-only until the Cursor importer lands.
             return nil
-        case .unknown:
-            // X3: forward-compat unknown kind — no JSONL parser plumbed.
+        case .grok, .unknown:
+            // grok (ACP) has no JSONL outside-source; unknown is X3.
             return nil
         }
         // Synthetic outside sessions keep repoKey nil so WorkspaceKey never

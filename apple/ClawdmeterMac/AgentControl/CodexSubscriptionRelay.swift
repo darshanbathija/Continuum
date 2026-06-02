@@ -133,6 +133,11 @@ fileprivate final class ProcessHandle: @unchecked Sendable {
     }
 }
 
+// DEPRECATED (harness migration, 2026-06): the Codex SDK chat relay is no longer
+// the default Codex chat path — Codex chat + Sessions now drive over the
+// `codex app-server` harness (AcpHarnessBridge). Reachable only via the
+// kill-switch (clawdmeter.codex.appServer.enabled=false); slated for removal once
+// the app-server driver is live-verified.
 @MainActor
 public final class CodexSubscriptionRelay {
 

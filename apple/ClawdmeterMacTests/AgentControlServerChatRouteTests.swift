@@ -67,6 +67,17 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_oneVendorPostChatSessions_createsSoloChatSession() async throws {
+        // Codex chat now defaults to the `codex app-server` harness, which can't
+        // spawn in the test env. This test exercises the LEGACY Codex SDK
+        // chat-create path (deferred spawn, returns 200), reachable only via the
+        // kill-switch now. Save/restore so we don't clobber the host's default.
+        let killSwitch = "clawdmeter.codex.appServer.enabled"
+        let savedKillSwitch = UserDefaults.standard.object(forKey: killSwitch)
+        UserDefaults.standard.set(false, forKey: killSwitch)
+        defer {
+            if let savedKillSwitch { UserDefaults.standard.set(savedKillSwitch, forKey: killSwitch) }
+            else { UserDefaults.standard.removeObject(forKey: killSwitch) }
+        }
         let request = CreateChatSessionRequest(
             provider: .codex,
             model: "gpt-5.5",
@@ -183,6 +194,17 @@ final class AgentControlServerChatRouteTests: XCTestCase {
     }
 
     func test_frontierRouteAppliesOpenRouterAvailabilityGate() async throws {
+        // Codex frontier children now default to the `codex app-server` harness,
+        // which can't spawn in the test env. This test only needs codex as the
+        // "good" slot to contrast with the gated OpenRouter slot, so exercise the
+        // legacy Codex SDK create path via the kill-switch. Save/restore.
+        let killSwitch = "clawdmeter.codex.appServer.enabled"
+        let savedKillSwitch = UserDefaults.standard.object(forKey: killSwitch)
+        UserDefaults.standard.set(false, forKey: killSwitch)
+        defer {
+            if let savedKillSwitch { UserDefaults.standard.set(savedKillSwitch, forKey: killSwitch) }
+            else { UserDefaults.standard.removeObject(forKey: killSwitch) }
+        }
         await ChatProviderProbe.shared.setAuthOverride(
             providerKey: "opencode",
             authenticated: false,

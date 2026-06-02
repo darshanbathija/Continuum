@@ -1,0 +1,41 @@
+{
+  "_comment": "Captured 2026-06-02 from `grok agent --no-leader stdio` (cmux.app build, agentVersion 0.2.11) by sending an ACP initialize. _meta.mcpServers and _meta.hostname/agentIds were SCRUBBED (the live response leaked the user's MCP env secrets). Use as a decode fixture for the ACP initialize result.",
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": { "image": false, "audio": false, "embeddedContext": true },
+      "mcpCapabilities": { "http": true, "sse": true },
+      "_meta": { "x.ai/fs_notify": true }
+    },
+    "authMethods": [
+      { "id": "grok.com", "name": "Grok", "description": "Sign in with Grok" }
+    ],
+    "_meta": {
+      "grokShell": true,
+      "currentWorkingDirectory": "<scrubbed>",
+      "agentVersion": "0.2.11",
+      "agentId": "<scrubbed>",
+      "agentInstanceId": "<scrubbed>",
+      "hostname": "<scrubbed>",
+      "modelState": {
+        "currentModelId": "grok-build",
+        "availableModels": [
+          { "modelId": "grok-build", "name": "Grok Build", "description": "Best for advanced coding tasks",
+            "_meta": { "totalContextTokens": 500000, "agentType": "grok-build-plan" } }
+        ]
+      },
+      "mcpServers": "<scrubbed: live response leaked user MCP env incl. secrets>",
+      "mcpApps": false,
+      "availableCommands": [
+        { "name": "compact", "description": "Compress conversation history to save context window", "input": { "hint": "optional context about what to preserve" } },
+        { "name": "always-approve", "description": "Toggle always-approve mode (skip all permission prompts)", "input": { "hint": "on|off" } },
+        { "name": "context", "description": "Show context window usage and session stats", "input": null },
+        { "name": "session-info", "description": "Show session details (model, turns, context usage)", "input": null }
+      ],
+      "cancelRewind": true
+    }
+  }
+}

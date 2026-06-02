@@ -80,6 +80,12 @@ struct NewSessionSheet: View {
                         if client.supportsCursor {
                             Text("Cursor").tag(AgentKind.cursor)
                         }
+                        // v26: Grok drives over the native ACP harness on the
+                        // paired Mac. iOS only sends the request; gate on the
+                        // Mac wire version so older Macs don't offer it.
+                        if client.supportsGrok {
+                            Text("Grok").tag(AgentKind.grok)
+                        }
                     }
                     .pickerStyle(.segmented)
 
@@ -95,7 +101,7 @@ struct NewSessionSheet: View {
                     // back-compat with persisted v3 sessions.
 
                     Toggle("Plan mode", isOn: $planMode)
-                        .disabled(agent == .cursor)
+                        .disabled(agent == .cursor || agent == .grok)
 
                     Toggle("Run as A/B pair (Claude + Codex)", isOn: $runAsABPair)
                         .toggleStyle(.switch)
@@ -153,6 +159,8 @@ struct NewSessionSheet: View {
                 }
                 if agent == .cursor && !client.supportsCursor {
                     setAgent(.claude)
+                } else if agent == .grok && !client.supportsGrok {
+                    setAgent(.claude)
                 } else if modelId == nil {
                     applyDefaults(for: agent)
                 }
@@ -161,7 +169,7 @@ struct NewSessionSheet: View {
                 await refreshPreflight()
             }
             .onChange(of: client.serverWireVersion) { _, _ in
-                if agent == .cursor && !client.supportsCursor {
+                if (agent == .cursor && !client.supportsCursor) || (agent == .grok && !client.supportsGrok) {
                     setAgent(.claude)
                 }
             }
@@ -252,10 +260,13 @@ struct NewSessionSheet: View {
 
     private func setAgent(_ newAgent: AgentKind) {
         guard newAgent != agent else { return }
-        let nextAgent = newAgent == .cursor && !client.supportsCursor ? .claude : newAgent
+        var nextAgent = newAgent
+        if nextAgent == .cursor && !client.supportsCursor { nextAgent = .claude }
+        if nextAgent == .grok && !client.supportsGrok { nextAgent = .claude }
         agent = nextAgent
         applyDefaults(for: nextAgent)
-        if nextAgent == .cursor {
+        // Cursor + Grok start in code mode (no daemon plan-mode for them yet).
+        if nextAgent == .cursor || nextAgent == .grok {
             planMode = false
         }
     }

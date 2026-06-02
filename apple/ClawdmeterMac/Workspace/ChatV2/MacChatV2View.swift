@@ -498,7 +498,8 @@ private struct SoloTranscript: View {
                 TranscriptScroll(
                     items: store.snapshot.items,
                     updateCounter: store.snapshot.updateCounter,
-                    pathRoot: Self.transcriptPathRoot(for: session)
+                    pathRoot: Self.transcriptPathRoot(for: session),
+                    turnState: store.snapshot.currentTurnState
                 )
             } else {
                 ProgressView().controlSize(.small)
@@ -606,24 +607,34 @@ private struct BroadcastTranscript: View {
             if children.isEmpty {
                 ChatEmptyState(title: "Broadcast group is empty", subtitle: "No live child sessions are attached to this comparison.")
             } else {
-                ScrollView(.horizontal) {
-                    HStack(alignment: .top, spacing: 10) {
-                        ForEach(children, id: \.id) { child in
-                            let frontierChild = frontierStore.snapshot.children.first { $0.sessionId == child.id }
-                            ProviderColumn(
-                                groupId: groupId,
-                                turnId: frontierStore.snapshot.latestTurnId,
-                                session: child,
-                                frontierChild: frontierChild,
-                                winner: winner(for: child),
-                                runtime: runtime,
-                                client: client,
-                                onContinueWinner: onContinueWinner
-                            )
-                                .frame(width: max(280, min(420, columnWidth)))
+                // Broadcast is capped at 3 children. Divide + FILL the full width
+                // so two providers don't leave half the page empty; only fall
+                // back to a horizontal scroll when columns would get too narrow
+                // to read.
+                GeometryReader { geo in
+                    let count = max(children.count, 1)
+                    let spacing: CGFloat = 10
+                    let pad: CGFloat = 12
+                    let avail = geo.size.width - pad * 2 - spacing * CGFloat(count - 1)
+                    let per = avail / CGFloat(count)
+                    if per >= 300 {
+                        HStack(alignment: .top, spacing: spacing) {
+                            ForEach(children, id: \.id) { child in
+                                columnView(child).frame(maxWidth: .infinity)
+                            }
+                        }
+                        .padding(pad)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    } else {
+                        ScrollView(.horizontal) {
+                            HStack(alignment: .top, spacing: spacing) {
+                                ForEach(children, id: \.id) { child in
+                                    columnView(child).frame(width: max(300, per))
+                                }
+                            }
+                            .padding(pad)
                         }
                     }
-                    .padding(12)
                 }
             }
         }
@@ -631,13 +642,19 @@ private struct BroadcastTranscript: View {
         .onDisappear { frontierStore.stop() }
     }
 
-    private var columnWidth: CGFloat {
-        // Precedence: `/` binds tighter than `??`, so the unparenthesized form
-        // parsed as `width ?? (1180 / count)` — the per-column divide only hit
-        // the dead nil-screen fallback and every column rendered full-screen
-        // width (then clamped to 420). Parenthesize so the divide applies to
-        // the chosen width.
-        (NSScreen.main?.visibleFrame.width ?? 1180) / CGFloat(max(children.count, 1))
+    @ViewBuilder
+    private func columnView(_ child: AgentSession) -> some View {
+        let frontierChild = frontierStore.snapshot.children.first { $0.sessionId == child.id }
+        ProviderColumn(
+            groupId: groupId,
+            turnId: frontierStore.snapshot.latestTurnId,
+            session: child,
+            frontierChild: frontierChild,
+            winner: winner(for: child),
+            runtime: runtime,
+            client: client,
+            onContinueWinner: onContinueWinner
+        )
     }
 
     private func winner(for child: AgentSession) -> FrontierTurnWinner? {
@@ -712,13 +729,15 @@ private struct ProviderColumn: View {
                     TranscriptScroll(
                         items: snapshot.items,
                         updateCounter: snapshot.updateCounter,
-                        pathRoot: Self.transcriptPathRoot(for: session)
+                        pathRoot: Self.transcriptPathRoot(for: session),
+                        turnState: frontierChild?.currentTurnState ?? .idle
                     )
                 } else if let runtime, let store = runtime.agentControlServer.chatStore(for: session) {
                     TranscriptScroll(
                         items: store.snapshot.items,
                         updateCounter: store.snapshot.updateCounter,
-                        pathRoot: Self.transcriptPathRoot(for: session)
+                        pathRoot: Self.transcriptPathRoot(for: session),
+                        turnState: store.snapshot.currentTurnState
                     )
                 } else {
                     ProgressView().controlSize(.small)
@@ -747,10 +766,33 @@ private struct TranscriptScroll: View {
     var hasOlderHistory: Bool = false
     var isLoadingOlder: Bool = false
     var onLoadOlder: (() async -> Void)? = nil
+    /// Live per-turn state. When `.streaming` with no assistant text yet, a
+    /// thinking indicator renders so the user sees the model is working in the
+    /// gap between sending and the first streamed token (every provider).
+    var turnState: TurnState = .idle
     @State private var pinned = true
     @State private var expandedTurns: Set<String> = []
     @State private var projectionCache = SingleSlotProjectionCache<TranscriptProjectionCacheKey, TranscriptProjection>()
     private static let bottomSentinelId = "chat-v2-bottom-sentinel"
+    private static let thinkingRowId = "chat-v2-thinking"
+
+    /// Show the thinking dots only while a turn is streaming AND no assistant
+    /// *text* has appeared yet — the growing text is its own feedback, so the
+    /// indicator covers the send→first-token gap (and tool work before any
+    /// answer text). Find the most-recent item: assistant text → hide; anything
+    /// else (the user's prompt, a tool run) → still waiting.
+    private func isThinking(_ projection: TranscriptProjection) -> Bool {
+        guard turnState == .streaming else { return false }
+        for turn in projection.turns.reversed() {
+            for item in turn.visibleItems.reversed() {
+                switch item {
+                case .message(let m): return m.kind != .assistantText
+                case .toolRun: return true
+                }
+            }
+        }
+        return true   // streaming with an empty transcript → definitely thinking
+    }
 
     private var transcriptProjection: TranscriptProjection {
         projectionCache.value(
@@ -794,6 +836,11 @@ private struct TranscriptScroll: View {
                         collapsedTurnRow(turn)
                             .id(turn.id)
                     }
+                    if isThinking(projection) {
+                        ThinkingDotsRow()
+                            .id(Self.thinkingRowId)
+                            .transition(.opacity)
+                    }
                     Color.clear.frame(height: 12).id(Self.bottomSentinelId)
                 }
                 .padding(14)
@@ -817,6 +864,14 @@ private struct TranscriptScroll: View {
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
+                    proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
+                }
+            }
+            .onChange(of: turnState) { _, _ in
+                // When a send flips the turn to streaming the thinking row
+                // appears with no updateCounter bump — scroll so it's visible.
+                guard pinned else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo(Self.bottomSentinelId, anchor: .bottom)
                 }
             }
@@ -952,6 +1007,39 @@ private struct TranscriptScroll: View {
     }
 }
 
+/// Animated three-dot "thinking" indicator shown in the send→first-token gap.
+/// Styled as a left-aligned assistant bubble; dots pulse in a wave using the
+/// heritage terra-cotta accent. Provider-agnostic — every model shows it.
+@available(macOS 14, *)
+private struct ThinkingDotsRow: View {
+    @Environment(\.tahoe) private var t
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(t.accent)
+                    .frame(width: 6, height: 6)
+                    .opacity(animating ? 1.0 : 0.3)
+                    .scaleEffect(animating ? 1.0 : 0.65)
+                    .animation(
+                        .easeInOut(duration: 0.55)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.18),
+                        value: animating
+                    )
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(t.hairline, lineWidth: 0.5))
+        .onAppear { animating = true }
+        .accessibilityLabel("Waiting for a response")
+    }
+}
+
 @available(macOS 14, *)
 private struct MessageRow: View {
     @Environment(\.tahoe) private var t
@@ -1049,8 +1137,9 @@ private struct ComposerBar: View {
     @ObservedObject var client: AgentControlClient
     let providerMatrix: ChatProvidersResponse?
     @FocusState private var focused: Bool
-    @State private var openVendorPicker: ChatVendor?
-    @State private var addVendorPickerPresented = false
+    // v0.29.x — multi-provider selector (Option A): one compact bar that opens a
+    // single popover (flat per-provider checklist + model/effort + Solo/Compare).
+    @State private var providerPopoverPresented = false
     // v0.29.8 — backing store for the new ComposerModelPicker. Each
     // ProviderDefaultsStore instance reads/writes the same UserDefaults
     // keys, so writes from the picker persist and other instances pick
@@ -1118,133 +1207,241 @@ private struct ComposerBar: View {
         (store.attachments.isEmpty && sendCtl.lastError == nil) ? 102 : 168
     }
 
+    // Multi-provider selector — Option A (compact bar + popover). One small
+    // control in the composer opens a single popover: a flat per-provider
+    // checklist, each row with its own model + effort, plus a Solo/Compare
+    // toggle. Selecting 1 provider = solo; 2–3 = broadcast (compare).
     @ViewBuilder
     private var providerControls: some View {
-        HStack(spacing: 7) {
-            if providerEnabledVendors.isEmpty {
-                Text("No providers enabled")
-                    .font(TahoeFont.body(11, weight: .semibold))
-                    .foregroundStyle(t.fg4)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
-                    .frame(height: 32)
-                    .background(Color.white.opacity(0.045), in: Capsule())
-                    .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(store.selectedVendors, id: \.self) { vendor in
-                            let selected = store.isVendorSelected(vendor)
-                            let available = isVendorAvailable(vendor)
-                            Button {
-                                openVendorPicker = vendor
-                            } label: {
-                                providerChip(vendor: vendor, selected: selected, available: available)
-                            }
-                            .buttonStyle(PressableButtonStyle())
-                            .disabled(!ProviderEnablement.isEnabled(vendor))
-                            .popover(isPresented: Binding(
-                                get: { openVendorPicker == vendor },
-                                set: { if !$0, openVendorPicker == vendor { openVendorPicker = nil } }
-                            ), arrowEdge: .bottom) {
-                                providerPickerPopover(for: vendor)
-                            }
-                            .help(providerUnavailableReason(vendor) ?? "\(vendor.displayName) model picker")
-                        }
-                    }
-                    .padding(.vertical, 1)
-                }
-                .frame(maxWidth: 344, alignment: .leading)
-            }
-
-            Button {
-                addVendorPickerPresented = true
-            } label: {
-                HStack(spacing: 5) {
-                    TahoeIcon(store.selectedVendorCount < 3 ? "plus" : "sliders", size: 11)
-                    Text(store.selectedVendorCount < 3 ? "Add" : "Configure")
-                        .font(TahoeFont.body(11, weight: .semibold))
-                }
-                .foregroundStyle(t.fg3)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .frame(height: 32)
+        if providerEnabledVendors.isEmpty {
+            Text("No providers enabled")
+                .font(TahoeFont.body(11, weight: .semibold))
+                .foregroundStyle(t.fg4)
+                .padding(.horizontal, 9).padding(.vertical, 7).frame(height: 32)
                 .background(Color.white.opacity(0.045), in: Capsule())
                 .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
-            }
-            .buttonStyle(PressableButtonStyle())
-            .fixedSize(horizontal: true, vertical: false)
-            .disabled(providerEnabledVendors.isEmpty)
-            .help(providerEnabledVendors.isEmpty ? "Enable a provider in Settings → Providers." : "Configure selected providers")
-            .popover(isPresented: Binding(
-                get: { addVendorPickerPresented },
-                set: { addVendorPickerPresented = $0 }
-            ), arrowEdge: .bottom) {
-                // v0.29.31: the broadcast "Add / Configure" surface now uses the
-                // same ComposerModelPicker as the per-vendor chips, in .multi
-                // mode (toggle 1–3 vendors into the broadcast, each with its own
-                // model + effort). Replaces the retired MacChatModelSelectorPanel.
-                ComposerModelPicker(
-                    initialVendor: firstConfigurableVendor,
-                    store: store,
-                    defaultsStore: providerDefaultsStore,
-                    catalog: client.modelCatalog,
-                    enabledVendors: providerPickerVendors,
-                    mode: .multi,
-                    vendorAvailability: { isVendorAvailable($0) },
-                    vendorUnavailableReason: { providerUnavailableReason($0) },
-                    onClose: { addVendorPickerPresented = false }
-                )
-            }
+                .help("Enable a provider in Settings → Providers.")
+        } else {
+            Button { providerPopoverPresented = true } label: { providerBarLabel }
+                .buttonStyle(.plain)
+                .fixedSize(horizontal: true, vertical: false)
+                .popover(isPresented: $providerPopoverPresented, arrowEdge: .bottom) {
+                    providerSelectorPopover
+                }
+                .help("Choose a provider, or pick 2–3 to compare side by side")
         }
-        .frame(minWidth: 120, maxWidth: 410, alignment: .leading)
     }
 
-    private func providerChip(vendor: ChatVendor, selected: Bool, available: Bool) -> some View {
-        HStack(spacing: 5) {
-            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 14)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(vendor.displayName)
-                    .font(TahoeFont.body(11, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if selected, let model = compactModelLabel(for: vendor) {
-                    Text(model)
-                        .font(TahoeFont.mono(8.5))
-                        .foregroundStyle(t.fg4)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+    /// Compact composer control: stacked glyphs of the selected providers + a
+    /// label (solo → name·model; multi → "N providers"). Opens the selector.
+    private var providerBarLabel: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 3) {
+                ForEach(store.selectedVendors, id: \.self) { v in
+                    TahoeProviderGlyph(provider: v.backingProvider.tahoeProvider, size: 16)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            if store.selectedVendorCount == 1 {
+                let v = store.primaryVendor
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(v.displayName)
+                        .font(TahoeFont.body(11.5, weight: .semibold))
+                        .foregroundStyle(t.fg).lineLimit(1)
+                    if let model = compactModelLabel(for: v) {
+                        Text(model)
+                            .font(TahoeFont.mono(8.5))
+                            .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+            } else {
+                Text("\(store.selectedVendorCount) providers")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+            }
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(t.fg4)
         }
-        .foregroundStyle(selected && available ? t.fg : t.fg4)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
-        .frame(width: 124, height: 32, alignment: .leading)
-        .background(selected && available ? Color.white.opacity(0.10) : Color.white.opacity(0.045), in: Capsule())
-        .overlay(Capsule().stroke(selected ? vendor.backingProvider.tahoeProvider.halo.color.opacity(0.42) : t.hairline, lineWidth: 0.5))
+        .padding(.horizontal, 10).padding(.vertical, 6).frame(height: 32)
+        .background(Color.white.opacity(0.06), in: Capsule())
+        .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
         .contentShape(Capsule())
     }
 
-    private func providerPickerPopover(for vendor: ChatVendor) -> some View {
-        // v0.29.8: per-vendor chip taps open the in-composer ComposerModelPicker
-        // (left rail of providers + search + ⌘N shortcuts + star favorites) in
-        // .single mode. v0.29.31: this is now the only model picker — the
-        // "Add / Configure" button opens the same component in .multi mode
-        // (broadcast), and MacChatModelSelectorPanel was retired.
-        //
-        ComposerModelPicker(
-            initialVendor: vendor,
-            store: store,
-            defaultsStore: providerDefaultsStore,
-            // v0.29.31: use the live probe-enriched catalog (Cursor +
-            // OpenRouter live models, Opus 4.8) instead of the static .bundled
-            // fallback that showed only "Auto" / 5 OpenRouter entries.
-            catalog: client.modelCatalog,
-            enabledVendors: providerPickerVendors,
-            onClose: { openVendorPicker = nil }
-        )
+    /// Solo/Compare toggle + a flat per-provider checklist, each row with its own
+    /// model + effort. 1 selected = solo; 2–3 = broadcast.
+    private var providerSelectorPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Ask or compare")
+                    .font(TahoeFont.body(12.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer()
+                soloCompareToggle
+            }
+            .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
+
+            Rectangle().fill(t.hairline).frame(height: 0.5)
+
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(providerPickerVendors, id: \.self) { vendor in
+                        providerSelectorRow(vendor)
+                    }
+                }
+                .padding(.horizontal, 8).padding(.vertical, 6)
+            }
+            .frame(maxHeight: 320)
+
+            Rectangle().fill(t.hairline).frame(height: 0.5)
+            Text(store.selectedVendorCount <= 1
+                 ? "Solo · \(store.primaryVendor.displayName)"
+                 : "Comparing \(store.selectedVendorCount) — answers shown side by side")
+                .font(TahoeFont.body(10.5))
+                .foregroundStyle(t.fg4)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+        }
+        .frame(width: 384)
+        .background(t.surfaceSolid)
+    }
+
+    private var soloCompareToggle: some View {
+        HStack(spacing: 2) {
+            soloCompareSegment(title: "Solo", active: store.selectedVendorCount <= 1) {
+                store.selectedVendors = [store.primaryVendor]
+                store.persist()
+            }
+            soloCompareSegment(title: "Compare", active: store.selectedVendorCount > 1) {
+                if store.selectedVendorCount <= 1 { store.toggleVendor(firstConfigurableVendor) }
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.05)))
+    }
+
+    private func soloCompareSegment(title: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .foregroundStyle(active ? t.fg : t.fg4)
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(active ? Color.white.opacity(0.12) : Color.clear))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func providerSelectorRow(_ vendor: ChatVendor) -> some View {
+        let selected = store.isVendorSelected(vendor)
+        let enabled = ProviderEnablement.isEnabled(vendor)
+        let available = isVendorAvailable(vendor)
+        let canSelect = enabled && (selected || available)
+        HStack(spacing: 10) {
+            Button { toggleProviderRow(vendor) } label: {
+                Image(systemName: selected ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(selected ? t.accent : t.fg4)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSelect)
+
+            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 18)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(vendor.displayName)
+                    .font(TahoeFont.body(12.5, weight: .semibold))
+                    .foregroundStyle(enabled ? t.fg : t.fg4)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let reason = providerUnavailableReason(vendor) {
+                    Text(reason)
+                        .font(TahoeFont.body(9.5))
+                        .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.tail)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+
+            providerRowModelMenu(vendor)
+            if modelSupportsEffort(vendor) { providerRowEffortMenu(vendor) }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(selected ? Color.white.opacity(0.06) : Color.clear))
+        .opacity(canSelect ? 1 : 0.55)
+        .contentShape(Rectangle())
+    }
+
+    private func toggleProviderRow(_ vendor: ChatVendor) {
+        guard ProviderEnablement.isEnabled(vendor) else { return }
+        if !store.isVendorSelected(vendor), !isVendorAvailable(vendor) { return }
+        store.toggleVendor(vendor)
+    }
+
+    private func providerRowModelMenu(_ vendor: ChatVendor) -> some View {
+        let models = vendor.models(in: client.modelCatalog)
+        let currentId = store.model(for: vendor, catalog: client.modelCatalog)
+        return Menu {
+            if models.isEmpty { Text("No models") }
+            ForEach(models, id: \.id) { m in
+                Button {
+                    store.selectModel(m.id, for: vendor, catalog: client.modelCatalog)
+                } label: {
+                    if m.id == currentId { Label(m.displayName, systemImage: "checkmark") }
+                    else { Text(m.displayName) }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold)).foregroundStyle(t.fg4)
+                Text(rowModelLabel(for: vendor))
+                    .font(TahoeFont.body(11)).foregroundStyle(t.fg2)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            .frame(width: 116, alignment: .leading)
+        }
+        // Deterministic fixed width so the model dropdown never collapses (when
+        // flexible) nor balloons (under .fixedSize with a long OpenRouter label).
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .frame(width: 116)
+    }
+
+    /// Model name for a row, stripping a redundant "<Provider> · " prefix
+    /// (e.g. "OpenRouter · OpenAI: GPT-5.5" → "OpenAI: GPT-5.5") since the row
+    /// already shows the provider name.
+    private func rowModelLabel(for vendor: ChatVendor) -> String {
+        let label = compactModelLabel(for: vendor) ?? "Model"
+        let prefix = "\(vendor.displayName) · "
+        return label.hasPrefix(prefix) ? String(label.dropFirst(prefix.count)) : label
+    }
+
+    @ViewBuilder
+    private func providerRowEffortMenu(_ vendor: ChatVendor) -> some View {
+        let current = store.effort(for: vendor, catalog: client.modelCatalog)
+        Menu {
+            ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                Button {
+                    store.selectEffort(effort, for: vendor, catalog: client.modelCatalog)
+                } label: {
+                    if current == effort { Label(effort.rawValue.capitalized, systemImage: "checkmark") }
+                    else { Text(effort.rawValue.capitalized) }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold)).foregroundStyle(t.fg4)
+                Text(current?.rawValue.capitalized ?? "Auto")
+                    .font(TahoeFont.body(11)).foregroundStyle(t.fg3)
+                    .lineLimit(1)
+            }
+            .frame(width: 58, alignment: .leading)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .frame(width: 58)
+        .help("Reasoning effort")
     }
 
     private var deepResearchChip: some View {

@@ -171,7 +171,7 @@ public enum AgentControlWireVersion {
     /// catalog/device checks plus explicit terminal-launched CLI install/auth
     /// actions and repo-env preview/import routes backed by PR 201's
     /// `RepoEnvStore` + Keychain custody.
-    public static let current: Int = 25
+    public static let current: Int = 26
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -350,6 +350,14 @@ public enum AgentControlWireVersion {
     /// Mac" when the paired Mac is below this.
     public static let reviveMinimum: Int = 25
 
+    /// v26: minimum wire version exposing `AgentKind.grok` (native ACP driver).
+    /// Older Macs decode `.grok` as `.unknown` ("Other agent") and hide it from
+    /// pickers; iOS shows "Update Clawdmeter on the Mac".
+    public static let grokMinimum: Int = 26
+    /// v26: minimum wire version where the daemon drives ACP sessions
+    /// (`.acpGrok`/`.acpCursor`) through the native harness driver.
+    public static let acpDriveMinimum: Int = 26
+
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
     /// compatible*: newer servers (e.g. wire v7) work fine with this
@@ -370,6 +378,16 @@ public enum AgentControlWireVersion {
     public static func supportsGemini(serverWireVersion: Int?) -> Bool {
         guard let v = serverWireVersion else { return false }
         return v >= geminiMinimum
+    }
+
+    public static func supportsGrok(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= grokMinimum
+    }
+
+    public static func supportsACPDrive(serverWireVersion: Int?) -> Bool {
+        guard let v = serverWireVersion else { return false }
+        return v >= acpDriveMinimum
     }
 
     public static func supportsChatSubscribe(serverWireVersion: Int?) -> Bool {
@@ -837,6 +855,9 @@ public struct ModelCatalog: Codable, Sendable {
     /// The bundled fallback intentionally contains only Auto so we do not
     /// claim access to models the user's Cursor account may not expose.
     public let cursor: [ModelCatalogEntry]
+    /// xAI Grok models (wire v26). ACP agents advertise models at `initialize`,
+    /// so this is the bundled fallback used until a live list is fetched.
+    public let grok: [ModelCatalogEntry]
     public let updatedAt: Date
 
     public init(
@@ -845,6 +866,7 @@ public struct ModelCatalog: Codable, Sendable {
         gemini: [ModelCatalogEntry] = [],
         opencode: [ModelCatalogEntry] = [],
         cursor: [ModelCatalogEntry] = [],
+        grok: [ModelCatalogEntry] = [],
         updatedAt: Date
     ) {
         self.claude = claude
@@ -852,6 +874,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.gemini = gemini
         self.opencode = opencode
         self.cursor = cursor
+        self.grok = grok
         self.updatedAt = updatedAt
     }
 
@@ -910,6 +933,13 @@ public struct ModelCatalog: Codable, Sendable {
         cursor: [
             ModelCatalogEntry(id: CursorModelCatalog.autoModelId, provider: .cursor, displayName: "Cursor default / Auto", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "Cursor account default", badge: "Auto"),
         ],
+        grok: [
+            // Live-probed from `grok models` (cmux Grok Build 0.2.16, 2026-06-03).
+            // Driven headless (GrokHeadlessDriver) — no ACP. These ids are what the
+            // grok CLI's `--model` flag accepts for this login.
+            ModelCatalogEntry(id: "grok-build", provider: .grok, displayName: "Grok Build", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 500_000, recommendedFor: "Advanced coding", badge: "Default"),
+            ModelCatalogEntry(id: "grok-composer-2.5-fast", provider: .grok, displayName: "Grok Composer 2.5 Fast", cliAlias: nil, supportsThinking: false, supportsEffort: true, contextWindow: 256_000, recommendedFor: "Fast iteration", badge: "Fast"),
+        ],
         updatedAt: Date(timeIntervalSince1970: 1747353600) // 2026-05-15
     )
 
@@ -920,6 +950,7 @@ public struct ModelCatalog: Codable, Sendable {
             ?? gemini.first(where: { $0.id == id || $0.cliAlias == id })
             ?? opencode.first(where: { $0.id == id || $0.cliAlias == id })
             ?? cursor.first(where: { $0.id == id || $0.cliAlias == id })
+            ?? grok.first(where: { $0.id == id || $0.cliAlias == id })
     }
 
     /// Provider-indexed catalog used by Code V2 pickers. The legacy arrays
@@ -932,6 +963,7 @@ public struct ModelCatalog: Codable, Sendable {
             AgentKind.gemini.rawValue: gemini,
             AgentKind.opencode.rawValue: opencode,
             AgentKind.cursor.rawValue: cursor,
+            AgentKind.grok.rawValue: grok,
         ]
     }
 
@@ -942,6 +974,7 @@ public struct ModelCatalog: Codable, Sendable {
         case .gemini: return gemini
         case .opencode: return opencode
         case .cursor: return cursor
+        case .grok: return grok
         case .unknown: return []
         }
     }
@@ -953,6 +986,7 @@ public struct ModelCatalog: Codable, Sendable {
             gemini: gemini,
             opencode: opencode,
             cursor: cursor,
+            grok: grok,
             updatedAt: Date()
         )
     }
@@ -964,6 +998,7 @@ public struct ModelCatalog: Codable, Sendable {
             gemini: gemini,
             opencode: opencode,
             cursor: cursor,
+            grok: grok,
             updatedAt: Date()
         )
     }
@@ -975,7 +1010,7 @@ public struct ModelCatalog: Codable, Sendable {
     /// Codable throws on missing keys; decodeIfPresent + default returns
     /// an empty Gemini array.
     private enum CodingKeys: String, CodingKey {
-        case claude, codex, gemini, opencode, cursor, updatedAt
+        case claude, codex, gemini, opencode, cursor, grok, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -985,6 +1020,7 @@ public struct ModelCatalog: Codable, Sendable {
         self.gemini = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .gemini) ?? []
         self.opencode = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .opencode) ?? []
         self.cursor = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .cursor) ?? []
+        self.grok = try c.decodeIfPresent([ModelCatalogEntry].self, forKey: .grok) ?? []
         self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
     }
 
@@ -995,6 +1031,7 @@ public struct ModelCatalog: Codable, Sendable {
         try c.encode(gemini, forKey: .gemini)
         try c.encode(opencode, forKey: .opencode)
         try c.encode(cursor, forKey: .cursor)
+        try c.encode(grok, forKey: .grok)
         try c.encode(updatedAt, forKey: .updatedAt)
     }
 }
@@ -1187,6 +1224,10 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
     /// Cursor Agent CLI / SDK-backed sessions. The Mac launches Cursor via
     /// `cursor-agent` or `agent`; iOS requests are proxied to the paired Mac.
     case cursor
+    /// xAI Grok via `grok agent --no-leader stdio` (ACP v0.11.3). Added for the
+    /// harness build (wire v26, 2026-06-02); auth id `grok.com`, resolved from
+    /// `initialize.authMethods` (never hardcoded).
+    case grok
     /// Forward-compat sentinel for unknown agent kinds (X3, v0.17, wire
     /// v12). Older v12 clients connecting to a v13 Mac decode the
     /// `.opencode` raw into `.unknown` instead of `.claude` —
@@ -1203,7 +1244,7 @@ public enum AgentKind: String, Codable, Hashable, Sendable, CaseIterable {
     /// segmented controls don't accidentally render it as a choice.
     /// `.opencode` and `.cursor` are included as real picker options.
     public static var allCases: [AgentKind] {
-        [.claude, .codex, .gemini, .opencode, .cursor]
+        [.claude, .codex, .gemini, .opencode, .cursor, .grok]
     }
 
     /// Lenient decoder (X3 — wire v12). Forward-compat readers keep
@@ -1233,6 +1274,11 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
     case cursorCLI = "cursor_cli"
     case cursorSDK = "cursor_sdk"
     case vscodeBridge = "vscode_bridge"
+    /// Native ACP drivers (wire v26). Per-agent (not a single `.acp`) for
+    /// diagnostic/migration fidelity — Grok and Cursor differ in
+    /// spawn/auth/config/resume behavior.
+    case acpGrok = "acp_grok"
+    case acpCursor = "acp_cursor"
     case unknown
 
     public init(from decoder: Decoder) throws {
@@ -1256,11 +1302,19 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
         case .opencode:
             return .opencodeServer
         case .cursor:
-            return .cursorCLI
+            // Phase 5: Cursor is now driven over the native ACP harness
+            // (`cursor-agent acp`), not the legacy tmux/poll CLI path.
+            return .acpCursor
+        case .grok:
+            return .acpGrok
         case .unknown:
             return .unknown
         }
     }
+
+    /// True for the native ACP harness runtime kinds (Grok, Cursor) — the
+    /// daemon drives these through `AcpHarnessBridge`, not tmux/SDK/serve.
+    public var isACPDriven: Bool { self == .acpGrok || self == .acpCursor }
 }
 
 /// How trustworthy a cost/usage value is. Provider-reported costs should
@@ -1348,6 +1402,15 @@ public struct SessionRuntimeCapabilities: Codable, Hashable, Sendable {
                 supportsPermissionPrompts: true,
                 supportsUsage: false,
                 supportsTerminal: true
+            )
+        case .acpGrok, .acpCursor:
+            // ACP drivers: full turn loop + permission prompts + usage.
+            // Terminal stays off until the Phase 6 fs/terminal trust model.
+            return SessionRuntimeCapabilities(
+                supportsCancel: true,
+                supportsPermissionPrompts: true,
+                supportsUsage: true,
+                supportsTerminal: false
             )
         case .unknown:
             return SessionRuntimeCapabilities(supportsStreaming: false)
@@ -4884,7 +4947,10 @@ public struct CreateChatSessionRequest: Codable, Sendable {
         self.model = try c.decodeIfPresent(String.self, forKey: .model)
         self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
         self.codexChatBackend = try c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)
-        self.chatVendor = try c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)
+        // Lenient: an unknown vendor rawValue (a newer client's vendor) decodes
+        // to nil instead of failing the whole session decode. Forward-compat —
+        // mirrors the wire's decodeIfPresent philosophy.
+        self.chatVendor = (try? c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)) ?? nil
         self.billingProvider = try c.decodeIfPresent(String.self, forKey: .billingProvider)
         self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
     }
@@ -4948,7 +5014,10 @@ public struct FrontierModelSlot: Codable, Sendable {
         self.effort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
         self.codexChatBackend = try c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)
         self.deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
-        self.chatVendor = try c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)
+        // Lenient: an unknown vendor rawValue (a newer client's vendor) decodes
+        // to nil instead of failing the whole session decode. Forward-compat —
+        // mirrors the wire's decodeIfPresent philosophy.
+        self.chatVendor = (try? c.decodeIfPresent(ChatVendor.self, forKey: .chatVendor)) ?? nil
         self.billingProvider = try c.decodeIfPresent(String.self, forKey: .billingProvider)
     }
 }

@@ -360,6 +360,9 @@ final class AppRuntime: ObservableObject {
                 // Cursor usage limits are owned by the user's Cursor account;
                 // no Clawdmeter auto-revive poller exists for this provider.
                 break
+            case .grok:
+                // ACP agent with no 5h-window quota poller — auto-revive N/A.
+                break
             case .unknown:
                 // X3: forward-compat unknown — never user-toggleable.
                 // The handler returns 400 before reaching here.
@@ -754,9 +757,10 @@ final class AppRuntime: ObservableObject {
                 source: CursorSource(tokenProvider: tokenProvider),
                 tokenProvider: tokenProvider
             )
-        case .opencode, .unknown:
+        case .opencode, .grok, .unknown:
             // Caller should not reach this — guarded by `providerConfig`
-            // returning nil for these kinds.
+            // returning nil for these kinds (grok is a Code/Sessions ACP
+            // agent, not a metered AppModel provider).
             preconditionFailure(
                 "AppRuntime.makeInstanceAwareModel called for unsupported kind \(instance.kind)"
             )
@@ -769,7 +773,7 @@ final class AppRuntime: ObservableObject {
         case .codex:  return .codex
         case .gemini: return .gemini
         case .cursor: return .cursor
-        case .opencode, .unknown: return nil
+        case .opencode, .grok, .unknown: return nil
         }
     }
 

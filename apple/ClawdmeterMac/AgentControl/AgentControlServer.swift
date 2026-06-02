@@ -76,6 +76,11 @@ public final class AgentControlServer {
     /// chat-snapshot request rescans for the new rollout file. The
     /// `chatStoreRegistry` delegates JSONL URL resolution to this.
     private let chatFileResolver: SessionFileResolver
+    /// ACP harness: live `AcpHarnessBridge`s keyed by session id. Grok (and,
+    /// later, every migrated ACP/SDK provider) is driven through one of these
+    /// instead of a tmux pane. Claude/Codex/Cursor stay on their existing
+    /// paths; the registry only holds the new harness-driven sessions.
+    private let harnessRegistry = HarnessSessionRegistry()
     /// T18 Wire Inspector: per-connection request context so the
     /// outgoing-response recorder can tag entries with the original
     /// method+path. Each NWConnection serves one request before
@@ -319,6 +324,13 @@ public final class AgentControlServer {
     /// without starting. The Sessions tab handles "daemon offline" gracefully.
     public func start() {
         guard listener == nil else { return }
+        // Reap stale harness children (codex app-server / grok / cursor-agent)
+        // left by a previous, crashed daemon. Real daemon only — a test server
+        // (writesServerMetadata == false) must not touch the shared
+        // ~/.clawdmeter pidfile or another live daemon's children.
+        if writesServerMetadata {
+            HarnessProcessReaper.shared.reapOrphans()
+        }
         let queue = DispatchQueue(label: "AgentControlServer.accept", qos: .userInitiated)
         self.listenerQueue = queue
 
@@ -1671,13 +1683,28 @@ public final class AgentControlServer {
         guard !bytes.isEmpty, bytes.count <= 1_000_000 else {
             sendResponse(.badRequest, on: connection); return
         }
+        // Phase 1: resolve the owning backend ONCE via SessionCommandRouter
+        // (the tested single source of truth for the precedence below). Each
+        // branch now checks its route instead of re-deriving the predicate;
+        // the branch ORDER + bodies are unchanged — rate-limit still sits
+        // between the agentapi branch and the rest, exactly as before.
+        let routeCtx = SessionCommandRouter.SessionContext(
+            agent: session.agent,
+            kind: session.kind,
+            codexChatBackend: session.codexChatBackend,
+            geminiBackend: session.geminiBackend,
+            hasAntigravityConversation: session.antigravityConversationId != nil,
+            runtimeIsACPDriven: session.runtimeBinding?.runtimeKind.isACPDriven == true,
+            hasLiveBridge: harnessRegistry.bridge(for: uuid) != nil
+        )
+        let route = SessionCommandRouter.resolve(routeCtx)
         // v0.8.1 agy-migration (Codex P1.3): Antigravity 2 agentapi
         // sessions have no tmux pane — sends route through
         // `LanguageServerClient.sendMessage` against the running
         // language_server. Same rate-limit + audit-log path as tmux
         // sends; the only difference is the transport. This branch
         // runs BEFORE the chat-tab SDK dispatch + paneId guard below.
-        if session.geminiBackend == .agentapi,
+        if route == .antigravityAgentapi,
            let conversationId = session.antigravityConversationId {
             guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
                 sendResponse(.tooManyRequestsSend, on: connection); return
@@ -1717,9 +1744,7 @@ public final class AgentControlServer {
         // v0.8 Phase 4.5: SDK chat sessions route to CodexSubscriptionRelay
         // instead of tmux. Detect via (kind=.chat, agent=.codex,
         // backend=.sdk) — those sessions have no tmux pane.
-        if session.kind == .chat
-            && session.agent == .codex
-            && session.codexChatBackend == .sdk {
+        if route == .codexSDK {
             await sendChatSDKPrompt(
                 session: session,
                 prompt: req.text,
@@ -1735,7 +1760,7 @@ public final class AgentControlServer {
         // events that OpencodeSSEAdapter routes into the session's
         // SessionChatStore — clients reading the chat-subscribe WS see
         // the assistant turn appear without an additional poll.
-        if session.agent == .opencode {
+        if route == .opencodeServe {
             await sendOpencodePrompt(
                 session: session,
                 prompt: req.text,
@@ -1743,6 +1768,37 @@ public final class AgentControlServer {
                 payloadHash: payloadHash,
                 connection: connection
             )
+            return
+        }
+        // ACP harness send (Grok, Cursor): drive the live `AcpHarnessBridge`.
+        // The reply streams back into the session's SessionChatStore as the
+        // driver emits HarnessEvents — clients on chat-subscribe see the turn
+        // appear with no extra poll, like the opencode/agentapi paths. Keyed
+        // off the bridge registry so legacy tmux sessions (no bridge) fall
+        // through to the tmux path below.
+        if route == .harnessBridge, let bridge = harnessRegistry.bridge(for: uuid) {
+            await bridge.prompt(req.text)
+            let peer = Self.endpointString(connection.endpoint)
+            await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
+            await sendCommandResponse(
+                body: ["ok": true],
+                key: req.idempotencyKey,
+                kind: .send,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
+            return
+        }
+        // An ACP session whose bridge died (daemon restart) has no tmux pane —
+        // return an explicit 503 ("paste succeeded" ≠ "provider accepted")
+        // instead of falling into the tmux-guard 500. Revive is Phase-1.
+        if SessionCommandRouter.acpExpectedButNoBridge(routeCtx) {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"acp_session_not_live","cta":"Start a new session"}"#.utf8)
+            ), on: connection)
             return
         }
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
@@ -1944,6 +2000,10 @@ public final class AgentControlServer {
     /// clients can attach immediately. Errors surface as 503 with
     /// structured CTA bodies the iOS Chat tab can map directly to
     /// user-facing prompts.
+    ///
+    /// DEPRECATED (harness migration, 2026-06): Gemini chat now drives over the
+    /// Cascade gRPC harness. This agentapi one-shot handler is reachable only via
+    /// the antigravity.grpc.enabled kill-switch.
     private func handlePostGeminiChatSession(
         model: String?,
         effort: ReasoningEffort?,
@@ -2214,6 +2274,11 @@ public final class AgentControlServer {
             // The current JSONL extractor only proves Claude/Codex ids, so
             // keep this conservative until the Cursor importer can prove one.
             argv = []
+        case .grok:
+            // ACP agent — driven via AcpAgentDriver, not a tmux argv. The
+            // daemon ACP spawn path is not wired yet, so fall through to the
+            // 503 (honest "not available" rather than an empty tmux spawn).
+            argv = []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Fall
             // through to the 503 below so the iOS caller sees a clean
@@ -2466,6 +2531,27 @@ public final class AgentControlServer {
             ?? InterruptRequest(idempotencyKey: nil)
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
+        // ACP harness interrupt (Grok, Cursor): the SessionInterruptDispatcher
+        // has no handle on the harness registry, so cancel the live bridge here
+        // first. Keyed off the bridge registry (agent-agnostic); legacy tmux
+        // sessions have no bridge and fall through to the dispatcher. Flip the
+        // turn state up front (mirrors the dispatcher) so the V2 UI's Send
+        // button restores immediately, then cancel the in-flight ACP turn.
+        if let bridge = harnessRegistry.bridge(for: uuid) {
+            if let s = registry.session(id: uuid) {
+                chatStoreRegistry.snapshotStore(for: s)?.setCurrentTurnState(.interrupted)
+            }
+            await bridge.cancel()
+            await sendCommandResponse(
+                body: ["ok": true],
+                key: req.idempotencyKey,
+                kind: .interrupt,
+                sessionId: uuid,
+                payloadHash: payloadHash,
+                on: connection
+            )
+            return
+        }
         // v0.23 (Chat V2 — audit P0 #2): route through
         // SessionInterruptDispatcher so Stop works for Codex SDK and
         // Gemini agentapi sessions too, not just tmux-backed ones.
@@ -4062,6 +4148,175 @@ public final class AgentControlServer {
         }
     }
 
+    /// The single switch deciding which providers are driven over the native
+    /// ACP harness (vs tmux / SDK / serve). Returns the agent's spawn+auth
+    /// policy, or nil for non-ACP agents (Claude/Codex/Gemini/OpenCode).
+    static func acpSupport(for agent: AgentKind) -> AcpAgentSupport? {
+        switch agent {
+        // Grok has NO ACP server in the shipping binary (cmux "Grok Build" is a
+        // TUI + headless one-shot + MCP client). It drives via GrokHeadlessDriver,
+        // not ACP. Cursor IS a real ACP agent (`cursor-agent acp`, verified live).
+        case .cursor: return CursorAcpSupport()
+        default: return nil
+        }
+    }
+
+    /// The `codex app-server` harness is the DEFAULT Codex drive path now
+    /// (Sessions + Chat). The legacy tmux/SDK Codex paths are deprecated. This
+    /// stays a kill-switch only: during live-verify, opt OUT of the harness with
+    /// `defaults write com.clawdmeter.mac clawdmeter.codex.appServer.enabled -bool false`.
+    static var codexAppServerEnabled: Bool {
+        UserDefaults.standard.object(forKey: "clawdmeter.codex.appServer.enabled") as? Bool ?? true
+    }
+    /// The Antigravity Cascade gRPC harness is the DEFAULT Gemini drive path now.
+    /// The legacy agentapi one-shot path is deprecated. Kill-switch only:
+    /// `defaults write com.clawdmeter.mac clawdmeter.antigravity.grpc.enabled -bool false`.
+    static var antigravityGrpcEnabled: Bool {
+        UserDefaults.standard.object(forKey: "clawdmeter.antigravity.grpc.enabled") as? Bool ?? true
+    }
+
+    /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
+    /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: no tmux pane
+    /// — the daemon drives an `AgentDriver` via `AcpHarnessBridge` (built by
+    /// `makeBridge`), projecting its event stream into the session's
+    /// `SessionChatStore`. Two-phase failure contract (A3): `bridge.start()`
+    /// throws synchronously on spawn/handshake/auth failure, so a failed start
+    /// tears the write-ahead session back down and returns a real HTTP error.
+    /// `binary`/`arguments` are the stdio launch (nil/[] for gRPC drivers).
+    private func handleSpawnHarnessSession(
+        req: NewSessionRequest,
+        displayName: String,
+        binary: String?,
+        arguments: [String],
+        cwd: String,
+        worktreePath: String?,
+        provisioning: WorktreeProvisioningMetadata?,
+        provisionalSessionId: UUID?,
+        connection: NWConnection,
+        makeBridge: (UUID, SessionChatStore) -> AcpHarnessBridge
+    ) async {
+        // Resolve the per-repo env set (same path as the tmux/opencode spawns).
+        let resolvedEnv: RepoEnvResolvedEnvironment?
+        do {
+            resolvedEnv = try resolveRepoEnv(repoRoot: req.repoKey, cwd: cwd)
+        } catch {
+            if sendRepoEnvConflict(error, on: connection) {
+                await cleanupUnregisteredWorktree(
+                    repoRoot: req.repoKey, worktreePath: worktreePath,
+                    provisioning: provisioning, provisionalSessionId: provisionalSessionId,
+                    context: "acp repo env conflict")
+                return
+            }
+            sendResponse(.internalError, on: connection)
+            await cleanupUnregisteredWorktree(
+                repoRoot: req.repoKey, worktreePath: worktreePath,
+                provisioning: provisioning, provisionalSessionId: provisionalSessionId,
+                context: "acp repo env resolve")
+            return
+        }
+
+        // The ACP child REPLACES its environment (Process.environment), so it
+        // must carry the full inherited env (PATH/HOME — Grok and Cursor both
+        // need them) plus the repo-env overrides layered on top.
+        var childEnv = ProcessInfo.processInfo.environment
+        for (k, v) in (resolvedEnv?.environment ?? [:]) { childEnv[k] = v }
+
+        // Step 1: write-ahead the Clawdmeter session (no tmux pane). The
+        // runtime kind is inferred as `.acpGrok` from `agent: .grok`.
+        let session: AgentSession
+        do {
+            session = try await registry.create(
+                repoKey: req.repoKey,
+                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                agent: req.agent,
+                model: req.model,
+                goal: req.goal,
+                worktreePath: worktreePath,
+                provisioning: provisioning,
+                tmuxWindowId: nil,
+                tmuxPaneId: nil,
+                planMode: false,  // ACP plan/approval flows through permission prompts, not the Codex synthetic-plan card
+                mode: worktreePath == nil ? .local : .worktree,
+                effort: req.effort,
+                ownsWorktree: worktreePath != nil,
+                envSetId: resolvedEnv?.set?.id,
+                envSetName: resolvedEnv?.set?.name,
+                id: provisionalSessionId ?? UUID()
+            )
+        } catch {
+            serverLogger.error("acp registry.create write-ahead failed: \(error.localizedDescription, privacy: .public)")
+            sendResponse(.internalError, on: connection)
+            await cleanupUnregisteredWorktree(
+                repoRoot: req.repoKey, worktreePath: worktreePath,
+                provisioning: provisioning, provisionalSessionId: provisionalSessionId,
+                context: "acp registry create failure")
+            return
+        }
+
+        // Step 2: acquire the per-session chat store the bridge projects into.
+        // `acquire` (not `snapshotStore`) because the bridge is a long-lived
+        // writer — it must pin the store against idle eviction while driving.
+        // Released on bridge teardown / session delete (lifecycle, Phase 1).
+        guard let store = chatStoreRegistry.acquire(for: session) else {
+            serverLogger.error("acp chat store acquire failed for \(session.id, privacy: .public)")
+            try? await registry.delete(id: session.id)
+            sendResponse(.internalError, on: connection)
+            await cleanupUnregisteredWorktree(
+                repoRoot: req.repoKey, worktreePath: worktreePath,
+                provisioning: provisioning, provisionalSessionId: provisionalSessionId,
+                context: "acp chat store acquire")
+            return
+        }
+
+        // Step 3: build + start the bridge. Model/effort selection is deferred
+        // to a follow-up (Grok takes them launch-time, Cursor via
+        // set_config_option) — v1 spawns with the agent's defaults until we map
+        // `initialize.availableModels`; the bundled catalog ids are placeholders,
+        // not real CLI models. alwaysApprove=false so the agent raises
+        // permission prompts we surface (a harness, not a blind auto-runner).
+        let bridge = makeBridge(session.id, store)
+        do {
+            try await bridge.start(
+                binary: binary,
+                arguments: arguments,
+                cwd: cwd,
+                env: childEnv,
+                effort: nil,
+                alwaysApprove: false
+            )
+        } catch {
+            serverLogger.error("acp bridge.start failed: \(error.localizedDescription, privacy: .public)")
+            await bridge.teardown()
+            chatStoreRegistry.release(sessionId: session.id)
+            try? await registry.delete(id: session.id)
+            await cleanupUnregisteredWorktree(
+                repoRoot: req.repoKey, worktreePath: worktreePath,
+                provisioning: provisioning, provisionalSessionId: provisionalSessionId,
+                context: "acp bridge start")
+            let payload = ["error": "acp_start_failed", "detail": String(describing: error)]
+            let body = (try? JSONSerialization.data(withJSONObject: payload))
+                ?? Data(#"{"error":"acp_start_failed"}"#.utf8)
+            sendResponse(HTTPResponse(status: 503, reason: "Service Unavailable",
+                                      contentType: "application/json", body: body), on: connection)
+            return
+        }
+
+        // Step 4: register the live bridge, record the workspace + event, and
+        // return the session JSON (same shape as every other spawn path).
+        harnessRegistry.register(bridge, for: session.id)
+        recordWorkspaceSession(repoRoot: req.repoKey, sessionId: session.id)
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["repo": cwd, "agent": req.agent.rawValue])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let body = try? encoder.encode(session) {
+            sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+        } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
     // MARK: - D4: per-provider auto-revive RPC (wire v12)
 
     /// POST body for `/providers/:id/auto-revive`. The `:id` path
@@ -4889,9 +5144,19 @@ public final class AgentControlServer {
         }
 
         let effectivePlanMode = req.agent == .cursor ? false : req.planMode
-        let preflightArgv = req.agent == .opencode
-            ? ["opencode-managed-session"]
-            : AgentSpawner.argv(for: req, workspacePath: req.repoKey)
+        // ACP harness agents (Grok, Cursor) and OpenCode spawn via their own
+        // managers, not tmux, so `AgentSpawner.argv` returns [] for them. Use a
+        // non-empty sentinel so they pass the CLI-presence guard and reach their
+        // dedicated spawn branch below (binary presence is checked there, at
+        // launch, via the two-phase start contract / provider preflight).
+        let preflightArgv: [String]
+        if req.agent == .opencode {
+            preflightArgv = ["opencode-managed-session"]
+        } else if Self.acpSupport(for: req.agent) != nil {
+            preflightArgv = ["acp-managed-session"]
+        } else {
+            preflightArgv = AgentSpawner.argv(for: req, workspacePath: req.repoKey)
+        }
         guard !preflightArgv.isEmpty else {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
@@ -4953,6 +5218,105 @@ public final class AgentControlServer {
                 provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId
             )
+            return
+        }
+
+        // Harness-driven providers bypass tmux: the daemon drives an AgentDriver
+        // and projects its events into the chat store. Each branch owns its own
+        // session-create + response, returning before the tmux argv/spawn below.
+        // (1) ACP stdio agents (Cursor — `cursor-agent acp`, verified live).
+        // Grok is NOT ACP; it's handled by the headless branch (1c) below.
+        if let support = Self.acpSupport(for: req.agent) {
+            let display = providerDisplayName(req.agent)
+            // Phase 6: the agent's fs read/write capability is granted ONLY for
+            // autopilot-trusted repos, bound to the repo root + session cwd via
+            // RepoTrustGate (symlink/`..`/TOCTOU-safe). Untrusted repos pass nil
+            // → fs stays unadvertised + every fs request is refused.
+            let trustGate = AutopilotState.shared.isRepoTrusted(req.repoKey)
+                ? RepoTrustGate(repoRoot: req.repoKey, sessionCwd: cwd)
+                : nil
+            let auditFs: (@Sendable (String, String, Bool) async -> Void)? = trustGate == nil ? nil : { op, path, allowed in
+                serverLogger.info("acp fs \(op, privacy: .public) allowed=\(allowed, privacy: .public) path=\(MobileCommandPayloadHasher.hex(Data(path.utf8)), privacy: .public)")
+            }
+            await handleSpawnHarnessSession(
+                req: req, displayName: display,
+                binary: support.binaryName,
+                arguments: support.spawnArgv(model: nil, effort: nil, alwaysApprove: false),
+                cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId, connection: connection,
+                makeBridge: { sid, store in
+                    .acp(sessionId: sid, support: support, store: store,
+                         model: req.model, agentDisplayName: display,
+                         trustGate: trustGate, onFileAccess: auditFs)
+                })
+            return
+        }
+        // (1c) Grok — headless driver. The shipping grok binary has no ACP
+        // server, so the GrokHeadlessDriver spawns `grok --output-format
+        // streaming-json` per turn (transport-owning; no stdio child).
+        if req.agent == .grok {
+            guard let grokPath = ShellRunner.locateBinary("grok") else {
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable", contentType: "application/json",
+                    body: Data(#"{"error":"grok_not_found","cta":"Install Grok / cmux first."}"#.utf8)
+                ), on: connection)
+                return
+            }
+            let display = providerDisplayName(req.agent)
+            await handleSpawnHarnessSession(
+                req: req, displayName: display,
+                binary: nil, arguments: [],
+                cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId, connection: connection,
+                makeBridge: { sid, store in
+                    .transportOwning(sessionId: sid, store: store, model: req.model,
+                                     agentDisplayName: display,
+                                     driver: GrokHeadlessDriver(binaryPath: grokPath))
+                })
+            return
+        }
+        // (2) Codex over `codex app-server` — the DEFAULT Codex drive path.
+        // The legacy tmux/SDK codex paths are deprecated; `codexAppServerEnabled`
+        // is now a live-verify kill-switch (default on).
+        if req.agent == .codex, Self.codexAppServerEnabled {
+            let display = providerDisplayName(req.agent)
+            await handleSpawnHarnessSession(
+                req: req, displayName: display,
+                binary: "codex", arguments: ["app-server"],
+                cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId, connection: connection,
+                makeBridge: { sid, store in
+                    .codexAppServer(sessionId: sid, store: store,
+                                    model: req.model, agentDisplayName: display)
+                })
+            return
+        }
+        // (3) Antigravity Cascade over gRPC — the DEFAULT Gemini drive path.
+        // The legacy agentapi one-shot path is deprecated; `antigravityGrpcEnabled`
+        // is now a live-verify kill-switch (default on).
+        if req.agent == .gemini, Self.antigravityGrpcEnabled {
+            let display = providerDisplayName(req.agent)
+            let projectsDir = ClawdmeterRealHome.url()
+                .appendingPathComponent(".gemini/config/projects", isDirectory: true)
+            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
+            guard let projectId = await resolver.allProjects().first?.id else {
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable", contentType: "application/json",
+                    body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first."}"#.utf8)
+                ), on: connection)
+                return
+            }
+            let lsClient = LanguageServerClient()
+            await handleSpawnHarnessSession(
+                req: req, displayName: display,
+                binary: nil, arguments: [],   // the gRPC driver owns its transport
+                cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId, connection: connection,
+                makeBridge: { sid, store in
+                    .transportOwning(sessionId: sid, store: store, model: req.model,
+                                     agentDisplayName: display,
+                                     driver: AntigravityCascadeDriver(languageServer: lsClient, projectId: projectId))
+                })
             return
         }
 
@@ -5225,6 +5589,7 @@ public final class AgentControlServer {
         case .gemini: return "antigravity"
         case .cursor: return "cursor"
         case .opencode: return "opencode"
+        case .grok: return "grok"
         case .unknown: return nil
         }
     }
@@ -5319,6 +5684,22 @@ public final class AgentControlServer {
             sendProviderDisabled(provider: req.provider, reason: reason, on: connection)
             return
         }
+        // Harness is the DEFAULT Chat drive path for non-Claude providers now:
+        // a chat session created here gets a live AcpHarnessBridge, and the
+        // send/interrupt/permission handlers already route to that bridge
+        // (SessionCommandRouter `.harnessBridge`). The legacy SDK/agentapi/tmux
+        // chat paths below are deprecated, reachable only via the per-provider
+        // kill-switch (default off). Codex → `codex app-server`.
+        if req.provider == .codex, Self.codexAppServerEnabled {
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
+        }
+        if req.provider == .grok {
+            // Grok chat drives over ACP via the harness — Grok has no legacy chat
+            // path (it was Sessions/Code-only before), so it always uses the harness.
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
+        }
         // v0.9: Gemini chat dispatches to Antigravity 2's agentapi via
         // a new daemon-side handler. Chat has no repoKey, so the helper
         // picks the first available Antigravity project as a scratch
@@ -5326,7 +5707,13 @@ public final class AgentControlServer {
         // Antigravity isn't installed / signed in / running / has no
         // projects open. agentapi-via-chat is live behind the wire v11 /
         // antigravityChatMinimum=11 gate.
+        if req.provider == .gemini, Self.antigravityGrpcEnabled {
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
+        }
         if req.provider == .gemini {
+            // Legacy agentapi one-shot chat path — deprecated, reachable only via
+            // the antigravityGrpcEnabled kill-switch (default off).
             await handlePostGeminiChatSession(
                 model: req.model,
                 effort: req.effort,
@@ -5341,9 +5728,14 @@ public final class AgentControlServer {
             await handlePostOpencodeChatSession(request: req, metadata: metadata, connection: connection)
             return
         }
-        if req.provider == .cursor,
-           let reason = await chatProviderUnavailableReason(provider: .cursor) {
-            sendChatProviderUnavailable(provider: .cursor, reason: reason, on: connection)
+        if req.provider == .cursor {
+            if let reason = await chatProviderUnavailableReason(provider: .cursor) {
+                sendChatProviderUnavailable(provider: .cursor, reason: reason, on: connection)
+                return
+            }
+            // Cursor chat drives over ACP via the harness (the legacy tmux argv
+            // path is deprecated; Phase 9 removes it).
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
             return
         }
         // Determine the Codex backend choice for this session. For non-
@@ -5396,6 +5788,14 @@ public final class AgentControlServer {
         // to route to CodexSubscriptionRelay; Phase 4.5 wires that. For
         // CLI chat (claude / codex+.cli) we spawn a tmux window now.
         let updatedSession = registry.session(id: session.id) ?? session
+        // Claude chat: pre-trust the throwaway chat-cwd so the CLI boots
+        // straight to the composer instead of blocking at the first-run trust
+        // dialog. Without this the warmup poll still dismisses the prompt, but
+        // the ~9s it takes exceeds the mobile send timeout. (No-op for other
+        // agents — they don't read ~/.claude.json.)
+        if updatedSession.agent == .claude {
+            ChatCwdManager.markTrustedForClaude(path: chatCwd)
+        }
         let argv = AgentSpawner.argv(for: updatedSession)
         if argv.isEmpty && updatedSession.agent == .codex && updatedSession.codexChatBackend == .sdk {
             // SDK chat: pre-create the SDK-only SessionChatStore via the
@@ -5487,6 +5887,246 @@ public final class AgentControlServer {
         if let body = try? encoder.encode(finalSession) {
             sendResponse(.ok(contentType: "application/json", body: body), on: connection)
         } else {
+            sendResponse(.internalError, on: connection)
+        }
+    }
+
+    /// Create a Chat session driven by the harness (no tmux pane). The chat
+    /// send/interrupt/permission handlers already route to a live
+    /// `AcpHarnessBridge` (`SessionCommandRouter.harnessBridge`); this wires
+    /// chat-CREATE to build + register one for a non-Claude provider.
+    ///
+    /// CRUCIAL: the session is created WITHOUT the SDK/agentapi backend axes
+    /// (`codexChatBackend: nil`, no agentapi conversation), so the router falls
+    /// through past the codex-SDK / antigravity-agentapi branches to
+    /// `.harnessBridge` once the bridge is live. Mirrors `handleSpawnHarnessSession`
+    /// Steps 2-4 but over a chat session + sandbox cwd (no worktree).
+    /// Errors from the harness chat-session core. The Solo handler maps these to
+    /// HTTP responses; the Frontier per-child path maps them to a slot reason.
+    private enum HarnessChatSpawnError: Error {
+        case createFailed(String)
+        case cwdFailed(String)
+        case storeAcquireFailed
+        case noAntigravityProjects
+        case unsupportedProvider
+        case startFailed(String)
+
+        var slotReason: String {
+            switch self {
+            case .createFailed(let d): return "create_failed: \(d)"
+            case .cwdFailed(let d): return "chat_cwd_create_failed: \(d)"
+            case .storeAcquireFailed: return "chat_store_acquire_failed"
+            case .noAntigravityProjects: return "antigravity_no_projects"
+            case .unsupportedProvider: return "unsupported_provider"
+            case .startFailed(let d): return "acp_start_failed: \(d)"
+            }
+        }
+    }
+
+    /// Whether a provider's CHAT/FRONTIER child drives through the harness (vs a
+    /// legacy backend). Mirrors the Solo-chat routing in handlePostChatSession:
+    /// grok/cursor always (ACP); codex/gemini behind their kill-switch (default
+    /// on); claude → tmux, opencode → SSE (never harness).
+    private func isChatHarnessEligible(_ provider: AgentKind) -> Bool {
+        switch provider {
+        case .grok, .cursor: return true
+        case .codex: return Self.codexAppServerEnabled
+        case .gemini: return Self.antigravityGrpcEnabled
+        default: return false
+        }
+    }
+
+    /// Core harness chat-session creation — NO HTTP response. Builds + starts +
+    /// registers an AcpHarnessBridge for a non-Claude provider over a chat
+    /// session + sandbox cwd, returning the created AgentSession (throws
+    /// HarnessChatSpawnError on any failure, cleaning up partial state).
+    ///
+    /// Shared by the Solo Chat create handler AND the Frontier per-child spawn.
+    /// The session is created WITHOUT the SDK/agentapi backend axes
+    /// (codexChatBackend nil, no agentapi conversation) so SessionCommandRouter
+    /// resolves `.harnessBridge` once the bridge is live. frontierGroupId /
+    /// frontierChildIndex bind a broadcast child to its group (nil for Solo).
+    private func createHarnessChatSessionCore(
+        provider: AgentKind,
+        model: String?,
+        effort: ReasoningEffort?,
+        deepResearch: Bool?,
+        chatVendor: ChatVendor?,
+        billingProvider: String?,
+        frontierGroupId: UUID? = nil,
+        frontierChildIndex: Int? = nil
+    ) async throws -> AgentSession {
+        // Step 1: write-ahead the chat session. codexChatBackend stays nil so
+        // SessionCommandRouter does NOT resolve `.codexSDK` for this session.
+        let session: AgentSession
+        do {
+            session = try await registry.createChat(
+                provider: provider,
+                model: model,
+                chatCwd: "",  // patched after cwd creation
+                codexChatBackend: nil,
+                effort: effort,
+                frontierGroupId: frontierGroupId,
+                frontierChildIndex: frontierChildIndex,
+                deepResearch: deepResearch ?? false,
+                chatVendor: chatVendor,
+                billingProvider: billingProvider
+            )
+        } catch {
+            throw HarnessChatSpawnError.createFailed(error.localizedDescription)
+        }
+        // Step 2: per-session sandbox cwd.
+        let chatCwd: String
+        do {
+            chatCwd = try ChatCwdManager.ensure(for: session.id).path
+        } catch {
+            try? await registry.delete(id: session.id)
+            throw HarnessChatSpawnError.cwdFailed(error.localizedDescription)
+        }
+        try? await registry.updateRuntime(
+            id: session.id, worktreePath: chatCwd,
+            tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
+        )
+        let staged = registry.session(id: session.id) ?? session
+        // Step 3: acquire the per-session chat store the bridge projects into
+        // (long-lived writer — pin against idle eviction; released on teardown).
+        guard let store = chatStoreRegistry.acquire(for: staged) else {
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            throw HarnessChatSpawnError.storeAcquireFailed
+        }
+        // Step 4: build the per-provider bridge.
+        let display = providerDisplayName(provider)
+        let binary: String?
+        let arguments: [String]
+        let bridge: AcpHarnessBridge
+        switch provider {
+        case .codex:
+            binary = "codex"
+            arguments = ["app-server"]
+            bridge = .codexAppServer(
+                sessionId: session.id, store: store,
+                model: model, agentDisplayName: display
+            )
+        case .cursor:
+            // ACP stdio agent. Chat has no repoKey → no fs trust gate; the
+            // agent's fs/terminal caps stay unadvertised and it runs in the
+            // per-session sandbox cwd.
+            guard let support = Self.acpSupport(for: provider) else {
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw HarnessChatSpawnError.unsupportedProvider
+            }
+            binary = support.binaryName
+            arguments = support.spawnArgv(model: nil, effort: nil, alwaysApprove: false)
+            bridge = .acp(
+                sessionId: session.id, support: support, store: store,
+                model: model, agentDisplayName: display,
+                trustGate: nil, onFileAccess: nil
+            )
+        case .grok:
+            // Grok has no ACP server — it drives headless. Transport-owning: the
+            // GrokHeadlessDriver spawns `grok` per turn, so there's no persistent
+            // stdio child (binary stays nil).
+            guard let grokPath = ShellRunner.locateBinary("grok") else {
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw HarnessChatSpawnError.startFailed("grok binary not found on PATH")
+            }
+            binary = nil
+            arguments = []
+            bridge = .transportOwning(
+                sessionId: session.id, store: store,
+                model: model, agentDisplayName: display,
+                driver: GrokHeadlessDriver(binaryPath: grokPath)
+            )
+        case .gemini:
+            // Antigravity Cascade over gRPC. Chat has no repoKey, so the first
+            // open Antigravity project is the scratch workspace. The gRPC driver
+            // owns its transport (no stdio child), so binary stays nil.
+            let projectsDir = ClawdmeterRealHome.url()
+                .appendingPathComponent(".gemini/config/projects", isDirectory: true)
+            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
+            guard let projectId = await resolver.allProjects().first?.id else {
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw HarnessChatSpawnError.noAntigravityProjects
+            }
+            let lsClient = LanguageServerClient()
+            binary = nil
+            arguments = []
+            bridge = .transportOwning(
+                sessionId: session.id, store: store,
+                model: model, agentDisplayName: display,
+                driver: AntigravityCascadeDriver(languageServer: lsClient, projectId: projectId)
+            )
+        default:
+            chatStoreRegistry.release(sessionId: session.id)
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            throw HarnessChatSpawnError.unsupportedProvider
+        }
+        // Step 5: start the bridge. Chat inherits the daemon env (PATH/HOME) and
+        // runs in the sandbox cwd.
+        let childEnv = ProcessInfo.processInfo.environment
+        do {
+            try await bridge.start(
+                binary: binary, arguments: arguments,
+                cwd: chatCwd, env: childEnv, effort: nil, alwaysApprove: false
+            )
+        } catch {
+            await bridge.teardown()
+            chatStoreRegistry.release(sessionId: session.id)
+            try? await registry.delete(id: session.id)
+            try? ChatCwdManager.remove(for: session.id)
+            throw HarnessChatSpawnError.startFailed(error.localizedDescription)
+        }
+        // Step 6: register the live bridge + return.
+        harnessRegistry.register(bridge, for: session.id)
+        AgentEventStream.recordEvent(
+            sessionId: session.id, kind: .sessionCreated,
+            payload: ["chat": "true", "provider": provider.rawValue, "harness": "true",
+                      "frontier": frontierGroupId != nil ? "true" : "false"]
+        )
+        return registry.session(id: session.id) ?? staged
+    }
+
+    /// Solo Chat-tab create over the harness — thin wrapper over the core that
+    /// maps spawn errors to HTTP responses.
+    private func handleCreateHarnessChatSession(
+        req: CreateChatSessionRequest,
+        metadata: ResolvedChatRuntimeMetadata,
+        connection: NWConnection
+    ) async {
+        do {
+            let session = try await createHarnessChatSessionCore(
+                provider: req.provider, model: req.model, effort: req.effort,
+                deepResearch: req.deepResearch, chatVendor: metadata.vendor,
+                billingProvider: metadata.billingProvider
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let body = try? encoder.encode(session) {
+                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
+            } else {
+                sendResponse(.internalError, on: connection)
+            }
+        } catch HarnessChatSpawnError.noAntigravityProjects {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable", contentType: "application/json",
+                body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first."}"#.utf8)
+            ), on: connection)
+        } catch let HarnessChatSpawnError.startFailed(detail) {
+            let payload = ["error": "acp_start_failed", "detail": detail]
+            let body = (try? JSONSerialization.data(withJSONObject: payload))
+                ?? Data(#"{"error":"acp_start_failed"}"#.utf8)
+            sendResponse(HTTPResponse(status: 503, reason: "Service Unavailable",
+                                      contentType: "application/json", body: body), on: connection)
+        } catch {
+            serverLogger.error("harness chat create failed: \(String(describing: error), privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
     }
@@ -5663,6 +6303,7 @@ public final class AgentControlServer {
         case .gemini: return "Antigravity"
         case .cursor: return "Cursor"
         case .opencode: return "OpenRouter"
+        case .grok: return "Grok"
         case .unknown: return "this provider"
         }
     }
@@ -5773,18 +6414,37 @@ public final class AgentControlServer {
         let groupId = UUID()
         var slotResults: [FrontierSlotResult] = []
         for (idx, slot) in req.models.enumerated() {
-            do {
-                let session = try await spawnFrontierChild(
-                    groupId: groupId,
-                    childIndex: idx,
-                    slot: slot
-                )
-                slotResults.append(FrontierSlotResult(index: idx, sessionId: session.id, reason: nil))
-            } catch let SpawnFailure.message(reason) {
-                slotResults.append(FrontierSlotResult(index: idx, sessionId: nil, reason: reason))
-            } catch {
-                slotResults.append(FrontierSlotResult(index: idx, sessionId: nil, reason: error.localizedDescription))
+            // Per-child spawn timeout: a child that HANGS (a wedged tmux claude
+            // pane, or a driver handshake that never completes) must not hang the
+            // whole broadcast → the "request timed out" the user hits. Time the
+            // slot out so the other providers still come through. Mirrors the
+            // continuation-race timeout handlePostChatSession uses for tmux.
+            let slotResult: FrontierSlotResult = await withCheckedContinuation { (cont: CheckedContinuation<FrontierSlotResult, Never>) in
+                let box = ResumeOnceBox()
+                // Hold the timeout task so the spawn path can cancel it — otherwise
+                // the 25s sleep lingers (and accumulates across broadcasts) even on
+                // the common success path where the spawn wins the race in ~2-5s.
+                let timeout = Task {
+                    try? await Task.sleep(nanoseconds: 25_000_000_000)
+                    if box.tryClaim() {
+                        cont.resume(returning: FrontierSlotResult(index: idx, sessionId: nil, reason: "spawn_timeout"))
+                    }
+                }
+                Task { @MainActor in
+                    let r: FrontierSlotResult
+                    do {
+                        let session = try await self.spawnFrontierChild(groupId: groupId, childIndex: idx, slot: slot)
+                        r = FrontierSlotResult(index: idx, sessionId: session.id, reason: nil)
+                    } catch let SpawnFailure.message(reason) {
+                        r = FrontierSlotResult(index: idx, sessionId: nil, reason: reason)
+                    } catch {
+                        r = FrontierSlotResult(index: idx, sessionId: nil, reason: error.localizedDescription)
+                    }
+                    if box.tryClaim() { cont.resume(returning: r) }
+                    timeout.cancel()   // spawn settled (or timeout already fired) — stop the sleep
+                }
             }
+            slotResults.append(slotResult)
         }
         let response = CreateFrontierResponse(groupId: groupId, slots: slotResults)
         // Cache for CM5 replay. Trim oldest entries when crossing 256.
@@ -5889,6 +6549,15 @@ public final class AgentControlServer {
         }
         guard RateLimiter.shared.tryAcquireSend(sessionId: session.id) else {
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: "rate_limited")
+        }
+        // Harness-driven children (codex app-server / gemini gRPC / grok+cursor
+        // ACP) drive through their live bridge — not the legacy per-agent dispatch
+        // below. A registered bridge is authoritative (mirrors the Solo send path's
+        // SessionCommandRouter `.harnessBridge` route).
+        if let bridge = harnessRegistry.bridge(for: session.id) {
+            await bridge.prompt(text)
+            await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
+            return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
         }
         // agentapi (Gemini)
         if session.geminiBackend == .agentapi,
@@ -6006,6 +6675,8 @@ public final class AgentControlServer {
             billingProvider: existing.runtimeBinding?.billingProvider
         )
         // Delete the old session (cleans up chat-cwd + chat store entry).
+        // Stop a harness child first (no-op for legacy children).
+        await harnessRegistry.remove(existing.id)
         await teardownSDKChat(sessionId: existing.id)
         if let wiring = sessionWiring.removeValue(forKey: existing.id) {
             wiring.stop()
@@ -6083,6 +6754,16 @@ public final class AgentControlServer {
         // Archive the losers. Existing archive path persists archivedAt
         // and the sidebar's Show-Archived toggle keeps them reachable.
         for child in allChildren where child.id != winner.id && child.archivedAt == nil {
+            // Stop the loser's harness child process (ACP/app-server/gRPC) so
+            // archiving doesn't leak a running agent, AND release the chat store
+            // the harness child acquired at create (createHarnessChatSessionCore)
+            // so it can idle-evict. Legacy children used snapshotStore (no
+            // acquire), so only release when this was actually a harness child.
+            let wasHarness = harnessRegistry.contains(child.id)
+            await harnessRegistry.remove(child.id)
+            if wasHarness {
+                chatStoreRegistry.release(sessionId: child.id)
+            }
             try? await registry.archive(id: child.id)
         }
         // Promote the winner out of the Frontier group. From this point
@@ -6171,6 +6852,24 @@ public final class AgentControlServer {
             codexBackend: metadata.codexBackend
         ) {
             throw SpawnFailure.message(reason)
+        }
+
+        // Harness is the default drive path for non-Claude broadcast children
+        // (codex app-server / gemini gRPC / grok+cursor ACP), exactly as Solo
+        // chat. Reuse the shared core; map its errors to a slot failure reason.
+        // Claude → tmux + opencode → SSE (and any kill-switched codex/gemini)
+        // fall through to the legacy per-provider switch below.
+        if isChatHarnessEligible(slot.provider) {
+            do {
+                return try await createHarnessChatSessionCore(
+                    provider: slot.provider, model: slot.model, effort: slot.effort,
+                    deepResearch: slot.deepResearch, chatVendor: metadata.vendor,
+                    billingProvider: metadata.billingProvider,
+                    frontierGroupId: groupId, frontierChildIndex: childIndex
+                )
+            } catch let harnessError as HarnessChatSpawnError {
+                throw SpawnFailure.message(harnessError.slotReason)
+            }
         }
 
         switch slot.provider {
@@ -6386,9 +7085,10 @@ public final class AgentControlServer {
                 payload: ["repo": chatCwd, "agent": "opencode", "opencodeID": opencodeID]
             )
             return updated
-        case .unknown:
+        case .unknown, .grok:
             // X3: forward-compat unknown agent — no frontier-child spawn
-            // path. Surfaces as a slot failure to the broadcast caller.
+            // path. grok (ACP) isn't wired for broadcast/Frontier yet.
+            // Surfaces as a slot failure to the broadcast caller.
             throw SpawnFailure.message("unknown_agent_kind")
         }
     }
@@ -6821,10 +7521,41 @@ public final class AgentControlServer {
             // input handler before the first user prompt can paste.
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         case .claude:
-            // Claude welcome auto-dismisses on render. Probe to give it
-            // ~1.5s, then drop into the permission-poll loop.
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
+            // Claude Code shows a one-time "Do you trust the files in this
+            // folder?" prompt on first launch in a directory. For a CHAT the cwd
+            // is a throwaway /tmp sandbox, so auto-accept it — otherwise the TUI
+            // sits at the prompt, the first /send pastes into the dialog instead
+            // of the composer, no reply ever streams, and the client times out.
+            // Claude Code's first-run dialog (verified live 2026-06-03):
+            //   "Quick safety check: Is this a project you created or one you
+            //    trust? ... ❯ 1. Yes, I trust this folder / 2. No, exit"
+            // It renders ~5-7s after launch (a single 1.5s capture missed it),
+            // so POLL for it, accept it (Down/Up wakes the handler + keeps the
+            // default "Yes" highlighted, Enter confirms — verified to reach the
+            // composer), then settle before the first paste. Without this the TUI
+            // sits at the prompt, /send pastes into the dialog, and the client
+            // times out.
+            func isClaudeTrustPrompt(_ s: String) -> Bool {
+                s.contains("Quick safety check")
+                    || s.localizedCaseInsensitiveContains("trust this folder")
+                    || s.localizedCaseInsensitiveContains("Is this a project you created")
+                    || s.contains("Do you trust")
+            }
+            var claudeAccepted = false
+            for _ in 0..<9 {   // ~9 × 1.2s ≈ 11s render window
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                let cap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
+                if isClaudeTrustPrompt(cap) {
+                    serverLogger.info("chat warmup: auto-accepting Claude trust prompt for \(session.id.uuidString, privacy: .public)")
+                    try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
+                    claudeAccepted = true
+                    break
+                }
+                // Already at the composer (logged in, no trust needed) → done.
+                if cap.contains("? for shortcuts") || cap.contains("Welcome back") { break }
+            }
+            // Settle so the composer's input handler is wired before the paste.
+            try? await Task.sleep(nanoseconds: claudeAccepted ? 3_000_000_000 : 1_500_000_000)
         case .gemini:
             break
         case .opencode:
@@ -6836,6 +7567,9 @@ public final class AgentControlServer {
         case .cursor:
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
+        case .grok:
+            // ACP agents have no tmux pane — no warmup choreography.
+            break
         case .unknown:
             // X3: forward-compat unknown agent — no warmup choreography
             // plumbed.
@@ -6924,6 +7658,27 @@ public final class AgentControlServer {
         }
         guard let req = try? JSONDecoder().decode(PermissionRespondRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
+        }
+        // ACP harness permission (Grok, Cursor): the pending prompt lives in the
+        // bridge (keyed by the ACP request id), not the daemon's continuation
+        // map, so this must run BEFORE the continuation-based checks below.
+        // Keyed off the bridge registry (agent-agnostic); legacy sessions have
+        // no bridge and use the continuation path. The bridge answers the
+        // agent's `session/request_permission` and clears the store's prompt; a
+        // non-match means a stale / already-answered click.
+        if let bridge = harnessRegistry.bridge(for: uuid) {
+            let matched = await bridge.respondToPermission(promptId: req.promptId, optionId: req.optionId)
+            if matched {
+                serverLogger.info("acp permission respond session=\(uuid.uuidString, privacy: .public) option=\(req.optionId, privacy: .public)")
+                sendJSON(["ok": true], on: connection)
+            } else {
+                sendResponse(HTTPResponse(
+                    status: 409, reason: "Conflict",
+                    contentType: "application/json",
+                    body: Data(#"{"error":"no_pending_prompt"}"#.utf8)
+                ), on: connection)
+            }
+            return
         }
         // Reject stale clicks where the UI's promptId doesn't match the
         // currently-pending prompt. Done BEFORE removing the continuation
@@ -7138,9 +7893,10 @@ public final class AgentControlServer {
                 autopilot: false,
                 workspacePath: session.effectiveCwd
             )
-        case .gemini:
-            // approve-plan from Gemini is unsupported in v6 — there's no
-            // gemini CLI to respawn. Surfaces as 500 below.
+        case .gemini, .grok:
+            // approve-plan via tmux respawn doesn't apply: Gemini has no CLI
+            // to respawn, and grok (ACP) approves via session/set_mode, which
+            // the daemon doesn't route yet. Surfaces as 500 below.
             argv = nil
         case .opencode:
             // PR #29: opencode has no plan-mode → respawn-with-write
@@ -7366,6 +8122,13 @@ public final class AgentControlServer {
         // v0.8 Phase 4.5: tear down any SDK chat infrastructure first
         // (ingestor sink + relay sidecar). Idempotent on non-SDK sessions.
         await teardownSDKChat(sessionId: uuid)
+        // ACP harness teardown (Grok): terminate the stdio child + driver and
+        // release the chat store the bridge pinned. Idempotent on non-ACP
+        // sessions (remove is a no-op when no bridge is registered).
+        if harnessRegistry.contains(uuid) {
+            await harnessRegistry.remove(uuid)
+            chatStoreRegistry.release(sessionId: uuid)
+        }
         // Kill the tmux window.
         if let windowId = session.tmuxWindowId {
             do {

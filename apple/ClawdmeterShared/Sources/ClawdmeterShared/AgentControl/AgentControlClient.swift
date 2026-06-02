@@ -688,6 +688,13 @@ public final class AgentControlClient: ObservableObject {
         AgentControlWireVersion.supportsCursor(serverWireVersion: serverWireVersion)
     }
 
+    /// True when the paired Mac can drive ACP harness agents (Grok). Gates the
+    /// Grok option in the mobile new-session sheet; older Macs hide it.
+    @MainActor
+    public var supportsGrok: Bool {
+        AgentControlWireVersion.supportsGrok(serverWireVersion: serverWireVersion)
+    }
+
     @MainActor
     public var supportsWorkspaces: Bool {
         AgentControlWireVersion.supportsWorkspaces(serverWireVersion: serverWireVersion)
@@ -959,10 +966,20 @@ public final class AgentControlClient: ObservableObject {
     /// `iOSPermissionPromptCard` was retired in v0.11 along with
     /// `iOSChatSoloView`; the Tahoe IOSChatView will host the replacement
     /// inline when permission prompts ship).
-    public func respondToPermissionPrompt(sessionId: UUID, promptId: String, optionId: String) async {
+    /// Returns `true` on HTTP 2xx so the durable outbox (and the V2 permission
+    /// card) can detect offline failures and surface / reschedule instead of
+    /// falsely acknowledging. Legacy callers discard the result via
+    /// `@discardableResult`. `idempotencyKey` lets the outbox dedup retries.
+    @discardableResult
+    public func respondToPermissionPrompt(
+        sessionId: UUID,
+        promptId: String,
+        optionId: String,
+        idempotencyKey: String? = nil
+    ) async -> Bool {
         await postBody(
             path: "/sessions/\(sessionId.uuidString)/permission-respond",
-            body: PermissionRespondRequest(promptId: promptId, optionId: optionId)
+            body: PermissionRespondRequest(promptId: promptId, optionId: optionId, idempotencyKey: idempotencyKey)
         )
     }
 

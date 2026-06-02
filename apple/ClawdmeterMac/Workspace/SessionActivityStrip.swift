@@ -139,6 +139,17 @@ struct SessionActivityStrip: View {
                         : .default,
                     value: animationOpacity
                 )
+        case .grok:
+            Text(active ? "Thinking" : "Idle")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .opacity(active ? animationOpacity : 0.5)
+                .animation(
+                    active
+                        ? SessionsV2Theme.pulseAnimation(for: .codex, reduceMotion: reduceMotion)
+                        : .default,
+                    value: animationOpacity
+                )
         case .unknown:
             // X3: forward-compat unknown agent — neutral "Working" label.
             Text(active ? "Working" : "Idle")

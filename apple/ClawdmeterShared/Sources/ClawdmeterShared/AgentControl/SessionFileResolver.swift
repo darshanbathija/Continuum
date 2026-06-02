@@ -88,6 +88,10 @@ public final class SessionFileResolver: @unchecked Sendable {
             // from sent prompts + terminal snapshots until native Cursor
             // transcript import can attach a proven Cursor chat id.
             return nil
+        case .grok:
+            // ACP agents stream the transcript over the protocol — no on-disk
+            // JSONL. The daemon feeds a SessionChatStore from HarnessEvents.
+            return nil
         case .unknown:
             // X3: forward-compat unknown agent — no transcript file we
             // know how to locate. UI surfaces render as "Other agent".

@@ -367,7 +367,20 @@ public final class MobileCommandOutbox: ObservableObject {
                 sessionId: sessionId,
                 idempotencyKey: envelope.idempotencyKey
             ) != nil
-        case .permissionResponse, .terminalInput, .pickWinner, .updateWorkspace:
+        case .permissionResponse:
+            // ACP harness + tmux/SDK permission prompts: a queued permission
+            // response dispatches for real (the daemon's ACP request waits
+            // indefinitely, so a delayed delivery still unblocks the agent).
+            // Returns the real HTTP outcome so an offline response reschedules
+            // instead of being silently acknowledged.
+            guard let body = try? decoder.decode(PermissionRespondRequest.self, from: payloadData) else { return false }
+            return await client.respondToPermissionPrompt(
+                sessionId: sessionId,
+                promptId: body.promptId,
+                optionId: body.optionId,
+                idempotencyKey: envelope.idempotencyKey
+            )
+        case .terminalInput, .pickWinner, .updateWorkspace:
             // Pre-wired outbox kinds we don't surface enqueue helpers
             // for yet. Treat as success so a stale entry from a future
             // build doesn't permanently stick in the queue.

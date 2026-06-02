@@ -30,6 +30,10 @@ import Foundation
 import OSLog
 import ClawdmeterShared
 
+// DEPRECATED (harness migration, 2026-06): Antigravity now drives over the
+// Cascade gRPC harness (AntigravityCascadeDriver). The agentapi sidecar/one-shot
+// is reachable only via the antigravity.grpc.enabled kill-switch; removed once the
+// gRPC driver is live-verified.
 @MainActor
 public final class AntigravitySidecarManager {
 

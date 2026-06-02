@@ -134,6 +134,19 @@ public enum SessionLifecycleReducer {
                 supportsCheckpoints: true,
                 supportsProviderHandoff: false
             )
+        case .grok:
+            // ACP: plan-approval via session/request_permission; resume via
+            // session/load. PR/checkpoint reuse the daemon plumbing.
+            return SessionLifecycleProviderCapabilities(
+                agent: agent,
+                supportsPlanApproval: true,
+                supportsResume: true,
+                supportsTranscriptImport: false,
+                supportsInterrupt: true,
+                supportsPRs: true,
+                supportsCheckpoints: true,
+                supportsProviderHandoff: false
+            )
         case .unknown:
             return SessionLifecycleProviderCapabilities(
                 agent: agent,

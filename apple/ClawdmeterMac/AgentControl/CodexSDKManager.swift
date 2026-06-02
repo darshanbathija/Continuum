@@ -28,6 +28,9 @@ import Foundation
 import OSLog
 
 /// Codex SDK sidecar manager. Real impl in v0.7.1.
+// DEPRECATED (harness migration, 2026-06): superseded by the `codex app-server`
+// harness driver. Reachable only via the codex.appServer.enabled kill-switch;
+// removed once the app-server driver is live-verified.
 @MainActor
 public final class CodexSDKManager {
 

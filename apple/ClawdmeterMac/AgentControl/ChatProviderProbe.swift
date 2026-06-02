@@ -313,6 +313,7 @@ public actor ChatProviderProbe {
         case .gemini: return "gemini"
         case .opencode: return "opencode"  // PR #29
         case .cursor: return "cursor"
+        case .grok: return "grok"  // wire v26 (ACP)
         case .unknown: return "unknown"  // X3 forward-compat key
         }
     }

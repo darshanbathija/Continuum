@@ -91,6 +91,10 @@ public enum AgentSpawner {
     /// then the user reviews and switches to `workspace-write` to
     /// execute. Same UX shape as Claude's `--permission-mode plan`,
     /// just a different transport.
+    ///
+    /// DEPRECATED (harness migration, 2026-06): Codex no longer spawns via tmux
+    /// argv — it drives over the `codex app-server` harness. This builder is
+    /// reachable only via the codex.appServer.enabled kill-switch.
     public static func codexArgv(
         model: String? = nil,
         planMode: Bool = false,
@@ -227,6 +231,10 @@ public enum AgentSpawner {
     /// - The CLI accepts an explicit `--workspace <path>` flag, which we pass
     ///   even though tmux also starts the pane in that cwd. This keeps Cursor's
     ///   own workspace binding aligned with the repo/worktree Clawdmeter picked.
+    ///
+    /// DEPRECATED (harness migration, 2026-06 / Phase 9): Cursor now drives over
+    /// ACP (cursor-agent) via the harness, not tmux. This builder is dead for new
+    /// sessions and is removed once cursor-agent-acp is live-verified.
     public static func cursorArgv(
         model: String? = nil,
         planMode: Bool = false,
@@ -290,7 +298,7 @@ public enum AgentSpawner {
                 autopilot: autopilot,
                 trustWorkspace: request.useWorktree && workspacePath != nil && workspacePath != request.repoKey
             ) ?? []
-        case .opencode:
+        case .opencode, .grok: // grok is ACP — spawned via AcpStdioChild, no tmux argv
             // PR #29: OpenCode sessions don't use tmux argv. The Mac
             // dispatcher routes opencode requests to
             // OpencodeProcessManager + OpencodeSSEAdapter instead.
@@ -381,7 +389,7 @@ public enum AgentSpawner {
                 autopilot: chatAutopilot,
                 trustWorkspace: session.provisioning != nil
             ) ?? []
-        case (.opencode, _):
+        case (.opencode, _), (.grok, _): // grok is ACP — no tmux argv
             // PR #29: opencode sessions don't take a tmux argv.
             // OpencodeProcessManager + SSEAdapter handle spawn.
             return []
@@ -448,7 +456,7 @@ public enum AgentSpawner {
                 acceptEdits: acceptEdits,
                 resumeSessionId: resumeSessionId
             ) ?? []
-        case .opencode:
+        case .opencode, .grok: // grok is ACP — spawned via AcpStdioChild, no tmux argv
             // PR #29: opencode has no tmux respawn path.
             return []
         case .cursor:

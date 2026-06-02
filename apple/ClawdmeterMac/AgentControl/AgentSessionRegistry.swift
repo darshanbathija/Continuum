@@ -972,11 +972,20 @@ public final class AgentSessionRegistry: ObservableObject {
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil
     ) -> SessionRuntimeBinding {
-        let runtime = SessionRuntimeKind.inferred(
+        var runtime = SessionRuntimeKind.inferred(
             agent: agent,
             codexBackend: codexBackend,
             geminiBackend: geminiBackend
         )
+        // Cursor is ACP-harness-driven only for CODE sessions. A cursor CHAT
+        // session (chatVendor set) runs on the chat backend and has no harness
+        // bridge, so it must NOT be tagged .acpCursor — otherwise the send
+        // path's `acpExpectedButNoBridge` guard (route .tmux + isACPDriven + no
+        // live bridge) would 503 it. Keep the legacy .cursorCLI kind for cursor
+        // chat. (Grok has no chat path; other agents' chat kinds are unaffected.)
+        if agent == .cursor, chatVendor != nil {
+            runtime = .cursorCLI
+        }
         let resolvedBillingProvider: String? = billingProvider ?? {
             switch agent {
             case .claude: return "claude"
@@ -984,6 +993,7 @@ public final class AgentSessionRegistry: ObservableObject {
             case .gemini: return "antigravity"
             case .opencode: return "opencode"
             case .cursor: return "cursor"
+            case .grok: return "grok"
             case .unknown: return nil
             }
         }()
@@ -991,6 +1001,7 @@ public final class AgentSessionRegistry: ObservableObject {
             switch agent {
             case .opencode: return .providerReported
             case .cursor: return .unavailable
+            case .grok: return .unavailable
             case .gemini: return .estimated
             case .claude, .codex: return .locallyPriced
             case .unknown: return .unavailable

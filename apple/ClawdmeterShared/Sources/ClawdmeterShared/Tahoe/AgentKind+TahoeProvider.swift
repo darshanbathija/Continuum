@@ -19,6 +19,7 @@ public extension AgentKind {
         case .gemini:   return .gemini
         case .opencode: return .opencode
         case .cursor:   return .cursor
+        case .grok:     return .cursor // TODO: add TahoeProvider.grok identity; placeholder lane for now
         case .unknown:  return .claude
         }
     }
