@@ -4135,22 +4135,36 @@ public final class AgentControlServer {
         }
     }
 
-    /// ACP harness spawn (Grok, Cursor). Mirrors `handleSpawnOpencodeSession`:
-    /// no tmux pane — we launch the agent as a piped stdio child and drive it
-    /// over ACP via `AcpHarnessBridge`, projecting its event stream into the
-    /// session's `SessionChatStore`. Two-phase failure contract (A3):
-    /// `bridge.start()` throws synchronously on spawn/handshake/auth failure,
-    /// so a failed start tears the write-ahead session back down and returns a
-    /// real HTTP error instead of stranding a dead session.
-    private func handleSpawnAcpSession(
+    /// Opt-in (default off): route new Codex sessions through the native
+    /// `codex app-server` harness driver instead of the tmux/SDK paths.
+    static var codexAppServerEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "clawdmeter.codex.appServer.enabled")
+    }
+    /// Opt-in (default off): drive new Gemini sessions over the Antigravity
+    /// Cascade gRPC harness instead of agentapi one-shot.
+    static var antigravityGrpcEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "clawdmeter.antigravity.grpc.enabled")
+    }
+
+    /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
+    /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: no tmux pane
+    /// — the daemon drives an `AgentDriver` via `AcpHarnessBridge` (built by
+    /// `makeBridge`), projecting its event stream into the session's
+    /// `SessionChatStore`. Two-phase failure contract (A3): `bridge.start()`
+    /// throws synchronously on spawn/handshake/auth failure, so a failed start
+    /// tears the write-ahead session back down and returns a real HTTP error.
+    /// `binary`/`arguments` are the stdio launch (nil/[] for gRPC drivers).
+    private func handleSpawnHarnessSession(
         req: NewSessionRequest,
-        support: AcpAgentSupport,
         displayName: String,
+        binary: String?,
+        arguments: [String],
         cwd: String,
         worktreePath: String?,
         provisioning: WorktreeProvisioningMetadata?,
         provisionalSessionId: UUID?,
-        connection: NWConnection
+        connection: NWConnection,
+        makeBridge: (UUID, SessionChatStore) -> AcpHarnessBridge
     ) async {
         // Resolve the per-repo env set (same path as the tmux/opencode spawns).
         let resolvedEnv: RepoEnvResolvedEnvironment?
@@ -4231,14 +4245,11 @@ public final class AgentControlServer {
         // `initialize.availableModels`; the bundled catalog ids are placeholders,
         // not real CLI models. alwaysApprove=false so the agent raises
         // permission prompts we surface (a harness, not a blind auto-runner).
-        let bridge = AcpHarnessBridge(
-            sessionId: session.id, support: support, store: store,
-            model: req.model, agentDisplayName: displayName
-        )
+        let bridge = makeBridge(session.id, store)
         do {
             try await bridge.start(
-                binary: support.binaryName,
-                arguments: support.spawnArgv(model: nil, effort: nil, alwaysApprove: false),
+                binary: binary,
+                arguments: arguments,
                 cwd: cwd,
                 env: childEnv,
                 effort: nil,
@@ -5181,22 +5192,66 @@ public final class AgentControlServer {
             return
         }
 
-        // ACP harness providers (Grok, Cursor) bypass tmux entirely: we spawn
-        // the agent as a piped stdio child and drive it over ACP. Like
-        // opencode, this branch owns its own session-create + response, so it
-        // returns before the tmux argv/spawn path below. Cursor's auth/binary/
-        // plan-mode preflight already ran above; this is the spawn itself.
+        // Harness-driven providers bypass tmux: the daemon drives an AgentDriver
+        // and projects its events into the chat store. Each branch owns its own
+        // session-create + response, returning before the tmux argv/spawn below.
+        // (1) ACP stdio agents (Grok, Cursor). Cursor's preflight ran above.
         if let support = Self.acpSupport(for: req.agent) {
-            await handleSpawnAcpSession(
-                req: req,
-                support: support,
-                displayName: providerDisplayName(req.agent),
-                cwd: cwd,
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                provisionalSessionId: provisionalSessionId,
-                connection: connection
-            )
+            let display = providerDisplayName(req.agent)
+            await handleSpawnHarnessSession(
+                req: req, displayName: display,
+                binary: support.binaryName,
+                arguments: support.spawnArgv(model: nil, effort: nil, alwaysApprove: false),
+                cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId, connection: connection,
+                makeBridge: { sid, store in
+                    .acp(sessionId: sid, support: support, store: store,
+                         model: req.model, agentDisplayName: display)
+                })
+            return
+        }
+        // (2) Codex over `codex app-server` — flag-gated (default off). The
+        // existing tmux/SDK codex paths stay default for back-compat until this
+        // is live-verified; set clawdmeter.codex.appServer.enabled to opt in.
+        if req.agent == .codex, Self.codexAppServerEnabled {
+            let display = providerDisplayName(req.agent)
+            await handleSpawnHarnessSession(
+                req: req, displayName: display,
+                binary: "codex", arguments: ["app-server"],
+                cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId, connection: connection,
+                makeBridge: { sid, store in
+                    .codexAppServer(sessionId: sid, store: store,
+                                    model: req.model, agentDisplayName: display)
+                })
+            return
+        }
+        // (3) Antigravity Cascade over gRPC — flag-gated (default off). agentapi
+        // one-shot + the SQLite-WAL ingestor stay the default drive/observe paths
+        // for back-compat; set clawdmeter.antigravity.grpc.enabled to opt in.
+        if req.agent == .gemini, Self.antigravityGrpcEnabled {
+            let display = providerDisplayName(req.agent)
+            let projectsDir = ClawdmeterRealHome.url()
+                .appendingPathComponent(".gemini/config/projects", isDirectory: true)
+            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
+            guard let projectId = await resolver.allProjects().first?.id else {
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable", contentType: "application/json",
+                    body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first."}"#.utf8)
+                ), on: connection)
+                return
+            }
+            let lsClient = LanguageServerClient()
+            await handleSpawnHarnessSession(
+                req: req, displayName: display,
+                binary: nil, arguments: [],   // the gRPC driver owns its transport
+                cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId, connection: connection,
+                makeBridge: { sid, store in
+                    .transportOwning(sessionId: sid, store: store, model: req.model,
+                                     agentDisplayName: display,
+                                     driver: AntigravityCascadeDriver(languageServer: lsClient, projectId: projectId))
+                })
             return
         }
 
