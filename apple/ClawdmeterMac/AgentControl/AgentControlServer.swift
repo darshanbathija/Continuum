@@ -6406,18 +6406,33 @@ public final class AgentControlServer {
         let groupId = UUID()
         var slotResults: [FrontierSlotResult] = []
         for (idx, slot) in req.models.enumerated() {
-            do {
-                let session = try await spawnFrontierChild(
-                    groupId: groupId,
-                    childIndex: idx,
-                    slot: slot
-                )
-                slotResults.append(FrontierSlotResult(index: idx, sessionId: session.id, reason: nil))
-            } catch let SpawnFailure.message(reason) {
-                slotResults.append(FrontierSlotResult(index: idx, sessionId: nil, reason: reason))
-            } catch {
-                slotResults.append(FrontierSlotResult(index: idx, sessionId: nil, reason: error.localizedDescription))
+            // Per-child spawn timeout: a child that HANGS (a wedged tmux claude
+            // pane, or a driver handshake that never completes) must not hang the
+            // whole broadcast → the "request timed out" the user hits. Time the
+            // slot out so the other providers still come through. Mirrors the
+            // continuation-race timeout handlePostChatSession uses for tmux.
+            let slotResult: FrontierSlotResult = await withCheckedContinuation { (cont: CheckedContinuation<FrontierSlotResult, Never>) in
+                let box = ResumeOnceBox()
+                Task { @MainActor in
+                    let r: FrontierSlotResult
+                    do {
+                        let session = try await self.spawnFrontierChild(groupId: groupId, childIndex: idx, slot: slot)
+                        r = FrontierSlotResult(index: idx, sessionId: session.id, reason: nil)
+                    } catch let SpawnFailure.message(reason) {
+                        r = FrontierSlotResult(index: idx, sessionId: nil, reason: reason)
+                    } catch {
+                        r = FrontierSlotResult(index: idx, sessionId: nil, reason: error.localizedDescription)
+                    }
+                    if box.tryClaim() { cont.resume(returning: r) }
+                }
+                Task {
+                    try? await Task.sleep(nanoseconds: 25_000_000_000)
+                    if box.tryClaim() {
+                        cont.resume(returning: FrontierSlotResult(index: idx, sessionId: nil, reason: "spawn_timeout"))
+                    }
+                }
             }
+            slotResults.append(slotResult)
         }
         let response = CreateFrontierResponse(groupId: groupId, slots: slotResults)
         // Cache for CM5 replay. Trim oldest entries when crossing 256.
