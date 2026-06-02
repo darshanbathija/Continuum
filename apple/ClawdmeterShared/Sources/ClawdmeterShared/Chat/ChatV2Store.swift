@@ -71,6 +71,7 @@ public enum ChatVendor: String, Codable, Hashable, Sendable, CaseIterable, Ident
         case .gemini: return .antigravity
         case .cursor: return .cursor
         case .opencode: return .openrouter
+        case .grok: return nil // Chat-tab vendor mapping pending; Grok ships in the Code/Sessions harness first
         case .unknown: return nil
         }
     }
@@ -362,6 +363,7 @@ public final class ChatV2Store: ObservableObject {
         case .gemini:   return ModelCatalog.bundled.gemini.first?.id
         case .opencode: return ModelCatalog.bundled.opencode.first?.id
         case .cursor:   return ModelCatalog.bundled.cursor.first?.id
+        case .grok:     return ModelCatalog.bundled.grok.first?.id
         case .unknown:  return nil
         }
     }

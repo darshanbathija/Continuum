@@ -217,6 +217,7 @@ public final class ComposerStore: ObservableObject {
             case .gemini: entry = catalog.gemini.first
             case .opencode: entry = catalog.opencode.first
             case .cursor: entry = catalog.cursor.first
+            case .grok: entry = catalog.grok.first
             case .unknown:
                 // X3: forward-compat unknown agent — no catalog slice
                 // exists. Composer chips clear; the picker hides the

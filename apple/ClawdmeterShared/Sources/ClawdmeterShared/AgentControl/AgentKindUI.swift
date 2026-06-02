@@ -20,6 +20,7 @@ public enum AgentKindUI {
         case .gemini: return "GeminiLogo"
         case .opencode: return "OpencodeLogo" // PR #29: alpha-shaped silhouette
         case .cursor: return "CodexLogo"
+        case .grok: return "CodexLogo" // TODO: add GrokLogo asset; silhouette for now
         case .unknown: return "ClaudeLogo" // neutral fallback; UI shows "Other"
         }
     }
@@ -31,7 +32,7 @@ public enum AgentKindUI {
     public static func isTemplate(for agent: AgentKind) -> Bool {
         switch agent {
         case .claude: return false
-        case .codex, .gemini, .opencode, .cursor, .unknown: return true
+        case .codex, .gemini, .opencode, .cursor, .grok, .unknown: return true
         }
     }
 
@@ -47,6 +48,7 @@ public enum AgentKindUI {
         case .gemini: return "Gemini"
         case .opencode: return "OpenCode"
         case .cursor: return "Cursor"
+        case .grok: return "Grok"
         case .unknown: return "Other agent"
         }
     }
@@ -68,6 +70,7 @@ public enum AgentKindUI {
         case .gemini: return (0x42, 0x85, 0xF4)
         case .opencode: return (0x6B, 0x5D, 0xD3)
         case .cursor: return (0x22, 0x22, 0x22)
+        case .grok: return (0x30, 0x30, 0x46) // xAI dark slate, distinct from cursor near-black
         case .unknown: return (0x88, 0x88, 0x88)
         }
     }

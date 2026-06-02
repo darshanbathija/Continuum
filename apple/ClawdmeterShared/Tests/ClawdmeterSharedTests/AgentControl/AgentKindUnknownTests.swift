@@ -66,15 +66,17 @@ final class AgentKindUnknownTests: XCTestCase {
         // as a selectable choice. AgentKind.allCases overrides the
         // auto-synthesized CaseIterable conformance to strip it.
         // PR #29 (wire v13): OpenCode became selectable. v17 adds
-        // Cursor as another selectable runtime; .unknown stays excluded.
+        // Cursor as another selectable runtime; v26 adds Grok (ACP);
+        // .unknown stays excluded.
         XCTAssertFalse(AgentKind.allCases.contains(.unknown),
             "X3: AgentKind.allCases must exclude .unknown so pickers stay clean")
-        XCTAssertEqual(AgentKind.allCases.count, 5)
+        XCTAssertEqual(AgentKind.allCases.count, 6)
         XCTAssertTrue(AgentKind.allCases.contains(.claude))
         XCTAssertTrue(AgentKind.allCases.contains(.codex))
         XCTAssertTrue(AgentKind.allCases.contains(.gemini))
         XCTAssertTrue(AgentKind.allCases.contains(.opencode))
         XCTAssertTrue(AgentKind.allCases.contains(.cursor))
+        XCTAssertTrue(AgentKind.allCases.contains(.grok))
     }
 
     // MARK: - AgentKindUI fallback rendering

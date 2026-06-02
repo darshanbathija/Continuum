@@ -117,6 +117,8 @@ public struct LiveSessionActivityIndicator: View {
             return Color(red: 0x6B / 255.0, green: 0x5D / 255.0, blue: 0xD3 / 255.0)
         case .cursor:
             return Color(red: 0x22 / 255.0, green: 0x22 / 255.0, blue: 0x22 / 255.0)
+        case .grok:
+            return Color(red: 0x30 / 255.0, green: 0x30 / 255.0, blue: 0x46 / 255.0)
         case .unknown:
             // X3: neutral gray for forward-compat unknown kinds.
             return Color(red: 0x88 / 255.0, green: 0x88 / 255.0, blue: 0x88 / 255.0)
@@ -142,6 +144,8 @@ public struct LiveSessionActivityIndicator: View {
             // disambiguates from the blue Codex one.
             CodexPulseSpinner(color: accent, size: 14)
         case .cursor:
+            CodexPulseSpinner(color: accent, size: 14)
+        case .grok:
             CodexPulseSpinner(color: accent, size: 14)
         case .unknown:
             // X3: reuse the asterisk spinner for unknown kinds. Pairs
