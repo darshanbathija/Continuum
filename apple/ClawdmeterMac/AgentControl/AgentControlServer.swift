@@ -6421,6 +6421,15 @@ public final class AgentControlServer {
             // continuation-race timeout handlePostChatSession uses for tmux.
             let slotResult: FrontierSlotResult = await withCheckedContinuation { (cont: CheckedContinuation<FrontierSlotResult, Never>) in
                 let box = ResumeOnceBox()
+                // Hold the timeout task so the spawn path can cancel it — otherwise
+                // the 25s sleep lingers (and accumulates across broadcasts) even on
+                // the common success path where the spawn wins the race in ~2-5s.
+                let timeout = Task {
+                    try? await Task.sleep(nanoseconds: 25_000_000_000)
+                    if box.tryClaim() {
+                        cont.resume(returning: FrontierSlotResult(index: idx, sessionId: nil, reason: "spawn_timeout"))
+                    }
+                }
                 Task { @MainActor in
                     let r: FrontierSlotResult
                     do {
@@ -6432,12 +6441,7 @@ public final class AgentControlServer {
                         r = FrontierSlotResult(index: idx, sessionId: nil, reason: error.localizedDescription)
                     }
                     if box.tryClaim() { cont.resume(returning: r) }
-                }
-                Task {
-                    try? await Task.sleep(nanoseconds: 25_000_000_000)
-                    if box.tryClaim() {
-                        cont.resume(returning: FrontierSlotResult(index: idx, sessionId: nil, reason: "spawn_timeout"))
-                    }
+                    timeout.cancel()   // spawn settled (or timeout already fired) — stop the sleep
                 }
             }
             slotResults.append(slotResult)

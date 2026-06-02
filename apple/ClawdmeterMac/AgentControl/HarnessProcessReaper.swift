@@ -120,7 +120,7 @@ final class HarnessProcessReaper {
         p.arguments = ["-p", "\(pid)", "-o", "comm="]
         let out = Pipe()
         p.standardOutput = out
-        p.standardError = Pipe()
+        p.standardError = FileHandle.nullDevice   // discard ps noise; no extra pipe fd to drain
         do { try p.run() } catch { return nil }
         p.waitUntilExit()
         guard p.terminationStatus == 0 else { return nil }
