@@ -184,14 +184,43 @@ final class ACPClientTests: XCTestCase {
 
     // MARK: helpers
 
-    private func makeDriver(mode: FakeAcpAgent.Mode) async -> (AcpAgentDriver, FakeAcpAgent) {
+    private func makeDriver(mode: FakeAcpAgent.Mode, trustGate: RepoTrustGate? = nil) async -> (AcpAgentDriver, FakeAcpAgent) {
         let agent = FakeAcpAgent(mode: mode)
         let conn = NdjsonRpcConnection(writer: agent)
         // wire the fake's outbound delivery into the connection (awaited, no race)
         await agent.setDeliver { await conn.feed($0) }
         let driver = AcpAgentDriver(connection: conn, support: GrokAcpSupport(),
-                                    clientInfo: ACPClientInfo(name: "clawdmeter-test", version: "0.0.0"))
+                                    clientInfo: ACPClientInfo(name: "clawdmeter-test", version: "0.0.0"),
+                                    trustGate: trustGate)
         return (driver, agent)
+    }
+
+    /// Phase 6: with a trust gate, the agent's fs/write is validated through the
+    /// gate — an in-root path writes the file (result); an escaping path is
+    /// refused (error) and no file is created.
+    func testFsWriteGatedByTrustModel() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("acpfs-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        guard let gate = RepoTrustGate(repoRoot: root.path) else { return XCTFail("gate") }
+
+        let (driver, agent) = await makeDriver(mode: .normal, trustGate: gate)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        _ = try await driver.start(model: nil, effort: nil, cwd: root.path, alwaysApprove: false)
+
+        // allow — in-root write succeeds and the file lands on disk.
+        let okResp = await agent.requestFsWrite(path: "notes.txt", content: "hello")
+        XCTAssertNotNil(okResp["result"], "in-root write should return a result")
+        XCTAssertNil(okResp["error"])
+        XCTAssertEqual(try? String(contentsOf: root.appendingPathComponent("notes.txt"), encoding: .utf8), "hello")
+
+        // deny — traversal escape is refused with an error and writes nothing.
+        let denyResp = await agent.requestFsWrite(path: "../escape.txt", content: "x")
+        XCTAssertNotNil(denyResp["error"], "escaping write must be denied")
+        XCTAssertFalse(fm.fileExists(atPath: root.deletingLastPathComponent().appendingPathComponent("escape.txt").path))
+
+        await driver.close()
     }
 
     /// Start the driver, send a prompt, collect events until `.turnEnded`

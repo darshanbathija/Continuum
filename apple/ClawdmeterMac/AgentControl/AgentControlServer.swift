@@ -5211,6 +5211,16 @@ public final class AgentControlServer {
         // (1) ACP stdio agents (Grok, Cursor). Cursor's preflight ran above.
         if let support = Self.acpSupport(for: req.agent) {
             let display = providerDisplayName(req.agent)
+            // Phase 6: the agent's fs read/write capability is granted ONLY for
+            // autopilot-trusted repos, bound to the repo root + session cwd via
+            // RepoTrustGate (symlink/`..`/TOCTOU-safe). Untrusted repos pass nil
+            // → fs stays unadvertised + every fs request is refused.
+            let trustGate = AutopilotState.shared.isRepoTrusted(req.repoKey)
+                ? RepoTrustGate(repoRoot: req.repoKey, sessionCwd: cwd)
+                : nil
+            let auditFs: (@Sendable (String, String, Bool) async -> Void)? = trustGate == nil ? nil : { op, path, allowed in
+                serverLogger.info("acp fs \(op, privacy: .public) allowed=\(allowed, privacy: .public) path=\(MobileCommandPayloadHasher.hex(Data(path.utf8)), privacy: .public)")
+            }
             await handleSpawnHarnessSession(
                 req: req, displayName: display,
                 binary: support.binaryName,
@@ -5219,7 +5229,8 @@ public final class AgentControlServer {
                 provisionalSessionId: provisionalSessionId, connection: connection,
                 makeBridge: { sid, store in
                     .acp(sessionId: sid, support: support, store: store,
-                         model: req.model, agentDisplayName: display)
+                         model: req.model, agentDisplayName: display,
+                         trustGate: trustGate, onFileAccess: auditFs)
                 })
             return
         }

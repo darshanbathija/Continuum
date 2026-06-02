@@ -38,9 +38,16 @@ public actor AcpAgentDriver: AgentDriver {
     private let connection: NdjsonRpcConnection
     private let support: AcpAgentSupport
     private let clientInfo: ACPClientInfo
-    /// fs/terminal client capabilities. Off in the Grok slice (Phase 2); turned
-    /// on per-repo behind the trust model in Phase 6.
+    /// fs/terminal client capabilities. `terminal` stays off (Phase 6 follow-up).
+    /// `fs` (read/write) is advertised + served ONLY when a `trustGate` is
+    /// injected — i.e. the session's repo is autopilot-trusted. Every fs request
+    /// is validated through the gate (repo-root binding, symlink/`..`/TOCTOU
+    /// resolution) before any disk I/O.
     private let advertiseFsTerminal: Bool
+    private let trustGate: RepoTrustGate?
+    /// Hash-only audit hook for fs ops (the daemon wires it to its audit log;
+    /// the gate itself is Mac/transport-agnostic so it can't log directly).
+    private let onFileAccess: (@Sendable (_ op: String, _ path: String, _ allowed: Bool) async -> Void)?
 
     private var sessionId: String?
     private var toolTitles: [String: String] = [:]
@@ -50,12 +57,16 @@ public actor AcpAgentDriver: AgentDriver {
         connection: NdjsonRpcConnection,
         support: AcpAgentSupport,
         clientInfo: ACPClientInfo,
-        advertiseFsTerminal: Bool = false
+        advertiseFsTerminal: Bool = false,
+        trustGate: RepoTrustGate? = nil,
+        onFileAccess: (@Sendable (String, String, Bool) async -> Void)? = nil
     ) {
         self.connection = connection
         self.support = support
         self.clientInfo = clientInfo
         self.advertiseFsTerminal = advertiseFsTerminal
+        self.trustGate = trustGate
+        self.onFileAccess = onFileAccess
         var cont: AsyncStream<HarnessEvent>.Continuation!
         self.events = AsyncStream(bufferingPolicy: .unbounded) { cont = $0 }
         self.eventCont = cont
@@ -69,7 +80,9 @@ public actor AcpAgentDriver: AgentDriver {
         // initialize
         let initReq = ACPInitializeRequest(
             clientCapabilities: ACPClientCapabilities(
-                fs: .init(readTextFile: advertiseFsTerminal, writeTextFile: advertiseFsTerminal),
+                // fs advertised only when a trust gate is present (repo trusted);
+                // terminal stays off this phase.
+                fs: .init(readTextFile: trustGate != nil, writeTextFile: trustGate != nil),
                 terminal: advertiseFsTerminal
             ),
             clientInfo: clientInfo
@@ -192,19 +205,78 @@ public actor AcpAgentDriver: AgentDriver {
                 options: req?.options ?? []
             )))
             // Deferred: the daemon answers later via respondToPermission(id:).
-        case ACP.ClientMethod.fsReadTextFile,
-             ACP.ClientMethod.fsWriteTextFile,
-             ACP.ClientMethod.terminalCreate,
+        case ACP.ClientMethod.fsReadTextFile:
+            await handleFsRead(id: id, params: params)
+        case ACP.ClientMethod.fsWriteTextFile:
+            await handleFsWrite(id: id, params: params)
+        case ACP.ClientMethod.terminalCreate,
              ACP.ClientMethod.terminalOutput,
              ACP.ClientMethod.terminalWaitForExit,
              ACP.ClientMethod.terminalKill,
              ACP.ClientMethod.terminalRelease:
-            // Capabilities not advertised in this phase → refuse cleanly.
+            // Terminal capability not advertised this phase → refuse cleanly.
             try? await connection.respondError(to: id, code: ACP.ErrorCode.methodNotFound,
                                                message: "\(method) not enabled")
         default:
             try? await connection.respondError(to: id, code: ACP.ErrorCode.methodNotFound,
                                                message: "unknown client method \(method)")
+        }
+    }
+
+    // MARK: fs client requests (Phase 6 — gated by RepoTrustGate)
+
+    /// `fs/read_text_file` — validate the path through the trust gate, then read
+    /// (capped) and return `{content}`. Denials become invalidParams errors so
+    /// the agent learns the path is out of bounds rather than silently failing.
+    private func handleFsRead(id: RpcId, params: ACPJSONValue) async {
+        guard let gate = trustGate, let path = params["path"]?.stringValue else {
+            try? await connection.respondError(to: id, code: ACP.ErrorCode.methodNotFound,
+                                               message: "fs/read_text_file not enabled"); return
+        }
+        switch gate.authorizeRead(path: path) {
+        case .deny(let reason):
+            await onFileAccess?("read", path, false)
+            try? await connection.respondError(to: id, code: ACP.ErrorCode.invalidParams,
+                                               message: "fs read denied: \(reason)")
+        case .allow(let resolved):
+            do {
+                let (capped, _) = gate.cap(try Data(contentsOf: URL(fileURLWithPath: resolved)))
+                await onFileAccess?("read", resolved, true)
+                try? await connection.respond(to: id, result: .object([
+                    "content": .string(String(decoding: capped, as: UTF8.self))
+                ]))
+            } catch {
+                try? await connection.respondError(to: id, code: ACP.ErrorCode.internalError,
+                                                   message: "fs read failed")
+            }
+        }
+    }
+
+    /// `fs/write_text_file` — validate through the gate (a symlinked/`..` parent
+    /// can't escape the root), create intermediate dirs under the root, write.
+    private func handleFsWrite(id: RpcId, params: ACPJSONValue) async {
+        guard let gate = trustGate, let path = params["path"]?.stringValue else {
+            try? await connection.respondError(to: id, code: ACP.ErrorCode.methodNotFound,
+                                               message: "fs/write_text_file not enabled"); return
+        }
+        let content = params["content"]?.stringValue ?? ""
+        switch gate.authorizeWrite(path: path) {
+        case .deny(let reason):
+            await onFileAccess?("write", path, false)
+            try? await connection.respondError(to: id, code: ACP.ErrorCode.invalidParams,
+                                               message: "fs write denied: \(reason)")
+        case .allow(let resolved):
+            do {
+                let url = URL(fileURLWithPath: resolved)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try Data(content.utf8).write(to: url)
+                await onFileAccess?("write", resolved, true)
+                try? await connection.respond(to: id, result: .null)
+            } catch {
+                try? await connection.respondError(to: id, code: ACP.ErrorCode.internalError,
+                                                   message: "fs write failed")
+            }
         }
     }
 

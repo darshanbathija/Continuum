@@ -49,15 +49,22 @@ final class AcpHarnessBridge {
     }
 
     /// ACP stdio agent (Grok, Cursor): child + NdjsonRpc + `AcpAgentDriver`.
+    /// `trustGate` (non-nil only for autopilot-trusted repos) enables the agent's
+    /// fs read/write capability, validated through the gate; `onFileAccess` is
+    /// the daemon's audit hook.
     static func acp(
         sessionId: UUID, support: AcpAgentSupport, store: SessionChatStore,
-        model: String?, agentDisplayName: String
+        model: String?, agentDisplayName: String,
+        trustGate: RepoTrustGate? = nil,
+        onFileAccess: (@Sendable (String, String, Bool) async -> Void)? = nil
     ) -> AcpHarnessBridge {
         let child = AcpStdioChild()
         let connection = NdjsonRpcConnection(writer: child)
         let driver = AcpAgentDriver(
             connection: connection, support: support,
-            clientInfo: ACPClientInfo(name: "clawdmeter", version: appVersion)
+            clientInfo: ACPClientInfo(name: "clawdmeter", version: appVersion),
+            trustGate: trustGate,
+            onFileAccess: onFileAccess
         )
         return AcpHarnessBridge(sessionId: sessionId, store: store, model: model,
                                 agentDisplayName: agentDisplayName, driver: driver,

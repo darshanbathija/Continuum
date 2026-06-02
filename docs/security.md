@@ -370,7 +370,40 @@ Bridging requires either `libsodium-swift` or a custom XChaCha20
 prelude. See [`docs/known-limitations.md`](known-limitations.md) for
 the current state and the verifier finding that surfaced this.
 
-## 11. Reporting a vulnerability
+## 11. Agent fs/terminal trust boundary (RepoTrustGate)
+
+When Clawdmeter drives an agent over ACP as a full harness (Grok, Cursor),
+the agent can ask the client (us) to **read or write files** on its behalf
+(`fs/read_text_file` / `fs/write_text_file`). We do not obey blindly.
+
+- **Capability is off by default.** The ACP `initialize` handshake advertises
+  `fs.readTextFile` / `fs.writeTextFile` ONLY when the session's repo is on the
+  per-repo **autopilot trust list** (`AutopilotState.isRepoTrusted`). Untrusted
+  repos advertise no fs capability and every fs request is refused
+  (`methodNotFound`). `terminal/*` is not advertised in this release.
+- **Every request is validated through `RepoTrustGate`** (bound to the repo
+  root + the session's worktree cwd) before any disk I/O:
+  - the path is canonicalized — `..` collapsed AND symlinks resolved via
+    `realpath` (for writes, the deepest existing ancestor is resolved and the
+    new-file remainder appended) — and the **canonical** result must sit at/under
+    the repo root. This defeats traversal (`../../etc/passwd`), absolute-path
+    escape, and symlink escape (a `link → /etc` placed inside the repo);
+  - it is **TOCTOU-aware**: the gate returns the resolved canonical path and the
+    handler operates on THAT path (resolve-then-use), never re-resolving the
+    attacker-supplied string;
+  - reads/outputs are **byte-capped** (anti-DoS);
+  - terminal command policy default-denies privilege escalation (`sudo`/`su`/…)
+    and catastrophic patterns (`rm -rf /`, pipe-to-shell, raw-device writes).
+- **Audited:** each fs op is logged hash-only (op + allow/deny + a hash of the
+  path — never the path or content).
+
+`RepoTrustGate` is pure + exhaustively unit-tested (traversal, symlink-escape on
+read and write-through-symlinked-parent, sibling-root-prefix confusion, command
+denylist) so the boundary is verifiable without the daemon. `PathAllowList`
+(scoped to iOS workspace onboarding) is NOT this boundary and is insufficient for
+agent-driven fs.
+
+## 12. Reporting a vulnerability
 
 If you find a security issue, email the maintainers directly rather
 than opening a public GitHub issue. The repo's `CONTRIBUTING.md` and

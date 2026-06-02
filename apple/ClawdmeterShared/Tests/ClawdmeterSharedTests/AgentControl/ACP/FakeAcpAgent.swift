@@ -12,6 +12,7 @@ actor FakeAcpAgent: AcpByteWriter {
     let mode: Mode
     private var deliver: (@Sendable (Data) async -> Void)?
     private var permissionContinuation: CheckedContinuation<Void, Never>?
+    private var fsResponse: CheckedContinuation<ACPJSONValue, Never>?
     private(set) var sawCancel = false
     private var fakeRequestId: Int64 = 9000
 
@@ -25,9 +26,34 @@ actor FakeAcpAgent: AcpByteWriter {
         if let method = o["method"]?.stringValue {
             await handle(method: method, id: o["id"], params: o["params"] ?? .object([:]))
         } else if o["id"] != nil {
-            // a response from the driver to our permission request
-            permissionContinuation?.resume()
-            permissionContinuation = nil
+            // a response from the driver to a client-request we sent.
+            if let c = fsResponse {
+                fsResponse = nil
+                c.resume(returning: v)
+            } else {
+                permissionContinuation?.resume()
+                permissionContinuation = nil
+            }
+        }
+    }
+
+    /// Send an `fs/write_text_file` client-request (agent → client) and return
+    /// the driver's full response frame (has `result` on allow, `error` on deny).
+    func requestFsWrite(path: String, content: String) async -> ACPJSONValue {
+        fakeRequestId += 1
+        let frame = ACPJSONValue.object([
+            "jsonrpc": .string("2.0"),
+            "id": .int(fakeRequestId),
+            "method": .string(ACP.ClientMethod.fsWriteTextFile),
+            "params": .object([
+                "sessionId": .string("fake-session-1"),
+                "path": .string(path),
+                "content": .string(content),
+            ]),
+        ])
+        return await withCheckedContinuation { (c: CheckedContinuation<ACPJSONValue, Never>) in
+            fsResponse = c
+            Task { await deliverFrame(frame) }
         }
     }
 
