@@ -79,8 +79,11 @@ final class WorkspaceStoreTests: XCTestCase {
     // MARK: - Migration
 
     func test_migration_synthesizesOneWorkspacePerRepoRoot() throws {
-        let repoA = "/Users/dev/repos/alpha"
-        let repoB = "/Users/dev/repos/beta"
+        // Real on-disk dirs: WorkspaceStore prunes synthesized workspaces whose
+        // repoRoot no longer exists, so fake absolute paths would be migrated
+        // then immediately pruned to 0.
+        let repoA = try makeRepoDir("alpha")
+        let repoB = try makeRepoDir("beta")
         let sessionAOlder = makeSession(
             repoKey: repoA,
             agent: .claude,
@@ -121,7 +124,7 @@ final class WorkspaceStoreTests: XCTestCase {
     }
 
     func test_migration_isIdempotent() throws {
-        let repo = "/Users/dev/repos/gamma"
+        let repo = try makeRepoDir("gamma")  // real dir so the synthesized workspace survives the prune
         try writeSessionsFile([
             makeSession(repoKey: repo, agent: .claude, model: "claude-sonnet-4-5", createdAt: Date())
         ])
@@ -455,31 +458,40 @@ final class WorkspaceStoreTests: XCTestCase {
         )
     }
 
-    func test_worktreeProvisionFailsClosedAndCleansUpOnCopyCap() async throws {
+    func test_worktreeProvisionDegradesGracefullyOnCopyCap() async throws {
+        // Hitting the files-to-copy cap must NOT fail the spawn — that was the
+        // "+ button creates a branch but never starts a session" regression.
+        // Provision degrades gracefully: the oversized ignored file is skipped,
+        // the worktree (with its committed tree) is kept.
         let repo = try makeGitRepo(name: "cap-fail")
         try write("tracked\n", to: repo.appendingPathComponent("tracked.txt"))
         try write(".env*\n", to: repo.appendingPathComponent(".gitignore"))
         try git(["add", "tracked.txt", ".gitignore"], cwd: repo)
         try git(["commit", "-m", "initial"], cwd: repo)
-        try write("TOO_BIG=123\n", to: repo.appendingPathComponent(".env.local"))
+        try write("TOO_BIG=123\n", to: repo.appendingPathComponent(".env.local"))  // 12 bytes > cap
 
         let manager = WorktreeManager(workspaceStorageRoot: workspaceStorageRoot.path)
-        do {
-            _ = try await manager.provision(
-                repoRoot: repo.path,
-                slug: "cap-fail-worktree",
-                branchName: "cap-fail-worktree",
-                filesToCopy: WorkspaceFilesToCopySettings(maxBytesPerFile: 1, maxTotalBytes: 1)
-            )
-            XCTFail("Expected oversized ignored file to fail closed")
-        } catch {
-            let path = WorktreeManager.worktreePath(
-                repoRoot: repo.path,
-                slug: "cap-fail-worktree",
-                storageRoot: workspaceStorageRoot.path
-            )
-            XCTAssertFalse(FileManager.default.fileExists(atPath: path))
-        }
+        let provisioned = try await manager.provision(
+            repoRoot: repo.path,
+            slug: "cap-fail-worktree",
+            branchName: "cap-fail-worktree",
+            filesToCopy: WorkspaceFilesToCopySettings(maxBytesPerFile: 1, maxTotalBytes: 1)
+        )
+
+        // The spawn succeeds and the worktree is kept...
+        XCTAssertTrue(FileManager.default.fileExists(atPath: provisioned.path))
+        // ...with its committed tree checked out...
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: (provisioned.path as NSString).appendingPathComponent("tracked.txt")))
+        // ...but the oversized gitignored file is NOT copied (cap respected).
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: (provisioned.path as NSString).appendingPathComponent(".env.local")))
+
+        _ = try await manager.cleanupProvisionedWorktree(
+            repoRoot: repo.path,
+            worktreePath: provisioned.path,
+            expectedMarkerId: provisioned.metadata.ownershipMarkerId
+        )
     }
 
     func test_worktreeProvisionUsesGitCommonDirProjectForConductorHostedRepo() async throws {
@@ -612,6 +624,15 @@ final class WorkspaceStoreTests: XCTestCase {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(file)
         try data.write(to: sessionsURL)
+    }
+
+    /// A real (non-git) directory under the test temp root, returned as a path
+    /// string. Migration groups by raw repoKey but prunes roots whose directory
+    /// doesn't exist, so migration tests must point at real dirs.
+    private func makeRepoDir(_ name: String) throws -> String {
+        let dir = tmpDir.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.path
     }
 
     private func makeGitRepo(name: String) throws -> URL {
