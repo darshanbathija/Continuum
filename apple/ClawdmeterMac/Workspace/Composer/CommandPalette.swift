@@ -108,6 +108,9 @@ final class SkillCatalog: ObservableObject {
             // Cursor slash-command discovery is not exposed by the CLI probe
             // yet, so keep the palette empty instead of showing Codex hints.
             pool = []
+        case .grok:
+            // No grok slash-command palette wired yet — keep it collapsed.
+            pool = []
         case .unknown:
             // X3: forward-compat unknown agent — no palette plumbed.
             pool = []

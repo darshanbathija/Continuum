@@ -984,6 +984,7 @@ public final class AgentSessionRegistry: ObservableObject {
             case .gemini: return "antigravity"
             case .opencode: return "opencode"
             case .cursor: return "cursor"
+            case .grok: return "grok"
             case .unknown: return nil
             }
         }()
@@ -991,6 +992,7 @@ public final class AgentSessionRegistry: ObservableObject {
             switch agent {
             case .opencode: return .providerReported
             case .cursor: return .unavailable
+            case .grok: return .unavailable
             case .gemini: return .estimated
             case .claude, .codex: return .locallyPriced
             case .unknown: return .unavailable

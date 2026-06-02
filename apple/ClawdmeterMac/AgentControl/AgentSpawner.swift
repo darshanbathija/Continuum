@@ -290,7 +290,7 @@ public enum AgentSpawner {
                 autopilot: autopilot,
                 trustWorkspace: request.useWorktree && workspacePath != nil && workspacePath != request.repoKey
             ) ?? []
-        case .opencode:
+        case .opencode, .grok: // grok is ACP — spawned via AcpStdioChild, no tmux argv
             // PR #29: OpenCode sessions don't use tmux argv. The Mac
             // dispatcher routes opencode requests to
             // OpencodeProcessManager + OpencodeSSEAdapter instead.
@@ -381,7 +381,7 @@ public enum AgentSpawner {
                 autopilot: chatAutopilot,
                 trustWorkspace: session.provisioning != nil
             ) ?? []
-        case (.opencode, _):
+        case (.opencode, _), (.grok, _): // grok is ACP — no tmux argv
             // PR #29: opencode sessions don't take a tmux argv.
             // OpencodeProcessManager + SSEAdapter handle spawn.
             return []
@@ -448,7 +448,7 @@ public enum AgentSpawner {
                 acceptEdits: acceptEdits,
                 resumeSessionId: resumeSessionId
             ) ?? []
-        case .opencode:
+        case .opencode, .grok: // grok is ACP — spawned via AcpStdioChild, no tmux argv
             // PR #29: opencode has no tmux respawn path.
             return []
         case .cursor:

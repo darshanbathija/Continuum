@@ -80,6 +80,7 @@ struct ModelPicker: View {
         case .gemini: return catalog.gemini
         case .opencode: return catalog.opencode
         case .cursor: return catalog.cursor
+        case .grok: return catalog.grok
         case .unknown: return []  // X3: no catalog slice for forward-compat unknown
         }
     }
@@ -91,6 +92,7 @@ struct ModelPicker: View {
         case .gemini: return "Gemini"
         case .opencode: return "OpenCode"
         case .cursor: return "Cursor"
+        case .grok: return "Grok"
         case .unknown: return "Other agent"  // X3
         }
     }

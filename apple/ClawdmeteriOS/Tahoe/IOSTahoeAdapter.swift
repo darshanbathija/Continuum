@@ -87,6 +87,7 @@ extension AgentControlClient {
         case .gemini: return .gemini
         case .opencode: return .opencode
         case .cursor: return .cursor
+        case .grok: return .cursor // TODO: TahoeProvider.grok identity; placeholder
         case .unknown: return .claude
         }
     }
@@ -111,6 +112,7 @@ extension AgentControlClient {
             case .gemini: return .gemini
             case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
             case .cursor: return .cursor
+            case .grok: return .cursor // TODO: TahoeProvider.grok identity; placeholder
             case .unknown:
                 // X3: visual fallback for raws this client doesn't
                 // recognize. Degrades to Claude styling.

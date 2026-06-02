@@ -191,6 +191,7 @@ extension AppRuntime {
         case .gemini: return .gemini
         case .opencode: return .opencode  // PR #31: 4th lane in TahoeProvider
         case .cursor: return .cursor
+        case .grok: return .cursor // TODO: TahoeProvider.grok identity; placeholder lane
         case .unknown:
             // X3: visual fallback. Semantic correctness lives on
             // AgentKind itself — UI degrades to Claude styling for

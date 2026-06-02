@@ -2214,6 +2214,11 @@ public final class AgentControlServer {
             // The current JSONL extractor only proves Claude/Codex ids, so
             // keep this conservative until the Cursor importer can prove one.
             argv = []
+        case .grok:
+            // ACP agent — driven via AcpAgentDriver, not a tmux argv. The
+            // daemon ACP spawn path is not wired yet, so fall through to the
+            // 503 (honest "not available" rather than an empty tmux spawn).
+            argv = []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Fall
             // through to the 503 below so the iOS caller sees a clean
@@ -5225,6 +5230,7 @@ public final class AgentControlServer {
         case .gemini: return "antigravity"
         case .cursor: return "cursor"
         case .opencode: return "opencode"
+        case .grok: return "grok"
         case .unknown: return nil
         }
     }
@@ -5663,6 +5669,7 @@ public final class AgentControlServer {
         case .gemini: return "Antigravity"
         case .cursor: return "Cursor"
         case .opencode: return "OpenRouter"
+        case .grok: return "Grok"
         case .unknown: return "this provider"
         }
     }
@@ -6386,9 +6393,10 @@ public final class AgentControlServer {
                 payload: ["repo": chatCwd, "agent": "opencode", "opencodeID": opencodeID]
             )
             return updated
-        case .unknown:
+        case .unknown, .grok:
             // X3: forward-compat unknown agent — no frontier-child spawn
-            // path. Surfaces as a slot failure to the broadcast caller.
+            // path. grok (ACP) isn't wired for broadcast/Frontier yet.
+            // Surfaces as a slot failure to the broadcast caller.
             throw SpawnFailure.message("unknown_agent_kind")
         }
     }
@@ -6836,6 +6844,9 @@ public final class AgentControlServer {
         case .cursor:
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
+        case .grok:
+            // ACP agents have no tmux pane — no warmup choreography.
+            break
         case .unknown:
             // X3: forward-compat unknown agent — no warmup choreography
             // plumbed.
@@ -7138,9 +7149,10 @@ public final class AgentControlServer {
                 autopilot: false,
                 workspacePath: session.effectiveCwd
             )
-        case .gemini:
-            // approve-plan from Gemini is unsupported in v6 — there's no
-            // gemini CLI to respawn. Surfaces as 500 below.
+        case .gemini, .grok:
+            // approve-plan via tmux respawn doesn't apply: Gemini has no CLI
+            // to respawn, and grok (ACP) approves via session/set_mode, which
+            // the daemon doesn't route yet. Surfaces as 500 below.
             argv = nil
         case .opencode:
             // PR #29: opencode has no plan-mode → respawn-with-write

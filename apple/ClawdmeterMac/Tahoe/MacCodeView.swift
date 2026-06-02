@@ -1865,6 +1865,7 @@ private struct ComposerBar: View {
         case .gemini: return catalog.gemini
         case .opencode: return catalog.opencode
         case .cursor: return catalog.cursor
+        case .grok: return catalog.grok
         case .unknown: return []
         }
     }
