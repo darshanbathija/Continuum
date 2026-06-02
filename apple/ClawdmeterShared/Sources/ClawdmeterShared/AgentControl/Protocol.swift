@@ -1300,15 +1300,19 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
         case .opencode:
             return .opencodeServer
         case .cursor:
-            return .cursorCLI
+            // Phase 5: Cursor is now driven over the native ACP harness
+            // (`cursor-agent acp`), not the legacy tmux/poll CLI path.
+            return .acpCursor
         case .grok:
-            // Cursor stays .cursorCLI until the Phase 5 migration flips it to
-            // .acpCursor; Grok is ACP from the start.
             return .acpGrok
         case .unknown:
             return .unknown
         }
     }
+
+    /// True for the native ACP harness runtime kinds (Grok, Cursor) — the
+    /// daemon drives these through `AcpHarnessBridge`, not tmux/SDK/serve.
+    public var isACPDriven: Bool { self == .acpGrok || self == .acpCursor }
 }
 
 /// How trustworthy a cost/usage value is. Provider-reported costs should

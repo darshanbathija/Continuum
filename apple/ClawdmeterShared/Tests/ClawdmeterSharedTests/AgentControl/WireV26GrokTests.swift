@@ -53,6 +53,32 @@ final class WireV26GrokTests: XCTestCase {
         XCTAssertFalse(caps.supportsTerminal, "fs/terminal off until the Phase 6 trust model")
     }
 
+    /// Phase 5: Cursor is now driven over the native ACP harness, so a freshly
+    /// created Cursor session infers `.acpCursor` (not the legacy `.cursorCLI`).
+    func testCursorInfersAcpRuntime() {
+        XCTAssertEqual(SessionRuntimeKind.inferred(agent: .cursor), .acpCursor)
+    }
+
+    /// Old persisted Cursor sessions keep their stored `.cursorCLI` runtime kind
+    /// (lenient decode) — the Phase-5 `inferred` flip only affects new spawns.
+    func testLegacyCursorCliStillDecodes() throws {
+        let rt = try JSONDecoder().decode(SessionRuntimeKind.self,
+                                          from: Data("\"cursor_cli\"".utf8))
+        XCTAssertEqual(rt, .cursorCLI)
+        XCTAssertFalse(rt.isACPDriven)
+    }
+
+    /// `isACPDriven` is the daemon's discriminator for routing a session through
+    /// the harness bridge vs the tmux/SDK/serve paths.
+    func testIsACPDrivenDiscriminator() {
+        XCTAssertTrue(SessionRuntimeKind.acpGrok.isACPDriven)
+        XCTAssertTrue(SessionRuntimeKind.acpCursor.isACPDriven)
+        for rt in [SessionRuntimeKind.claudeCLI, .codexCLI, .codexSDK,
+                   .antigravityAgentAPI, .opencodeServer, .cursorCLI, .unknown] {
+            XCTAssertFalse(rt.isACPDriven, "\(rt.rawValue) must not route to the ACP harness")
+        }
+    }
+
     func testModelCatalogGrok() throws {
         XCTAssertFalse(ModelCatalog.bundled.grok.isEmpty)
         XCTAssertEqual(ModelCatalog.bundled.entries(for: .grok).first?.id, "grok-build")

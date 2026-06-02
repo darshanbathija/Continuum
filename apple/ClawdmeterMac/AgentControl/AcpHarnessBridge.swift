@@ -14,17 +14,20 @@ final class AcpHarnessBridge {
     private let driver: AcpAgentDriver
     private let store: SessionChatStore
     private let model: String?
-    private var projection = AcpHarnessProjection()
+    private let agentDisplayName: String
+    private var projection: AcpHarnessProjection
     /// Maps a surfaced permission prompt id back to the ACP request id so the
     /// daemon's `/permission-respond` route can answer the agent.
     private var pendingPermissionRpcIds: [String: RpcId] = [:]
     private var consumeTask: Task<Void, Never>?
     private(set) var externalSessionId: String?
 
-    init(sessionId: UUID, support: AcpAgentSupport, store: SessionChatStore, model: String?) {
+    init(sessionId: UUID, support: AcpAgentSupport, store: SessionChatStore, model: String?, agentDisplayName: String) {
         self.sessionId = sessionId
         self.store = store
         self.model = model
+        self.agentDisplayName = agentDisplayName
+        self.projection = AcpHarnessProjection(agentDisplayName: agentDisplayName)
         self.connection = NdjsonRpcConnection(writer: child)
         self.driver = AcpAgentDriver(
             connection: connection,
@@ -109,7 +112,7 @@ final class AcpHarnessBridge {
     private func apply(_ op: AcpStoreOp) {
         switch op {
         case .appendAssistantText(let text):
-            store.appendSDKMessages([msg(.assistantText, title: "Grok", body: text)], model: model)
+            store.appendSDKMessages([msg(.assistantText, title: agentDisplayName, body: text)], model: model)
         case .appendToolCall(let title, let status):
             store.appendSDKMessages([msg(.toolCall, title: title, body: status)])
         case .setPlanText(let text):
@@ -119,7 +122,7 @@ final class AcpHarnessBridge {
         case .setPermissionPrompt(let prompt):
             store.setPendingPermissionPrompt(prompt)
         case .appendErrorText(let text):
-            store.appendSDKMessages([msg(.assistantText, title: "Grok", body: text, isError: true)])
+            store.appendSDKMessages([msg(.assistantText, title: agentDisplayName, body: text, isError: true)])
         }
     }
 

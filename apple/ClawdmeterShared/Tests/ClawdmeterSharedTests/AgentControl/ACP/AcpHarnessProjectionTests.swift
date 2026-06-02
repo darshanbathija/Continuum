@@ -65,6 +65,22 @@ final class AcpHarnessProjectionTests: XCTestCase {
         XCTAssertTrue(prompt.options[1].isDestructive)
     }
 
+    func testPermissionHeaderReflectsAgentDisplayName() {
+        var p = AcpHarnessProjection(agentDisplayName: "Cursor")
+        let req = HarnessPermissionRequest(
+            requestId: .string("abc"),
+            sessionId: "s",
+            title: "Run command?",
+            options: [ACPPermissionOption(optionId: "allow_once", name: "Allow", kind: "allow_once")]
+        )
+        let ops = p.apply(.permissionRequest(req))
+        guard case .setPermissionPrompt(let prompt?) = ops.first else {
+            return XCTFail("expected a permission prompt op")
+        }
+        XCTAssertEqual(prompt.header, "Cursor")
+        XCTAssertEqual(prompt.id, "acp-perm-sabc")
+    }
+
     func testErrorSurfacesAndInterrupts() {
         var p = AcpHarnessProjection()
         XCTAssertEqual(p.apply(.error(code: "x", message: "boom")),

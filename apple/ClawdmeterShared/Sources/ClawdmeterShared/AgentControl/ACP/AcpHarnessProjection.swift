@@ -18,8 +18,14 @@ public enum AcpStoreOp: Sendable, Equatable {
 /// tool calls, permission prompts, and turn state map directly.
 public struct AcpHarnessProjection: Sendable {
     private var assistantBuffer = ""
+    /// Display name of the agent (e.g. "Grok", "Cursor") used as the permission
+    /// prompt header. Defaults to a generic label so tests/util callers needn't
+    /// supply one.
+    private let agentDisplayName: String
 
-    public init() {}
+    public init(agentDisplayName: String = "Agent") {
+        self.agentDisplayName = agentDisplayName
+    }
 
     public mutating func apply(_ event: HarnessEvent) -> [AcpStoreOp] {
         switch event {
@@ -42,7 +48,7 @@ public struct AcpHarnessProjection: Sendable {
             return []
 
         case .permissionRequest(let req):
-            return [.setPermissionPrompt(Self.permissionPrompt(for: req))]
+            return [.setPermissionPrompt(Self.permissionPrompt(for: req, header: agentDisplayName))]
 
         case .usage:
             return []
@@ -100,7 +106,7 @@ public struct AcpHarnessProjection: Sendable {
         }
     }
 
-    public static func permissionPrompt(for req: HarnessPermissionRequest) -> PendingPermissionPrompt {
+    public static func permissionPrompt(for req: HarnessPermissionRequest, header: String = "Agent") -> PendingPermissionPrompt {
         let options = req.options.map { opt -> PermissionOption in
             let kind = opt.kind ?? ""
             return PermissionOption(
@@ -115,7 +121,7 @@ public struct AcpHarnessProjection: Sendable {
             id: permissionPromptId(for: req.requestId),
             title: req.title ?? "The agent is requesting permission",
             detail: nil,
-            header: "Grok",
+            header: header,
             options: options
         )
     }

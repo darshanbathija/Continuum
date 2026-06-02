@@ -1750,23 +1750,13 @@ public final class AgentControlServer {
             )
             return
         }
-        // ACP harness send (Grok): drive the live `AcpHarnessBridge`. The reply
-        // streams back into the session's SessionChatStore as the driver emits
-        // HarnessEvents — clients on chat-subscribe see the turn appear with no
-        // extra poll, exactly like the opencode/agentapi structured paths.
-        if session.agent == .grok {
-            guard let bridge = harnessRegistry.bridge(for: uuid) else {
-                // No live bridge — the daemon restarted and the ACP child is
-                // gone. Revive (respawn + session/load) is a Phase-1 lifecycle
-                // item; surface a clear 503 so the client re-creates instead of
-                // a false 200 ("paste succeeded" ≠ "provider accepted").
-                sendResponse(HTTPResponse(
-                    status: 503, reason: "Service Unavailable",
-                    contentType: "application/json",
-                    body: Data(#"{"error":"acp_session_not_live","cta":"Start a new Grok session"}"#.utf8)
-                ), on: connection)
-                return
-            }
+        // ACP harness send (Grok, Cursor): drive the live `AcpHarnessBridge`.
+        // The reply streams back into the session's SessionChatStore as the
+        // driver emits HarnessEvents — clients on chat-subscribe see the turn
+        // appear with no extra poll, like the opencode/agentapi paths. Keyed
+        // off the bridge registry so legacy tmux sessions (no bridge) fall
+        // through to the tmux path below.
+        if let bridge = harnessRegistry.bridge(for: uuid) {
             await bridge.prompt(req.text)
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
@@ -1778,6 +1768,17 @@ public final class AgentControlServer {
                 payloadHash: payloadHash,
                 on: connection
             )
+            return
+        }
+        // An ACP session whose bridge died (daemon restart) has no tmux pane —
+        // return an explicit 503 ("paste succeeded" ≠ "provider accepted")
+        // instead of falling into the tmux-guard 500. Revive is Phase-1.
+        if session.runtimeBinding?.runtimeKind.isACPDriven == true {
+            sendResponse(HTTPResponse(
+                status: 503, reason: "Service Unavailable",
+                contentType: "application/json",
+                body: Data(#"{"error":"acp_session_not_live","cta":"Start a new session"}"#.utf8)
+            ), on: connection)
             return
         }
         guard let paneId = session.tmuxPaneId ?? session.tmuxWindowId else {
@@ -2506,15 +2507,17 @@ public final class AgentControlServer {
             ?? InterruptRequest(idempotencyKey: nil)
         if await tryReplayIdempotent(key: req.idempotencyKey, on: connection) { return }
         let payloadHash = MobileCommandPayloadHasher.hex(request.body)
-        // ACP harness interrupt (Grok): the SessionInterruptDispatcher has no
-        // handle on the harness registry, so cancel the live bridge here first.
-        // Flip the turn state up front (mirrors the dispatcher) so the V2 UI's
-        // Send button restores immediately, then cancel the in-flight ACP turn.
-        if let grokSession = registry.session(id: uuid), grokSession.agent == .grok {
-            chatStoreRegistry.snapshotStore(for: grokSession)?.setCurrentTurnState(.interrupted)
-            if let bridge = harnessRegistry.bridge(for: uuid) {
-                await bridge.cancel()
+        // ACP harness interrupt (Grok, Cursor): the SessionInterruptDispatcher
+        // has no handle on the harness registry, so cancel the live bridge here
+        // first. Keyed off the bridge registry (agent-agnostic); legacy tmux
+        // sessions have no bridge and fall through to the dispatcher. Flip the
+        // turn state up front (mirrors the dispatcher) so the V2 UI's Send
+        // button restores immediately, then cancel the in-flight ACP turn.
+        if let bridge = harnessRegistry.bridge(for: uuid) {
+            if let s = registry.session(id: uuid) {
+                chatStoreRegistry.snapshotStore(for: s)?.setCurrentTurnState(.interrupted)
             }
+            await bridge.cancel()
             await sendCommandResponse(
                 body: ["ok": true],
                 key: req.idempotencyKey,
@@ -4121,7 +4124,18 @@ public final class AgentControlServer {
         }
     }
 
-    /// ACP harness spawn (Grok in v1). Mirrors `handleSpawnOpencodeSession`:
+    /// The single switch deciding which providers are driven over the native
+    /// ACP harness (vs tmux / SDK / serve). Returns the agent's spawn+auth
+    /// policy, or nil for non-ACP agents (Claude/Codex/Gemini/OpenCode).
+    static func acpSupport(for agent: AgentKind) -> AcpAgentSupport? {
+        switch agent {
+        case .grok: return GrokAcpSupport()
+        case .cursor: return CursorAcpSupport()
+        default: return nil
+        }
+    }
+
+    /// ACP harness spawn (Grok, Cursor). Mirrors `handleSpawnOpencodeSession`:
     /// no tmux pane — we launch the agent as a piped stdio child and drive it
     /// over ACP via `AcpHarnessBridge`, projecting its event stream into the
     /// session's `SessionChatStore`. Two-phase failure contract (A3):
@@ -4131,6 +4145,7 @@ public final class AgentControlServer {
     private func handleSpawnAcpSession(
         req: NewSessionRequest,
         support: AcpAgentSupport,
+        displayName: String,
         cwd: String,
         worktreePath: String?,
         provisioning: WorktreeProvisioningMetadata?,
@@ -4210,14 +4225,15 @@ public final class AgentControlServer {
             return
         }
 
-        // Step 3: build + start the bridge. Model/effort are launch-time only
-        // for Grok, but the bundled catalog id ("grok-build") is a placeholder,
-        // not a real CLI model — so v1 spawns with the agent's defaults and
-        // defers model selection until we map `initialize.availableModels`.
-        // alwaysApprove=false so the agent raises permission prompts we surface
-        // (the point of being a harness, not a blind auto-runner).
+        // Step 3: build + start the bridge. Model/effort selection is deferred
+        // to a follow-up (Grok takes them launch-time, Cursor via
+        // set_config_option) — v1 spawns with the agent's defaults until we map
+        // `initialize.availableModels`; the bundled catalog ids are placeholders,
+        // not real CLI models. alwaysApprove=false so the agent raises
+        // permission prompts we surface (a harness, not a blind auto-runner).
         let bridge = AcpHarnessBridge(
-            sessionId: session.id, support: support, store: store, model: req.model
+            sessionId: session.id, support: support, store: store,
+            model: req.model, agentDisplayName: displayName
         )
         do {
             try await bridge.start(
@@ -5088,9 +5104,19 @@ public final class AgentControlServer {
         }
 
         let effectivePlanMode = req.agent == .cursor ? false : req.planMode
-        let preflightArgv = req.agent == .opencode
-            ? ["opencode-managed-session"]
-            : AgentSpawner.argv(for: req, workspacePath: req.repoKey)
+        // ACP harness agents (Grok, Cursor) and OpenCode spawn via their own
+        // managers, not tmux, so `AgentSpawner.argv` returns [] for them. Use a
+        // non-empty sentinel so they pass the CLI-presence guard and reach their
+        // dedicated spawn branch below (binary presence is checked there, at
+        // launch, via the two-phase start contract / provider preflight).
+        let preflightArgv: [String]
+        if req.agent == .opencode {
+            preflightArgv = ["opencode-managed-session"]
+        } else if Self.acpSupport(for: req.agent) != nil {
+            preflightArgv = ["acp-managed-session"]
+        } else {
+            preflightArgv = AgentSpawner.argv(for: req, workspacePath: req.repoKey)
+        }
         guard !preflightArgv.isEmpty else {
             sendResponse(HTTPResponse(
                 status: 503, reason: "Service Unavailable",
@@ -5155,14 +5181,16 @@ public final class AgentControlServer {
             return
         }
 
-        // ACP harness providers (Grok) bypass tmux entirely: we spawn the
-        // agent as a piped stdio child and drive it over ACP. Like opencode,
-        // this branch owns its own session-create + response, so it returns
-        // before the tmux argv/spawn path below.
-        if req.agent == .grok {
+        // ACP harness providers (Grok, Cursor) bypass tmux entirely: we spawn
+        // the agent as a piped stdio child and drive it over ACP. Like
+        // opencode, this branch owns its own session-create + response, so it
+        // returns before the tmux argv/spawn path below. Cursor's auth/binary/
+        // plan-mode preflight already ran above; this is the spawn itself.
+        if let support = Self.acpSupport(for: req.agent) {
             await handleSpawnAcpSession(
                 req: req,
-                support: GrokAcpSupport(),
+                support: support,
+                displayName: providerDisplayName(req.agent),
                 cwd: cwd,
                 worktreePath: worktreePath,
                 provisioning: provisioning,
@@ -7147,20 +7175,14 @@ public final class AgentControlServer {
         guard let req = try? JSONDecoder().decode(PermissionRespondRequest.self, from: request.body) else {
             sendResponse(.badRequest, on: connection); return
         }
-        // ACP harness permission (Grok): the pending prompt lives in the bridge
-        // (keyed by the ACP request id), not the daemon's continuation map, so
-        // this must run BEFORE the continuation-based checks below. The bridge
-        // answers the agent's `session/request_permission` and clears the
-        // store's prompt; a non-match means a stale / already-answered click.
-        if let grokSession = registry.session(id: uuid), grokSession.agent == .grok {
-            guard let bridge = harnessRegistry.bridge(for: uuid) else {
-                sendResponse(HTTPResponse(
-                    status: 409, reason: "Conflict",
-                    contentType: "application/json",
-                    body: Data(#"{"error":"no_pending_prompt"}"#.utf8)
-                ), on: connection)
-                return
-            }
+        // ACP harness permission (Grok, Cursor): the pending prompt lives in the
+        // bridge (keyed by the ACP request id), not the daemon's continuation
+        // map, so this must run BEFORE the continuation-based checks below.
+        // Keyed off the bridge registry (agent-agnostic); legacy sessions have
+        // no bridge and use the continuation path. The bridge answers the
+        // agent's `session/request_permission` and clears the store's prompt; a
+        // non-match means a stale / already-answered click.
+        if let bridge = harnessRegistry.bridge(for: uuid) {
             let matched = await bridge.respondToPermission(promptId: req.promptId, optionId: req.optionId)
             if matched {
                 serverLogger.info("acp permission respond session=\(uuid.uuidString, privacy: .public) option=\(req.optionId, privacy: .public)")
