@@ -12,6 +12,11 @@ import ClawdmeterShared
 @MainActor
 final class AcpHarnessBridge {
     let sessionId: UUID
+    /// The spawned child's PID + binary name, captured at start for the orphan
+    /// reaper. nil for transport-owning (gRPC) drivers — they have no child
+    /// process to reap.
+    private(set) var reapablePid: Int32?
+    private(set) var reapableBinary: String?
     /// stdio transport (nil for drivers that own their own transport, e.g. gRPC).
     private let child: AcpStdioChild?
     private let connection: NdjsonRpcConnection?
@@ -123,6 +128,9 @@ final class AcpHarnessBridge {
             } catch {
                 throw ACPError.startFailed("failed to launch \(binary): \(error)")
             }
+            // Capture PID + binary for the orphan reaper (stdio drivers only).
+            self.reapablePid = await child.pid
+            self.reapableBinary = binary
         }
         externalSessionId = try await driver.start(
             model: model, effort: effort, cwd: cwd ?? "", alwaysApprove: alwaysApprove
@@ -208,12 +216,20 @@ final class AcpHarnessBridge {
 final class HarnessSessionRegistry {
     private var bridges: [UUID: AcpHarnessBridge] = [:]
 
-    func register(_ bridge: AcpHarnessBridge, for id: UUID) { bridges[id] = bridge }
+    func register(_ bridge: AcpHarnessBridge, for id: UUID) {
+        bridges[id] = bridge
+        // Record the child PID for the orphan reaper (stdio drivers only; gRPC
+        // transport-owning bridges expose no reapablePid).
+        if let pid = bridge.reapablePid, let binary = bridge.reapableBinary {
+            HarnessProcessReaper.shared.record(sessionId: id, pid: pid, binary: binary)
+        }
+    }
     func bridge(for id: UUID) -> AcpHarnessBridge? { bridges[id] }
     func contains(_ id: UUID) -> Bool { bridges[id] != nil }
 
     func remove(_ id: UUID) async {
         guard let bridge = bridges.removeValue(forKey: id) else { return }
+        HarnessProcessReaper.shared.remove(sessionId: id)
         await bridge.teardown()
     }
 }

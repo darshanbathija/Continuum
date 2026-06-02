@@ -324,6 +324,13 @@ public final class AgentControlServer {
     /// without starting. The Sessions tab handles "daemon offline" gracefully.
     public func start() {
         guard listener == nil else { return }
+        // Reap stale harness children (codex app-server / grok / cursor-agent)
+        // left by a previous, crashed daemon. Real daemon only — a test server
+        // (writesServerMetadata == false) must not touch the shared
+        // ~/.clawdmeter pidfile or another live daemon's children.
+        if writesServerMetadata {
+            HarnessProcessReaper.shared.reapOrphans()
+        }
         let queue = DispatchQueue(label: "AgentControlServer.accept", qos: .userInitiated)
         self.listenerQueue = queue
 
