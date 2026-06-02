@@ -1,4 +1,5 @@
 import SwiftUI
+import ClawdmeterShared
 
 /// Tiny chip showing autopilot on/off state. Tapping calls the parent's
 /// handler, which is expected to show a confirmation sheet (the toggle
@@ -27,7 +28,7 @@ struct AutopilotChip: View {
                     .stroke(isOn ? Color.green.opacity(0.4) : Color.secondary.opacity(0.3), lineWidth: 1)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help(isOn
               ? "Autopilot ON — auto-approves tool calls. Tap to disable."
               : "Tap to enable autopilot. Will interrupt the current turn to respawn the CLI with --dangerously-* flags.")

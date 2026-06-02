@@ -47,14 +47,14 @@ struct PRReviewPane: View {
                     Image(systemName: "arrow.up.right.square")
                         .font(.system(size: 11))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .help("Open in browser")
             }
             Button(action: { coordinator.refreshNow() }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .help("Refresh PR state")
         }
         .padding(.horizontal, 12)

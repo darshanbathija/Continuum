@@ -32,7 +32,7 @@ struct AttachmentChip: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .help("Remove attachment")
         }
         .padding(.horizontal, 6)

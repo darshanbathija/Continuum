@@ -2215,6 +2215,26 @@ public final class SessionsModel: ObservableObject {
     /// The chip picker calls this with the new entry's id; if `entry.cliAlias`
     /// is set, we pass the alias (e.g. "opus") since claude --model accepts
     /// both aliases and full ids.
+    /// Surface the outcome of a mid-session config swap so it never fails
+    /// silently. Failure always toasts with the daemon's reason; success is a
+    /// brief confirmation (the chip itself already reflects the new value).
+    private func surfaceSwap(
+        _ result: SessionConfigChanger.SwapResult,
+        succeeded: String,
+        failed: String
+    ) {
+        switch result {
+        case .swapped:
+            WorkspaceFeedback.success(succeeded)
+        case .resumeFailed(let restoredOriginal):
+            WorkspaceFeedback.failure(failed, detail: restoredOriginal
+                ? "Couldn't resume — restored the previous session."
+                : "Couldn't resume the session.")
+        case .spawnError(let message):
+            WorkspaceFeedback.failure(failed, detail: message)
+        }
+    }
+
     public func switchModel(sessionId: UUID, to entry: ModelCatalogEntry, effort: ReasoningEffort? = nil) async {
         guard let runtime = AppDelegate.runtime else { return }
         let changer = SessionConfigChanger(
@@ -2223,7 +2243,8 @@ public final class SessionsModel: ObservableObject {
             repoEnvResolver: repoEnvResolver
         )
         let modelToUse = entry.cliAlias ?? entry.id
-        _ = await changer.swap(sessionId: sessionId, newModel: modelToUse, newEffort: .some(effort))
+        let result = await changer.swap(sessionId: sessionId, newModel: modelToUse, newEffort: .some(effort))
+        surfaceSwap(result, succeeded: "Model → \(entry.displayName)", failed: "Couldn't switch model")
     }
 
     /// Sessions v2 Phase 1: swap the effort dial mid-session.
@@ -2234,7 +2255,8 @@ public final class SessionsModel: ObservableObject {
             tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
-        _ = await changer.swap(sessionId: sessionId, newEffort: .some(effort))
+        let result = await changer.swap(sessionId: sessionId, newEffort: .some(effort))
+        surfaceSwap(result, succeeded: "Reasoning effort updated", failed: "Couldn't change effort")
     }
 
     /// Sessions v2 Phase 1: toggle plan/code mid-session (Claude only).
@@ -2245,7 +2267,10 @@ public final class SessionsModel: ObservableObject {
             tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
-        _ = await changer.swap(sessionId: sessionId, newPlanMode: planMode)
+        let result = await changer.swap(sessionId: sessionId, newPlanMode: planMode)
+        surfaceSwap(result,
+                    succeeded: planMode ? "Switched to Plan mode" : "Switched to Code mode",
+                    failed: "Couldn't change mode")
     }
 
     /// Revive a degraded session: respawn its agent into a fresh tmux pane
@@ -2275,6 +2300,11 @@ public final class SessionsModel: ObservableObject {
         // right argv. Order matters: write state first, then respawn —
         // SessionConfigChanger reads the stores when building newArgv.
         let store = PermissionModeStore.shared
+        // Snapshot the prior flags so we can roll the optimistic store write
+        // back if the respawn fails — otherwise the permission chip would
+        // claim a mode the restored CLI isn't actually running.
+        let priorAcceptEdits = store.acceptEdits(sessionId: sessionId)
+        let priorBypass = AutopilotState.shared.isEnabled(sessionId: sessionId)
         switch newMode {
         case .ask:
             store.setAcceptEdits(false, sessionId: sessionId)
@@ -2294,7 +2324,14 @@ public final class SessionsModel: ObservableObject {
             tmux: runtime.tmuxClient,
             repoEnvResolver: repoEnvResolver
         )
-        _ = await changer.swap(sessionId: sessionId, newPlanMode: newMode == .plan)
+        let result = await changer.swap(sessionId: sessionId, newPlanMode: newMode == .plan)
+        if case .swapped = result {} else {
+            // Respawn didn't take — restore the flags so the chip reflects the
+            // CLI that's actually running, not the mode the user attempted.
+            store.setAcceptEdits(priorAcceptEdits, sessionId: sessionId)
+            store.setBypass(priorBypass, sessionId: sessionId)
+        }
+        surfaceSwap(result, succeeded: "Permission mode updated", failed: "Couldn't change permission mode")
     }
 
     public func endSession(id: UUID) async {
@@ -2421,6 +2458,7 @@ public final class SessionsModel: ObservableObject {
               session.status == .planning,
               (session.planText?.isEmpty == false || session.agent == .codex || session.agent == .cursor)
         else { return }
+        var windowKilled = false
         do {
             let providerResumeId: String
             if session.agent == .cursor {
@@ -2430,6 +2468,10 @@ public final class SessionsModel: ObservableObject {
                         planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
                     )
                     try? await registry.updateStatus(id: id, status: .degraded)
+                    WorkspaceFeedback.failure(
+                        "Can't approve plan",
+                        detail: "Cursor needs a real chat id — start Cursor in code mode or import a session with a proven id."
+                    )
                     return
                 }
                 providerResumeId = cursorResumeId
@@ -2445,10 +2487,14 @@ public final class SessionsModel: ObservableObject {
                 autopilot: false,
                 workspacePath: session.effectiveCwd
             )
-            guard !argv.isEmpty else { return }
+            guard !argv.isEmpty else {
+                WorkspaceFeedback.failure("Can't approve plan", detail: "Couldn't build the relaunch command for this agent.")
+                return
+            }
             let cwd = session.effectiveCwd
             let resolvedEnv = try resolveRepoEnv(session: session, cwd: cwd)
             try await runtime.tmuxClient.killWindow(windowId)
+            windowKilled = true
             let window = try await runtime.tmuxClient.newWindow(
                 cwd: cwd,
                 child: argv,
@@ -2464,7 +2510,16 @@ public final class SessionsModel: ObservableObject {
             )
             try await registry.markPlanApproved(id: id)
             try await registry.updateStatus(id: id, status: .running)
-        } catch {}
+            WorkspaceFeedback.success("Plan approved — running")
+        } catch {
+            if windowKilled {
+                // The plan-mode pane is already dead; flag degraded so the user
+                // gets the Revive affordance instead of a session pointed at a
+                // killed window.
+                try? await registry.updateStatus(id: id, status: .degraded)
+            }
+            WorkspaceFeedback.failure("Couldn't approve the plan", detail: error.localizedDescription)
+        }
     }
 
     private func cleanupUnregisteredWorktree(

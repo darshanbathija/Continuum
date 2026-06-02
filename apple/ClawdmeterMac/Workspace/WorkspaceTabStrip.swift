@@ -142,7 +142,7 @@ struct WorkspaceTabStrip: View {
                 }
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help(session.effectiveCwd)
         .contextMenu {
             Button("Close", role: .destructive) {
@@ -168,7 +168,7 @@ struct WorkspaceTabStrip: View {
                 closeAction: { model.clearDraftWorkspaceTab() }
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("Draft chat tab")
     }
 
@@ -184,7 +184,7 @@ struct WorkspaceTabStrip: View {
                 closeAction: { onCloseTerminal(tab) }
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("\(terminalTitle(for: tab, session: session))\n\(session.effectiveCwd)")
         .contextMenu {
             Button("Close") {
@@ -205,7 +205,7 @@ struct WorkspaceTabStrip: View {
                 closeAction: { onCloseDocument(tab) }
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help(tab.path)
         .contextMenu {
             Button("Close") {
@@ -248,7 +248,7 @@ struct WorkspaceTabStrip: View {
                     .font(.system(size: 9, weight: .bold))
                     .frame(width: 14, height: 14)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .foregroundStyle(t.fg3)
             .help("Close tab")
         }

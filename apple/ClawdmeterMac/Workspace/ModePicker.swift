@@ -12,6 +12,10 @@ struct ModePicker: View {
     let agent: AgentKind
     let onChange: (SessionMode) -> Void
 
+    @Namespace private var pillNamespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.tahoe) private var t
+
     var body: some View {
         HStack(spacing: 4) {
             ForEach(SessionMode.allCases, id: \.self) { option in
@@ -20,6 +24,9 @@ struct ModePicker: View {
         }
         .padding(2)
         .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+        // P3: the selected pill SLIDES between segments (160ms) instead of an
+        // instant fill swap — matches EffortDial and the segmented-control spec.
+        .animation(SessionsV2Theme.segmentedSelection(reduceMotion: reduceMotion), value: mode)
     }
 
     @ViewBuilder
@@ -38,12 +45,13 @@ struct ModePicker: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(
-                isSelected
-                    ? AnyShapeStyle(terraCotta)
-                    : AnyShapeStyle(Color.clear),
-                in: RoundedRectangle(cornerRadius: 5)
-            )
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(t.accent)
+                        .matchedGeometryEffect(id: "modePill", in: pillNamespace)
+                }
+            }
             .foregroundStyle(
                 isSelected ? Color.white
                     : (isDisabled ? Color.secondary : Color.primary)
@@ -51,7 +59,7 @@ struct ModePicker: View {
             .opacity(isDisabled ? 0.55 : 1.0)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .disabled(isDisabled)
         .help(tooltip(option))
     }
@@ -82,6 +90,4 @@ struct ModePicker: View {
             return "Remote-Mac mode — coming in G3."
         }
     }
-
-    private var terraCotta: Color { SessionsV2Theme.accent }
 }

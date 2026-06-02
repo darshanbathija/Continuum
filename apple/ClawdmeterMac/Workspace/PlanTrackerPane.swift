@@ -182,7 +182,7 @@ struct PlanTrackerPane: View {
             .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     private var emptyState: some View {

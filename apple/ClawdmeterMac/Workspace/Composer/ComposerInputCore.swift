@@ -66,6 +66,10 @@ struct ComposerInputCore: View {
     @State private var showingPromptHistory: Bool = false
     @State private var showingExpandedEditor: Bool = false
     @State private var savePromptTitle: String = ""
+    /// Drives the running-state accent rim's 1.8s breathing pulse (DESIGN.md
+    /// §Motion). Toggled true while a turn runs so the repeatForever animation
+    /// oscillates the rim opacity; held false (static rim) under Reduce Motion.
+    @State private var rimPulse: Bool = false
     @ObservedObject private var insertionInbox = ComposerInsertionInbox.shared
     /// Optional: when set, MentionPicker uses these as the source of
     /// suggestions (parent passes session-derived sources + open sessions).
@@ -91,6 +95,7 @@ struct ComposerInputCore: View {
     var onRetryPending: (() -> Void)?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tahoe) private var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         // Claude-Code-style stack: input box on top, attachments chip strip,
@@ -138,10 +143,28 @@ struct ComposerInputCore: View {
             .padding(.bottom, 10)
         }
         .overlay(
+            // DESIGN.md §Motion: while a turn runs the accent rim *breathes*
+            // (1.8s ease-in-out). `rimPulse` oscillates the opacity; under
+            // Reduce Motion `composerRimPulse` is nil so we hold a static rim.
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(sessionIsRunning ? t.accentAlpha(0.45) : .clear, lineWidth: 1)
-                .shadow(color: sessionIsRunning ? t.accentAlpha(0.30) : .clear, radius: 11)
+                .stroke(t.accentAlpha(sessionIsRunning ? (reduceMotion ? 0.45 : (rimPulse ? 0.55 : 0.22)) : 0),
+                        lineWidth: 1)
+                .shadow(color: t.accentAlpha(sessionIsRunning ? (reduceMotion ? 0.28 : (rimPulse ? 0.34 : 0.12)) : 0),
+                        radius: 11)
         )
+        .onChange(of: sessionIsRunning) { _, running in
+            if running, let anim = SessionsV2Theme.composerRimPulse(reduceMotion: reduceMotion) {
+                rimPulse = false
+                withAnimation(anim) { rimPulse = true }
+            } else {
+                rimPulse = false
+            }
+        }
+        .onAppear {
+            if sessionIsRunning, let anim = SessionsV2Theme.composerRimPulse(reduceMotion: reduceMotion) {
+                withAnimation(anim) { rimPulse = true }
+            }
+        }
         // Palette / mention popovers float flush ABOVE the composer. They are
         // attached HERE — outside the inner `TahoeGlass`, whose `.clipShape`
         // was clipping (hiding) them entirely when they sat inside it. The
@@ -455,7 +478,7 @@ struct ComposerInputCore: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("Attach a file (drag-drop, paste, or click)")
         // The matching identifier for `code.composer.model-effort` /
         // `permission-mode` / `context-usage` — added in PR #185 with the
@@ -477,7 +500,7 @@ struct ComposerInputCore: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .keyboardShortcut(.upArrow, modifiers: [.option])
         .help("Prompt history (⌥↑)")
         .accessibilityLabel("Open prompt history")
@@ -516,7 +539,7 @@ struct ComposerInputCore: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("Paste terminal text without ANSI color codes")
         .accessibilityLabel("Paste stripped terminal text")
     }
@@ -527,7 +550,7 @@ struct ComposerInputCore: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("Open expanded editor")
         .accessibilityLabel("Open expanded composer editor")
     }
@@ -539,7 +562,7 @@ struct ComposerInputCore: View {
                 .foregroundStyle(dictation.state == .recording ? terraCotta : .secondary)
                 .symbolEffect(.pulse, isActive: dictation.state == .recording)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .keyboardShortcut("m", modifiers: [.control])
         .help(dictationTooltip)
     }
@@ -597,7 +620,7 @@ struct ComposerInputCore: View {
                             .frame(width: 28, height: 28)
                             .background(t.hair2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .keyboardShortcut(.return, modifiers: [.option])
                     .disabled(!store.canSend || store.isSending)
                     .help("Queue follow-up (⌥↩)")
@@ -635,7 +658,7 @@ struct ComposerInputCore: View {
                     .overlay(Capsule(style: .continuous).stroke(t.accentAlpha(0.40), lineWidth: 0.75))
                     .foregroundStyle(t.fg)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .keyboardShortcut(".", modifiers: [.command])
                 .help("Stop the running prompt (⌘.)")
             }
@@ -653,7 +676,7 @@ struct ComposerInputCore: View {
                     .shadow(color: canSendNow ? t.accentDeep.color(opacity: 0.30) : .clear, radius: 6, x: 0, y: 4)
                     .symbolEffect(.pulse, isActive: store.isSending)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .keyboardShortcut(.return, modifiers: [.command])
             .disabled(!canSendNow)
             .help(planApprovalMode ? "Approve or refine the plan above" : "Send (⌘↩)")
@@ -995,7 +1018,7 @@ private struct PromptHistorySheet: View {
             }
             .padding(.vertical, 3)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .contextMenu {
             Button("Use Prompt", action: action)
             Button("Copy Prompt") {
@@ -1152,7 +1175,7 @@ private struct PendingMessageStrip: View {
                         .foregroundStyle(SessionsV2Theme.warn)
                 }
                 Button("Retry now") { onRetry() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.accent)
                 Button {
@@ -1162,7 +1185,7 @@ private struct PendingMessageStrip: View {
                         .font(.system(size: 11))
                         .foregroundStyle(t.fg4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .help("Discard pending message")
             case .failed:
                 HStack(spacing: 5) {
@@ -1175,7 +1198,7 @@ private struct PendingMessageStrip: View {
                         .lineLimit(2)
                 }
                 Button("Retry") { onRetry() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.accent)
                     .accessibilityIdentifier("composer.pending.retry")
@@ -1186,7 +1209,7 @@ private struct PendingMessageStrip: View {
                         .font(.system(size: 11))
                         .foregroundStyle(t.fg4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .help("Discard pending message")
                 .accessibilityIdentifier("composer.pending.dismiss")
             }

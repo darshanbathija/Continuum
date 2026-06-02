@@ -106,7 +106,7 @@ struct SessionHoverActions: View {
                 .contentShape(Rectangle())
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .codeHoverChrome(
             cornerRadius: 6,
             help: "Archive",

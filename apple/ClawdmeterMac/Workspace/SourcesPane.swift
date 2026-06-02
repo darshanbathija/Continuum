@@ -94,7 +94,7 @@ struct SourcesPane: View {
             .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     // MARK: - View-layer rendering of precomputed SourceEntry

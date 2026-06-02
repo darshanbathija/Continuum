@@ -39,7 +39,7 @@ struct ReviewPaneGutter: View {
                     )
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .help("Open \(tab.rawValue) pane")
             }
             Spacer()
