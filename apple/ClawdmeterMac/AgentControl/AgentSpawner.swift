@@ -91,6 +91,10 @@ public enum AgentSpawner {
     /// then the user reviews and switches to `workspace-write` to
     /// execute. Same UX shape as Claude's `--permission-mode plan`,
     /// just a different transport.
+    ///
+    /// DEPRECATED (harness migration, 2026-06): Codex no longer spawns via tmux
+    /// argv — it drives over the `codex app-server` harness. This builder is
+    /// reachable only via the codex.appServer.enabled kill-switch.
     public static func codexArgv(
         model: String? = nil,
         planMode: Bool = false,
@@ -227,6 +231,10 @@ public enum AgentSpawner {
     /// - The CLI accepts an explicit `--workspace <path>` flag, which we pass
     ///   even though tmux also starts the pane in that cwd. This keeps Cursor's
     ///   own workspace binding aligned with the repo/worktree Clawdmeter picked.
+    ///
+    /// DEPRECATED (harness migration, 2026-06 / Phase 9): Cursor now drives over
+    /// ACP (cursor-agent) via the harness, not tmux. This builder is dead for new
+    /// sessions and is removed once cursor-agent-acp is live-verified.
     public static func cursorArgv(
         model: String? = nil,
         planMode: Bool = false,

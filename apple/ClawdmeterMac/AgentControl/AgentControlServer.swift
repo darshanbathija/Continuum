@@ -1993,6 +1993,10 @@ public final class AgentControlServer {
     /// clients can attach immediately. Errors surface as 503 with
     /// structured CTA bodies the iOS Chat tab can map directly to
     /// user-facing prompts.
+    ///
+    /// DEPRECATED (harness migration, 2026-06): Gemini chat now drives over the
+    /// Cascade gRPC harness. This agentapi one-shot handler is reachable only via
+    /// the antigravity.grpc.enabled kill-switch.
     private func handlePostGeminiChatSession(
         model: String?,
         effort: ReasoningEffort?,
