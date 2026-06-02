@@ -1213,7 +1213,7 @@ private struct ComposerBar: View {
                 .foregroundStyle(t.fg4)
                 .padding(.horizontal, 14).padding(.vertical, 9)
         }
-        .frame(width: 360)
+        .frame(width: 384)
         .background(t.surfaceSolid)
     }
 
@@ -1264,14 +1264,16 @@ private struct ComposerBar: View {
                 Text(vendor.displayName)
                     .font(TahoeFont.body(12.5, weight: .semibold))
                     .foregroundStyle(enabled ? t.fg : t.fg4)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 if let reason = providerUnavailableReason(vendor) {
                     Text(reason)
                         .font(TahoeFont.body(9.5))
                         .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.tail)
                 }
             }
-
-            Spacer(minLength: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
 
             providerRowModelMenu(vendor)
             if modelSupportsEffort(vendor) { providerRowEffortMenu(vendor) }
@@ -1306,13 +1308,13 @@ private struct ComposerBar: View {
             HStack(spacing: 3) {
                 Text(compactModelLabel(for: vendor) ?? "Model")
                     .font(TahoeFont.body(10.5)).foregroundStyle(t.fg3)
-                    .lineLimit(1).truncationMode(.middle)
+                    .lineLimit(1).truncationMode(.tail)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 7, weight: .semibold)).foregroundStyle(t.fg4)
             }
-            .frame(maxWidth: 130, alignment: .trailing)
+            .frame(maxWidth: 118, alignment: .trailing)
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
     }
 
     @ViewBuilder
