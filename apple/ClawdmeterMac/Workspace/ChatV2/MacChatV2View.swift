@@ -1049,8 +1049,9 @@ private struct ComposerBar: View {
     @ObservedObject var client: AgentControlClient
     let providerMatrix: ChatProvidersResponse?
     @FocusState private var focused: Bool
-    @State private var openVendorPicker: ChatVendor?
-    @State private var addVendorPickerPresented = false
+    // v0.29.x — multi-provider selector (Option A): one compact bar that opens a
+    // single popover (flat per-provider checklist + model/effort + Solo/Compare).
+    @State private var providerPopoverPresented = false
     // v0.29.8 — backing store for the new ComposerModelPicker. Each
     // ProviderDefaultsStore instance reads/writes the same UserDefaults
     // keys, so writes from the picker persist and other instances pick
@@ -1118,133 +1119,224 @@ private struct ComposerBar: View {
         (store.attachments.isEmpty && sendCtl.lastError == nil) ? 102 : 168
     }
 
+    // Multi-provider selector — Option A (compact bar + popover). One small
+    // control in the composer opens a single popover: a flat per-provider
+    // checklist, each row with its own model + effort, plus a Solo/Compare
+    // toggle. Selecting 1 provider = solo; 2–3 = broadcast (compare).
     @ViewBuilder
     private var providerControls: some View {
-        HStack(spacing: 7) {
-            if providerEnabledVendors.isEmpty {
-                Text("No providers enabled")
-                    .font(TahoeFont.body(11, weight: .semibold))
-                    .foregroundStyle(t.fg4)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
-                    .frame(height: 32)
-                    .background(Color.white.opacity(0.045), in: Capsule())
-                    .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(store.selectedVendors, id: \.self) { vendor in
-                            let selected = store.isVendorSelected(vendor)
-                            let available = isVendorAvailable(vendor)
-                            Button {
-                                openVendorPicker = vendor
-                            } label: {
-                                providerChip(vendor: vendor, selected: selected, available: available)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!ProviderEnablement.isEnabled(vendor))
-                            .popover(isPresented: Binding(
-                                get: { openVendorPicker == vendor },
-                                set: { if !$0, openVendorPicker == vendor { openVendorPicker = nil } }
-                            ), arrowEdge: .bottom) {
-                                providerPickerPopover(for: vendor)
-                            }
-                            .help(providerUnavailableReason(vendor) ?? "\(vendor.displayName) model picker")
-                        }
-                    }
-                    .padding(.vertical, 1)
-                }
-                .frame(maxWidth: 344, alignment: .leading)
-            }
-
-            Button {
-                addVendorPickerPresented = true
-            } label: {
-                HStack(spacing: 5) {
-                    TahoeIcon(store.selectedVendorCount < 3 ? "plus" : "sliders", size: 11)
-                    Text(store.selectedVendorCount < 3 ? "Add" : "Configure")
-                        .font(TahoeFont.body(11, weight: .semibold))
-                }
-                .foregroundStyle(t.fg3)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .frame(height: 32)
+        if providerEnabledVendors.isEmpty {
+            Text("No providers enabled")
+                .font(TahoeFont.body(11, weight: .semibold))
+                .foregroundStyle(t.fg4)
+                .padding(.horizontal, 9).padding(.vertical, 7).frame(height: 32)
                 .background(Color.white.opacity(0.045), in: Capsule())
                 .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
-            }
-            .buttonStyle(.plain)
-            .fixedSize(horizontal: true, vertical: false)
-            .disabled(providerEnabledVendors.isEmpty)
-            .help(providerEnabledVendors.isEmpty ? "Enable a provider in Settings → Providers." : "Configure selected providers")
-            .popover(isPresented: Binding(
-                get: { addVendorPickerPresented },
-                set: { addVendorPickerPresented = $0 }
-            ), arrowEdge: .bottom) {
-                // v0.29.31: the broadcast "Add / Configure" surface now uses the
-                // same ComposerModelPicker as the per-vendor chips, in .multi
-                // mode (toggle 1–3 vendors into the broadcast, each with its own
-                // model + effort). Replaces the retired MacChatModelSelectorPanel.
-                ComposerModelPicker(
-                    initialVendor: firstConfigurableVendor,
-                    store: store,
-                    defaultsStore: providerDefaultsStore,
-                    catalog: client.modelCatalog,
-                    enabledVendors: providerPickerVendors,
-                    mode: .multi,
-                    vendorAvailability: { isVendorAvailable($0) },
-                    vendorUnavailableReason: { providerUnavailableReason($0) },
-                    onClose: { addVendorPickerPresented = false }
-                )
-            }
+                .help("Enable a provider in Settings → Providers.")
+        } else {
+            Button { providerPopoverPresented = true } label: { providerBarLabel }
+                .buttonStyle(.plain)
+                .fixedSize(horizontal: true, vertical: false)
+                .popover(isPresented: $providerPopoverPresented, arrowEdge: .bottom) {
+                    providerSelectorPopover
+                }
+                .help("Choose a provider, or pick 2–3 to compare side by side")
         }
-        .frame(minWidth: 120, maxWidth: 410, alignment: .leading)
     }
 
-    private func providerChip(vendor: ChatVendor, selected: Bool, available: Bool) -> some View {
-        HStack(spacing: 5) {
-            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 14)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(vendor.displayName)
-                    .font(TahoeFont.body(11, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if selected, let model = compactModelLabel(for: vendor) {
-                    Text(model)
-                        .font(TahoeFont.mono(8.5))
-                        .foregroundStyle(t.fg4)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+    /// Compact composer control: stacked glyphs of the selected providers + a
+    /// label (solo → name·model; multi → "N providers"). Opens the selector.
+    private var providerBarLabel: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 3) {
+                ForEach(store.selectedVendors, id: \.self) { v in
+                    TahoeProviderGlyph(provider: v.backingProvider.tahoeProvider, size: 16)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            if store.selectedVendorCount == 1 {
+                let v = store.primaryVendor
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(v.displayName)
+                        .font(TahoeFont.body(11.5, weight: .semibold))
+                        .foregroundStyle(t.fg).lineLimit(1)
+                    if let model = compactModelLabel(for: v) {
+                        Text(model)
+                            .font(TahoeFont.mono(8.5))
+                            .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+            } else {
+                Text("\(store.selectedVendorCount) providers")
+                    .font(TahoeFont.body(11.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+            }
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(t.fg4)
         }
-        .foregroundStyle(selected && available ? t.fg : t.fg4)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
-        .frame(width: 124, height: 32, alignment: .leading)
-        .background(selected && available ? Color.white.opacity(0.10) : Color.white.opacity(0.045), in: Capsule())
-        .overlay(Capsule().stroke(selected ? vendor.backingProvider.tahoeProvider.halo.color.opacity(0.42) : t.hairline, lineWidth: 0.5))
+        .padding(.horizontal, 10).padding(.vertical, 6).frame(height: 32)
+        .background(Color.white.opacity(0.06), in: Capsule())
+        .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
         .contentShape(Capsule())
     }
 
-    private func providerPickerPopover(for vendor: ChatVendor) -> some View {
-        // v0.29.8: per-vendor chip taps open the in-composer ComposerModelPicker
-        // (left rail of providers + search + ⌘N shortcuts + star favorites) in
-        // .single mode. v0.29.31: this is now the only model picker — the
-        // "Add / Configure" button opens the same component in .multi mode
-        // (broadcast), and MacChatModelSelectorPanel was retired.
-        //
-        ComposerModelPicker(
-            initialVendor: vendor,
-            store: store,
-            defaultsStore: providerDefaultsStore,
-            // v0.29.31: use the live probe-enriched catalog (Cursor +
-            // OpenRouter live models, Opus 4.8) instead of the static .bundled
-            // fallback that showed only "Auto" / 5 OpenRouter entries.
-            catalog: client.modelCatalog,
-            enabledVendors: providerPickerVendors,
-            onClose: { openVendorPicker = nil }
-        )
+    /// Solo/Compare toggle + a flat per-provider checklist, each row with its own
+    /// model + effort. 1 selected = solo; 2–3 = broadcast.
+    private var providerSelectorPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Ask or compare")
+                    .font(TahoeFont.body(12.5, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                Spacer()
+                soloCompareToggle
+            }
+            .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
+
+            Rectangle().fill(t.hairline).frame(height: 0.5)
+
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(providerPickerVendors, id: \.self) { vendor in
+                        providerSelectorRow(vendor)
+                    }
+                }
+                .padding(.horizontal, 8).padding(.vertical, 6)
+            }
+            .frame(maxHeight: 320)
+
+            Rectangle().fill(t.hairline).frame(height: 0.5)
+            Text(store.selectedVendorCount <= 1
+                 ? "Solo · \(store.primaryVendor.displayName)"
+                 : "Comparing \(store.selectedVendorCount) — answers shown side by side")
+                .font(TahoeFont.body(10.5))
+                .foregroundStyle(t.fg4)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+        }
+        .frame(width: 360)
+        .background(t.surfaceSolid)
+    }
+
+    private var soloCompareToggle: some View {
+        HStack(spacing: 2) {
+            soloCompareSegment(title: "Solo", active: store.selectedVendorCount <= 1) {
+                store.selectedVendors = [store.primaryVendor]
+                store.persist()
+            }
+            soloCompareSegment(title: "Compare", active: store.selectedVendorCount > 1) {
+                if store.selectedVendorCount <= 1 { store.toggleVendor(firstConfigurableVendor) }
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.05)))
+    }
+
+    private func soloCompareSegment(title: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(TahoeFont.body(10.5, weight: .semibold))
+                .foregroundStyle(active ? t.fg : t.fg4)
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(active ? Color.white.opacity(0.12) : Color.clear))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func providerSelectorRow(_ vendor: ChatVendor) -> some View {
+        let selected = store.isVendorSelected(vendor)
+        let enabled = ProviderEnablement.isEnabled(vendor)
+        let available = isVendorAvailable(vendor)
+        let canSelect = enabled && (selected || available)
+        HStack(spacing: 10) {
+            Button { toggleProviderRow(vendor) } label: {
+                Image(systemName: selected ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(selected ? t.accent : t.fg4)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSelect)
+
+            TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 18)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(vendor.displayName)
+                    .font(TahoeFont.body(12.5, weight: .semibold))
+                    .foregroundStyle(enabled ? t.fg : t.fg4)
+                if let reason = providerUnavailableReason(vendor) {
+                    Text(reason)
+                        .font(TahoeFont.body(9.5))
+                        .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.tail)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            providerRowModelMenu(vendor)
+            if modelSupportsEffort(vendor) { providerRowEffortMenu(vendor) }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(selected ? Color.white.opacity(0.06) : Color.clear))
+        .opacity(canSelect ? 1 : 0.55)
+        .contentShape(Rectangle())
+    }
+
+    private func toggleProviderRow(_ vendor: ChatVendor) {
+        guard ProviderEnablement.isEnabled(vendor) else { return }
+        if !store.isVendorSelected(vendor), !isVendorAvailable(vendor) { return }
+        store.toggleVendor(vendor)
+    }
+
+    private func providerRowModelMenu(_ vendor: ChatVendor) -> some View {
+        let models = vendor.models(in: client.modelCatalog)
+        let currentId = store.model(for: vendor, catalog: client.modelCatalog)
+        return Menu {
+            if models.isEmpty { Text("No models") }
+            ForEach(models, id: \.id) { m in
+                Button {
+                    store.selectModel(m.id, for: vendor, catalog: client.modelCatalog)
+                } label: {
+                    if m.id == currentId { Label(m.displayName, systemImage: "checkmark") }
+                    else { Text(m.displayName) }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(compactModelLabel(for: vendor) ?? "Model")
+                    .font(TahoeFont.body(10.5)).foregroundStyle(t.fg3)
+                    .lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold)).foregroundStyle(t.fg4)
+            }
+            .frame(maxWidth: 130, alignment: .trailing)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+    }
+
+    @ViewBuilder
+    private func providerRowEffortMenu(_ vendor: ChatVendor) -> some View {
+        let current = store.effort(for: vendor, catalog: client.modelCatalog)
+        Menu {
+            ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                Button {
+                    store.selectEffort(effort, for: vendor, catalog: client.modelCatalog)
+                } label: {
+                    if current == effort { Label(effort.rawValue.capitalized, systemImage: "checkmark") }
+                    else { Text(effort.rawValue.capitalized) }
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Text(current?.rawValue.capitalized ?? "Auto")
+                    .font(TahoeFont.body(10)).foregroundStyle(t.fg4)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold)).foregroundStyle(t.fg4)
+            }
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("Reasoning effort")
     }
 
     private var deepResearchChip: some View {
