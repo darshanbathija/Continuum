@@ -7509,10 +7509,31 @@ public final class AgentControlServer {
             // input handler before the first user prompt can paste.
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         case .claude:
-            // Claude welcome auto-dismisses on render. Probe to give it
-            // ~1.5s, then drop into the permission-poll loop.
+            // Claude Code shows a one-time "Do you trust the files in this
+            // folder?" prompt on first launch in a directory. For a CHAT the cwd
+            // is a throwaway /tmp sandbox, so auto-accept it — otherwise the TUI
+            // sits at the prompt, the first /send pastes into the dialog instead
+            // of the composer, no reply ever streams, and the client times out.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
+            var claudeCap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
+            if claudeCap.contains("Do you trust")
+                || claudeCap.localizedCaseInsensitiveContains("trust the files")
+                || claudeCap.localizedCaseInsensitiveContains("trust the contents") {
+                serverLogger.info("chat warmup: auto-accepting Claude trust prompt for \(session.id.uuidString, privacy: .public)")
+                // Wake the dialog's input handler (Down/Up keeps the default
+                // "Yes, proceed" highlighted), then accept — same choreography as
+                // the Codex trust dialog.
+                try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                claudeCap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
+                // Belt: if a confirm dialog is still up, a bare Enter accepts it.
+                if claudeCap.contains("Do you trust") {
+                    try? await tmux.command(["send-keys", "-t", paneId, "Enter"])
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                }
+            }
+            // Let the TUI finish wiring its input handler before the first paste.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         case .gemini:
             break
         case .opencode:
