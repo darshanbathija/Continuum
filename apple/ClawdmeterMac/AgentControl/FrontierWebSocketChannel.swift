@@ -123,6 +123,18 @@ public final class FrontierWebSocketChannel: WSChannel {
 
     // MARK: - Push
 
+    /// Encode a Sendable wire value OFF the main actor (see the matching note in
+    /// ChatStreamWebSocketChannel). Ordering is preserved by `schedulePush`'s
+    /// `pendingPush?.cancel()` — only one aggregate encode/send is ever in flight.
+    private nonisolated static func encodeOffMain<T: Encodable & Sendable>(_ value: T) async -> Data? {
+        await Task.detached { () -> Data? in
+            let enc = JSONEncoder()
+            enc.dateEncodingStrategy = .iso8601
+            enc.outputFormatting = [.withoutEscapingSlashes]
+            return try? enc.encode(value)
+        }.value
+    }
+
     private func schedulePush() {
         // Coalesce multiple per-child triggers into one envelope.
         pendingPush?.cancel()
@@ -174,7 +186,7 @@ public final class FrontierWebSocketChannel: WSChannel {
             children: children,
             turnWinners: turnWinnersProvider()
         )
-        guard let body = try? encoder.encode(envelope) else {
+        guard let body = await Self.encodeOffMain(envelope) else {
             frontierStreamLogger.error("frontier-subscribe: encode failed group=\(self.groupId.uuidString, privacy: .public)")
             return
         }

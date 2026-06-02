@@ -139,6 +139,22 @@ public final class ChatStreamWebSocketChannel: WSChannel {
 
     // MARK: - Push
 
+    /// Encode a Sendable wire value OFF the main actor. JSON serialization of a
+    /// large chat snapshot is the one non-trivial CPU cost on this hot path; the
+    /// main-actor thread shouldn't pay it. A fresh encoder is created inside the
+    /// detached task (JSONEncoder is not Sendable, so we can't capture the shared
+    /// one) with the same config as `self.encoder`. Frame ORDERING is unaffected:
+    /// the 100ms debounce coalesces to one push per window and each push awaits
+    /// its encode+send sequentially.
+    private nonisolated static func encodeOffMain<T: Encodable & Sendable>(_ value: T) async -> Data? {
+        await Task.detached { () -> Data? in
+            let enc = JSONEncoder()
+            enc.dateEncodingStrategy = .iso8601
+            enc.outputFormatting = [.withoutEscapingSlashes]
+            return try? enc.encode(value)
+        }.value
+    }
+
     private func pushSnapshot(_ snapshot: SessionChatStore.ChatSnapshot) async {
         let wire = WireChatSnapshot(
             sessionId: session.id,
@@ -166,7 +182,7 @@ public final class ChatStreamWebSocketChannel: WSChannel {
     /// v20-and-earlier path: send the whole `WireChatSnapshot` JSON
     /// payload as one text frame (the original Phase 2 wire).
     private func pushLegacySnapshot(_ wire: WireChatSnapshot) async {
-        guard let body = try? encoder.encode(wire) else {
+        guard let body = await Self.encodeOffMain(wire) else {
             chatStreamLogger.error("chat-subscribe: failed to encode snapshot for session \(self.session.id.uuidString, privacy: .public)")
             return
         }
@@ -179,12 +195,12 @@ public final class ChatStreamWebSocketChannel: WSChannel {
     private func pushShellDetail(from wire: WireChatSnapshot) async {
         let shellFrame = ChatStreamFrame.shell(wire.shellEvent())
         let detailFrame = ChatStreamFrame.detail(wire.detailEvent())
-        guard let shellBody = try? encoder.encode(shellFrame) else {
+        guard let shellBody = await Self.encodeOffMain(shellFrame) else {
             chatStreamLogger.error("chat-subscribe: failed to encode shell frame for session \(self.session.id.uuidString, privacy: .public)")
             return
         }
         await sendTextFrame(shellBody, identifier: "chat-shell")
-        guard let detailBody = try? encoder.encode(detailFrame) else {
+        guard let detailBody = await Self.encodeOffMain(detailFrame) else {
             chatStreamLogger.error("chat-subscribe: failed to encode detail frame for session \(self.session.id.uuidString, privacy: .public)")
             return
         }
