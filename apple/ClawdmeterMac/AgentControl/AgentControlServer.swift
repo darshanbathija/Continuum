@@ -5663,7 +5663,13 @@ public final class AgentControlServer {
         // Antigravity isn't installed / signed in / running / has no
         // projects open. agentapi-via-chat is live behind the wire v11 /
         // antigravityChatMinimum=11 gate.
+        if req.provider == .gemini, Self.antigravityGrpcEnabled {
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
+            return
+        }
         if req.provider == .gemini {
+            // Legacy agentapi one-shot chat path — deprecated, reachable only via
+            // the antigravityGrpcEnabled kill-switch (default off).
             await handlePostGeminiChatSession(
                 model: req.model,
                 effort: req.effort,
@@ -5919,6 +5925,32 @@ public final class AgentControlServer {
                 sessionId: session.id, support: support, store: store,
                 model: req.model, agentDisplayName: display,
                 trustGate: nil, onFileAccess: nil
+            )
+        case .gemini:
+            // Antigravity Cascade over gRPC. Chat has no repoKey, so (like the
+            // legacy agentapi chat path) the first open Antigravity project is
+            // the scratch workspace. The gRPC driver owns its transport (no
+            // stdio child), so binary stays nil.
+            let projectsDir = ClawdmeterRealHome.url()
+                .appendingPathComponent(".gemini/config/projects", isDirectory: true)
+            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
+            guard let projectId = await resolver.allProjects().first?.id else {
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable", contentType: "application/json",
+                    body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first."}"#.utf8)
+                ), on: connection)
+                return
+            }
+            let lsClient = LanguageServerClient()
+            binary = nil
+            arguments = []
+            bridge = .transportOwning(
+                sessionId: session.id, store: store,
+                model: req.model, agentDisplayName: display,
+                driver: AntigravityCascadeDriver(languageServer: lsClient, projectId: projectId)
             )
         default:
             // Not yet routed to the harness — should be unreachable (the caller
