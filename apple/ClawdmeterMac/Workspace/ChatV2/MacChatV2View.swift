@@ -606,24 +606,34 @@ private struct BroadcastTranscript: View {
             if children.isEmpty {
                 ChatEmptyState(title: "Broadcast group is empty", subtitle: "No live child sessions are attached to this comparison.")
             } else {
-                ScrollView(.horizontal) {
-                    HStack(alignment: .top, spacing: 10) {
-                        ForEach(children, id: \.id) { child in
-                            let frontierChild = frontierStore.snapshot.children.first { $0.sessionId == child.id }
-                            ProviderColumn(
-                                groupId: groupId,
-                                turnId: frontierStore.snapshot.latestTurnId,
-                                session: child,
-                                frontierChild: frontierChild,
-                                winner: winner(for: child),
-                                runtime: runtime,
-                                client: client,
-                                onContinueWinner: onContinueWinner
-                            )
-                                .frame(width: max(280, min(420, columnWidth)))
+                // Broadcast is capped at 3 children. Divide + FILL the full width
+                // so two providers don't leave half the page empty; only fall
+                // back to a horizontal scroll when columns would get too narrow
+                // to read.
+                GeometryReader { geo in
+                    let count = max(children.count, 1)
+                    let spacing: CGFloat = 10
+                    let pad: CGFloat = 12
+                    let avail = geo.size.width - pad * 2 - spacing * CGFloat(count - 1)
+                    let per = avail / CGFloat(count)
+                    if per >= 300 {
+                        HStack(alignment: .top, spacing: spacing) {
+                            ForEach(children, id: \.id) { child in
+                                columnView(child).frame(maxWidth: .infinity)
+                            }
+                        }
+                        .padding(pad)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    } else {
+                        ScrollView(.horizontal) {
+                            HStack(alignment: .top, spacing: spacing) {
+                                ForEach(children, id: \.id) { child in
+                                    columnView(child).frame(width: max(300, per))
+                                }
+                            }
+                            .padding(pad)
                         }
                     }
-                    .padding(12)
                 }
             }
         }
@@ -631,13 +641,19 @@ private struct BroadcastTranscript: View {
         .onDisappear { frontierStore.stop() }
     }
 
-    private var columnWidth: CGFloat {
-        // Precedence: `/` binds tighter than `??`, so the unparenthesized form
-        // parsed as `width ?? (1180 / count)` — the per-column divide only hit
-        // the dead nil-screen fallback and every column rendered full-screen
-        // width (then clamped to 420). Parenthesize so the divide applies to
-        // the chosen width.
-        (NSScreen.main?.visibleFrame.width ?? 1180) / CGFloat(max(children.count, 1))
+    @ViewBuilder
+    private func columnView(_ child: AgentSession) -> some View {
+        let frontierChild = frontierStore.snapshot.children.first { $0.sessionId == child.id }
+        ProviderColumn(
+            groupId: groupId,
+            turnId: frontierStore.snapshot.latestTurnId,
+            session: child,
+            frontierChild: frontierChild,
+            winner: winner(for: child),
+            runtime: runtime,
+            client: client,
+            onContinueWinner: onContinueWinner
+        )
     }
 
     private func winner(for child: AgentSession) -> FrontierTurnWinner? {
@@ -1305,16 +1321,28 @@ private struct ComposerBar: View {
                 }
             }
         } label: {
-            HStack(spacing: 3) {
-                Text(compactModelLabel(for: vendor) ?? "Model")
-                    .font(TahoeFont.body(10.5)).foregroundStyle(t.fg3)
-                    .lineLimit(1).truncationMode(.tail)
+            HStack(spacing: 4) {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .semibold)).foregroundStyle(t.fg4)
+                    .font(.system(size: 8, weight: .semibold)).foregroundStyle(t.fg4)
+                Text(rowModelLabel(for: vendor))
+                    .font(TahoeFont.body(11)).foregroundStyle(t.fg2)
+                    .lineLimit(1).truncationMode(.tail)
             }
-            .frame(maxWidth: 118, alignment: .trailing)
+            .frame(width: 116, alignment: .leading)
         }
+        // Deterministic fixed width so the model dropdown never collapses (when
+        // flexible) nor balloons (under .fixedSize with a long OpenRouter label).
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .frame(width: 116)
+    }
+
+    /// Model name for a row, stripping a redundant "<Provider> · " prefix
+    /// (e.g. "OpenRouter · OpenAI: GPT-5.5" → "OpenAI: GPT-5.5") since the row
+    /// already shows the provider name.
+    private func rowModelLabel(for vendor: ChatVendor) -> String {
+        let label = compactModelLabel(for: vendor) ?? "Model"
+        let prefix = "\(vendor.displayName) · "
+        return label.hasPrefix(prefix) ? String(label.dropFirst(prefix.count)) : label
     }
 
     @ViewBuilder
@@ -1330,14 +1358,17 @@ private struct ComposerBar: View {
                 }
             }
         } label: {
-            HStack(spacing: 2) {
-                Text(current?.rawValue.capitalized ?? "Auto")
-                    .font(TahoeFont.body(10)).foregroundStyle(t.fg4)
+            HStack(spacing: 4) {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .semibold)).foregroundStyle(t.fg4)
+                    .font(.system(size: 8, weight: .semibold)).foregroundStyle(t.fg4)
+                Text(current?.rawValue.capitalized ?? "Auto")
+                    .font(TahoeFont.body(11)).foregroundStyle(t.fg3)
+                    .lineLimit(1)
             }
+            .frame(width: 58, alignment: .leading)
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .frame(width: 58)
         .help("Reasoning effort")
     }
 
