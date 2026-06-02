@@ -14,19 +14,17 @@ public struct IOSPermissionResponder: PermissionResponder {
     }
 
     public func respond(sessionId: UUID, promptId: String, optionId: String) async throws {
-        // The existing client method is fire-and-forget (void). We snapshot
-        // `lastError` before + after; if a new error string appears, surface
-        // it. Not perfect — concurrent calls could race the error — but
-        // matches the existing contract used elsewhere in the V2 surface.
-        let before = await MainActor.run { client.lastError }
-        await client.respondToPermissionPrompt(
+        // The client method now returns the real HTTP outcome (true on 2xx),
+        // so the racy lastError before/after snapshot is gone. On failure,
+        // surface `lastError` (set by the failed POST) to the V2 card.
+        let ok = await client.respondToPermissionPrompt(
             sessionId: sessionId,
             promptId: promptId,
             optionId: optionId
         )
-        let after = await MainActor.run { client.lastError }
-        if let after, after != before {
-            throw PermissionResponderError(after)
+        if !ok {
+            let message = await MainActor.run { client.lastError } ?? "Permission response failed"
+            throw PermissionResponderError(message)
         }
     }
 }
