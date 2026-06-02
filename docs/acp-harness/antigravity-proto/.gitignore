@@ -1,0 +1,6 @@
+# Regenerable by tools/extract-antigravity-proto.sh (needs Antigravity.app).
+# The curated extracts (proto-inventory / rpc-methods / v1internal-fields) ARE
+# committed as the Phase-7 schema reference; the full 8.6k-line struct-tag dump
+# and best-effort carved descriptors are not.
+field-map.txt
+descriptors/
