@@ -325,7 +325,7 @@ struct ChatItemRowContent: View {
             .padding(.vertical, 5)
             .background(t.hair2, in: Capsule(style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("Open Markdown document in Code tab")
     }
 

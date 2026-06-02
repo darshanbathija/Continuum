@@ -278,7 +278,7 @@ public struct TahoeAccentButton<Label: View>: View {
             }
             .shadow(color: t.accentDeep.color(opacity: 0.30), radius: 6, x: 0, y: 4)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .disabled(disabled)
         .opacity(disabled ? 0.5 : 1.0)
     }
@@ -322,7 +322,7 @@ public struct TahoeGhostButton<Label: View>: View {
                     .stroke(active ? t.accent : t.hairline, lineWidth: 0.5)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 }
 

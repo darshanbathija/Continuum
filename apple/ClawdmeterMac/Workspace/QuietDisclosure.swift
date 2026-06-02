@@ -1,4 +1,5 @@
 import SwiftUI
+import ClawdmeterShared
 
 /// Custom DisclosureGroup style with a tighter chevron + no default
 /// "Show more / Show less" hover chrome. Matches the Codex-desktop
@@ -27,7 +28,7 @@ struct QuietDisclosure: DisclosureGroupStyle {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             if configuration.isExpanded {
                 configuration.content
             }

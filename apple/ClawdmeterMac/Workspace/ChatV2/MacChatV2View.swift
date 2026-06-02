@@ -171,7 +171,7 @@ private struct Sidebar: View {
                     Button(action: onNew) {
                         TahoeIcon("plus", size: 13).foregroundStyle(t.fg2)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .help("New chat")
                 }
                 .padding(12)
@@ -232,7 +232,7 @@ private struct Sidebar: View {
                                     .padding(10)
                                     .background(t.dark ? Color.white.opacity(0.05) : Color.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(PressableButtonStyle())
                             }
                         }
                     }
@@ -379,7 +379,7 @@ private struct HistoryRow: View {
             .background(selected ? Color.white.opacity(0.11) : Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? t.accent.opacity(0.45) : t.hairline, lineWidth: 0.6))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 }
 
@@ -701,7 +701,7 @@ private struct ProviderColumn: View {
                     } label: {
                         TahoeIcon("bookmark", size: 13).foregroundStyle(winner == nil ? t.fg3 : session.agent.tahoeProvider.halo.color)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .disabled(turnId == "turn-0")
                     .help("Mark this answer as winner")
                     Button {
@@ -719,7 +719,7 @@ private struct ProviderColumn: View {
                     } label: {
                         TahoeIcon("arrowR", size: 13).foregroundStyle(continuing ? t.fg4 : t.fg3)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .disabled(continuing)
                     .help("Continue from this answer")
                 }
@@ -828,7 +828,7 @@ private struct TranscriptScroll: View {
                             }
                             .font(TahoeFont.body(11, weight: .semibold))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableButtonStyle())
                         .disabled(isLoadingOlder)
                         .frame(maxWidth: .infinity)
                     }
@@ -928,7 +928,7 @@ private struct TranscriptScroll: View {
             } label: {
                 disclosureLabel(turn, icon: isOpen ? "chevron.down" : "chevron.right")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
         } else {
             disclosureLabel(turn, icon: "clock")
         }
@@ -953,7 +953,7 @@ private struct TranscriptScroll: View {
                     } label: {
                         compactChip(icon: iconName(for: artifact.kind), title: artifact.filename)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                 }
                 ForEach(turn.editedFiles.prefix(4)) { file in
                     compactChip(icon: "pencil.and.scribble", title: file.basename)
@@ -1460,7 +1460,7 @@ private struct ComposerBar: View {
             .background(store.deepResearch ? t.accent.opacity(0.15) : Color.white.opacity(0.045), in: Capsule())
             .overlay(Capsule().stroke(store.deepResearch ? t.accent.opacity(0.4) : t.hairline, lineWidth: 0.5))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     private var lockedModeChip: some View {
@@ -1485,7 +1485,7 @@ private struct ComposerBar: View {
                 .background(Color.white.opacity(0.045), in: Capsule())
                 .overlay(Capsule().stroke(t.hairline, lineWidth: 0.5))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     private var attachmentStrip: some View {
@@ -1500,7 +1500,7 @@ private struct ComposerBar: View {
                     Button { store.removeAttachment(id: attachment.id) } label: {
                         TahoeIcon("x", size: 9).foregroundStyle(t.fg4)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -1523,7 +1523,7 @@ private struct ComposerBar: View {
             }
             .frame(width: 34, height: 34)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .disabled(!sendCtl.canSend || sendCtl.sending || openTarget?.isReadOnlyTranscript == true)
         .keyboardShortcut(.return, modifiers: [.command])
     }

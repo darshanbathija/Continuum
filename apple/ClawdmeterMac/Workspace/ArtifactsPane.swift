@@ -136,7 +136,7 @@ struct ArtifactsPane: View {
             .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     struct Artifact: Identifiable {
@@ -219,7 +219,7 @@ private struct QuickLookOverlay: View {
                             .font(.system(size: 18))
                             .foregroundStyle(.white)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .keyboardShortcut(.escape)
                 }
                 .padding(10)

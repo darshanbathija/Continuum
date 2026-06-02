@@ -92,7 +92,7 @@ struct TranscriptPathLinkButton: View {
                     .stroke(t.hairline, lineWidth: 0.7)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .disabled(!exists)
         .help(exists ? helpText : "File not found: \(link.path)")
         .accessibilityLabel(exists ? "Open \(link.path) line \(lineLabel)" : "File not found \(link.path)")

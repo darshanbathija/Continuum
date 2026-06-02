@@ -70,7 +70,7 @@ struct ModelEffortChip: View {
             .overlay(Capsule().stroke(isHovered ? Color.secondary.opacity(0.24) : Color.clear, lineWidth: 0.75))
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .fixedSize(horizontal: true, vertical: false)
         .disabled(enabledVendors.isEmpty)
         .help(enabledVendors.isEmpty ? "Enable a provider in Settings → Providers." : "Change model or effort (⌘⌥M)")
@@ -163,7 +163,7 @@ struct ContextUsageChip: View {
             .overlay(Capsule().stroke(isHovered ? Color.secondary.opacity(0.24) : Color.clear, lineWidth: 0.75))
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("Context window utilisation — click for plan usage (⌘⌥C)")
         .accessibilityLabel("Context window")
         .accessibilityValue(percentText)
@@ -291,7 +291,7 @@ struct ModelEffortPopover: View {
                         in: RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     private var allEfforts: [ReasoningEffort] {
@@ -333,7 +333,7 @@ struct ModelEffortPopover: View {
                         in: RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .disabled(!modelSupportsEffort)
         .help(modelSupportsEffort ? "" : "This model doesn't expose an effort dial")
     }

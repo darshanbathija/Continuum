@@ -68,6 +68,14 @@ public enum SessionsV2Theme {
         public static let normal: Double = 0.25
         /// Slower transitions (sheet present/dismiss).
         public static let slow: Double = 0.35
+        /// DESIGN.md interaction band — button / tab press + hover (120ms).
+        public static let interaction: Double = 0.12
+        /// DESIGN.md segmented-control selection slide (160ms).
+        public static let segmented: Double = 0.16
+        /// DESIGN.md composer accent-rim breathing pulse (1.8s).
+        public static let composerPulse: Double = 1.8
+        /// DESIGN.md spinner / shimmer-sweep cadence (0.9s).
+        public static let spinner: Double = 0.9
     }
 
     // MARK: - Typography (SF Pro)
@@ -166,6 +174,39 @@ public enum SessionsV2Theme {
         reduceMotion
             ? .linear(duration: AnimationDuration.instant)
             : .easeInOut(duration: AnimationDuration.fast)
+    }
+
+    /// Press-state animation for buttons / chips — snappy (Conductor feel),
+    /// 120ms ease-out. Collapses to instant under Reduce Motion.
+    public static func pressAnimation(reduceMotion: Bool) -> Animation {
+        reduceMotion
+            ? .linear(duration: AnimationDuration.instant)
+            : .easeOut(duration: AnimationDuration.interaction)
+    }
+
+    /// Segmented-control selection slide (matched-geometry fill) — 160ms ease.
+    public static func segmentedSelection(reduceMotion: Bool) -> Animation {
+        reduceMotion
+            ? .linear(duration: AnimationDuration.instant)
+            : .easeOut(duration: AnimationDuration.segmented)
+    }
+
+    /// Switch-thumb / toggle slide. DESIGN.md curve cubic-bezier(0.3,0.7,0.4,1)
+    /// at 150ms. Collapses to instant under Reduce Motion.
+    public static func switchThumb(reduceMotion: Bool) -> Animation {
+        reduceMotion
+            ? .linear(duration: AnimationDuration.instant)
+            : .timingCurve(0.3, 0.7, 0.4, 1, duration: 0.15)
+    }
+
+    /// Composer accent-rim breathing pulse. Per DESIGN.md the rim breathes at
+    /// 1.8s ease-in-out while a turn runs; under Reduce Motion this returns nil
+    /// so the caller renders a STATIC rim (no infinite loop) — matches the
+    /// `pulseAnimation(for:reduceMotion:)` nil contract.
+    public static func composerRimPulse(reduceMotion: Bool) -> Animation? {
+        guard !reduceMotion else { return nil }
+        return .easeInOut(duration: AnimationDuration.composerPulse)
+            .repeatForever(autoreverses: true)
     }
     #endif
 }

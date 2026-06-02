@@ -89,7 +89,7 @@ struct WorkspaceSwitcherSheet: View {
                                 }
                             }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableButtonStyle())
                     }
                 }
                 if !filteredSessions.isEmpty {
@@ -102,7 +102,7 @@ struct WorkspaceSwitcherSheet: View {
                             } label: {
                                 workspaceSessionRow(session)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressableButtonStyle())
                         }
                     }
                 }
@@ -132,7 +132,7 @@ struct WorkspaceSwitcherSheet: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressableButtonStyle())
                         }
                     }
                 }

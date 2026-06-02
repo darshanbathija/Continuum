@@ -56,7 +56,7 @@ struct GlobalCommandPalette: View {
                             Button(action: { run(command) }) {
                                 commandRow(command, selected: idx == selectedIndex)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressableButtonStyle())
                             .disabled(!command.isEnabled)
                             .id(command.id.rawValue)
                             .accessibilityLabel(command.title)

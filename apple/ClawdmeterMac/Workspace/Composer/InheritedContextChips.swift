@@ -127,7 +127,7 @@ struct InheritedContextChips: View {
                     .stroke(selected ? t.accentAlpha(0.65) : t.hairline, lineWidth: 0.75)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("\(session.agent.rawValue) - \(WorkspaceKey.workspacePath(for: session))")
     }
 
