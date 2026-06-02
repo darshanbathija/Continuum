@@ -27,6 +27,8 @@ struct ModePicker: View {
         // P3: the selected pill SLIDES between segments (160ms) instead of an
         // instant fill swap — matches EffortDial and the segmented-control spec.
         .animation(SessionsV2Theme.segmentedSelection(reduceMotion: reduceMotion), value: mode)
+        // P10: success ring flash when the mode actually changes (matches EffortDial).
+        .confirmationPulse(mode, cornerRadius: 7)
     }
 
     @ViewBuilder

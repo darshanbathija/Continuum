@@ -197,6 +197,32 @@ final class PRCoordinatorTests: XCTestCase {
         XCTAssertTrue(PRCoordinator.canMerge(snapshot: unknown, canUseDaemonActions: true))
         XCTAssertFalse(PRCoordinator.canMerge(snapshot: base, canUseDaemonActions: false))
     }
+
+    /// merge() success path: a daemon merge that returns ok writes the fresh
+    /// snapshot and leaves no stale error. The trailing refreshDaemonOnce()
+    /// no-ops because merge set a non-nil snapshot and we're not watching, so
+    /// the post-merge state is deterministic.
+    func test_merge_successWritesSnapshotAndClearsError() async throws {
+        let stub = StubPRClient()
+        stub.mergeResult = MergePRResponse(
+            ok: true,
+            merged: true,
+            pr: PRStatus(
+                url: "https://github.com/example/repo/pull/7", number: 7,
+                title: "Ship it", body: "", state: .open, additions: 2, deletions: 1,
+                changedFiles: 1, reviewDecision: "APPROVED", checksRollup: "success"
+            ),
+            receipt: nil,
+            error: nil
+        )
+        let coordinator = PRCoordinator(sessionId: UUID(), client: stub, fallback: PRMirror(sessionId: UUID()))
+
+        await coordinator.merge()
+
+        XCTAssertEqual(stub.mergeCalls, 1)
+        XCTAssertEqual(coordinator.snapshot?.number, 7)
+        XCTAssertNil(coordinator.lastError)
+    }
 }
 
 // MARK: - Test stubs
@@ -210,6 +236,8 @@ private final class StubPRClient: PRCoordinatingClient {
     var lastError: String?
     var outcomes: [AgentControlClient.PRStatusOutcome] = []
     var getOutcomeCalls = 0
+    var mergeResult: MergePRResponse?
+    var mergeCalls = 0
 
     func getPRStatus(sessionId: UUID) async -> PRStatus? {
         switch await getPRStatusOutcome(sessionId: sessionId) {
@@ -239,5 +267,8 @@ private final class StubPRClient: PRCoordinatingClient {
         auto: Bool,
         adminOverride: Bool,
         idempotencyKey: String?
-    ) async -> MergePRResponse? { nil }
+    ) async -> MergePRResponse? {
+        mergeCalls += 1
+        return mergeResult
+    }
 }
