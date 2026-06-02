@@ -335,6 +335,7 @@
 		ECB0775FEF1BF8D1B9D4B339 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE036C3B197F45A234547AD /* MarkdownRenderer.swift */; };
 		ED74E95DB9CD21EDB7AD21F6 /* MacCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467BAF6E9E5D52A492CEF344 /* MacCodeView.swift */; };
 		EDF8A47DEA8AA968DC543046 /* ChatStreamWebSocketChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC56D7440BE0E567075D87F5 /* ChatStreamWebSocketChannel.swift */; };
+		EE224D95613FEF7BB1DE849D /* GrokHeadlessDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 856C7552A929C04A22490BB6 /* GrokHeadlessDriverTests.swift */; };
 		EED00F050E7E1F9D4CE12AED /* WireV14ContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86DE3B0E9C4A31A3EB01E82 /* WireV14ContractTests.swift */; };
 		F0BF40F959BBEF77FF304822 /* GitHubReleaseConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB7FB7DB2059E1F3425D94C /* GitHubReleaseConstants.swift */; };
 		F0E45574BB27372F491E9AB0 /* CodexTaskComplication.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DB68892A592E6EE6C06E5B /* CodexTaskComplication.swift */; };
@@ -345,6 +346,7 @@
 		F33648618E69E2686F1031E7 /* QuickSpawnContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49FF764D16075FBD5CFDC73E /* QuickSpawnContractTests.swift */; };
 		F4C4D33C87EA884DB52B4654 /* UsageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10D345820EF090F6426A9E0 /* UsageModel.swift */; };
 		F54AA92455AB651F391E0FB3 /* AntigravityPlanPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88501FECEB4876BDEAAF06B7 /* AntigravityPlanPane.swift */; };
+		F8109EBB1BB2BF7DE7BE808F /* GrokHeadlessDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 671EFE7CEB481A769082D854 /* GrokHeadlessDriver.swift */; };
 		F8B03B30ECD0247FB3A6DE97 /* AntigravityCascadeDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25797A790189A0BF42819018 /* AntigravityCascadeDriver.swift */; };
 		F8FA8741CD3BB21488BF313B /* Vendor in Resources */ = {isa = PBXBuildFile; fileRef = 3F390A788ACC767845A4786C /* Vendor */; };
 		F93CF9064EA3D0BCF6842060 /* ChatProviderProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8426305B5811735F89E23CAD /* ChatProviderProbe.swift */; };
@@ -577,6 +579,7 @@
 		6576347309635291F6B4C01B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		65A73329D82E28D0DC7B1D49 /* IOSRelayPairingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSRelayPairingService.swift; sourceTree = "<group>"; };
 		65C348780612E22B3A37DBC8 /* SidecarAskCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarAskCoordinator.swift; sourceTree = "<group>"; };
+		671EFE7CEB481A769082D854 /* GrokHeadlessDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokHeadlessDriver.swift; sourceTree = "<group>"; };
 		676A5C188193624EE197578F /* ComposerInsertionInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerInsertionInbox.swift; sourceTree = "<group>"; };
 		68EF91556CDC1149B2B2C480 /* MacTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTerminalView.swift; sourceTree = "<group>"; };
 		693EC2D069F0436FA3D69AAC /* SessionSidebarGrouperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSidebarGrouperTests.swift; sourceTree = "<group>"; };
@@ -610,6 +613,7 @@
 		84E9F4135D88422C10ADF505 /* RunProfileManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunProfileManager.swift; sourceTree = "<group>"; };
 		8502D79883F8A1C3ED82A085 /* RepoEnvVariablesSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoEnvVariablesSettingsView.swift; sourceTree = "<group>"; };
 		8524794C9A655A7937BDCB51 /* VendorProvisioningService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VendorProvisioningService.swift; sourceTree = "<group>"; };
+		856C7552A929C04A22490BB6 /* GrokHeadlessDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokHeadlessDriverTests.swift; sourceTree = "<group>"; };
 		85E7DC29DED7B2A2FE149E9E /* IOSMarkdownDocumentTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMarkdownDocumentTabView.swift; sourceTree = "<group>"; };
 		87DB105B08B1AE734AF7FF4B /* TranscriptPathLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptPathLinks.swift; sourceTree = "<group>"; };
 		882E7B0B1D24591A17536772 /* TailscaleHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailscaleHost.swift; sourceTree = "<group>"; };
@@ -901,6 +905,7 @@
 				96C2DF0BC33E8B4A3197CFDD /* DaemonChatStoreRegistry.swift */,
 				F53B364B4BB9E6F7F3F9C8DC /* DoneDetector.swift */,
 				99FAF0AE17DFF9A063E6639B /* FrontierWebSocketChannel.swift */,
+				671EFE7CEB481A769082D854 /* GrokHeadlessDriver.swift */,
 				162AFC48DB7B96F3BD402C58 /* HarnessProcessReaper.swift */,
 				11D7F61D372EFFC19F2C80E8 /* JSONLAliasStore.swift */,
 				3F1627364A3A4398D5A45B4A /* JSONLTail.swift */,
@@ -1187,6 +1192,7 @@
 				483357794C2704F3A1892570 /* F1cWireChatParityTests.swift */,
 				012447D961770BC6D8F59436 /* F1dWireChatParityTests.swift */,
 				C7E5B17BFEC181317FE13905 /* GitDiffStoreTests.swift */,
+				856C7552A929C04A22490BB6 /* GrokHeadlessDriverTests.swift */,
 				B402D2971401AAA603A1AC75 /* HarnessProcessReaperTests.swift */,
 				A1441677BF0D54C2F2B6D382 /* HarnessProviderOptInTests.swift */,
 				3A4E9C143026DEB7E82C1EDC /* LanguageServerClientRewriteTests.swift */,
@@ -1902,6 +1908,7 @@
 				36C488FE08B36947E3A98EF9 /* F1cWireChatParityTests.swift in Sources */,
 				2E243A6E1AC3086560AA1038 /* F1dWireChatParityTests.swift in Sources */,
 				8EADCCDA5DD5DDD4F91F3334 /* GitDiffStoreTests.swift in Sources */,
+				EE224D95613FEF7BB1DE849D /* GrokHeadlessDriverTests.swift in Sources */,
 				07107E18CE3DA43EC7619E2F /* HarnessProcessReaperTests.swift in Sources */,
 				4A5E2E079789F857DA43058F /* HarnessProviderOptInTests.swift in Sources */,
 				B794445CF6C561F8E1DEC66C /* LanguageServerClientRewriteTests.swift in Sources */,
@@ -2009,6 +2016,7 @@
 				81D97B8F91A09D98BDB6CB10 /* GitDiffPane.swift in Sources */,
 				F0BF40F959BBEF77FF304822 /* GitHubReleaseConstants.swift in Sources */,
 				B9C92A4C27F33ED173CAC273 /* GlobalCommandPalette.swift in Sources */,
+				F8109EBB1BB2BF7DE7BE808F /* GrokHeadlessDriver.swift in Sources */,
 				CC88C0D46B445CF0E9B22816 /* HarnessProcessReaper.swift in Sources */,
 				478FB511877975AA262E0C5E /* InAppBrowser.swift in Sources */,
 				C9C9C42E2E1B8D3BE8160EEC /* InheritedAttachmentStager.swift in Sources */,

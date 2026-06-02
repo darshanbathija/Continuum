@@ -4153,7 +4153,9 @@ public final class AgentControlServer {
     /// policy, or nil for non-ACP agents (Claude/Codex/Gemini/OpenCode).
     static func acpSupport(for agent: AgentKind) -> AcpAgentSupport? {
         switch agent {
-        case .grok: return GrokAcpSupport()
+        // Grok has NO ACP server in the shipping binary (cmux "Grok Build" is a
+        // TUI + headless one-shot + MCP client). It drives via GrokHeadlessDriver,
+        // not ACP. Cursor IS a real ACP agent (`cursor-agent acp`, verified live).
         case .cursor: return CursorAcpSupport()
         default: return nil
         }
@@ -5222,7 +5224,8 @@ public final class AgentControlServer {
         // Harness-driven providers bypass tmux: the daemon drives an AgentDriver
         // and projects its events into the chat store. Each branch owns its own
         // session-create + response, returning before the tmux argv/spawn below.
-        // (1) ACP stdio agents (Grok, Cursor). Cursor's preflight ran above.
+        // (1) ACP stdio agents (Cursor — `cursor-agent acp`, verified live).
+        // Grok is NOT ACP; it's handled by the headless branch (1c) below.
         if let support = Self.acpSupport(for: req.agent) {
             let display = providerDisplayName(req.agent)
             // Phase 6: the agent's fs read/write capability is granted ONLY for
@@ -5245,6 +5248,30 @@ public final class AgentControlServer {
                     .acp(sessionId: sid, support: support, store: store,
                          model: req.model, agentDisplayName: display,
                          trustGate: trustGate, onFileAccess: auditFs)
+                })
+            return
+        }
+        // (1c) Grok — headless driver. The shipping grok binary has no ACP
+        // server, so the GrokHeadlessDriver spawns `grok --output-format
+        // streaming-json` per turn (transport-owning; no stdio child).
+        if req.agent == .grok {
+            guard let grokPath = ShellRunner.locateBinary("grok") else {
+                sendResponse(HTTPResponse(
+                    status: 503, reason: "Service Unavailable", contentType: "application/json",
+                    body: Data(#"{"error":"grok_not_found","cta":"Install Grok / cmux first."}"#.utf8)
+                ), on: connection)
+                return
+            }
+            let display = providerDisplayName(req.agent)
+            await handleSpawnHarnessSession(
+                req: req, displayName: display,
+                binary: nil, arguments: [],
+                cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
+                provisionalSessionId: provisionalSessionId, connection: connection,
+                makeBridge: { sid, store in
+                    .transportOwning(sessionId: sid, store: store, model: req.model,
+                                     agentDisplayName: display,
+                                     driver: GrokHeadlessDriver(binaryPath: grokPath))
                 })
             return
         }
@@ -5973,8 +6000,8 @@ public final class AgentControlServer {
                 sessionId: session.id, store: store,
                 model: model, agentDisplayName: display
             )
-        case .grok, .cursor:
-            // ACP stdio agents. Chat has no repoKey → no fs trust gate; the
+        case .cursor:
+            // ACP stdio agent. Chat has no repoKey → no fs trust gate; the
             // agent's fs/terminal caps stay unadvertised and it runs in the
             // per-session sandbox cwd.
             guard let support = Self.acpSupport(for: provider) else {
@@ -5989,6 +6016,23 @@ public final class AgentControlServer {
                 sessionId: session.id, support: support, store: store,
                 model: model, agentDisplayName: display,
                 trustGate: nil, onFileAccess: nil
+            )
+        case .grok:
+            // Grok has no ACP server — it drives headless. Transport-owning: the
+            // GrokHeadlessDriver spawns `grok` per turn, so there's no persistent
+            // stdio child (binary stays nil).
+            guard let grokPath = ShellRunner.locateBinary("grok") else {
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw HarnessChatSpawnError.startFailed("grok binary not found on PATH")
+            }
+            binary = nil
+            arguments = []
+            bridge = .transportOwning(
+                sessionId: session.id, store: store,
+                model: model, agentDisplayName: display,
+                driver: GrokHeadlessDriver(binaryPath: grokPath)
             )
         case .gemini:
             // Antigravity Cascade over gRPC. Chat has no repoKey, so the first

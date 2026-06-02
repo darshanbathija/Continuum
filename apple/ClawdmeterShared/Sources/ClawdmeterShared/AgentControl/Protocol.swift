@@ -934,9 +934,11 @@ public struct ModelCatalog: Codable, Sendable {
             ModelCatalogEntry(id: CursorModelCatalog.autoModelId, provider: .cursor, displayName: "Cursor default / Auto", cliAlias: nil, supportsThinking: true, supportsEffort: false, contextWindow: nil, recommendedFor: "Cursor account default", badge: "Auto"),
         ],
         grok: [
-            // Live-probed default (grok agent 0.2.11, 2026-06-02). The ACP
-            // `initialize` response advertises the real list at runtime.
-            ModelCatalogEntry(id: "grok-build", provider: .grok, displayName: "Grok Build", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 500_000, recommendedFor: "Advanced coding", badge: "New"),
+            // Live-probed from `grok models` (cmux Grok Build 0.2.16, 2026-06-03).
+            // Driven headless (GrokHeadlessDriver) — no ACP. These ids are what the
+            // grok CLI's `--model` flag accepts for this login.
+            ModelCatalogEntry(id: "grok-build", provider: .grok, displayName: "Grok Build", cliAlias: nil, supportsThinking: true, supportsEffort: true, contextWindow: 500_000, recommendedFor: "Advanced coding", badge: "Default"),
+            ModelCatalogEntry(id: "grok-composer-2.5-fast", provider: .grok, displayName: "Grok Composer 2.5 Fast", cliAlias: nil, supportsThinking: false, supportsEffort: true, contextWindow: 256_000, recommendedFor: "Fast iteration", badge: "Fast"),
         ],
         updatedAt: Date(timeIntervalSince1970: 1747353600) // 2026-05-15
     )
