@@ -5175,12 +5175,20 @@ public final class AgentControlServer {
         var cwd = req.repoKey  // assume repoKey is an absolute path
         var worktreePath: String? = nil
         var provisioning: WorktreeProvisioningMetadata? = nil
-        var provisionalSessionId: UUID?
-        if req.useWorktree {
+        // v27 Code-tab harness migration: honor a pre-minted session id so the
+        // Mac's optimistic provisional row and this session are one row.
+        var provisionalSessionId: UUID? = req.sessionId
+        if let existing = req.existingWorkspacePath, !existing.isEmpty {
+            // v27: the Mac client already provisioned this git worktree locally
+            // (to drive the optimistic "+" provisioning trail) and owns its
+            // lifecycle. Reuse it rather than provisioning a second worktree.
+            worktreePath = existing
+            cwd = existing
+        } else if req.useWorktree {
             // Mint a city up front so the worktree path + branch use the
             // same name. The session id we'll register with is captured
             // here so CityNamer's mapping is stable.
-            let sessionId = UUID()
+            let sessionId = provisionalSessionId ?? UUID()
             provisionalSessionId = sessionId
             let city = await MainActor.run {
                 CityNamer.shared.cityName(for: sessionId)
