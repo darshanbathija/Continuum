@@ -171,7 +171,14 @@ public enum AgentControlWireVersion {
     /// catalog/device checks plus explicit terminal-launched CLI install/auth
     /// actions and repo-env preview/import routes backed by PR 201's
     /// `RepoEnvStore` + Keychain custody.
-    public static let current: Int = 26
+    /// v27 (2026-06): Code-tab harness migration. `NewSessionRequest` gains
+    /// optional `existingWorkspacePath` + `sessionId` so the Mac Code tab can
+    /// route codex/cursor/gemini spawns through the daemon's ACP harness
+    /// (reusing a Mac-provisioned worktree + pre-minted id) instead of building
+    /// tmux argv. Both fields decode-if-present, so older daemons ignore them
+    /// and older clients omit them — back-compat preserved. `harnessSpawnMinimum
+    /// = 27` gates the Mac fork.
+    public static let current: Int = 27
     /// Minimum wire version that exposes `AgentKind.opencode` natively.
     /// Clients with `serverWireVersion < this` decode opencode sessions
     /// as `.unknown` (X3 fallback) and render as "Other agent". This is
@@ -357,6 +364,14 @@ public enum AgentControlWireVersion {
     /// v26: minimum wire version where the daemon drives ACP sessions
     /// (`.acpGrok`/`.acpCursor`) through the native harness driver.
     public static let acpDriveMinimum: Int = 26
+
+    /// v27: minimum wire version where the daemon's `POST /sessions` accepts
+    /// `NewSessionRequest.existingWorkspacePath` (reuse a Mac-provisioned
+    /// worktree) + `sessionId` (pre-minted id) for harness Code-tab spawns.
+    /// The Mac gates its Code-tab "spawn via daemon harness" fork on this; an
+    /// older daemon would ignore the fields and double-provision, so the Mac
+    /// falls back to the tmux path below this version.
+    public static let harnessSpawnMinimum: Int = 27
 
     /// Forward-compat client-side check (X3-A). Returns `true` when the
     /// client should flag a mismatch banner. The contract is *forward-
@@ -3202,6 +3217,19 @@ public struct NewSessionRequest: Codable, Sendable {
     /// spawn. See `ProviderInstanceEnvironment.buildEnv(for:)`.
     public let providerInstanceId: String?
 
+    /// Code-tab harness migration (wire `harnessSpawnMinimum`): when the Mac
+    /// client has already provisioned the git worktree locally (to drive the
+    /// optimistic "+" provisioning trail), it passes the resolved cwd here so
+    /// the daemon's harness spawn reuses it instead of provisioning a second
+    /// worktree. `nil` = daemon provisions (back-compat / iOS path).
+    public let existingWorkspacePath: String?
+
+    /// Code-tab harness migration: pre-minted session id so the optimistic
+    /// provisional `AgentSession` the Mac created up front and the daemon's
+    /// harness session are the SAME row (open-state / draft / trail key off
+    /// this id). `nil` = daemon mints a fresh id (back-compat / iOS path).
+    public let sessionId: UUID?
+
     public init(
         repoKey: String,
         agent: AgentKind,
@@ -3212,7 +3240,9 @@ public struct NewSessionRequest: Codable, Sendable {
         baseBranch: String? = nil,
         effort: ReasoningEffort? = nil,
         abPair: AgentKind? = nil,
-        providerInstanceId: String? = nil
+        providerInstanceId: String? = nil,
+        existingWorkspacePath: String? = nil,
+        sessionId: UUID? = nil
     ) {
         self.repoKey = repoKey
         self.agent = agent
@@ -3224,6 +3254,8 @@ public struct NewSessionRequest: Codable, Sendable {
         self.effort = effort
         self.abPair = abPair
         self.providerInstanceId = providerInstanceId
+        self.existingWorkspacePath = existingWorkspacePath
+        self.sessionId = sessionId
     }
 
     // Custom decoder to tolerate v2 requests missing the new fields.
@@ -3245,10 +3277,15 @@ public struct NewSessionRequest: Codable, Sendable {
         // field deserialize cleanly — the server treats nil as
         // "primary instance for this kind".
         self.providerInstanceId = try c.decodeIfPresent(String.self, forKey: .providerInstanceId)
+        // v27 Code-tab harness migration. decodeIfPresent so v26 daemons/
+        // clients omitting the fields deserialize cleanly (back-compat).
+        self.existingWorkspacePath = try c.decodeIfPresent(String.self, forKey: .existingWorkspacePath)
+        self.sessionId = try c.decodeIfPresent(UUID.self, forKey: .sessionId)
     }
 
     private enum CodingKeys: String, CodingKey {
         case repoKey, agent, model, planMode, goal, useWorktree, baseBranch, effort, abPair, providerInstanceId
+        case existingWorkspacePath, sessionId
     }
 }
 
