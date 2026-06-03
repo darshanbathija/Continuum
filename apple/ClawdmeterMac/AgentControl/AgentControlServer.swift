@@ -5290,7 +5290,7 @@ public final class AgentControlServer {
             }
             await handleSpawnHarnessSession(
                 req: req, displayName: display,
-                binary: support.binaryName,
+                binary: (AgentSpawner.cursorBinaryPath() ?? support.binaryName),
                 arguments: support.spawnArgv(model: nil, effort: nil, alwaysApprove: false),
                 cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId, connection: connection,
@@ -5332,7 +5332,7 @@ public final class AgentControlServer {
             let display = providerDisplayName(req.agent)
             await handleSpawnHarnessSession(
                 req: req, displayName: display,
-                binary: "codex", arguments: ["app-server"],
+                binary: (ShellRunner.locateBinary("codex") ?? "codex"), arguments: ["app-server"],
                 cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId, connection: connection,
                 makeBridge: { sid, store in

@@ -102,6 +102,7 @@
 		3C391FC18132F11AED711762 /* ProvisioningTrailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C26322AF31DD69281D1B0B3 /* ProvisioningTrailView.swift */; };
 		3CCE7102E89863558B3D3436 /* AntigravityCascadeClientDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C600D55048FDECA89C2B02 /* AntigravityCascadeClientDecodeTests.swift */; };
 		3D153FBD1EF5FB96D68B6AA4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE1C3B5FDF4AB46F3A7B4FC6 /* SettingsView.swift */; };
+		3D32963A880A312FDFEFDCAE /* LiveDriveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15FF6A0F233219A913A22AE2 /* LiveDriveTests.swift */; };
 		3D7C8FFD8D4435D633FE91F1 /* AgentEventStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9881A0E3387C6A605D8D83 /* AgentEventStream.swift */; };
 		3E0C51486BA7D95939273B67 /* main.mjs in Resources */ = {isa = PBXBuildFile; fileRef = B251462C091357CBD6482B37 /* main.mjs */; };
 		3E4133E8D5F42ACFC89F2CAE /* MacRelayClientReconnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A51537AA0E4F893EADB693 /* MacRelayClientReconnectTests.swift */; };
@@ -511,6 +512,7 @@
 		147082FC165068DD00F8A062 /* WorkspaceReviewPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReviewPane.swift; sourceTree = "<group>"; };
 		154FAAB82985A5CA50923DC2 /* SessionChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStore.swift; sourceTree = "<group>"; };
 		15C6C853320E8369882903E2 /* ChatItemRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatItemRowView.swift; sourceTree = "<group>"; };
+		15FF6A0F233219A913A22AE2 /* LiveDriveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveDriveTests.swift; sourceTree = "<group>"; };
 		162AFC48DB7B96F3BD402C58 /* HarnessProcessReaper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessProcessReaper.swift; sourceTree = "<group>"; };
 		162F800D3CC14A1C33E3A4F8 /* ClawdmeterWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClawdmeterWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		174532B759A129A612A27E8F /* MarkdownDocumentTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocumentTabView.swift; sourceTree = "<group>"; };
@@ -1269,6 +1271,7 @@
 				B402D2971401AAA603A1AC75 /* HarnessProcessReaperTests.swift */,
 				A1441677BF0D54C2F2B6D382 /* HarnessProviderOptInTests.swift */,
 				3A4E9C143026DEB7E82C1EDC /* LanguageServerClientRewriteTests.swift */,
+				15FF6A0F233219A913A22AE2 /* LiveDriveTests.swift */,
 				AFA447574373EE185264E612 /* MacRelayClientHandshakeTests.swift */,
 				10A51537AA0E4F893EADB693 /* MacRelayClientReconnectTests.swift */,
 				EEBBA775D9076DD4042D4137 /* NewSessionShortcutsTests.swift */,
@@ -1989,6 +1992,7 @@
 				07107E18CE3DA43EC7619E2F /* HarnessProcessReaperTests.swift in Sources */,
 				4A5E2E079789F857DA43058F /* HarnessProviderOptInTests.swift in Sources */,
 				B794445CF6C561F8E1DEC66C /* LanguageServerClientRewriteTests.swift in Sources */,
+				3D32963A880A312FDFEFDCAE /* LiveDriveTests.swift in Sources */,
 				E6DF50FB52A08418A01E53F8 /* MacRelayClientHandshakeTests.swift in Sources */,
 				3E4133E8D5F42ACFC89F2CAE /* MacRelayClientReconnectTests.swift in Sources */,
 				14D2C6E7BD39C0F38458C15E /* NewSessionShortcutsTests.swift in Sources */,
