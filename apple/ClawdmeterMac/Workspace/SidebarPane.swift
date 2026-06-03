@@ -807,6 +807,19 @@ struct SidebarPane: View {
                 Label("Archive all sessions (\(section.sessions.count))", systemImage: "archivebox")
             }
         }
+        // Archive the WHOLE repo in one go: archive every session across all its
+        // worktrees AND drop it from the Managed list, so the row disappears
+        // entirely (sessions stay recoverable under the Archived filter).
+        Button(role: .destructive) {
+            let ids = section.sessions.map(\.id)
+            let workspaceId = managedWorkspace(for: section.repo)?.id
+            Task {
+                for id in ids { try? await model.registry.archive(id: id) }
+                if let workspaceId { _ = model.workspaceStore.delete(id: workspaceId) }
+            }
+        } label: {
+            Label("Archive entire repo", systemImage: "archivebox.fill")
+        }
         Divider()
         Button { openSettingsWindow() } label: {
             Label("Settings & Env Variables…", systemImage: "gearshape")
