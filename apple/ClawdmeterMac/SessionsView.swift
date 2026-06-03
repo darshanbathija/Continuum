@@ -857,6 +857,13 @@ public final class SessionsModel: ObservableObject {
             evictExcessChatStores()
             return daemonStore
         }
+        // Optimistic "+" session still provisioning: its effectiveCwd is the
+        // REPO ROOT (worktree not created yet), so resolving a JSONL here would
+        // tail the repo's newest codex rollout — surfacing an UNRELATED old
+        // session's transcript AND title (latestAssistantSummary). Stay empty
+        // until the real worktree is attached; effectiveCwd then points at the
+        // new worktree and resolution is correct.
+        if isProvisioning(session.id) { return nil }
         if let existing = chatStores[session.id] {
             touchLRU(session.id)
             // Audit P1 fix: when the daemon spawns a fresh post-approve
