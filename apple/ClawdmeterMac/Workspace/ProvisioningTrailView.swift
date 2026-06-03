@@ -26,79 +26,57 @@ struct ProvisioningProgress: Equatable {
     var allDone: Bool { completed == Step.allCases.count }
 }
 
-/// The animated provisioning trail. Non-blocking glass ribbon that lives between
-/// the transcript and the composer — the composer stays usable the whole time.
+/// The animated provisioning trail — a slim **horizontal** glass bar pinned at
+/// the TOP of the session. Non-blocking (the composer below stays usable the
+/// whole time); each step animates pending → spinner → spring-checkmark and
+/// resolves to a fact (branch, N files copied, setup ran, Codex ready).
 @available(macOS 14, *)
 struct ProvisioningTrailView: View {
     let progress: ProvisioningProgress
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var collapsed = false
 
     private var accent: Color { SessionsV2Theme.accent }
-    private var done: Color { SessionsV2Theme.success }
+    private var doneColor: Color { SessionsV2Theme.success }
+    private var tint: Color { progress.allDone ? doneColor : accent }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            if !collapsed {
-                Rectangle().fill(Color.white.opacity(0.06)).frame(height: 0.5)
-                    .padding(.vertical, 8)
-                VStack(spacing: 0) {
-                    ForEach(ProvisioningProgress.Step.allCases, id: \.self) { step in
-                        stepRow(step, isLast: step == .agent)
-                    }
+        HStack(spacing: 12) {
+            aggregateRing
+            // Horizontal stepper: node + label, connected by a filling line.
+            HStack(spacing: 0) {
+                ForEach(ProvisioningProgress.Step.allCases, id: \.self) { step in
+                    stepView(step)
+                    if step != .agent { connector(after: step) }
                 }
             }
+            Spacer(minLength: 8)
+            elapsedLabel
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke((progress.allDone ? done : accent).opacity(0.20), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(tint.opacity(0.22), lineWidth: 0.5)
         )
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
         .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: progress)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: collapsed)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(progress.allDone ? "Workspace ready" : "Setting up workspace, \(progress.completed) of 4 steps done")
     }
 
-    // MARK: header
-
-    private var header: some View {
-        HStack(spacing: 9) {
-            aggregateRing
-            VStack(alignment: .leading, spacing: 1) {
-                Text(progress.allDone ? "Workspace ready" : "Setting up workspace")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text("\(progress.completed) of \(ProvisioningProgress.Step.allCases.count)")
-                    .font(.system(size: 10)).monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            elapsedLabel
-            Button { collapsed.toggle() } label: {
-                Image(systemName: collapsed ? "chevron.down" : "chevron.up")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 18)
-            }
-            .buttonStyle(.plain)
-            .help(collapsed ? "Show setup steps" : "Hide setup steps")
-        }
-    }
+    // MARK: leading aggregate ring (overall progress)
 
     private var aggregateRing: some View {
         ZStack {
-            Circle().stroke(Color.white.opacity(0.10), lineWidth: 2)
+            Circle().stroke(Color.primary.opacity(0.10), lineWidth: 2)
             Circle()
                 .trim(from: 0, to: max(0.001, CGFloat(progress.completed) / 4))
-                .stroke(progress.allDone ? done : accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             if progress.allDone {
-                Image(systemName: "checkmark").font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(done)
+                Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)).foregroundStyle(doneColor)
             }
         }
         .frame(width: 18, height: 18)
@@ -113,45 +91,36 @@ struct ProvisioningTrailView: View {
         }
     }
 
-    // MARK: step row
+    // MARK: stepper
 
-    @ViewBuilder
-    private func stepRow(_ s: ProvisioningProgress.Step, isLast: Bool) -> some View {
+    private func stepView(_ s: ProvisioningProgress.Step) -> some View {
         let st = progress.state(s)
-        HStack(alignment: .top, spacing: 10) {
-            VStack(spacing: 0) {
-                node(st)
-                if !isLast {
-                    Rectangle()
-                        .fill((st == .done || st == .skipped) ? accent.opacity(0.45) : Color.white.opacity(0.08))
-                        .frame(width: 1.5)
-                        .frame(maxHeight: .infinity)
-                }
-            }
-            .frame(width: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label(s))
-                    .font(.system(size: 12.5, weight: st == .active ? .semibold : .medium))
-                    .foregroundStyle(st == .pending ? Color.secondary : Color.primary)
-                if let sub = sublabel(s) {
-                    Text(sub)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            .padding(.top, 0)
-            Spacer(minLength: 0)
+        return HStack(spacing: 6) {
+            node(st)
+            Text(label(s))
+                .font(.system(size: 12, weight: st == .active ? .semibold : .medium))
+                .foregroundStyle(st == .pending ? Color.secondary : Color.primary)
+                .lineLimit(1)
+                .fixedSize()
         }
-        .frame(minHeight: isLast ? 22 : 38, alignment: .top)
+    }
+
+    /// Connecting line between nodes — fills with the accent once the preceding
+    /// step is done, so the trail visibly "advances".
+    private func connector(after s: ProvisioningProgress.Step) -> some View {
+        let st = progress.state(s)
+        return Rectangle()
+            .fill((st == .done || st == .skipped) ? accent.opacity(0.5) : Color.primary.opacity(0.12))
+            .frame(height: 1.5)
+            .frame(minWidth: 14, maxWidth: .infinity)
+            .padding(.horizontal, 8)
     }
 
     @ViewBuilder
     private func node(_ state: ProvisioningProgress.StepState) -> some View {
         switch state {
         case .pending:
-            Circle().stroke(Color.white.opacity(0.16), lineWidth: 1.5).frame(width: 16, height: 16)
+            Circle().stroke(Color.primary.opacity(0.18), lineWidth: 1.5).frame(width: 16, height: 16)
         case .active:
             SetupSpinnerRing()
         case .done:
@@ -163,14 +132,14 @@ struct ProvisioningTrailView: View {
             .transition(.scale(scale: 0.4).combined(with: .opacity))
         case .skipped:
             ZStack {
-                Circle().stroke(Color.white.opacity(0.16), lineWidth: 1.5)
+                Circle().stroke(Color.primary.opacity(0.18), lineWidth: 1.5)
                 Image(systemName: "minus").font(.system(size: 7, weight: .bold)).foregroundStyle(.secondary)
             }
             .frame(width: 16, height: 16)
         }
     }
 
-    // MARK: labels (active = present-progressive, done = the verifiable fact)
+    // MARK: labels — active = present-progressive, done/skipped = the fact
 
     private func label(_ s: ProvisioningProgress.Step) -> String {
         let st = progress.state(s)
@@ -188,27 +157,13 @@ struct ProvisioningTrailView: View {
         case .worktree:
             return "Worktree on \(progress.branch ?? "new branch")"
         case .files:
-            if progress.filesNoop { return "No extra files to copy" }
+            if progress.filesNoop { return "No extra files" }
             let n = progress.filesCopied ?? 0
             return n == 1 ? "1 file copied" : "\(n) files copied"
         case .setup:
             return progress.setupRan ? "Setup complete" : "No setup script"
         case .agent:
             return "Codex ready"
-        }
-    }
-
-    /// Monospace proof / hint sub-line. Branch + count read as confirmation.
-    private func sublabel(_ s: ProvisioningProgress.Step) -> String? {
-        switch s {
-        case .worktree:
-            return progress.state(s) == .done ? nil : "git worktree add"
-        case .files:
-            return progress.state(s) == .pending ? ".env, secrets" : nil
-        case .setup:
-            return progress.state(s) == .active ? "setup script" : nil
-        case .agent:
-            return progress.state(s) == .done ? nil : "gpt-5.5 · max"
         }
     }
 }

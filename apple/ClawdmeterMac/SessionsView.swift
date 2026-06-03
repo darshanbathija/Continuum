@@ -647,9 +647,13 @@ public final class SessionsModel: ObservableObject {
                     throw SpawnError.missingBinary("Codex CLI not found on PATH. Configure in Settings → Diagnostics.")
                 }
                 let resolvedEnv = try resolveRepoEnv(repoRoot: repoKey, cwd: cwd)
-                let window = try await tmux.newWindow(
-                    cwd: cwd, child: argv, environment: resolvedEnv?.environment ?? [:]
-                )
+                let env = resolvedEnv?.environment ?? [:]
+                // Guard the pane spawn with a deadline — a wedged tmux control
+                // connection would otherwise leave the trail spinning on
+                // "Starting Codex" forever (the symptom just hit).
+                let window = try await Self.withSpawnTimeout(20) {
+                    try await tmux.newWindow(cwd: cwd, child: argv, environment: env)
+                }
                 try await registry.updateRuntime(
                     id: sessionId,
                     worktreePath: cwd,
@@ -1440,12 +1444,34 @@ public final class SessionsModel: ObservableObject {
         /// signed in / has-no-project-for-this-repo. Carries the
         /// user-facing CTA string the composer surfaces inline.
         case antigravityNotReady(String)
+        /// tmux didn't create the pane in time — the control connection is
+        /// wedged. Surfaced (not hung) so the user can relaunch + retry.
+        case spawnTimedOut
         public var errorDescription: String? {
             switch self {
             case .missingBinary(let m): return m
             case .unsupportedMode(let m): return m
             case .antigravityNotReady(let m): return m
+            case .spawnTimedOut:
+                return "Timed out starting the agent (tmux unresponsive). Quit and relaunch Clawdmeter, then try again."
             }
+        }
+    }
+
+    /// Race an async op against a deadline. A wedged `tmux.newWindow` never
+    /// resumes its continuation (cooperative cancellation can't unstick a dead
+    /// PTY), so we abandon it and surface a timeout instead of hanging forever.
+    private static func withSpawnTimeout<T: Sendable>(
+        _ seconds: Double, _ op: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await op() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw SpawnError.spawnTimedOut
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
         }
     }
 
