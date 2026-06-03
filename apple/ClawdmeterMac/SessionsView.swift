@@ -362,6 +362,19 @@ public final class SessionsModel: ObservableObject {
     @Published public var showingNewSessionSheet: Bool = false
     @Published public var expandedRepoKeys: Set<String> = []
 
+    /// Optimistic "Creating worktree…" rows. One is appended the instant the
+    /// user clicks "+" on a repo so the action feels responsive — worktree
+    /// provision + agent boot take a few seconds, and without this the sidebar
+    /// shows nothing until they finish (which reads as "unresponsive / it reused
+    /// the blank one"). Each click adds its own row, so the user sees a new
+    /// branch start every time; removed when the real session lands or the
+    /// spawn fails.
+    public struct ProvisioningPlaceholder: Identifiable, Hashable {
+        public let id: UUID
+        public let repoKey: String
+    }
+    @Published public var provisioningPlaceholders: [ProvisioningPlaceholder] = []
+
     /// Currently-open session in the workspace center pane. nil = empty
     /// center pane (workspace still renders sidebar + review).
     @Published public var openSessionId: UUID?
@@ -529,7 +542,16 @@ public final class SessionsModel: ObservableObject {
         let agent: AgentKind = .codex
         let modelId = "gpt-5.5"
         let effort: ReasoningEffort = .max
+        // Instant feedback: expand the repo and drop a "Creating worktree…" row
+        // RIGHT NOW, before the async provision starts. Every click adds its own
+        // placeholder, so the user sees a new branch start each time instead of a
+        // multi-second dead pause.
+        expandedRepoKeys.insert(repoKey)
+        selectedRepoKey = repoKey
+        let placeholder = ProvisioningPlaceholder(id: UUID(), repoKey: repoKey)
+        provisioningPlaceholders.append(placeholder)
         Task { @MainActor in
+            defer { provisioningPlaceholders.removeAll { $0.id == placeholder.id } }
             do {
                 let session = try await spawnSession(
                     repoPath: repoKey,

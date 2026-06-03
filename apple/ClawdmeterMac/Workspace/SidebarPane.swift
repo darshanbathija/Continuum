@@ -749,7 +749,10 @@ struct SidebarPane: View {
 
     private func workspaceSection(_ section: SidebarWorkspaceSection) -> some View {
         let sectionID = "workspace:\(section.id)"
-        let isExpanded = isPrioritySectionExpanded(sectionID)
+        let hasProvisioning = model.provisioningPlaceholders.contains { $0.repoKey == section.repo.key }
+        // Force-expand while a "+" spawn is in flight so the optimistic row is
+        // visible even if the user had collapsed this repo.
+        let isExpanded = isPrioritySectionExpanded(sectionID) || hasProvisioning
         // v0.29.29: import-a-repo should be a clean slate. Earlier v0.29.28
         // rendered the repo's historical JSONLs underneath the workspace
         // header so users wouldn't lose access to past sessions; turns
@@ -767,6 +770,12 @@ struct SidebarPane: View {
                 sessionCount: section.sessions.count,
                 subtitle: workspaceSubtitle(for: section.workspacePath),
                 gearMenu: AnyView(workspaceGearMenu(section)),
+                onAdd: {
+                    // Persistently un-collapse so the new session stays visible
+                    // after provisioning, then spawn a fresh worktree.
+                    collapsedPrioritySectionIDs.remove(sectionID)
+                    model.quickSpawnInRepo(section.repo.key)
+                },
                 onToggle: { togglePrioritySection(sectionID) }
             )
             .contextMenu { workspaceMenuItems(section) }
@@ -774,8 +783,27 @@ struct SidebarPane: View {
                 ForEach(section.sessions) { session in
                     sessionRow(session, isOpen: model.openSessionId == session.id, depth: 0)
                 }
+                // Optimistic "Creating worktree…" rows for in-flight "+" spawns
+                // in this repo, so each click shows an immediate new-branch row.
+                ForEach(model.provisioningPlaceholders.filter { $0.repoKey == section.repo.key }) { _ in
+                    provisioningRow()
+                }
             }
         }
+    }
+
+    /// A lightweight spinner row shown while a new worktree is being provisioned.
+    private func provisioningRow() -> some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 16)
+            Text("Creating worktree…")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(t.fg3)
+            Spacer()
+        }
+        .padding(.vertical, 6)
+        .padding(.leading, 26)
+        .padding(.trailing, 10)
     }
 
     // MARK: - Workspace management (gear / context menu)
@@ -1333,6 +1361,7 @@ struct SidebarPane: View {
         sessionCount: Int,
         subtitle: String? = nil,
         gearMenu: AnyView? = nil,
+        onAdd: (() -> Void)? = nil,
         onToggle: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 8) {
@@ -1384,7 +1413,7 @@ struct SidebarPane: View {
                 gearMenu
             }
             Button {
-                model.quickSpawnInRepo(repo.key)
+                if let onAdd { onAdd() } else { model.quickSpawnInRepo(repo.key) }
             } label: {
                 TahoeIcon("plus", size: 11, weight: .bold)
                     .foregroundStyle(t.fg3)
