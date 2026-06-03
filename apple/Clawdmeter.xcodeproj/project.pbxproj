@@ -98,6 +98,7 @@
 		389C34543E4E3E857E98DC40 /* GeminiLogo.svg in Resources */ = {isa = PBXBuildFile; fileRef = 61DCEB1020CBB0E324C60959 /* GeminiLogo.svg */; };
 		38CE5326CE59E154BC2EC14A /* SessionInterruptDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A0D29A023D0668311B4735 /* SessionInterruptDispatcher.swift */; };
 		3C1B58E34AA8D8FC4831DBAF /* ClawdmeterMacWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748E1F1BC9C3BDE9E666458C /* ClawdmeterMacWidgets.swift */; };
+		3C391FC18132F11AED711762 /* ProvisioningTrailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C26322AF31DD69281D1B0B3 /* ProvisioningTrailView.swift */; };
 		3CCE7102E89863558B3D3436 /* AntigravityCascadeClientDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C600D55048FDECA89C2B02 /* AntigravityCascadeClientDecodeTests.swift */; };
 		3D153FBD1EF5FB96D68B6AA4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE1C3B5FDF4AB46F3A7B4FC6 /* SettingsView.swift */; };
 		3D7C8FFD8D4435D633FE91F1 /* AgentEventStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9881A0E3387C6A605D8D83 /* AgentEventStream.swift */; };
@@ -525,6 +526,7 @@
 		296166EDD678E1FACDD438AB /* OpencodeProcessManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeProcessManager.swift; sourceTree = "<group>"; };
 		2AD73B2E17CC64DB49162431 /* TahoeReviewPlanRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TahoeReviewPlanRows.swift; sourceTree = "<group>"; };
 		2BC6D46113D2E229933540E3 /* CodeTabVisualSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTabVisualSnapshotTests.swift; sourceTree = "<group>"; };
+		2C26322AF31DD69281D1B0B3 /* ProvisioningTrailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvisioningTrailView.swift; sourceTree = "<group>"; };
 		2C335B8CD4CB81A48217F617 /* ClaudeLogo.svg */ = {isa = PBXFileReference; path = ClaudeLogo.svg; sourceTree = "<group>"; };
 		2D57648012C2D3368CD2ED3C /* AcpHarnessBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpHarnessBridge.swift; sourceTree = "<group>"; };
 		2DF13BB0B02E7C499DA1A425 /* UpdateCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCoordinatorTests.swift; sourceTree = "<group>"; };
@@ -1174,6 +1176,7 @@
 				ED32A7A26407941E5159C449 /* ModelPicker.swift */,
 				5B1DE3BECFAB2F957716D01F /* ModePicker.swift */,
 				1CFEA1EAB3B6FFE95E352655 /* PlanTrackerPane.swift */,
+				2C26322AF31DD69281D1B0B3 /* ProvisioningTrailView.swift */,
 				93A894C6B7326CFA1F502397 /* PRReviewPane.swift */,
 				4353CCA0F5543AEB084A0406 /* QuickStartRepoSheet.swift */,
 				F0C71FABF0D6B86D4326D903 /* QuietDisclosure.swift */,
@@ -2129,6 +2132,7 @@
 				E835774AF3CCE85077A32357 /* PlanTrackerPane.swift in Sources */,
 				C25E52ACBC77D484C6E4A117 /* PluginRegistry.swift in Sources */,
 				5432E5C01B962FF077E05110 /* ProviderConfig.swift in Sources */,
+				3C391FC18132F11AED711762 /* ProvisioningTrailView.swift in Sources */,
 				DCA8543E3CD0D2378D6C6BC3 /* PseudoTerminal.swift in Sources */,
 				43CE166F0225B3A52F99D7BA /* QuickStartRepoSheet.swift in Sources */,
 				0D64A3A6B6B8E57782AEC0DC /* QuietDisclosure.swift in Sources */,

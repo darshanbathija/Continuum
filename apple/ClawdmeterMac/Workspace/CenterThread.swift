@@ -453,6 +453,15 @@ struct CenterThread: View {
                 Divider()
                 checkpointStrip(latest)
             }
+            // Setup Trail — animated, non-blocking provisioning ribbon for an
+            // optimistic "+" session. Sits just above the composer (which stays
+            // usable the whole time) and confirms each step with a fact.
+            if #available(macOS 14, *), let progress = model.provisioningProgress[session.id] {
+                ProvisioningTrailView(progress: progress)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             // Always render the composer — even for read-only synthetic
             // Recent-JSONL rows. Sending text on a read-only row
             // implicitly promotes it to a live `--resume`/`resume` spawn

@@ -373,6 +373,34 @@ public final class SessionsModel: ObservableObject {
     @Published public var provisioningSessionIds: Set<UUID> = []
     public func isProvisioning(_ id: UUID) -> Bool { provisioningSessionIds.contains(id) }
 
+    /// Live "Setup Trail" state per provisioning session — drives the animated
+    /// step ribbon (worktree → files → setup → agent) shown above the composer.
+    @Published var provisioningProgress: [UUID: ProvisioningProgress] = [:]
+
+    /// Apply a real provisioning milestone (from WorktreeManager) to the trail.
+    private func applyProvisionPhase(_ phase: WorktreeManager.ProvisionPhase, sessionId: UUID) {
+        guard var p = provisioningProgress[sessionId] else { return }
+        withAnimation(.snappy(duration: 0.28)) {
+            switch phase {
+            case .worktreeReady(let branch):
+                p.branch = branch
+                p.set(.worktree, .done); p.set(.files, .active)
+            case .copyingFiles:
+                p.set(.worktree, .done); p.set(.files, .active)
+            case .filesCopied(let count, let noop):
+                p.filesCopied = count; p.filesNoop = noop
+                p.set(.files, .done); p.set(.setup, .active)
+            case .runningSetup:
+                p.set(.files, .done); p.set(.setup, .active)
+            case .setupFinished:
+                p.setupRan = true; p.set(.setup, .done); p.set(.agent, .active)
+            case .setupSkipped:
+                p.setupRan = false; p.set(.setup, .skipped); p.set(.agent, .active)
+            }
+            provisioningProgress[sessionId] = p
+        }
+    }
+
     /// Currently-open session in the workspace center pane. nil = empty
     /// center pane (workspace still renders sidebar + review).
     @Published public var openSessionId: UUID?
@@ -549,6 +577,7 @@ public final class SessionsModel: ObservableObject {
         expandedRepoKeys.insert(repoKey)
         selectedRepoKey = repoKey
         provisioningSessionIds.insert(sessionId)
+        provisioningProgress[sessionId] = ProvisioningProgress()
         Task { @MainActor in
             do {
                 let provisional = try await registry.create(
@@ -605,7 +634,10 @@ public final class SessionsModel: ObservableObject {
                     slug: slug,
                     branchName: slug,
                     filesToCopy: filesToCopySettings(forRepoRoot: repoKey),
-                    setupScript: RepoSetupScriptStore.script(forRepoRoot: repoKey)
+                    setupScript: RepoSetupScriptStore.script(forRepoRoot: repoKey),
+                    onPhase: { [weak self] phase in
+                        Task { @MainActor in self?.applyProvisionPhase(phase, sessionId: sessionId) }
+                    }
                 )
                 let cwd = provisioned.path
                 let argv = AgentSpawner.codexArgv(
@@ -631,10 +663,28 @@ public final class SessionsModel: ObservableObject {
                 recordWorkspaceSession(repoRoot: repoKey, sessionId: sessionId)
                 provisioningSessionIds.remove(sessionId)
                 await refresh()
+                // Final step: mark the agent ready (final spring checkmark), then
+                // let the "Codex ready" state linger briefly and dismiss the trail.
+                if var p = provisioningProgress[sessionId] {
+                    withAnimation(.snappy(duration: 0.28)) {
+                        p.set(.worktree, .done)
+                        if p.state(.files) != .done { p.set(.files, .done) }
+                        if p.state(.setup) != .done && p.state(.setup) != .skipped { p.set(.setup, .skipped) }
+                        p.set(.agent, .done)
+                        provisioningProgress[sessionId] = p
+                    }
+                }
                 // Ready — flush any prompt the user queued while provisioning.
                 signalPendingFirstSendReady()
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 1_600_000_000)
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        self?.provisioningProgress[sessionId] = nil
+                    }
+                }
             } catch {
                 provisioningSessionIds.remove(sessionId)
+                provisioningProgress[sessionId] = nil
                 CityNamer.shared.release(sessionId)
                 try? await registry.delete(id: sessionId)
                 if openSessionId == sessionId { openSessionId = nil }
