@@ -767,15 +767,116 @@ struct SidebarPane: View {
                 sessionCount: section.sessions.count,
                 subtitle: workspaceSubtitle(for: section.workspacePath),
                 gearMenu: AnyView(workspaceGearMenu(section)),
+                onAdd: {
+                    // Persistently un-collapse so the new session stays visible
+                    // after provisioning, then spawn a fresh worktree.
+                    collapsedPrioritySectionIDs.remove(sectionID)
+                    model.quickSpawnInRepo(section.repo.key)
+                },
                 onToggle: { togglePrioritySection(sectionID) }
             )
             .contextMenu { workspaceMenuItems(section) }
             if isExpanded {
-                ForEach(section.sessions) { session in
-                    sessionRow(session, isOpen: model.openSessionId == session.id, depth: 0)
+                // Two levels only (Conductor parity): Repo → Worktree (branch).
+                // A worktree is one leaf row; the model sessions running on it
+                // (Claude → Codex handoff) live as TABS in the workspace, sorted
+                // by age — NOT a third sidebar tier. Newest worktree first.
+                ForEach(worktreeGroups(section.sessions), id: \.path) { wt in
+                    worktreeRow(wt)
                 }
             }
         }
+    }
+
+    /// One branch's worktree + the model sessions running on it.
+    private struct WorktreeGroup: Identifiable {
+        let path: String
+        let branch: String
+        let sessions: [AgentSession]
+        var id: String { path }
+    }
+
+    /// Group a repo's sessions by their worktree (branch), newest-active first.
+    private func worktreeGroups(_ sessions: [AgentSession]) -> [WorktreeGroup] {
+        let grouped = Dictionary(grouping: sessions) { (s: AgentSession) -> String in
+            WorkspaceKey.of(s)?.workspacePath ?? s.worktreePath ?? s.repoKey ?? s.id.uuidString
+        }
+        return grouped.map { path, ss in
+            let last = (path as NSString).lastPathComponent
+            return WorktreeGroup(
+                path: path,
+                branch: last.isEmpty ? path : last,
+                sessions: ss.sorted { $0.createdAt < $1.createdAt }
+            )
+        }
+        .sorted {
+            ($0.sessions.map(\.lastEventAt).max() ?? .distantPast) > ($1.sessions.map(\.lastEventAt).max() ?? .distantPast)
+        }
+    }
+
+    /// A single worktree (branch) leaf row. Clicking it opens the workspace at
+    /// the most-recently-active model session; the worktree's other models show
+    /// as tabs there (sorted by age). No third sidebar tier.
+    @ViewBuilder
+    private func worktreeRow(_ wt: WorktreeGroup) -> some View {
+        let isOpen = wt.sessions.contains { $0.id == model.openSessionId }
+        let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
+        Button {
+            // openSession() keeps any in-progress draft alive (don't clear it).
+            if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
+                model.openSession(primary)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Group {
+                    if provisioning {
+                        ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 13, height: 13)
+                    } else {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(isOpen ? t.accent : t.fg3)
+                            .frame(width: 13)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(wt.branch)
+                        .font(TahoeFont.body(12.5, weight: .medium))
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1).truncationMode(.middle)
+                    Text(worktreeSubtitle(wt))
+                        .font(TahoeFont.body(9.5))
+                        .foregroundStyle(t.fg4)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                Spacer(minLength: 4)
+                if wt.sessions.count > 1 {
+                    Text("\(wt.sessions.count)")
+                        .font(TahoeFont.body(9.5, weight: .semibold))
+                        .foregroundStyle(t.fg3)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(t.hair2, in: Capsule())
+                        .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
+                }
+            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(isOpen ? t.accent.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(PressableButtonStyle())
+        .padding(.leading, 26)
+        .padding(.trailing, 8)
+    }
+
+    /// The models running on a worktree, oldest→newest (the handoff chain) with
+    /// consecutive duplicates collapsed, e.g. "Claude · Codex".
+    private func worktreeSubtitle(_ wt: WorktreeGroup) -> String {
+        let names = wt.sessions
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { AgentKindUI.displayName(for: $0.agent) }
+        var chain: [String] = []
+        for n in names where chain.last != n { chain.append(n) }
+        return chain.isEmpty ? "Worktree" : chain.joined(separator: " · ")
     }
 
     // MARK: - Workspace management (gear / context menu)
@@ -806,6 +907,19 @@ struct SidebarPane: View {
             } label: {
                 Label("Archive all sessions (\(section.sessions.count))", systemImage: "archivebox")
             }
+        }
+        // Archive the WHOLE repo in one go: archive every session across all its
+        // worktrees AND drop it from the Managed list, so the row disappears
+        // entirely (sessions stay recoverable under the Archived filter).
+        Button(role: .destructive) {
+            let ids = section.sessions.map(\.id)
+            let workspaceId = managedWorkspace(for: section.repo)?.id
+            Task {
+                for id in ids { try? await model.registry.archive(id: id) }
+                if let workspaceId { _ = model.workspaceStore.delete(id: workspaceId) }
+            }
+        } label: {
+            Label("Archive entire repo", systemImage: "archivebox.fill")
         }
         Divider()
         Button { openSettingsWindow() } label: {
@@ -911,9 +1025,14 @@ struct SidebarPane: View {
         }
     }
 
-    private func workspaceSubtitle(for workspacePath: String) -> String {
-        let last = (workspacePath as NSString).lastPathComponent
-        return last.isEmpty ? workspacePath : "Workspace \(last)"
+    /// Managed rows now represent a whole repo (all its worktrees nested), so
+    /// the subtitle is the repo's path (home-abbreviated) — informative and it
+    /// disambiguates same-named repos in different locations.
+    private func workspaceSubtitle(for repoPath: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if repoPath == home { return "~" }
+        if repoPath.hasPrefix(home + "/") { return "~" + repoPath.dropFirst(home.count) }
+        return repoPath
     }
 
     /// Pin-aware sort used by the legacy repo-grouped path's per-repo
@@ -1315,6 +1434,7 @@ struct SidebarPane: View {
         sessionCount: Int,
         subtitle: String? = nil,
         gearMenu: AnyView? = nil,
+        onAdd: (() -> Void)? = nil,
         onToggle: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 8) {
@@ -1366,7 +1486,7 @@ struct SidebarPane: View {
                 gearMenu
             }
             Button {
-                model.quickSpawnInRepo(repo.key)
+                if let onAdd { onAdd() } else { model.quickSpawnInRepo(repo.key) }
             } label: {
                 TahoeIcon("plus", size: 11, weight: .bold)
                     .foregroundStyle(t.fg3)

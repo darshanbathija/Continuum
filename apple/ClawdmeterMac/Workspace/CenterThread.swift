@@ -453,6 +453,15 @@ struct CenterThread: View {
                 Divider()
                 checkpointStrip(latest)
             }
+            // Setup Trail — animated, non-blocking provisioning ribbon for an
+            // optimistic "+" session. Sits just above the composer (which stays
+            // usable the whole time) and confirms each step with a fact.
+            if #available(macOS 14, *), let progress = model.provisioningProgress[session.id] {
+                ProvisioningTrailView(progress: progress)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             // Always render the composer — even for read-only synthetic
             // Recent-JSONL rows. Sending text on a read-only row
             // implicitly promotes it to a live `--resume`/`resume` spawn
@@ -866,6 +875,26 @@ struct CenterThread: View {
             target = live
         } else {
             target = session
+        }
+
+        // Optimistic "+" session whose worktree/agent are still provisioning in
+        // the background: there's no pane yet, so don't POST (it'd 503). Queue
+        // the prompt so it auto-sends the instant provisioning completes, and
+        // clear the composer. (Common case: by the time the user finishes typing
+        // a prompt, provisioning is already done and this branch is skipped.)
+        if model.isProvisioning(target.id) {
+            model.queueFirstSendRecovery(
+                sessionId: target.id,
+                text: draftText,
+                attachments: draftAttachments,
+                error: .offline,
+                autoSendWhenReady: true
+            )
+            composerStore.endSend()
+            model.chatStore(for: target)?.markPendingQueuedOffline(
+                error: "Setting up the worktree — your prompt sends automatically when ready."
+            )
+            return
         }
 
         guard await createLifecycleCheckpoint(summary: "Before prompt", for: target) else {
@@ -1284,8 +1313,15 @@ struct CenterThread: View {
         composerStore.restoreDraft(
             text: recovery.text,
             attachments: recovery.attachments,
-            error: recovery.error
+            error: recovery.autoSendWhenReady ? nil : recovery.error
         )
+        // Auto-flush a prompt queued while the "+" session was provisioning —
+        // only once it's actually ready (worktree + pane attached). If the ready
+        // signal raced ahead of the session update, the draft is safely restored
+        // to the composer for a manual send.
+        if recovery.autoSendWhenReady, session.tmuxPaneId != nil {
+            Task { await performBoundSend() }
+        }
     }
 
     private var terraCotta: Color { SessionsV2Theme.accent }

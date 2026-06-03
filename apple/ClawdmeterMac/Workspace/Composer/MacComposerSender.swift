@@ -107,7 +107,12 @@ final class MacComposerSender {
         guard let url = URL(string: "http://\(host):\(port)\(path)") else { throw Error.badURL }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 8
+        // 30s, not 8s: the FIRST send to a Claude (tmux) chat blocks server-side
+        // on the CLI warmup (boot + trust-dismiss), which can take ~10-14s with a
+        // heavy MCP/plugin config. Harness providers (codex/grok/cursor) are ready
+        // at create so they return fast either way; Claude is the one that needs
+        // the headroom. Without it the first "hi" hit "The request timed out."
+        req.timeoutInterval = 30
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let enc = JSONEncoder()

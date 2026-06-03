@@ -159,7 +159,7 @@ struct WorkspaceTabStrip: View {
     }
 
     private var draftButton: some View {
-        Button {} label: {
+        Button { model.selectDraftWorkspaceTab() } label: {
             tabLabel(
                 title: "Untitled",
                 subtitle: "Draft",

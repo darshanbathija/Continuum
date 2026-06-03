@@ -375,24 +375,28 @@ enum SidebarProjectionBuilder {
         workspaceRepoKeys: Set<String>
     ) -> [SidebarWorkspaceSection] {
         let repoByKey = Dictionary(uniqueKeysWithValues: repos.map { ($0.key, $0) })
-        let grouped = Dictionary(grouping: sessions.compactMap { session -> (WorkspaceKey, AgentSession)? in
+        // Group by CANONICAL repo, not per-worktree WorkspaceKey: a repo with
+        // many worktree/Conductor sessions collapses to ONE managed row with all
+        // its sessions nested underneath — instead of a separate
+        // "Clawdmeter · Workspace <city>" row for every worktree.
+        let grouped = Dictionary(grouping: sessions.compactMap { session -> (String, AgentSession)? in
             guard let key = WorkspaceKey.of(session) else { return nil }
-            return (key, session)
+            let canonicalRepoKey = keyAliases[key.repoKey] ?? key.repoKey
+            return (canonicalRepoKey, session)
         }, by: { $0.0 })
 
-        var sections: [SidebarWorkspaceSection] = grouped.compactMap { key, pairs -> SidebarWorkspaceSection? in
+        var sections: [SidebarWorkspaceSection] = grouped.compactMap { repoKey, pairs -> SidebarWorkspaceSection? in
             let sessions = recencySorted(pairs.map(\.1))
             guard let latest = sessions.map(\.lastEventAt).max() else { return nil }
-            let repoKey = keyAliases[key.repoKey] ?? key.repoKey
             let repo = repoByKey[repoKey] ?? AgentRepo(
-                key: key.repoKey,
-                displayName: RepoIdentity.displayName(for: key.repoKey),
+                key: repoKey,
+                displayName: RepoIdentity.displayName(for: repoKey),
                 hasActiveSessions: true
             )
             return SidebarWorkspaceSection(
-                workspaceKey: key,
+                workspaceKey: WorkspaceKey(repoKey: repoKey, workspacePath: repoKey),
                 repo: repo,
-                workspacePath: key.workspacePath,
+                workspacePath: repoKey,
                 sessions: sessions,
                 recentSessions: repo.recentSessions,
                 latestActivity: latest

@@ -442,13 +442,27 @@ public actor WorktreeManager {
 
     /// Create an owned worktree and apply Conductor-style "Files to copy"
     /// before any provider runtime starts inside it.
+    /// Real provisioning milestones, emitted at each step boundary so the UI can
+    /// render a live "Setup Trail" that confirms each stage with a fact (branch
+    /// name, files-copied count, setup ran). Observability only — never affects
+    /// provisioning correctness.
+    public enum ProvisionPhase: Sendable {
+        case worktreeReady(branch: String)
+        case copyingFiles
+        case filesCopied(count: Int, noop: Bool)
+        case runningSetup
+        case setupFinished
+        case setupSkipped
+    }
+
     public func provision(
         repoRoot: String,
         slug: String,
         branchName: String? = nil,
         baseBranch: String? = nil,
         filesToCopy: WorkspaceFilesToCopySettings = WorkspaceFilesToCopySettings(),
-        setupScript: String? = nil
+        setupScript: String? = nil,
+        onPhase: (@Sendable (ProvisionPhase) -> Void)? = nil
     ) async throws -> ProvisionedWorktree {
         let added = try await addWithLayout(
             repoRoot: repoRoot,
@@ -460,6 +474,7 @@ public actor WorktreeManager {
         let markerId = UUID().uuidString
         do {
             let branch = try await currentBranch(cwd: path)
+            onPhase?(.worktreeReady(branch: branch ?? slug))
             let gitDir = try await absoluteGitDir(cwd: path)
             try writeOwnershipMarker(
                 gitDir: gitDir,
@@ -485,6 +500,7 @@ public actor WorktreeManager {
             // summary, and keep the worktree + agent. The worktree + ownership
             // marker are already written above, so cleanup still works later.
             let summary: WorktreeFileCopySummary
+            onPhase?(.copyingFiles)
             do {
                 summary = try await copyConfiguredFiles(
                     repoRoot: repoRoot,
@@ -502,13 +518,18 @@ public actor WorktreeManager {
                     failureSummary: "Skipped — \(error.localizedDescription)"
                 )
             }
+            onPhase?(.filesCopied(count: summary.copiedFileCount, noop: summary.copiedFileCount == 0))
             // Conductor parity: run the per-repo Setup Script INSIDE the fresh
             // worktree before the agent starts (e.g. `npm install`, or symlink
             // node_modules from $CONTINUUM_REPO_ROOT). Non-fatal — a failed
             // setup must never block the session; we log and proceed.
             if let setupScript,
                !setupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                onPhase?(.runningSetup)
                 await runSetupScript(setupScript, worktreePath: path, repoRoot: repoRoot, branch: branch)
+                onPhase?(.setupFinished)
+            } else {
+                onPhase?(.setupSkipped)
             }
             let metadata = WorktreeProvisioningMetadata(
                 ownershipMarkerId: markerId,

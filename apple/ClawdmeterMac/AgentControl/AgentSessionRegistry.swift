@@ -1103,12 +1103,26 @@ public final class AgentSessionRegistry: ObservableObject {
             if file.schemaVersion != Self.currentSchemaVersion {
                 registryLogger.warning("sessions.json schema v\(file.schemaVersion) (we expect v\(Self.currentSchemaVersion)) — proceeding with raw decode")
             }
-            self.sessions = file.sessions
+            // Drop orphaned provisional sessions: a worktree-mode session with
+            // no worktreePath was created optimistically by the "+" button but
+            // never finished provisioning (app crashed / force-quit between
+            // create and worktree-attach). Loading it would resolve the wrong
+            // JSONL (effectiveCwd falls back to the repo root) and surface an
+            // unrelated session's transcript. They have no worktree/pane to keep.
+            let loaded = file.sessions.filter { s in
+                !(s.mode == .worktree
+                  && (s.worktreePath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                  && s.tmuxPaneId == nil)
+            }
+            if loaded.count != file.sessions.count {
+                registryLogger.info("Dropped \(file.sessions.count - loaded.count) orphaned provisional session(s) on load")
+            }
+            self.sessions = loaded
             // Restore per-session seq counters from the loaded data.
-            for session in file.sessions {
+            for session in loaded {
                 nextEventSeqBySession[session.id] = session.lastEventSeq + 1
             }
-            registryLogger.info("Loaded \(file.sessions.count) sessions from \(self.storeURL.path, privacy: .public)")
+            registryLogger.info("Loaded \(loaded.count) sessions from \(self.storeURL.path, privacy: .public)")
         } catch {
             registryLogger.error("Failed to load sessions.json: \(error.localizedDescription); starting empty")
         }

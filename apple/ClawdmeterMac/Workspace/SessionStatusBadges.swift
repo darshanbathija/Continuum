@@ -141,6 +141,15 @@ struct ConnectingTranscriptState: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: 440)
+            // The composer below is already live — encourage the user to start
+            // writing while the agent finishes booting; the first send queues and
+            // delivers as soon as it's ready.
+            Text("Go ahead and type your prompt below — it'll send the moment \(session.agent.rawValue.capitalized) is ready.")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 380)
+                .padding(.top, 2)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
