@@ -780,13 +780,14 @@ struct SidebarPane: View {
             )
             .contextMenu { workspaceMenuItems(section) }
             if isExpanded {
-                ForEach(section.sessions) { session in
-                    sessionRow(session, isOpen: model.openSessionId == session.id, depth: 0)
-                }
-                // Optimistic "Creating worktree…" rows for in-flight "+" spawns
-                // in this repo, so each click shows an immediate new-branch row.
+                // New worktrees-in-progress pinned to the TOP so each "+" lands
+                // where the user is looking. The real session sorts newest-first
+                // too, so it stays on top once it replaces the placeholder.
                 ForEach(model.provisioningPlaceholders.filter { $0.repoKey == section.repo.key }) { _ in
                     provisioningRow()
+                }
+                ForEach(section.sessions) { session in
+                    sessionRow(session, isOpen: model.openSessionId == session.id, depth: 0)
                 }
             }
         }
