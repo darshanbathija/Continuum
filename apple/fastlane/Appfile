@@ -6,12 +6,12 @@
 # release lane below short-circuits before any signing occurs.
 
 app_identifier([
-  "com.clawdmeter.mac",
-  "com.clawdmeter.ios",
-  "com.clawdmeter.ios.widgets",
-  "com.clawdmeter.watch",
-  "com.clawdmeter.watch.widgets",
-  "com.clawdmeter.mac.widgets",
+  "com.continuum.mac",
+  "com.continuum.ios",
+  "com.continuum.ios.widgets",
+  "com.continuum.watch",
+  "com.continuum.watch.widgets",
+  "com.continuum.mac.widgets",
 ])
 
 apple_id(ENV["CLAWDMETER_APPLE_ID"] || "set CLAWDMETER_APPLE_ID env var")

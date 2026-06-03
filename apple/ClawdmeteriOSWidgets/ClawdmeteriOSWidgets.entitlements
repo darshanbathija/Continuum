@@ -7,7 +7,7 @@
 	     on every poll. -->
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.76S62SDSD3.com.clawdmeter</string>
+		<string>group.LRL8MRH6B4.com.continuum</string>
 	</array>
 </dict>
 </plist>

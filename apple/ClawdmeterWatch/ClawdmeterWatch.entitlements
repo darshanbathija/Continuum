@@ -6,14 +6,14 @@
 	     latest snapshot from UserDefaults under this suite. -->
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.76S62SDSD3.com.clawdmeter</string>
+		<string>group.LRL8MRH6B4.com.continuum</string>
 	</array>
 	<!-- Shared iCloud-Keychain access group: the Mac mirrors Claude Code's
 	     OAuth token here and the Watch reads it on first launch — no manual
 	     token paste required. -->
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.clawdmeter</string>
+		<string>$(AppIdentifierPrefix)com.continuum</string>
 	</array>
 </dict>
 </plist>

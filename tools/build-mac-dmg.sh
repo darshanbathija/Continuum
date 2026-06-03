@@ -31,7 +31,7 @@ PROJECT="apple/Clawdmeter.xcodeproj"
 # v0.29.8: PRODUCT_NAME in apple/project.yml is now "Continuum", so
 # the bundle on disk + the xcarchive + the export folder all carry
 # that name. APP_NAME drives both the .app folder lookup and the DMG
-# filename, so it follows. CFBundleIdentifier stays com.clawdmeter.mac
+# filename, so it follows. CFBundleIdentifier stays com.continuum.mac
 # (see project.yml comment) so existing installs keep their data —
 # only the visible name and the .app folder rename.
 APP_NAME="Continuum"
@@ -237,7 +237,7 @@ if [[ -n "$SIGNING_IDENTITY" && -f "$HELPER_ENT" ]]; then
   # 1. `$(AppIdentifierPrefix)` macros — Xcode expands these at sign
   #    time using the project's resolved team prefix. Standalone
   #    `codesign --entitlements` does NOT expand them; it would embed
-  #    the literal `$(AppIdentifierPrefix)com.clawdmeter` as the
+  #    the literal `$(AppIdentifierPrefix)com.continuum` as the
   #    keychain-access-group, which Gatekeeper / launchd reject ("the
   #    application cannot be opened for an unexpected reason …
   #    Launchd job spawn failed", error 163). Expand the macro into a

@@ -9,7 +9,7 @@
 
 name: Clawdmeter
 options:
-  bundleIdPrefix: com.clawdmeter
+  bundleIdPrefix: com.continuum
   deploymentTarget:
     macOS: "26.0"
   developmentLanguage: en
@@ -180,20 +180,18 @@ targets:
       # Design tab.
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.mac
-        # v0.29.8: PRODUCT_NAME → Continuum so the .app folder users
-        # see in /Applications + Finder + Get Info + Spotlight is
-        # "Continuum.app", not "Clawdmeter.app". Bundle identifier
-        # stays com.clawdmeter.mac so the App Group, keychain prefix,
-        # and on-disk data path (~/Library/Application Support/
-        # Clawdmeter/, sandbox container ~/Library/Containers/
-        # com.clawdmeter.mac/) don't move — existing installs upgrade
-        # in place. Users will end up with both /Applications/
-        # Clawdmeter.app (old) and /Applications/Continuum.app (new)
-        # after first upgrade; the install script in tools/build-mac-
-        # dmg.sh prints a note telling them to drag the old one to
-        # the Trash. Phase 2 bundle-id transition still pending the
-        # Montauk Analytics Developer Program enrollment.
+        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.mac
+        # Bundle-id transition DONE (2026-06): now signed under the
+        # Montauk Analytics Inc org team (LRL8MRH6B4) with the
+        # com.continuum.* identity for TestFlight + a Developer-ID DMG.
+        # The App Group + keychain + iCloud all moved to com.continuum
+        # (group.LRL8MRH6B4.com.continuum), so a machine upgrading from
+        # the old com.clawdmeter build gets a fresh App Group/keychain
+        # /prefs domain — re-pair the iPhone + re-paste the token once.
+        # The on-disk data dir ~/Library/Application Support/Clawdmeter/
+        # is NOT bundle-scoped, so session/analytics data survives.
+        # PRODUCT_NAME → Continuum so the .app users see in /Applications
+        # + Finder + Spotlight is "Continuum.app".
         PRODUCT_NAME: Continuum
         # Keep the Swift module + on-disk paths under the "Clawdmeter"
         # identity so `@testable import Clawdmeter` in every test file
@@ -203,7 +201,7 @@ targets:
         # test suite at v0.29.8 (no test PR has gone green since).
         PRODUCT_MODULE_NAME: Clawdmeter
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "76S62SDSD3"
+        DEVELOPMENT_TEAM: "LRL8MRH6B4"
         INFOPLIST_FILE: ClawdmeterMac/Info.plist
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: NO
@@ -238,10 +236,10 @@ targets:
         embed: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.ios
+        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.ios
         PRODUCT_NAME: Clawdmeter
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "76S62SDSD3"
+        DEVELOPMENT_TEAM: "LRL8MRH6B4"
         INFOPLIST_FILE: ClawdmeteriOS/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClawdmeteriOS/ClawdmeteriOS.entitlements
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
@@ -267,10 +265,10 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.ios.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.ios.widgets
         PRODUCT_NAME: ClawdmeteriOSWidgets
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "76S62SDSD3"
+        DEVELOPMENT_TEAM: "LRL8MRH6B4"
         INFOPLIST_FILE: ClawdmeteriOSWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClawdmeteriOSWidgets/ClawdmeteriOSWidgets.entitlements
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
@@ -298,10 +296,10 @@ targets:
         embed: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.watch
+        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.watch
         PRODUCT_NAME: Clawdmeter
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "76S62SDSD3"
+        DEVELOPMENT_TEAM: "LRL8MRH6B4"
         INFOPLIST_FILE: ClawdmeterWatch/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClawdmeterWatch/ClawdmeterWatch.entitlements
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
@@ -326,10 +324,10 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.watch.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.watch.widgets
         PRODUCT_NAME: ClawdmeterWatchWidgets
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "76S62SDSD3"
+        DEVELOPMENT_TEAM: "LRL8MRH6B4"
         INFOPLIST_FILE: ClawdmeterWatchWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClawdmeterWatchWidgets/ClawdmeterWatchWidgets.entitlements
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
@@ -355,10 +353,10 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.mac.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.mac.widgets
         PRODUCT_NAME: ClawdmeterMacWidgets
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "76S62SDSD3"
+        DEVELOPMENT_TEAM: "LRL8MRH6B4"
         INFOPLIST_FILE: ClawdmeterMacWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements
         MACOSX_DEPLOYMENT_TARGET: "26.0"
@@ -387,9 +385,9 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.mac.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.mac.tests
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "76S62SDSD3"
+        DEVELOPMENT_TEAM: "LRL8MRH6B4"
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_OBJC_BRIDGING_HEADER: ""
@@ -419,9 +417,9 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.ios.tests
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "76S62SDSD3"
+        DEVELOPMENT_TEAM: "LRL8MRH6B4"
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_OBJC_BRIDGING_HEADER: ""
@@ -441,9 +439,9 @@ targets:
       - target: ClawdmeterMac
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdmeter.mac.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.mac.uitests
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "76S62SDSD3"
+        DEVELOPMENT_TEAM: "LRL8MRH6B4"
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: ClawdmeterMac

@@ -55,7 +55,7 @@ struct PlanWaitingTimeline: TimelineProvider {
     }
 
     private func readEntry() -> PlanWaitingEntry {
-        let defaults = UserDefaults(suiteName: "group.76S62SDSD3.com.clawdmeter")
+        let defaults = UserDefaults(suiteName: "group.LRL8MRH6B4.com.continuum")
         let count = defaults?.integer(forKey: "clawdmeter.watch.planWaitingCount") ?? 0
         let goalPreview = defaults?.string(forKey: "clawdmeter.watch.latestGoal")
         return PlanWaitingEntry(date: .now, count: count, goalPreview: goalPreview)
