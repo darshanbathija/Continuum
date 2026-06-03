@@ -116,7 +116,16 @@ struct SessionWorkspaceView: View {
                                         Task { await switchMode(session: session, to: newMode) }
                                     }
                                 )
-                                .id(session.id)
+                                // No `.id(session.id)` here (deliberately): the
+                                // center thread keeps SwiftUI identity across
+                                // tab switches so it diffs in place instead of
+                                // a full teardown + ComposerStore rebuild. The
+                                // composer/prMirror are sourced from per-session
+                                // model caches and the inner ChatThreadScroll
+                                // still carries its own `.id(session.id)` to
+                                // re-bind the transcript correctly. See
+                                // CenterThread's `.onChange(of: session.id)`
+                                // reset for the @State that must not leak.
                             } else if let draft = model.draftWorkspaceTab {
                                 centerDraft(draft)
                                     .id(draft.id)

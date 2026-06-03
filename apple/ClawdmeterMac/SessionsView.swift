@@ -495,6 +495,7 @@ public final class SessionsModel: ObservableObject {
             openOutsideJSONLPath = path
             openSessionId = nil
             forcedChatStoreURLs[existing.id] = url
+            needsURLRevalidation.insert(existing.id)
             externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
             return
         }
@@ -517,6 +518,7 @@ public final class SessionsModel: ObservableObject {
         )
         syntheticOutsideSessions[path] = synth
         forcedChatStoreURLs[synth.id] = url
+        needsURLRevalidation.insert(synth.id)
         externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
         draftWorkspaceTab = nil
         selectedWorkspaceTerminalTabId = nil
@@ -829,6 +831,26 @@ public final class SessionsModel: ObservableObject {
     private var chatStores: [UUID: SessionChatStore] = [:]
     private var chatStoreLRU: [UUID] = []
     private static let maxResidentChatStores = 3
+    /// Per-session cached `ComposerStore` (tab-switch perf). Built once on
+    /// first open and reused, so switching Code tabs no longer rebuilds the
+    /// composer (and discards the in-progress draft + model/effort/mode chip
+    /// selections) on every flip. Evicted alongside `chatStores` under the
+    /// same LRU window so it stays bounded.
+    private var composerStores: [UUID: ComposerStore] = [:]
+    /// The tmux pane id a session's chat store was last resolved against,
+    /// keyed by session id ("" = resolved against no live pane). Every respawn
+    /// (config swap, approve-plan, revive) assigns a NEW pane, so a changed
+    /// pane id is the cheap, can't-miss signal that the Codex rollout JSONL may
+    /// have rotated and the tailed file must be re-resolved. When the pane is
+    /// unchanged — the common tab-toggle case — we skip the synchronous
+    /// parent-walk + per-file stat scan `resolveSessionFileURL` runs, which on
+    /// every warm hit was the dominant main-thread stall when toggling tabs.
+    private var lastResolvedPaneId: [UUID: String] = [:]
+    /// Sessions whose tailed JSONL must be re-resolved on the next `chatStore`
+    /// access regardless of pane id — set when a forced JSONL pin is applied
+    /// (continue-here / resume / synthetic-read-only) so the override takes
+    /// effect immediately even though the pane id may be unchanged.
+    private var needsURLRevalidation: Set<UUID> = []
     /// Sessions explicitly protected from LRU eviction. The main
     /// workspace's currently-open session is always protected; popped-out
     /// session windows register themselves on mount (and unregister on
@@ -926,17 +948,25 @@ public final class SessionsModel: ObservableObject {
         if let existing = chatStores[session.id] {
             touchLRU(session.id)
             // Audit P1 fix: when the daemon spawns a fresh post-approve
-            // rollout (Codex `approve-plan` writes a new JSONL), the
-            // cached store keeps tailing the dead plan-mode file unless
-            // we swap it in place. Compare the cached URL against the
-            // currently-resolved one and call switchTailedFile when
-            // they diverge — without this the Mac chat freezes on the
-            // plan and the user has to relaunch the app to see live
-            // execution turns.
-            let resolved = forcedChatStoreURLs[session.id]
-                ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.effectiveCwd)
-            if let resolved, existing.currentFileURL != resolved {
-                existing.switchTailedFile(to: resolved)
+            // rollout (Codex `approve-plan` writes a new JSONL), the cached
+            // store keeps tailing the dead plan-mode file unless we swap it
+            // in place. But resolving on EVERY warm hit means a synchronous
+            // parent-walk + per-file stat scan of ~/.claude/projects/<repo>/
+            // on every Code-tab flip — the dominant main-thread stall when
+            // toggling tabs. Every respawn (approve-plan, config swap,
+            // revive) assigns a new tmux pane, so a changed pane id (or an
+            // explicit pin via needsURLRevalidation) is the cheap can't-miss
+            // signal that the rollout may have rotated; an unchanged pane —
+            // the common toggle case — skips the scan entirely.
+            let paneToken = session.tmuxPaneId ?? ""
+            let forcedRevalidation = needsURLRevalidation.remove(session.id) != nil
+            if lastResolvedPaneId[session.id] != paneToken || forcedRevalidation {
+                lastResolvedPaneId[session.id] = paneToken
+                let resolved = forcedChatStoreURLs[session.id]
+                    ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.effectiveCwd)
+                if let resolved, existing.currentFileURL != resolved {
+                    existing.switchTailedFile(to: resolved)
+                }
             }
             return existing
         }
@@ -947,6 +977,10 @@ public final class SessionsModel: ObservableObject {
         store.start()
         chatStores[session.id] = store
         chatStoreLRU.append(session.id)
+        // Record the pane the store was just resolved against so the next warm
+        // hit doesn't redundantly re-scan (see lastResolvedPaneId).
+        needsURLRevalidation.remove(session.id)
+        lastResolvedPaneId[session.id] = session.tmuxPaneId ?? ""
         evictExcessChatStores()
         return store
     }
@@ -1004,6 +1038,9 @@ public final class SessionsModel: ObservableObject {
             let evictId = chatStoreLRU.remove(at: evictIdx)
             chatStores[evictId]?.stop()
             chatStores.removeValue(forKey: evictId)
+            composerStores.removeValue(forKey: evictId)
+            lastResolvedPaneId.removeValue(forKey: evictId)
+            needsURLRevalidation.remove(evictId)
             prMirrors[evictId]?.detach()
             prMirrors.removeValue(forKey: evictId)
             prCoordinators[evictId]?.stopWatching()
@@ -1015,10 +1052,35 @@ public final class SessionsModel: ObservableObject {
         chatStores[sessionId]?.stop()
         chatStores.removeValue(forKey: sessionId)
         chatStoreLRU.removeAll { $0 == sessionId }
+        composerStores.removeValue(forKey: sessionId)
+        lastResolvedPaneId.removeValue(forKey: sessionId)
+        needsURLRevalidation.remove(sessionId)
         prMirrors[sessionId]?.detach()
         prMirrors.removeValue(forKey: sessionId)
         prCoordinators[sessionId]?.stopWatching()
         prCoordinators.removeValue(forKey: sessionId)
+    }
+
+    /// Tab-switch perf: lazy per-session composer store. Built once with the
+    /// session's effective model/effort/mode + autopilot state and reused, so
+    /// reopening a Code tab restores the in-progress draft + chip selections
+    /// instead of rebuilding (and discarding them) on every flip. `CenterThread`
+    /// observes this cached instance rather than constructing its own
+    /// `@StateObject`, which is what let us drop the `.id(session.id)` view-
+    /// identity teardown that made switching tabs feel heavy.
+    public func composerStore(for session: AgentSession, catalog: ModelCatalog) -> ComposerStore {
+        if let existing = composerStores[session.id] { return existing }
+        let store = ComposerStore(mode: .bound(sessionId: session.id))
+        let resolvedModel = CenterThread.effectiveModelId(for: session, catalog: catalog)
+        store.modelId = resolvedModel
+        store.effort = CenterThread.effectiveEffort(for: session, modelId: resolvedModel, catalog: catalog)
+        store.mode = session.mode
+        store.agent = session.agent
+        store.planMode = session.status == .planning
+        store.repoKey = session.repoKey
+        store.autopilotEnabled = AutopilotState.shared.isEnabled(sessionId: session.id)
+        composerStores[session.id] = store
+        return store
     }
 
     /// G16: lazy PR mirror, attached to this session's chat store on first
@@ -1699,6 +1761,7 @@ public final class SessionsModel: ObservableObject {
         )
         if let pinned = pinnedJSONLURL {
             forcedChatStoreURLs[session.id] = pinned
+            needsURLRevalidation.insert(session.id)
         }
         recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
         expandedRepoKeys.insert(repoPath)
