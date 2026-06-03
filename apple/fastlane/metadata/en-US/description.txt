@@ -1,0 +1,11 @@
+Continuum puts your AI coding usage on every screen.
+
+See live rate-limit gauges for Claude Code and Codex, plus historical token and cost analytics, on your iPhone, Apple Watch, and Mac — kept in sync.
+
+• Live rate-limit gauges — know at a glance how much of your 5-hour and weekly limits you've used, so you never stall mid-session.
+• Token & cost analytics — daily, weekly, and all-time spend, broken down by project and model.
+• Pairs with your Mac — the Continuum Mac app reads your local CLI usage and securely streams it to your iPhone and Watch over your own network. No account required.
+• Apple Watch complications — your usage, on your wrist.
+• Private by design — your data stays on your devices. Nothing is collected.
+
+Continuum is for developers who live in Claude Code and Codex and want to stay ahead of their limits.

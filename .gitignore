@@ -45,3 +45,4 @@ apple/ClawdmeterMac/Resources/Vendor/opencode/opencode
 tools/qa-logs/
 apple/fastlane/report.xml
 apple/build/
+apple/fastlane/screenshots-sim-reference/

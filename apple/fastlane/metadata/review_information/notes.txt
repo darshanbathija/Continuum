@@ -1,0 +1,3 @@
+Continuum Console is the iPhone companion to the Continuum Mac app. It displays AI coding-tool (Claude Code / Codex) usage read from a paired Mac. No account or login is required and there is no user-generated content.
+
+To evaluate without a Mac: the app opens to its dashboard with built-in demo/sample analytics and shows pairing instructions (a QR code is displayed by the Mac app). All processing is on-device; no data is collected.
