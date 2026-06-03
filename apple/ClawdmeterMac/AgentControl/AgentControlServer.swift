@@ -4181,6 +4181,19 @@ public final class AgentControlServer {
     /// like the Chat tab's harness sessions instead of waiting on a tmux pane.
     func isHarnessLive(_ id: UUID) -> Bool { harnessRegistry.contains(id) }
 
+    /// v27: tear down a session's harness bridge (stdio child / gRPC channel)
+    /// and release the chat store it pinned. Idempotent (no-op when no bridge
+    /// is registered). The Mac's `endSession` + the optimistic-"+" failure path
+    /// call this so a harness child isn't leaked when the registry row is
+    /// deleted in-process out-of-band (the full `handleDeleteSession` only runs
+    /// for an explicit `DELETE /sessions/:id`). Mirrors that handler's harness
+    /// branch (AgentControlServer.swift handleDeleteSession).
+    func teardownHarnessSession(_ id: UUID) async {
+        guard harnessRegistry.contains(id) else { return }
+        await harnessRegistry.remove(id)
+        chatStoreRegistry.release(sessionId: id)
+    }
+
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
     /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: no tmux pane
     /// — the daemon drives an `AgentDriver` via `AcpHarnessBridge` (built by

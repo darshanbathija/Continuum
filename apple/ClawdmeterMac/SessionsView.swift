@@ -707,6 +707,12 @@ public final class SessionsModel: ObservableObject {
                 provisioningSessionIds.remove(sessionId)
                 provisioningProgress[sessionId] = nil
                 CityNamer.shared.release(sessionId)
+                // v27 timeout-race safety: createSession may have timed out on
+                // the Mac while the daemon actually succeeded (adopted the row +
+                // started the bridge). Tear down any harness bridge the daemon
+                // registered for this id before deleting the row, so we don't
+                // leak the driver child. No-op if no bridge exists.
+                await AppDelegate.runtime?.agentControlServer.teardownHarnessSession(sessionId)
                 try? await registry.delete(id: sessionId)
                 if openSessionId == sessionId { openSessionId = nil }
                 NSLog("[Clawdmeter] quickSpawn provision failed sid=%@ repo=%@: %@",
@@ -2731,6 +2737,10 @@ public final class SessionsModel: ObservableObject {
             try? await registry.delete(id: id)
             return
         }
+        // v27: tear down the harness bridge (stdio child / gRPC channel) for
+        // paneless codex/cursor/gemini/grok sessions — registry.delete alone
+        // would leak the driver child. No-op for tmux (Claude) sessions.
+        await AppDelegate.runtime?.agentControlServer.teardownHarnessSession(id)
         if let runtime = AppDelegate.runtime, let windowId = session.tmuxWindowId {
             do { try await runtime.tmuxClient.killWindow(windowId) } catch {}
         }
