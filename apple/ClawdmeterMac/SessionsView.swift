@@ -1159,11 +1159,22 @@ public final class SessionsModel: ObservableObject {
     }
 
     public func openSession(_ session: AgentSession) {
-        draftWorkspaceTab = nil
+        // Do NOT clear draftWorkspaceTab here: switching to another tab must not
+        // discard an in-progress "Untitled" draft. The draft persists in the tab
+        // strip until the user closes it (X) or it's consumed by a spawn.
         selectedWorkspaceTerminalTabId = nil
         selectedWorkspaceDocumentTabId = nil
         openOutsideJSONLPath = nil
         openSessionId = session.id
+    }
+
+    /// Re-select the in-progress draft tab (show its composer) without losing it.
+    public func selectDraftWorkspaceTab() {
+        guard draftWorkspaceTab != nil else { return }
+        selectedWorkspaceTerminalTabId = nil
+        selectedWorkspaceDocumentTabId = nil
+        openOutsideJSONLPath = nil
+        openSessionId = nil
     }
 
     public func openDraftWorkspaceTab(

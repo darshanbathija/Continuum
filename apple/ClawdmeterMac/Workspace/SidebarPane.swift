@@ -777,12 +777,12 @@ struct SidebarPane: View {
             )
             .contextMenu { workspaceMenuItems(section) }
             if isExpanded {
-                // Three-level nesting: repo → worktree (branch) → model sessions.
-                // Multiple models on ONE worktree are a context-handoff group
-                // (Claude → Codex on the same branch); separate worktrees are
-                // independent branches. Newest worktree first.
+                // Two levels only (Conductor parity): Repo → Worktree (branch).
+                // A worktree is one leaf row; the model sessions running on it
+                // (Claude → Codex handoff) live as TABS in the workspace, sorted
+                // by age — NOT a third sidebar tier. Newest worktree first.
                 ForEach(worktreeGroups(section.sessions), id: \.path) { wt in
-                    worktreeSubgroup(wt, repo: section.repo)
+                    worktreeRow(wt)
                 }
             }
         }
@@ -814,61 +814,70 @@ struct SidebarPane: View {
         }
     }
 
+    /// A single worktree (branch) leaf row. Clicking it opens the workspace at
+    /// the most-recently-active model session; the worktree's other models show
+    /// as tabs there (sorted by age). No third sidebar tier.
     @ViewBuilder
-    private func worktreeSubgroup(_ wt: WorktreeGroup, repo: AgentRepo) -> some View {
-        let id = "worktree:\(wt.path)"
-        let expanded = isPrioritySectionExpanded(id)
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Button { togglePrioritySection(id) } label: {
-                    HStack(spacing: 6) {
-                        TahoeIcon(expanded ? "chevD" : "chevR", size: 9).foregroundStyle(t.fg3).frame(width: 9)
-                        Image(systemName: "arrow.triangle.branch").font(.system(size: 10, weight: .semibold)).foregroundStyle(t.fg3)
-                        Text(wt.branch)
-                            .font(TahoeFont.body(11.5, weight: .medium))
-                            .foregroundStyle(t.fg2)
-                            .lineLimit(1).truncationMode(.middle)
-                        if wt.sessions.count > 1 {
-                            Text("\(wt.sessions.count)")
-                                .font(TahoeFont.body(9.5, weight: .semibold))
-                                .foregroundStyle(t.fg3)
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(t.hair2, in: Capsule())
-                        }
-                        Spacer(minLength: 4)
+    private func worktreeRow(_ wt: WorktreeGroup) -> some View {
+        let isOpen = wt.sessions.contains { $0.id == model.openSessionId }
+        let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
+        Button {
+            if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
+                model.draftWorkspaceTab = nil
+                model.openOutsideJSONLPath = nil
+                model.openSessionId = primary.id
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Group {
+                    if provisioning {
+                        ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 13, height: 13)
+                    } else {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(isOpen ? t.accent : t.fg3)
+                            .frame(width: 13)
                     }
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(PressableButtonStyle())
-                // Hand off to another model on THIS worktree/branch.
-                Button { handOffInWorktree(wt) } label: {
-                    TahoeIcon("plus", size: 9, weight: .bold)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(wt.branch)
+                        .font(TahoeFont.body(12.5, weight: .medium))
+                        .foregroundStyle(t.fg)
+                        .lineLimit(1).truncationMode(.middle)
+                    Text(worktreeSubtitle(wt))
+                        .font(TahoeFont.body(9.5))
+                        .foregroundStyle(t.fg4)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                Spacer(minLength: 4)
+                if wt.sessions.count > 1 {
+                    Text("\(wt.sessions.count)")
+                        .font(TahoeFont.body(9.5, weight: .semibold))
                         .foregroundStyle(t.fg3)
-                        .frame(width: 18, height: 18)
-                        .background(t.hair2, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                }
-                .buttonStyle(PressableButtonStyle())
-                .help("Hand off to another model on this branch (same worktree)")
-            }
-            .padding(.leading, 26)
-            .padding(.trailing, 8)
-            .frame(minHeight: 26)
-            if expanded {
-                ForEach(wt.sessions) { s in
-                    sessionRow(s, isOpen: model.openSessionId == s.id, depth: 1)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(t.hair2, in: Capsule())
+                        .help("\(wt.sessions.count) models on this branch — open to switch via tabs")
                 }
             }
+            .contentShape(Rectangle())
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(isOpen ? t.accent.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .buttonStyle(PressableButtonStyle())
+        .padding(.leading, 26)
+        .padding(.trailing, 8)
     }
 
-    /// Open a handoff draft on an existing worktree, pre-selecting a DIFFERENT
-    /// model than the one already there (Claude ⇄ Codex) so a stuck session can
-    /// pass the work to another model on the same branch.
-    private func handOffInWorktree(_ wt: WorktreeGroup) {
-        guard let template = wt.sessions.last else { return }
-        let current = template.agent
-        let other: AgentKind = (current == .claude) ? .codex : .claude
-        model.openDraftWorkspaceTab(from: template, defaults: .for(agent: other, catalog: .bundled))
+    /// The models running on a worktree, oldest→newest (the handoff chain) with
+    /// consecutive duplicates collapsed, e.g. "Claude · Codex".
+    private func worktreeSubtitle(_ wt: WorktreeGroup) -> String {
+        let names = wt.sessions
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { AgentKindUI.displayName(for: $0.agent) }
+        var chain: [String] = []
+        for n in names where chain.last != n { chain.append(n) }
+        return chain.isEmpty ? "Worktree" : chain.joined(separator: " · ")
     }
 
     // MARK: - Workspace management (gear / context menu)
