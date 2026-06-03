@@ -20,7 +20,7 @@ settings:
   base:
     SWIFT_VERSION: "5.10"
     MARKETING_VERSION: "0.29.46"
-    CURRENT_PROJECT_VERSION: "185"
+    CURRENT_PROJECT_VERSION: "186"
 
 packages:
   ClawdmeterShared:
@@ -234,6 +234,10 @@ targets:
         product: SwiftTerm
       - target: ClawdmeteriOSWidgets
         embed: true
+      # Companion watch app rides inside the iOS app's Watch/ folder so it
+      # ships + installs with the iPhone app (no separate App Store record).
+      - target: ClawdmeterWatch
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.ios
@@ -296,7 +300,7 @@ targets:
         embed: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.watch
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.ios.watchkitapp
         PRODUCT_NAME: Clawdmeter
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"
@@ -324,7 +328,7 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.watch.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.ios.watchkitapp.widgets
         PRODUCT_NAME: ClawdmeterWatchWidgets
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"

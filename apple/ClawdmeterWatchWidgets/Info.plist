@@ -12,6 +12,9 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<!-- Required for widget/complication extensions (App Store validation 90360). -->
+	<key>CFBundleDisplayName</key>
+	<string>Continuum</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>

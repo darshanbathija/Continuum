@@ -44,6 +44,7 @@
 		171E724E4E9A594EA115BDE8 /* AcpHarnessBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D57648012C2D3368CD2ED3C /* AcpHarnessBridge.swift */; };
 		1777EFD96F6AB3DA3918D8A1 /* IOSRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 985FCABEFBB5E2385E870CB3 /* IOSRootView.swift */; };
 		17B9A55BA4BA2A2FA8722959 /* AntigravitySidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3AC79CBA2A61141DA7FCBCF /* AntigravitySidecarManager.swift */; };
+		17EDD74704B4563A60BFE058 /* ClawdmeterWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 162F800D3CC14A1C33E3A4F8 /* ClawdmeterWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		180979EE1D21A4EC76344D81 /* IOSChatV2View.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFCA10DE26C860C326DE2FDB /* IOSChatV2View.swift */; };
 		180F0F522D2CF2CBD7EEE500 /* MacMenubarPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */; };
 		183FABC95728764FF9DEFCD6 /* TahoeDiffPreviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6964337810D3098CE9F66CBE /* TahoeDiffPreviewPane.swift */; };
@@ -395,6 +396,13 @@
 			remoteGlobalIDString = 8AA22310FEA881C9D8B28CB5;
 			remoteInfo = ClawdmeteriOSWidgets;
 		};
+		8E8BBBE1D5EB7195B7F43962 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 222D0246BE012011ADC176EC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F684FD2D7539FBD6583E7C23;
+			remoteInfo = ClawdmeterWatch;
+		};
 		AB19613FB5BA226F6474527B /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 222D0246BE012011ADC176EC /* Project object */;
@@ -446,6 +454,17 @@
 				1B8462EC849A8650EF81C300 /* ClawdmeteriOSWidgets.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		873DFC8E3FED965BDEF200FB /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				17EDD74704B4563A60BFE058 /* ClawdmeterWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C507E26DF8F26E9F2383CB39 /* Embed Foundation Extensions */ = {
@@ -1562,11 +1581,13 @@
 				56A9473EECA742E3B8BB513E /* Resources */,
 				A60E1BA49B34E24477BABF6B /* Frameworks */,
 				3767AF6E79F2BDA48C56B30D /* Embed Foundation Extensions */,
+				873DFC8E3FED965BDEF200FB /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				B93AEF7A918F7EEB992FD2F6 /* PBXTargetDependency */,
+				6CB1E542900677C32F847429 /* PBXTargetDependency */,
 			);
 			name = ClawdmeteriOS;
 			packageProductDependencies = (
@@ -2345,6 +2366,11 @@
 			target = E01F1244232B993269EA8B04 /* ClawdmeterMac */;
 			targetProxy = 2EC67EAB978B98975719B906 /* PBXContainerItemProxy */;
 		};
+		6CB1E542900677C32F847429 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F684FD2D7539FBD6583E7C23 /* ClawdmeterWatch */;
+			targetProxy = 8E8BBBE1D5EB7195B7F43962 /* PBXContainerItemProxy */;
+		};
 		8EF348E3B9552E47E2DD4B09 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 0AB15308E885A033A5C14292 /* ClawdmeteriOS */;
@@ -2407,7 +2433,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 185;
+				CURRENT_PROJECT_VERSION = 186;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -2639,7 +2665,7 @@
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterWatch/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.watch;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -2726,7 +2752,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 185;
+				CURRENT_PROJECT_VERSION = 186;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -2783,7 +2809,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.watch.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp.widgets;
 				PRODUCT_NAME = ClawdmeterWatchWidgets;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -2805,7 +2831,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.watch.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp.widgets;
 				PRODUCT_NAME = ClawdmeterWatchWidgets;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -2867,7 +2893,7 @@
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterWatch/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.watch;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.watchkitapp;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
