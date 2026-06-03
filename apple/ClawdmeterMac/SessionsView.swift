@@ -601,7 +601,12 @@ public final class SessionsModel: ObservableObject {
                     agent: agent, model: modelId, effort: effort, tmux: runtime.tmuxClient
                 )
             } catch {
+                // registry.create failed → no session was persisted; just undo
+                // the optimistic UI state (trail + city reservation) + toast.
                 provisioningSessionIds.remove(sessionId)
+                provisioningProgress[sessionId] = nil
+                CityNamer.shared.release(sessionId)
+                if openSessionId == sessionId { openSessionId = nil }
                 NSLog("[Clawdmeter] quickSpawn provisional create failed repo=%@: %@", repoKey, "\(error)")
                 Self.postQuickSpawnFailureToast(
                     title: "Couldn’t start a session in \((repoKey as NSString).lastPathComponent)",

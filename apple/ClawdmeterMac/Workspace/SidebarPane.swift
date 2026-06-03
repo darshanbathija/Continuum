@@ -822,10 +822,9 @@ struct SidebarPane: View {
         let isOpen = wt.sessions.contains { $0.id == model.openSessionId }
         let provisioning = wt.sessions.contains { model.isProvisioning($0.id) }
         Button {
+            // openSession() keeps any in-progress draft alive (don't clear it).
             if let primary = wt.sessions.max(by: { $0.lastEventAt < $1.lastEventAt }) {
-                model.draftWorkspaceTab = nil
-                model.openOutsideJSONLPath = nil
-                model.openSessionId = primary.id
+                model.openSession(primary)
             }
         } label: {
             HStack(spacing: 8) {
