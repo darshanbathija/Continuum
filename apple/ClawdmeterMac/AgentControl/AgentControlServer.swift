@@ -7542,20 +7542,31 @@ public final class AgentControlServer {
                     || s.contains("Do you trust")
             }
             var claudeAccepted = false
-            for _ in 0..<9 {   // ~9 × 1.2s ≈ 11s render window
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
+            var claudeReady = false
+            // Poll fast (0.6s) so we detect the composer the moment it renders
+            // instead of waiting out a coarse interval — shaves seconds off the
+            // first send. ~28 × 0.6s ≈ 17s window covers a heavy MCP/plugin boot.
+            for _ in 0..<28 {
+                try? await Task.sleep(nanoseconds: 600_000_000)
                 let cap = (try? await tmux.command(["capture-pane", "-p", "-t", paneId]))?.lines.joined(separator: "\n") ?? ""
                 if isClaudeTrustPrompt(cap) {
                     serverLogger.info("chat warmup: auto-accepting Claude trust prompt for \(session.id.uuidString, privacy: .public)")
                     try? await tmux.command(["send-keys", "-t", paneId, "Down", "Up", "Enter"])
                     claudeAccepted = true
+                    // Don't break — keep polling for the composer so we settle on
+                    // real readiness, not a fixed guess after the keypress.
+                    continue
+                }
+                // Composer is up (pre-trusted boot, or post-accept) → ready.
+                if cap.contains("? for shortcuts") || cap.contains("Welcome back") {
+                    claudeReady = true
                     break
                 }
-                // Already at the composer (logged in, no trust needed) → done.
-                if cap.contains("? for shortcuts") || cap.contains("Welcome back") { break }
             }
             // Settle so the composer's input handler is wired before the paste.
-            try? await Task.sleep(nanoseconds: claudeAccepted ? 3_000_000_000 : 1_500_000_000)
+            // Short when we confirmed the composer; longer as a fallback when the
+            // boot outran the poll window (paste-into-not-quite-ready insurance).
+            try? await Task.sleep(nanoseconds: claudeReady ? 800_000_000 : 2_500_000_000)
         case .gemini:
             break
         case .opencode:
