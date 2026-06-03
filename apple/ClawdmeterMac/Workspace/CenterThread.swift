@@ -868,6 +868,26 @@ struct CenterThread: View {
             target = session
         }
 
+        // Optimistic "+" session whose worktree/agent are still provisioning in
+        // the background: there's no pane yet, so don't POST (it'd 503). Queue
+        // the prompt so it auto-sends the instant provisioning completes, and
+        // clear the composer. (Common case: by the time the user finishes typing
+        // a prompt, provisioning is already done and this branch is skipped.)
+        if model.isProvisioning(target.id) {
+            model.queueFirstSendRecovery(
+                sessionId: target.id,
+                text: draftText,
+                attachments: draftAttachments,
+                error: .offline,
+                autoSendWhenReady: true
+            )
+            composerStore.endSend()
+            model.chatStore(for: target)?.markPendingQueuedOffline(
+                error: "Setting up the worktree — your prompt sends automatically when ready."
+            )
+            return
+        }
+
         guard await createLifecycleCheckpoint(summary: "Before prompt", for: target) else {
             finishBoundSendWithError(
                 .daemonError(message: "Safety checkpoint failed. Prompt was not sent."),
@@ -1284,8 +1304,15 @@ struct CenterThread: View {
         composerStore.restoreDraft(
             text: recovery.text,
             attachments: recovery.attachments,
-            error: recovery.error
+            error: recovery.autoSendWhenReady ? nil : recovery.error
         )
+        // Auto-flush a prompt queued while the "+" session was provisioning —
+        // only once it's actually ready (worktree + pane attached). If the ready
+        // signal raced ahead of the session update, the draft is safely restored
+        // to the composer for a manual send.
+        if recovery.autoSendWhenReady, session.tmuxPaneId != nil {
+            Task { await performBoundSend() }
+        }
     }
 
     private var terraCotta: Color { SessionsV2Theme.accent }

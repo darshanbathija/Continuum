@@ -272,6 +272,10 @@ struct PendingFirstSendRecovery: Equatable {
     let text: String
     let attachments: [ComposerStore.Attachment]
     let error: ComposerStore.SendError
+    /// When true, the queued draft auto-sends the moment the session is ready
+    /// (used for sends made while a "+" session is still provisioning) instead
+    /// of being restored to the composer for a manual retry.
+    var autoSendWhenReady: Bool = false
 }
 
 struct WorkspaceDraftTab: Identifiable, Equatable {
@@ -362,18 +366,12 @@ public final class SessionsModel: ObservableObject {
     @Published public var showingNewSessionSheet: Bool = false
     @Published public var expandedRepoKeys: Set<String> = []
 
-    /// Optimistic "Creating worktree…" rows. One is appended the instant the
-    /// user clicks "+" on a repo so the action feels responsive — worktree
-    /// provision + agent boot take a few seconds, and without this the sidebar
-    /// shows nothing until they finish (which reads as "unresponsive / it reused
-    /// the blank one"). Each click adds its own row, so the user sees a new
-    /// branch start every time; removed when the real session lands or the
-    /// spawn fails.
-    public struct ProvisioningPlaceholder: Identifiable, Hashable {
-        public let id: UUID
-        public let repoKey: String
-    }
-    @Published public var provisioningPlaceholders: [ProvisioningPlaceholder] = []
+    /// Sessions whose worktree + agent are still being provisioned in the
+    /// background (created optimistically by "+" so the composer is usable in
+    /// <250ms). While in this set, the session has no worktree/pane yet; sends
+    /// queue and auto-flush the moment provisioning completes.
+    @Published public var provisioningSessionIds: Set<UUID> = []
+    public func isProvisioning(_ id: UUID) -> Bool { provisioningSessionIds.contains(id) }
 
     /// Currently-open session in the workspace center pane. nil = empty
     /// center pane (workspace still renders sidebar + review).
@@ -542,37 +540,108 @@ public final class SessionsModel: ObservableObject {
         let agent: AgentKind = .codex
         let modelId = "gpt-5.5"
         let effort: ReasoningEffort = .max
-        // Instant feedback: expand the repo and drop a "Creating worktree…" row
-        // RIGHT NOW, before the async provision starts. Every click adds its own
-        // placeholder, so the user sees a new branch start each time instead of a
-        // multi-second dead pause.
+        let sessionId = UUID()
+        // INSTANT (<250ms): expand the repo + create an optimistic provisional
+        // session (no worktree/pane yet) and open it, so the composer is usable
+        // immediately. The worktree (new branch + Conductor-style file copy +
+        // setup script) and the codex agent are provisioned in the BACKGROUND;
+        // a prompt typed/sent meanwhile is queued and auto-flushes on ready.
         expandedRepoKeys.insert(repoKey)
         selectedRepoKey = repoKey
-        let placeholder = ProvisioningPlaceholder(id: UUID(), repoKey: repoKey)
-        provisioningPlaceholders.append(placeholder)
+        provisioningSessionIds.insert(sessionId)
         Task { @MainActor in
-            defer { provisioningPlaceholders.removeAll { $0.id == placeholder.id } }
             do {
-                let session = try await spawnSession(
-                    repoPath: repoKey,
+                let provisional = try await registry.create(
+                    repoKey: repoKey,
+                    repoDisplayName: (repoKey as NSString).lastPathComponent,
                     agent: agent,
-                    planMode: true,
-                    goal: nil,
-                    mode: .worktree,
-                    tmux: runtime.tmuxClient,
                     model: modelId,
-                    effort: effort
+                    goal: nil,
+                    worktreePath: nil,
+                    tmuxWindowId: nil,
+                    tmuxPaneId: nil,
+                    planMode: true,
+                    mode: .worktree,
+                    effort: effort,
+                    ownsWorktree: false,
+                    id: sessionId
                 )
-                openSessionId = session.id
-                selectedRepoKey = repoKey
-                if !expandedRepoKeys.contains(repoKey) {
-                    expandedRepoKeys.insert(repoKey)
-                }
+                openSessionId = provisional.id
+                provisionAndAttachWorktree(
+                    sessionId: sessionId, repoKey: repoKey,
+                    agent: agent, model: modelId, effort: effort, tmux: runtime.tmuxClient
+                )
             } catch {
-                // Stay out of the sheet. Make the failure loud + actionable.
-                NSLog("[Clawdmeter] quickSpawnInRepo failed for repo=%@: %@", repoKey, "\(error)")
+                provisioningSessionIds.remove(sessionId)
+                NSLog("[Clawdmeter] quickSpawn provisional create failed repo=%@: %@", repoKey, "\(error)")
                 Self.postQuickSpawnFailureToast(
                     title: "Couldn’t start a session in \((repoKey as NSString).lastPathComponent)",
+                    detail: Self.humanize(spawnError: error)
+                )
+            }
+        }
+    }
+
+    /// Background half of the optimistic "+" spawn: provisions the worktree
+    /// (new branch + Conductor-style file copy + setup script), spawns the codex
+    /// agent in a tmux pane, attaches both to the already-open provisional
+    /// session, then flushes any prompt the user queued while it was setting up.
+    /// All errors are non-blocking: the provisional session is torn down and a
+    /// toast surfaces, never the sheet.
+    private func provisionAndAttachWorktree(
+        sessionId: UUID,
+        repoKey: String,
+        agent: AgentKind,
+        model: String,
+        effort: ReasoningEffort,
+        tmux: TmuxControlClient
+    ) {
+        Task { @MainActor in
+            do {
+                let city = CityNamer.shared.cityName(for: sessionId)
+                let slug = WorktreeManager.slug(city: city)
+                let provisioned = try await WorktreeManager.shared.provision(
+                    repoRoot: repoKey,
+                    slug: slug,
+                    branchName: slug,
+                    filesToCopy: filesToCopySettings(forRepoRoot: repoKey),
+                    setupScript: RepoSetupScriptStore.script(forRepoRoot: repoKey)
+                )
+                let cwd = provisioned.path
+                let argv = AgentSpawner.codexArgv(
+                    model: model, planMode: true, effort: effort, workspacePath: cwd
+                ) ?? []
+                guard !argv.isEmpty else {
+                    throw SpawnError.missingBinary("Codex CLI not found on PATH. Configure in Settings → Diagnostics.")
+                }
+                let resolvedEnv = try resolveRepoEnv(repoRoot: repoKey, cwd: cwd)
+                let window = try await tmux.newWindow(
+                    cwd: cwd, child: argv, environment: resolvedEnv?.environment ?? [:]
+                )
+                try await registry.updateRuntime(
+                    id: sessionId,
+                    worktreePath: cwd,
+                    provisioning: provisioned.metadata,
+                    runtimeCwd: cwd,
+                    tmuxWindowId: window.windowId,
+                    tmuxPaneId: window.paneId,
+                    mode: .worktree,
+                    ownsWorktree: true
+                )
+                recordWorkspaceSession(repoRoot: repoKey, sessionId: sessionId)
+                provisioningSessionIds.remove(sessionId)
+                await refresh()
+                // Ready — flush any prompt the user queued while provisioning.
+                signalPendingFirstSendReady()
+            } catch {
+                provisioningSessionIds.remove(sessionId)
+                CityNamer.shared.release(sessionId)
+                try? await registry.delete(id: sessionId)
+                if openSessionId == sessionId { openSessionId = nil }
+                NSLog("[Clawdmeter] quickSpawn provision failed sid=%@ repo=%@: %@",
+                      sessionId.uuidString, repoKey, "\(error)")
+                Self.postQuickSpawnFailureToast(
+                    title: "Couldn’t set up the worktree in \((repoKey as NSString).lastPathComponent)",
                     detail: Self.humanize(spawnError: error)
                 )
             }
@@ -659,13 +728,22 @@ public final class SessionsModel: ObservableObject {
         sessionId: UUID,
         text: String,
         attachments: [ComposerStore.Attachment],
-        error: ComposerStore.SendError
+        error: ComposerStore.SendError,
+        autoSendWhenReady: Bool = false
     ) {
         pendingFirstSendRecoveries[sessionId] = PendingFirstSendRecovery(
             text: text,
             attachments: attachments,
-            error: error
+            error: error,
+            autoSendWhenReady: autoSendWhenReady
         )
+        pendingFirstSendRecoveryVersion += 1
+    }
+
+    /// Re-triggers `applyPendingFirstSendRecovery` in the open session view —
+    /// used by the background provisioner to flush a queued auto-send once the
+    /// worktree + agent are ready.
+    func signalPendingFirstSendReady() {
         pendingFirstSendRecoveryVersion += 1
     }
 

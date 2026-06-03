@@ -749,10 +749,7 @@ struct SidebarPane: View {
 
     private func workspaceSection(_ section: SidebarWorkspaceSection) -> some View {
         let sectionID = "workspace:\(section.id)"
-        let hasProvisioning = model.provisioningPlaceholders.contains { $0.repoKey == section.repo.key }
-        // Force-expand while a "+" spawn is in flight so the optimistic row is
-        // visible even if the user had collapsed this repo.
-        let isExpanded = isPrioritySectionExpanded(sectionID) || hasProvisioning
+        let isExpanded = isPrioritySectionExpanded(sectionID)
         // v0.29.29: import-a-repo should be a clean slate. Earlier v0.29.28
         // rendered the repo's historical JSONLs underneath the workspace
         // header so users wouldn't lose access to past sessions; turns
@@ -780,31 +777,14 @@ struct SidebarPane: View {
             )
             .contextMenu { workspaceMenuItems(section) }
             if isExpanded {
-                // New worktrees-in-progress pinned to the TOP so each "+" lands
-                // where the user is looking. The real session sorts newest-first
-                // too, so it stays on top once it replaces the placeholder.
-                ForEach(model.provisioningPlaceholders.filter { $0.repoKey == section.repo.key }) { _ in
-                    provisioningRow()
-                }
+                // section.sessions is newest-first, so an optimistic "+" session
+                // (created instantly, worktree still provisioning) lands at the
+                // top where the user is looking.
                 ForEach(section.sessions) { session in
                     sessionRow(session, isOpen: model.openSessionId == session.id, depth: 0)
                 }
             }
         }
-    }
-
-    /// A lightweight spinner row shown while a new worktree is being provisioned.
-    private func provisioningRow() -> some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 16)
-            Text("Creating worktree…")
-                .font(TahoeFont.body(12))
-                .foregroundStyle(t.fg3)
-            Spacer()
-        }
-        .padding(.vertical, 6)
-        .padding(.leading, 26)
-        .padding(.trailing, 10)
     }
 
     // MARK: - Workspace management (gear / context menu)
