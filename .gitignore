@@ -44,3 +44,4 @@ apple/ClawdmeterMac/Resources/Vendor/opencode/opencode
 # QA run artifacts (tools/qa-surfaces.sh + tools/clawdmeter-logs.sh).
 tools/qa-logs/
 apple/fastlane/report.xml
+apple/build/
