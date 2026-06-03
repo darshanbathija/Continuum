@@ -2248,14 +2248,10 @@ public final class AgentControlServer {
                 resumeSessionId: cliSessionId
             ) ?? []
         case .codex:
-            argv = AgentSpawner.codexArgv(
-                model: modelDefault,
-                planMode: false,
-                effort: defaults.effort,
-                autopilot: false,
-                resumeSessionId: cliSessionId,
-                workspacePath: req.repoKey
-            ) ?? []
+            // v27: codex is harness-driven; external "Continue here" resume is
+            // deprioritized — no tmux resume argv. Empty → the missing-binary
+            // surface returns a clean 4xx (start a fresh harness session instead).
+            argv = []
         case .gemini:
             // No interactive Gemini CLI yet — fall through to the
             // missing-binary surface so the request returns a 4xx
@@ -7950,18 +7946,10 @@ public final class AgentControlServer {
                 effort: session.effort,
                 autopilot: false
             )
-        case .codex:
-            argv = AgentSpawner.codexArgv(
-                model: session.model,
-                planMode: false,
-                effort: session.effort,
-                autopilot: false,
-                workspacePath: session.effectiveCwd
-            )
-        case .gemini, .grok:
-            // approve-plan via tmux respawn doesn't apply: Gemini has no CLI
-            // to respawn, and grok (ACP) approves via session/set_mode, which
-            // the daemon doesn't route yet. Surfaces as 500 below.
+        case .codex, .gemini, .grok:
+            // v27: codex/gemini/grok are harness-driven; approve-plan flows
+            // through the bridge (permission response / set_mode), not a tmux
+            // respawn. Surfaces as 500 below for any legacy tmux codex session.
             argv = nil
         case .opencode:
             // PR #29: opencode has no plan-mode → respawn-with-write
@@ -7970,28 +7958,10 @@ public final class AgentControlServer {
             // approve-plan from a stale UI doesn't pretend to succeed.
             argv = nil
         case .cursor:
-            guard let cursorResumeId = Self.cursorResumeId(for: session) else {
-                try? await registry.setPlanText(
-                    id: uuid,
-                    planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
-                )
-                try? await registry.updateStatus(id: uuid, status: .degraded)
-                sendResponse(HTTPResponse(
-                    status: 409,
-                    reason: "Conflict",
-                    contentType: "application/json",
-                    body: Data(#"{"error":"cursor_resume_id_missing","cta":"Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."}"#.utf8)
-                ), on: connection)
-                return
-            }
-            argv = AgentSpawner.cursorArgv(
-                model: session.model,
-                planMode: false,
-                effort: session.effort,
-                autopilot: false,
-                resumeSessionId: cursorResumeId,
-                workspacePath: session.effectiveCwd
-            )
+            // v27: cursor is harness-driven; approve-plan flows through the ACP
+            // session (set_mode / permission), not a tmux respawn. Surfaces as
+            // 500 below for any legacy tmux cursor session.
+            argv = nil
         case .unknown:
             // X3: forward-compat unknown agent — no respawn path.
             // Surfaces as 500 below.

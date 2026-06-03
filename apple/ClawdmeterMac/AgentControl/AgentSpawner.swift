@@ -82,190 +82,6 @@ public enum AgentSpawner {
         return try? String(contentsOf: url, encoding: .utf8)
     }
 
-    /// Build argv for spawning Codex with the given options. Returns nil if
-    /// the `codex` binary cannot be located.
-    ///
-    /// `planMode` maps to Codex's `--sandbox read-only` (verified via
-    /// `codex --help` 2026-05). Read-only sandbox prevents Codex from
-    /// writing or executing mutating commands — the agent reads + plans,
-    /// then the user reviews and switches to `workspace-write` to
-    /// execute. Same UX shape as Claude's `--permission-mode plan`,
-    /// just a different transport.
-    ///
-    /// DEPRECATED (harness migration, 2026-06): Codex no longer spawns via tmux
-    /// argv — it drives over the `codex app-server` harness. This builder is
-    /// reachable only via the codex.appServer.enabled kill-switch.
-    public static func codexArgv(
-        model: String? = nil,
-        planMode: Bool = false,
-        effort: ReasoningEffort? = nil,
-        autopilot: Bool = false,
-        acceptEdits: Bool = false,
-        resumeSessionId: String? = nil,
-        workspacePath: String? = nil,
-        extraArgs: [String] = []
-    ) -> [String]? {
-        // `acceptEdits` is a no-op on Codex — `workspace-write` is the
-        // default sandbox and already auto-accepts in-workspace writes
-        // while still gating Bash + network. Kept in the signature so
-        // callers don't need to branch.
-        _ = acceptEdits
-        guard let codex = ShellRunner.locateBinary("codex") else { return nil }
-        var argv = [codex]
-        if let resumeSessionId, !resumeSessionId.isEmpty {
-            argv += ["resume", resumeSessionId]
-        }
-        if let workspacePath, !workspacePath.isEmpty {
-            argv += ["-C", workspacePath]
-        }
-        if let model, !model.isEmpty {
-            argv += ["--model", model]
-        }
-        // Effort is a config override on Codex (no direct flag). TOML literal
-        // syntax: model_reasoning_effort="medium" with quoted string value.
-        if let effort {
-            argv += ["-c", "model_reasoning_effort=\"\(effort.codexConfigValue)\""]
-        }
-        if planMode {
-            // Read-only sandbox = Codex's plan mode. The agent can read
-            // and propose, but anything that would mutate the workspace
-            // (writes, network calls, non-trivial shell) is blocked.
-            // approve-plan flips this to workspace-write on user OK.
-            argv += ["-s", "read-only"]
-        } else if autopilot {
-            argv += ["--dangerously-bypass-approvals-and-sandbox"]
-        }
-        argv.append(contentsOf: extraArgs)
-        return argv
-    }
-
-    /// Build argv for spawning Gemini with the given options. Returns nil if
-    /// the `gemini` binary cannot be located.
-    ///
-    /// CLI flags verified against `gemini --help` (CLI 0.42.0, 2026-05):
-    ///   -m / --model            model selection (accepts `pro-high`/`pro`/`flash` aliases)
-    ///   --approval-mode plan    read-only mode; agent reads + plans, no mutations
-    ///   --approval-mode auto_edit  auto-accept file edits (acceptEdits)
-    ///   --approval-mode yolo    skip all approval prompts (autopilot)
-    ///   -r / --resume <id>      resume a previous session
-    ///
-    /// `effort` is a no-op for Gemini — the CLI doesn't expose a per-call
-    /// effort flag. The user picks a higher-effort model in the catalog
-    /// instead (e.g. `gemini-3-pro` for deep reasoning vs
-    /// `gemini-3.5-flash` for fast iteration).
-    public static func geminiArgv(
-        model: String? = nil,
-        planMode: Bool = false,
-        effort: ReasoningEffort? = nil,
-        autopilot: Bool = false,
-        acceptEdits: Bool = false,
-        resumeSessionId: String? = nil,
-        trustWorkspace: Bool = false,
-        extraArgs: [String] = []
-    ) -> [String]? {
-        // Effort is encoded in the model name (per-high / pro-low), not
-        // in a separate flag. Kept in signature so callers don't need to branch.
-        _ = effort
-        guard let gemini = ShellRunner.locateBinary("gemini") else { return nil }
-        return GeminiArgvBuilder.argv(
-            geminiBinary: gemini,
-            model: model,
-            planMode: planMode,
-            autopilot: autopilot,
-            acceptEdits: acceptEdits,
-            resumeSessionId: resumeSessionId,
-            trustWorkspace: trustWorkspace,
-            extraArgs: extraArgs
-        )
-    }
-
-    public static func cursorBinaryPath() -> String? {
-        if let cursorAgent = ShellRunner.locateBinary("cursor-agent"),
-           isCursorAgentBinary(cursorAgent) {
-            return cursorAgent
-        }
-        guard let fallback = ShellRunner.locateBinary("agent"),
-              isCursorAgentBinary(fallback) else {
-            return nil
-        }
-        return fallback
-    }
-
-    private static func isCursorAgentBinary(_ path: String) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["--help"]
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        do {
-            try process.run()
-        } catch {
-            return false
-        }
-
-        let deadline = Date().addingTimeInterval(2)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        if process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
-            return false
-        }
-
-        let output = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            + "\n"
-            + String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        let lower = output.lowercased()
-        return lower.contains("cursor agent")
-            && lower.contains("--workspace")
-            && lower.contains("--resume")
-            && lower.contains("--list-models")
-    }
-
-    /// Build argv for Cursor Agent CLI sessions. Cursor differs from the
-    /// other providers in two important ways:
-    /// - The preferred binary is `cursor-agent`, with `agent` as the fallback.
-    /// - The CLI accepts an explicit `--workspace <path>` flag, which we pass
-    ///   even though tmux also starts the pane in that cwd. This keeps Cursor's
-    ///   own workspace binding aligned with the repo/worktree Clawdmeter picked.
-    ///
-    /// DEPRECATED (harness migration, 2026-06 / Phase 9): Cursor now drives over
-    /// ACP (cursor-agent) via the harness, not tmux. This builder is dead for new
-    /// sessions and is removed once cursor-agent-acp is live-verified.
-    public static func cursorArgv(
-        model: String? = nil,
-        planMode: Bool = false,
-        effort: ReasoningEffort? = nil,
-        autopilot: Bool = false,
-        acceptEdits: Bool = false,
-        resumeSessionId: String? = nil,
-        workspacePath: String? = nil,
-        extraArgs: [String] = []
-    ) -> [String]? {
-        _ = effort
-        _ = acceptEdits
-        guard let cursor = cursorBinaryPath() else { return nil }
-        var argv = [cursor]
-        if let workspacePath, !workspacePath.isEmpty {
-            argv += ["--workspace", workspacePath]
-        }
-        if let resumeSessionId, !resumeSessionId.isEmpty {
-            argv += ["--resume", resumeSessionId]
-        }
-        if let model, !CursorModelCatalog.isAutoModel(model) {
-            argv += ["--model", model]
-        }
-        if planMode {
-            argv += ["--mode", "plan"]
-        } else if autopilot {
-            argv += ["--force"]
-        }
-        argv.append(contentsOf: extraArgs)
-        return argv
-    }
 
     /// Build argv for a `NewSessionRequest`. Returns an empty array if the
     /// required binary is missing — caller checks and surfaces the error.
@@ -282,38 +98,14 @@ public enum AgentSpawner {
                 effort: request.effort,
                 autopilot: autopilot
             ) ?? []
-        case .codex:
-            return codexArgv(
-                model: request.model,
-                planMode: request.planMode,
-                effort: request.effort,
-                autopilot: autopilot,
-                workspacePath: workspacePath ?? request.repoKey
-            ) ?? []
-        case .gemini:
-            return geminiArgv(
-                model: request.model,
-                planMode: request.planMode,
-                effort: request.effort,
-                autopilot: autopilot,
-                trustWorkspace: request.useWorktree && workspacePath != nil && workspacePath != request.repoKey
-            ) ?? []
-        case .opencode, .grok: // grok is ACP — spawned via AcpStdioChild, no tmux argv
-            // PR #29: OpenCode sessions don't use tmux argv. The Mac
-            // dispatcher routes opencode requests to
-            // OpencodeProcessManager + OpencodeSSEAdapter instead.
+        case .codex, .gemini, .cursor, .opencode, .grok:
+            // v27: every non-Claude provider is ACP-harness-driven (paneless) —
+            // codex via app-server, cursor via cursor-agent ACP, gemini via the
+            // Cascade gRPC driver, grok headless, opencode via its SSE manager.
+            // None take a tmux argv; the Mac fork + daemon route them to the
+            // AcpHarnessBridge before this builder is reached. Only Claude spawns
+            // via tmux.
             return []
-        case .cursor:
-            return cursorArgv(
-                model: request.model,
-                // Cursor plan-mode needs a real Cursor chat id for a safe
-                // approve/resume cycle. New Clawdmeter-owned Cursor sessions
-                // do not have that id yet, so start them directly in code mode.
-                planMode: false,
-                effort: request.effort,
-                autopilot: autopilot,
-                workspacePath: workspacePath ?? request.repoKey
-            ) ?? []
         case .unknown:
             // X3: forward-compat unknown agent — no argv builder. Caller
             // sees missingBinary and surfaces a clean error.
@@ -356,56 +148,11 @@ public enum AgentSpawner {
                 autopilot: chatAutopilot,
                 deepResearch: session.deepResearch
             ) ?? []
-        case (.codex, .chat):
-            // SDK backend: caller routes to CodexSubscriptionRelay
-            // instead of tmux. Empty argv signals "skip tmux spawn".
-            if session.codexChatBackend == .sdk { return [] }
-            // CLI backend (uniform with Claude/Gemini): tmux + codex
-            // --sandbox read-only.
-            return codexArgv(
-                model: session.model,
-                planMode: true,
-                effort: session.effort,
-                autopilot: false,
-                workspacePath: session.effectiveCwd
-            ) ?? []
-        case (.codex, .code):
-            return codexArgv(
-                model: session.model,
-                planMode: planMode,
-                effort: session.effort,
-                autopilot: chatAutopilot,
-                workspacePath: session.effectiveCwd
-            ) ?? []
-        case (.gemini, .chat):
-            // v0.8: Gemini chat returns 501 at the route handler.
-            // Spawn path returns empty to mirror that contract.
+        case (.codex, _), (.gemini, _), (.cursor, _), (.opencode, _), (.grok, _):
+            // v27: every non-Claude provider is ACP-harness-driven (paneless) —
+            // no tmux argv. The Mac fork + daemon route them to the
+            // AcpHarnessBridge before this builder is reached. Only Claude tmux.
             return []
-        case (.gemini, .code):
-            return geminiArgv(
-                model: session.model,
-                planMode: planMode,
-                effort: session.effort,
-                autopilot: chatAutopilot,
-                trustWorkspace: session.provisioning != nil
-            ) ?? []
-        case (.opencode, _), (.grok, _): // grok is ACP — no tmux argv
-            // PR #29: opencode sessions don't take a tmux argv.
-            // OpencodeProcessManager + SSEAdapter handle spawn.
-            return []
-        case (.cursor, _):
-            // Cursor plan-mode needs a real Cursor resume id for a safe
-            // approve/resume cycle. New Clawdmeter-owned chat sessions do
-            // not have that id yet, so mirror NewSessionRequest and start
-            // Cursor chat in code mode.
-            let cursorPlanMode = session.kind == .chat ? false : planMode
-            return cursorArgv(
-                model: session.model,
-                planMode: cursorPlanMode,
-                effort: session.effort,
-                autopilot: chatAutopilot,
-                workspacePath: session.effectiveCwd
-            ) ?? []
         case (.unknown, _):
             // X3: forward-compat unknown kind — no argv. Caller surfaces
             // a clean error or routes to a future adapter.
@@ -437,38 +184,11 @@ public enum AgentSpawner {
                 acceptEdits: acceptEdits,
                 resumeSessionId: resumeSessionId
             ) ?? []
-        case .codex:
-            return codexArgv(
-                model: model,
-                planMode: planMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId,
-                workspacePath: workspacePath
-            ) ?? []
-        case .gemini:
-            return geminiArgv(
-                model: model,
-                planMode: planMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId
-            ) ?? []
-        case .opencode, .grok: // grok is ACP — spawned via AcpStdioChild, no tmux argv
-            // PR #29: opencode has no tmux respawn path.
+        case .codex, .gemini, .cursor, .opencode, .grok:
+            // v27: non-Claude providers are ACP-harness-driven — respawn /
+            // config-swap / approve-plan go through rebuilding the harness
+            // bridge, not a tmux argv. Only Claude respawns via tmux.
             return []
-        case .cursor:
-            return cursorArgv(
-                model: model,
-                planMode: planMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId,
-                workspacePath: workspacePath
-            ) ?? []
         case .unknown:
             // X3: forward-compat unknown agent — no respawn argv builder.
             return []
@@ -487,6 +207,14 @@ public enum AgentSpawner {
         }
         if missing.isEmpty { return nil }
         return "Agent CLI not found on PATH: \(missing.joined(separator: ", ")). Configure in Settings → Diagnostics."
+    }
+
+    /// Locate the Cursor Agent CLI: prefer `cursor-agent`, fall back to `agent`.
+    /// Returns nil when neither is on PATH. Used by the cursor preflight +
+    /// ChatProviderProbe. (The tmux argv builder that also used it is gone — v27
+    /// routes cursor through the cursor-agent ACP harness, not tmux.)
+    public static func cursorBinaryPath() -> String? {
+        ShellRunner.locateBinary("cursor-agent") ?? ShellRunner.locateBinary("agent")
     }
 
     /// Agent-specific preflight for starting a single selected runtime.

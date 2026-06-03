@@ -1776,39 +1776,12 @@ public final class SessionsModel: ObservableObject {
                 acceptEdits: acceptEdits,
                 resumeSessionId: resumeSessionId
             ) ?? []
-        case .codex:
-            argv = AgentSpawner.codexArgv(
-                model: model,
-                planMode: effectivePlanMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId,
-                workspacePath: cwd
-            ) ?? []
-        case .gemini:
-            // v0.8.0 dead branch — the .gemini case is short-circuited
-            // by `spawnAntigravitySession` above. This argv assignment
-            // is unreachable but the compiler requires it for
-            // exhaustiveness; if execution gets here (resumeSessionId
-            // path for Gemini), the missingBinary error below catches.
+        case .codex, .gemini, .opencode, .cursor:
+            // v27: every non-Claude provider is harness-driven (paneless) — the
+            // fork at the top of spawnSession returns before this switch, so
+            // these are unreachable. Kept only for exhaustiveness; Claude is the
+            // sole tmux argv path now.
             argv = []
-        case .opencode:
-            // PR #29: OpenCode spawns don't go through this tmux argv
-            // path — OpencodeProcessManager + SSEAdapter handle them
-            // out-of-band. The missingBinary throw below surfaces a
-            // clean error if execution reaches here unexpectedly.
-            argv = []
-        case .cursor:
-            argv = AgentSpawner.cursorArgv(
-                model: model,
-                planMode: effectivePlanMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId,
-                workspacePath: cwd
-            ) ?? []
         case .grok, .unknown:
             // grok is ACP (no tmux argv); unknown is X3 forward-compat. Both
             // fall through to the missingBinary throw below.
@@ -1968,26 +1941,10 @@ public final class SessionsModel: ObservableObject {
                 acceptEdits: acceptEdits,
                 resumeSessionId: nil
             ) ?? []
-        case .codex:
-            argv = AgentSpawner.codexArgv(
-                model: model,
-                planMode: planMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: nil
-            ) ?? []
-        case .cursor:
-            argv = AgentSpawner.cursorArgv(
-                model: model,
-                planMode: planMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: nil,
-                workspacePath: cwd
-            ) ?? []
-        case .gemini, .opencode, .grok, .unknown:
+        case .codex, .cursor, .gemini, .opencode, .grok, .unknown:
+            // v27: non-Claude providers are harness-driven (paneless) — the fork
+            // at the top returns before this switch, so these are unreachable.
+            // Kept for exhaustiveness; Claude is the sole tmux argv path now.
             argv = []
         }
         guard !argv.isEmpty else {
