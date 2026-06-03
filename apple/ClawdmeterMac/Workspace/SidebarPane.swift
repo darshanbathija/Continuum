@@ -911,9 +911,14 @@ struct SidebarPane: View {
         }
     }
 
-    private func workspaceSubtitle(for workspacePath: String) -> String {
-        let last = (workspacePath as NSString).lastPathComponent
-        return last.isEmpty ? workspacePath : "Workspace \(last)"
+    /// Managed rows now represent a whole repo (all its worktrees nested), so
+    /// the subtitle is the repo's path (home-abbreviated) — informative and it
+    /// disambiguates same-named repos in different locations.
+    private func workspaceSubtitle(for repoPath: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if repoPath == home { return "~" }
+        if repoPath.hasPrefix(home + "/") { return "~" + repoPath.dropFirst(home.count) }
+        return repoPath
     }
 
     /// Pin-aware sort used by the legacy repo-grouped path's per-repo
