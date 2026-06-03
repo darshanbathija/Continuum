@@ -56,7 +56,7 @@ struct AntigravityTaskTimeline: TimelineProvider {
     }
 
     private func readEntry() -> AntigravityTaskEntry {
-        let defaults = UserDefaults(suiteName: "group.LRL8MRH6B4.com.continuum")
+        let defaults = UserDefaults(suiteName: "group.LRL8MRH6B4.ai.continuum")
         let raw = defaults?.string(forKey: "clawdmeter.watch.currentTaskHeadline")
         return AntigravityTaskEntry(date: .now, headline: raw)
     }

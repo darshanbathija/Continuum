@@ -1755,40 +1755,40 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					0AB15308E885A033A5C14292 = {
-						DevelopmentTeam = 76S62SDSD3;
+						DevelopmentTeam = LRL8MRH6B4;
 						ProvisioningStyle = Automatic;
 					};
 					8AA22310FEA881C9D8B28CB5 = {
-						DevelopmentTeam = 76S62SDSD3;
+						DevelopmentTeam = LRL8MRH6B4;
 						ProvisioningStyle = Automatic;
 					};
 					8B311165646AC3157ECBA650 = {
-						DevelopmentTeam = 76S62SDSD3;
+						DevelopmentTeam = LRL8MRH6B4;
 						ProvisioningStyle = Automatic;
 					};
 					9891BEAF13ED7FA627485A18 = {
-						DevelopmentTeam = 76S62SDSD3;
+						DevelopmentTeam = LRL8MRH6B4;
 						ProvisioningStyle = Automatic;
 					};
 					A4AA2E19EAE02BC2ED417A9C = {
-						DevelopmentTeam = 76S62SDSD3;
+						DevelopmentTeam = LRL8MRH6B4;
 						ProvisioningStyle = Automatic;
 					};
 					BA2A76CB7E523FD5B96EE015 = {
-						DevelopmentTeam = 76S62SDSD3;
+						DevelopmentTeam = LRL8MRH6B4;
 						ProvisioningStyle = Automatic;
 						TestTargetID = E01F1244232B993269EA8B04;
 					};
 					E01F1244232B993269EA8B04 = {
-						DevelopmentTeam = 76S62SDSD3;
+						DevelopmentTeam = LRL8MRH6B4;
 						ProvisioningStyle = Automatic;
 					};
 					F34F119DBCAE604B82FC7D56 = {
-						DevelopmentTeam = 76S62SDSD3;
+						DevelopmentTeam = LRL8MRH6B4;
 						ProvisioningStyle = Automatic;
 					};
 					F684FD2D7539FBD6583E7C23 = {
-						DevelopmentTeam = 76S62SDSD3;
+						DevelopmentTeam = LRL8MRH6B4;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -2444,7 +2444,7 @@
 				CODE_SIGN_ENTITLEMENTS = "ClawdmeterMac/ClawdmeterMac-Release.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2452,7 +2452,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.mac;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
 				SDKROOT = macosx;
@@ -2466,7 +2466,7 @@
 				CODE_SIGN_ENTITLEMENTS = ClawdmeteriOS/ClawdmeteriOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeteriOS/Info.plist;
@@ -2475,7 +2475,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -2487,7 +2487,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2495,7 +2495,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.ios.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.tests;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -2508,7 +2508,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeteriOSWidgets/ClawdmeteriOSWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeteriOSWidgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -2517,7 +2517,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.ios.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.widgets;
 				PRODUCT_NAME = ClawdmeteriOSWidgets;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -2531,7 +2531,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2539,7 +2539,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.mac.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.uitests;
 				SDKROOT = macosx;
 				TEST_TARGET_NAME = ClawdmeterMac;
 			};
@@ -2551,7 +2551,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2559,7 +2559,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.mac.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.tests;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Continuum.app/Contents/MacOS/Continuum";
@@ -2572,7 +2572,7 @@
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterMacWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2581,7 +2581,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.mac.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2595,7 +2595,7 @@
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMac/ClawdmeterMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2603,7 +2603,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.mac;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
 				SDKROOT = macosx;
@@ -2616,7 +2616,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2624,7 +2624,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.mac.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.uitests;
 				SDKROOT = macosx;
 				TEST_TARGET_NAME = ClawdmeterMac;
 			};
@@ -2636,10 +2636,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterWatch/ClawdmeterWatch.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterWatch/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.watch;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.watch;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -2654,7 +2654,7 @@
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterMacWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2663,7 +2663,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.mac.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2675,7 +2675,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeteriOSWidgets/ClawdmeteriOSWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeteriOSWidgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -2684,7 +2684,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.ios.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.widgets;
 				PRODUCT_NAME = ClawdmeteriOSWidgets;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -2755,7 +2755,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2763,7 +2763,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.mac.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.tests;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Continuum.app/Contents/MacOS/Continuum";
@@ -2775,7 +2775,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterWatchWidgets/ClawdmeterWatchWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterWatchWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2783,7 +2783,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.watch.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.watch.widgets;
 				PRODUCT_NAME = ClawdmeterWatchWidgets;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -2797,7 +2797,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterWatchWidgets/ClawdmeterWatchWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterWatchWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2805,7 +2805,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.watch.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.watch.widgets;
 				PRODUCT_NAME = ClawdmeterWatchWidgets;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -2819,7 +2819,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2827,7 +2827,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.ios.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios.tests;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -2842,7 +2842,7 @@
 				CODE_SIGN_ENTITLEMENTS = ClawdmeteriOS/ClawdmeteriOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeteriOS/Info.plist;
@@ -2851,7 +2851,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.ios;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -2864,10 +2864,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterWatch/ClawdmeterWatch.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 76S62SDSD3;
+				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClawdmeterWatch/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = com.clawdmeter.watch;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.watch;
 				PRODUCT_NAME = Clawdmeter;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;

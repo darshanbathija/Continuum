@@ -9,7 +9,7 @@
 
 name: Clawdmeter
 options:
-  bundleIdPrefix: com.continuum
+  bundleIdPrefix: ai.continuum
   deploymentTarget:
     macOS: "26.0"
   developmentLanguage: en
@@ -180,12 +180,12 @@ targets:
       # Design tab.
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.mac
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.mac
         # Bundle-id transition DONE (2026-06): now signed under the
         # Montauk Analytics Inc org team (LRL8MRH6B4) with the
-        # com.continuum.* identity for TestFlight + a Developer-ID DMG.
-        # The App Group + keychain + iCloud all moved to com.continuum
-        # (group.LRL8MRH6B4.com.continuum), so a machine upgrading from
+        # ai.continuum.* identity for TestFlight + a Developer-ID DMG.
+        # The App Group + keychain + iCloud all moved to ai.continuum
+        # (group.LRL8MRH6B4.ai.continuum), so a machine upgrading from
         # the old com.clawdmeter build gets a fresh App Group/keychain
         # /prefs domain — re-pair the iPhone + re-paste the token once.
         # The on-disk data dir ~/Library/Application Support/Clawdmeter/
@@ -236,7 +236,7 @@ targets:
         embed: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.ios
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.ios
         PRODUCT_NAME: Clawdmeter
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"
@@ -265,7 +265,7 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.ios.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.ios.widgets
         PRODUCT_NAME: ClawdmeteriOSWidgets
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"
@@ -296,7 +296,7 @@ targets:
         embed: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.watch
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.watch
         PRODUCT_NAME: Clawdmeter
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"
@@ -324,7 +324,7 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.watch.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.watch.widgets
         PRODUCT_NAME: ClawdmeterWatchWidgets
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"
@@ -353,7 +353,7 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.mac.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.mac.widgets
         PRODUCT_NAME: ClawdmeterMacWidgets
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"
@@ -385,7 +385,7 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.mac.tests
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.mac.tests
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"
         MACOSX_DEPLOYMENT_TARGET: "26.0"
@@ -417,7 +417,7 @@ targets:
         product: ClawdmeterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.ios.tests
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
@@ -439,7 +439,7 @@ targets:
       - target: ClawdmeterMac
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.continuum.mac.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: ai.continuum.mac.uitests
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "LRL8MRH6B4"
         MACOSX_DEPLOYMENT_TARGET: "26.0"

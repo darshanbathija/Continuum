@@ -219,12 +219,12 @@ final class ProviderInstanceWireTests: XCTestCase {
         let instanceA = ProviderInstanceId(
             kind: .claude,
             name: "personal",
-            keychainAccessGroupOverride: "LRL8MRH6B4.com.continuum.kc.personal"
+            keychainAccessGroupOverride: "LRL8MRH6B4.ai.continuum.kc.personal"
         )
         let instanceB = ProviderInstanceId(
             kind: .claude,
             name: "work",
-            keychainAccessGroupOverride: "LRL8MRH6B4.com.continuum.kc.work"
+            keychainAccessGroupOverride: "LRL8MRH6B4.ai.continuum.kc.work"
         )
         let providerA = PastedAnthropicTokenProvider.forInstance(instanceA)
         let providerB = PastedAnthropicTokenProvider.forInstance(instanceB)

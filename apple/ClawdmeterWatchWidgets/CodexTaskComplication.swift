@@ -56,7 +56,7 @@ struct CodexTaskTimeline: TimelineProvider {
     }
 
     private func readEntry() -> CodexTaskEntry {
-        let defaults = UserDefaults(suiteName: "group.LRL8MRH6B4.com.continuum")
+        let defaults = UserDefaults(suiteName: "group.LRL8MRH6B4.ai.continuum")
         let raw = defaults?.string(forKey: "clawdmeter.watch.codexCurrentTodo")
         return CodexTaskEntry(date: .now, headline: raw)
     }
