@@ -4175,6 +4175,12 @@ public final class AgentControlServer {
         UserDefaults.standard.object(forKey: "clawdmeter.antigravity.grpc.enabled") as? Bool ?? true
     }
 
+    /// v27 Code-tab harness migration: true when a live harness bridge is
+    /// driving this session (paneless codex/cursor/gemini/grok). The Code-tab
+    /// chat-store routing + first-send readiness use this to treat the session
+    /// like the Chat tab's harness sessions instead of waiting on a tmux pane.
+    func isHarnessLive(_ id: UUID) -> Bool { harnessRegistry.contains(id) }
+
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
     /// Antigravity over gRPC). Mirrors `handleSpawnOpencodeSession`: no tmux pane
     /// — the daemon drives an `AgentDriver` via `AcpHarnessBridge` (built by
@@ -4224,33 +4230,60 @@ public final class AgentControlServer {
         // Step 1: write-ahead the Clawdmeter session (no tmux pane). The
         // runtime kind is inferred as `.acpGrok` from `agent: .grok`.
         let session: AgentSession
-        do {
-            session = try await registry.create(
-                repoKey: req.repoKey,
-                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-                agent: req.agent,
-                model: req.model,
-                goal: req.goal,
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                tmuxWindowId: nil,
-                tmuxPaneId: nil,
-                planMode: false,  // ACP plan/approval flows through permission prompts, not the Codex synthetic-plan card
-                mode: worktreePath == nil ? .local : .worktree,
-                effort: req.effort,
-                ownsWorktree: worktreePath != nil,
-                envSetId: resolvedEnv?.set?.id,
-                envSetName: resolvedEnv?.set?.name,
-                id: provisionalSessionId ?? UUID()
-            )
-        } catch {
-            serverLogger.error("acp registry.create write-ahead failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-            await cleanupUnregisteredWorktree(
-                repoRoot: req.repoKey, worktreePath: worktreePath,
-                provisioning: provisioning, provisionalSessionId: provisionalSessionId,
-                context: "acp registry create failure")
-            return
+        if let pre = provisionalSessionId, let existing = registry.session(id: pre) {
+            // v27 optimistic "+": the Mac already created this provisional row up
+            // front and drove the provisioning trail against it. `registry.create`
+            // has no id-dedup (it appends), so ADOPT the row in place — attach the
+            // worktree, clear plan/pane, mark running — rather than create a
+            // duplicate. The live bridge registered in Step 4 is what drives it.
+            // On failure the Mac owns the row + worktree cleanup (its createSession
+            // call throws), so we don't tear them down here.
+            do {
+                try await registry.updateRuntime(
+                    id: existing.id,
+                    worktreePath: worktreePath,
+                    runtimeCwd: cwd,
+                    tmuxWindowId: nil,
+                    tmuxPaneId: nil,
+                    mode: worktreePath == nil ? .local : .worktree,
+                    ownsWorktree: worktreePath != nil
+                )
+                try await registry.updateStatus(id: existing.id, status: .running)
+            } catch {
+                serverLogger.error("acp registry adopt failed: \(error.localizedDescription, privacy: .public)")
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            session = registry.session(id: existing.id) ?? existing
+        } else {
+            do {
+                session = try await registry.create(
+                    repoKey: req.repoKey,
+                    repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                    agent: req.agent,
+                    model: req.model,
+                    goal: req.goal,
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    tmuxWindowId: nil,
+                    tmuxPaneId: nil,
+                    planMode: false,  // ACP plan/approval flows through permission prompts, not the Codex synthetic-plan card
+                    mode: worktreePath == nil ? .local : .worktree,
+                    effort: req.effort,
+                    ownsWorktree: worktreePath != nil,
+                    envSetId: resolvedEnv?.set?.id,
+                    envSetName: resolvedEnv?.set?.name,
+                    id: provisionalSessionId ?? UUID()
+                )
+            } catch {
+                serverLogger.error("acp registry.create write-ahead failed: \(error.localizedDescription, privacy: .public)")
+                sendResponse(.internalError, on: connection)
+                await cleanupUnregisteredWorktree(
+                    repoRoot: req.repoKey, worktreePath: worktreePath,
+                    provisioning: provisioning, provisionalSessionId: provisionalSessionId,
+                    context: "acp registry create failure")
+                return
+            }
         }
 
         // Step 2: acquire the per-session chat store the bridge projects into.

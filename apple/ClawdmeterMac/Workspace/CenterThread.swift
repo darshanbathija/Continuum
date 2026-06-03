@@ -701,7 +701,11 @@ struct CenterThread: View {
             // lastModelChipSessionId.
             let isRepoint = lastModelChipSessionId != session.id
             lastModelChipSessionId = session.id
-            guard !isRepoint, !isReadOnly, let new, new != session.model else { return }
+            // v27: harness Code sessions (codex/cursor/gemini) have no
+            // mid-session reconfigure in v1 — the AgentDriver spawns with the
+            // agent's defaults, so the chip is cosmetic. Skip the (tmux-only)
+            // SessionConfigChanger swap so it doesn't fail with a toast.
+            guard !isRepoint, !isReadOnly, !isHarnessDriven, let new, new != session.model else { return }
             if let entry = catalog.entry(forId: new) {
                 Task { await model.switchModel(sessionId: session.id, to: entry, effort: composerStore.effort) }
             }
@@ -709,11 +713,11 @@ struct CenterThread: View {
         .onChange(of: composerStore.effort) { _, new in
             let isRepoint = lastEffortChipSessionId != session.id
             lastEffortChipSessionId = session.id
-            guard !isRepoint, !isReadOnly, let new, new != session.effort else { return }
+            guard !isRepoint, !isReadOnly, !isHarnessDriven, let new, new != session.effort else { return }
             Task { await model.switchEffort(sessionId: session.id, to: new) }
         }
         .onChange(of: composerStore.mode) { _, new in
-            guard !isReadOnly, new != session.mode else { return }
+            guard !isReadOnly, !isHarnessDriven, new != session.mode else { return }
             onModeSwitch(new)
         }
     }
@@ -1351,6 +1355,14 @@ struct CenterThread: View {
         return entry.supportsEffort
     }
 
+    /// v27: true when this Code session is driven by a live harness bridge
+    /// (paneless codex/cursor/gemini) rather than a tmux pane. Gates the
+    /// mid-session config chips (no driver reconfigure in v1) + first-send
+    /// readiness.
+    private var isHarnessDriven: Bool {
+        AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true
+    }
+
     private func applyPendingFirstSendRecovery() {
         guard let recovery = model.takeFirstSendRecovery(sessionId: session.id) else { return }
         composerStore.restoreDraft(
@@ -1359,10 +1371,12 @@ struct CenterThread: View {
             error: recovery.autoSendWhenReady ? nil : recovery.error
         )
         // Auto-flush a prompt queued while the "+" session was provisioning —
-        // only once it's actually ready (worktree + pane attached). If the ready
-        // signal raced ahead of the session update, the draft is safely restored
-        // to the composer for a manual send.
-        if recovery.autoSendWhenReady, session.tmuxPaneId != nil {
+        // only once it's actually ready. Ready = a tmux pane attached (Claude)
+        // OR a live harness bridge driving it (v27 paneless codex/cursor/
+        // gemini). If the ready signal raced ahead of the session update, the
+        // draft is safely restored to the composer for a manual send.
+        let harnessReady = AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true
+        if recovery.autoSendWhenReady, session.tmuxPaneId != nil || harnessReady {
             Task { await performBoundSend() }
         }
     }

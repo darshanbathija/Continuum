@@ -647,27 +647,37 @@ public final class SessionsModel: ObservableObject {
                     }
                 )
                 let cwd = provisioned.path
-                let argv = AgentSpawner.codexArgv(
-                    model: model, planMode: true, effort: effort, workspacePath: cwd
-                ) ?? []
-                guard !argv.isEmpty else {
-                    throw SpawnError.missingBinary("Codex CLI not found on PATH. Configure in Settings → Diagnostics.")
+                // v27: drive codex via the daemon ACP harness (paneless) instead
+                // of a tmux pane. The daemon adopts the optimistic row (same
+                // sessionId) and reuses this Mac-provisioned worktree
+                // (existingWorkspacePath). Guard with a deadline so a wedged
+                // daemon/spawn doesn't leave the trail spinning forever.
+                guard let runtime = AppDelegate.runtime,
+                      let port = runtime.agentControlServer.boundPort else {
+                    throw SpawnError.missingBinary("Daemon not started — relaunch Clawdmeter.")
                 }
-                let resolvedEnv = try resolveRepoEnv(repoRoot: repoKey, cwd: cwd)
-                let env = resolvedEnv?.environment ?? [:]
-                // Guard the pane spawn with a deadline — a wedged tmux control
-                // connection would otherwise leave the trail spinning on
-                // "Starting Codex" forever (the symptom just hit).
-                let window = try await Self.withSpawnTimeout(20) {
-                    try await tmux.newWindow(cwd: cwd, child: argv, environment: env)
+                let sender = MacComposerSender(
+                    port: Int(port),
+                    token: runtime.agentControlServer.localLoopbackToken ?? ""
+                )
+                let createReq = NewSessionRequest(
+                    repoKey: repoKey, agent: agent, model: model, planMode: false,
+                    goal: nil, useWorktree: true, effort: effort,
+                    existingWorkspacePath: cwd, sessionId: sessionId
+                )
+                _ = try await Self.withSpawnTimeout(30) {
+                    try await sender.createSession(createReq)
                 }
+                // Record the worktree provisioning metadata on the (adopted) row
+                // so end-of-session cleanup removes the worktree — the daemon
+                // adopt set worktree/owns but not the metadata (the Mac owns it).
                 try await registry.updateRuntime(
                     id: sessionId,
                     worktreePath: cwd,
                     provisioning: provisioned.metadata,
                     runtimeCwd: cwd,
-                    tmuxWindowId: window.windowId,
-                    tmuxPaneId: window.paneId,
+                    tmuxWindowId: nil,
+                    tmuxPaneId: nil,
                     mode: .worktree,
                     ownsWorktree: true
                 )
@@ -945,6 +955,24 @@ public final class SessionsModel: ObservableObject {
         // until the real worktree is attached; effectiveCwd then points at the
         // new worktree and resolution is correct.
         if isProvisioning(session.id) { return nil }
+        // v27 Code-tab harness migration: a paneless harness Code session
+        // (codex/cursor/gemini driven by a live bridge) reads the daemon-owned
+        // store the bridge writes into — exactly like a chat session — instead
+        // of resolving + tailing a JSONL. Mirror the `.chat` branch above.
+        if AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true {
+            if let existing = chatStores[session.id] {
+                touchLRU(session.id)
+                return existing
+            }
+            guard let daemonStore = AppDelegate.runtime?.agentControlServer.chatStore(for: session) else {
+                return nil
+            }
+            chatStores[session.id] = daemonStore
+            chatStoreLRU.append(session.id)
+            lastResolvedPaneId[session.id] = session.tmuxPaneId ?? ""
+            evictExcessChatStores()
+            return daemonStore
+        }
         if let existing = chatStores[session.id] {
             touchLRU(session.id)
             // Audit P1 fix: when the daemon spawns a fresh post-approve
@@ -1571,6 +1599,50 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
+    /// v27 Code-tab harness migration: spawn a paneless harness session
+    /// (codex/cursor/gemini) by delegating to the daemon's `POST /sessions`
+    /// over the loopback, then adopt it into the open-state exactly like the
+    /// tmux path's tail. `existingWorkspacePath`/`sessionId` are set by the
+    /// optimistic "+" path so the Mac-provisioned worktree + pre-minted row are
+    /// reused; nil for the New Session sheet (the daemon provisions + mints).
+    private func spawnHarnessSessionViaDaemon(
+        repoPath: String,
+        agent: AgentKind,
+        goal: String?,
+        mode: SessionMode,
+        model: String?,
+        effort: ReasoningEffort?,
+        existingWorkspacePath: String?,
+        sessionId: UUID?
+    ) async throws -> AgentSession {
+        guard let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort else {
+            throw SpawnError.missingBinary("Daemon not started — relaunch Clawdmeter.")
+        }
+        let sender = MacComposerSender(
+            port: Int(port),
+            token: runtime.agentControlServer.localLoopbackToken ?? ""
+        )
+        let req = NewSessionRequest(
+            repoKey: repoPath,
+            agent: agent,
+            model: model,
+            planMode: false,
+            goal: goal,
+            useWorktree: mode == .worktree,
+            effort: effort,
+            existingWorkspacePath: existingWorkspacePath,
+            sessionId: sessionId
+        )
+        let session = try await sender.createSession(req)
+        recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
+        expandedRepoKeys.insert(repoPath)
+        draftWorkspaceTab = nil
+        openSessionId = session.id
+        await refresh()
+        return registry.session(id: session.id) ?? session
+    }
+
     public func spawnSession(
         repoPath: String,
         agent: AgentKind,
@@ -1597,20 +1669,45 @@ public final class SessionsModel: ObservableObject {
         initialMessage: String? = nil
     ) async throws -> AgentSession {
         try assertProviderEnabled(agent)
-        // v0.8.0 agy-migration — Gemini sessions fork off here BEFORE the
-        // tmux pipeline runs. Antigravity 2's agentapi is HTTP-RPC, not a
-        // terminal CLI; there's no pane to spawn. Tier-2 v0.42 chat is
-        // gone (D4 hard-stop). Returns the new session or throws
-        // `.antigravityNotReady` with the CTA the composer surfaces.
-        if agent == .gemini, resumeSessionId == nil {
-            return try await spawnAntigravitySession(
-                repoPath: repoPath,
-                goal: goal,
-                mode: mode,
-                model: model,
-                effort: effort,
-                planMode: planMode,
-                initialMessage: initialMessage
+        // v27 Code-tab harness migration: route every NEW non-Claude Code spawn
+        // through the daemon's ACP harness (paneless codex/cursor/gemini)
+        // instead of building tmux argv. Claude, every resume flow, and OpenCode
+        // fall through to their existing paths below. This sits BEFORE the CLI
+        // preflight because Gemini (Antigravity) isn't a CLI binary —
+        // `preflight(.gemini)` would wrongly reject it.
+        if agent != .claude, agent != .opencode, resumeSessionId == nil {
+            // Gemini's gRPC Cascade driver is compile-only; keep a one-flag
+            // rollback to the legacy agentapi spawn when it's disabled.
+            if agent == .gemini, !AgentControlServer.antigravityGrpcEnabled {
+                return try await spawnAntigravitySession(
+                    repoPath: repoPath, goal: goal, mode: mode, model: model,
+                    effort: effort, planMode: planMode, initialMessage: initialMessage
+                )
+            }
+            // Cursor preflight — the daemon's harness preflight doesn't
+            // auth-check cursor-agent, so do it here before provisioning.
+            if agent == .cursor {
+                if planMode, (resumeSessionId?.isEmpty ?? true) {
+                    throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
+                }
+                let cursorState = await CursorModelProbe.shared.currentState()
+                guard cursorState.binaryPath != nil else {
+                    throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
+                }
+                guard cursorState.authenticated else {
+                    throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
+                }
+                if let model,
+                   !CursorModelCatalog.isAutoModel(model),
+                   !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
+                    throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
+                }
+            } else if agent != .gemini, let reason = AgentSpawner.preflight(agent: agent) {
+                throw SpawnError.missingBinary(reason)
+            }
+            return try await spawnHarnessSessionViaDaemon(
+                repoPath: repoPath, agent: agent, goal: goal, mode: mode,
+                model: model, effort: effort, existingWorkspacePath: nil, sessionId: nil
             )
         }
         if agent == .cursor, planMode, (resumeSessionId?.isEmpty ?? true) {
@@ -1796,16 +1893,44 @@ public final class SessionsModel: ObservableObject {
             workspacePath: workspacePath,
             mode: mode
         )
-        if agent == .gemini {
-            let session = try await spawnAntigravitySession(
-                repoPath: repoPath,
-                workspacePath: workspacePath,
-                goal: goal,
-                mode: mode,
-                model: model,
-                effort: effort,
-                planMode: planMode,
-                initialMessage: initialMessage
+        // v27 Code-tab harness migration: route non-Claude into the EXISTING
+        // worktree via the daemon harness (reuse the worktree — existingWorkspace
+        // tells the daemon to skip provisioning — daemon creates the row).
+        // Claude + OpenCode keep their existing paths below.
+        if agent != .claude, agent != .opencode {
+            // Gemini's gRPC Cascade driver is compile-only; one-flag rollback
+            // to the agentapi spawn when disabled.
+            if agent == .gemini, !AgentControlServer.antigravityGrpcEnabled {
+                let session = try await spawnAntigravitySession(
+                    repoPath: repoPath, workspacePath: workspacePath, goal: goal,
+                    mode: mode, model: model, effort: effort, planMode: planMode,
+                    initialMessage: initialMessage
+                )
+                try await registry.setInheritedContextSources(sessionId: session.id, sourceIds: inheritedContextSourceIds)
+                return registry.session(id: session.id) ?? session
+            }
+            if agent == .cursor {
+                if planMode {
+                    throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
+                }
+                let cursorState = await CursorModelProbe.shared.currentState()
+                guard cursorState.binaryPath != nil else {
+                    throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
+                }
+                guard cursorState.authenticated else {
+                    throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
+                }
+                if let model,
+                   !CursorModelCatalog.isAutoModel(model),
+                   !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
+                    throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
+                }
+            } else if agent != .gemini, let reason = AgentSpawner.preflight(agent: agent) {
+                throw SpawnError.missingBinary(reason)
+            }
+            let session = try await spawnHarnessSessionViaDaemon(
+                repoPath: repoPath, agent: agent, goal: goal, mode: mode,
+                model: model, effort: effort, existingWorkspacePath: workspacePath, sessionId: nil
             )
             try await registry.setInheritedContextSources(sessionId: session.id, sourceIds: inheritedContextSourceIds)
             return registry.session(id: session.id) ?? session
