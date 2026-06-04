@@ -1161,9 +1161,31 @@ struct ProviderPreferenceRows: View {
                 }
                 if newValue {
                     Task { await refreshCatalogIfAllowed(for: vendor) }
+                    // Enabling Claude seeds Continuum's own usage token from
+                    // Claude Code's keychain item (one Always-Allow prompt).
+                    // Without this the live 5h/weekly gauge reads an empty
+                    // token after a fresh install / re-signed build (the
+                    // keychain ACL + prefs domain are per-signature) and shows
+                    // 0% / "resets in —". Replaces the separate Authenticate
+                    // button — turning the provider on IS the authenticate.
+                    if id == "claude" { Self.seedClaudeTokenFromClaudeCode() }
                 }
             }
         )
+    }
+
+    /// Imports Claude Code's OAuth token into Continuum's own Keychain entry
+    /// so the live usage gauge has a token to poll with. Reads Claude Code's
+    /// third-party item with user interaction (macOS prompts once → Always
+    /// Allow), mirrors it via `PastedAnthropicTokenProvider`, and opts the
+    /// user into launch auto-refresh so it stays seeded across rotations.
+    private static func seedClaudeTokenFromClaudeCode() {
+        Task.detached(priority: .userInitiated) {
+            guard let token = KeychainTokenProvider(allowsUserInteraction: true).currentAccessToken,
+                  !token.isEmpty else { return }
+            _ = PastedAnthropicTokenProvider.shared().setToken(token)
+            UserDefaults.standard.set(true, forKey: "clawdmeter.claude.autoImportFromClaudeCode")
+        }
     }
 
     private func providerEnablementId(for vendor: ChatVendor) -> String {
