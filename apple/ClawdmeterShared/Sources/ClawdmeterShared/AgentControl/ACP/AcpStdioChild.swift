@@ -50,18 +50,21 @@ public actor AcpStdioChild: AcpByteWriter {
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            Task { await self?.emitStdout(data) }
+            guard let child = self else { return }
+            Task { await child.emitStdout(data) }
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            Task { await self?.appendStderr(data) }
+            guard let child = self else { return }
+            Task { await child.appendStderr(data) }
         }
         // MUST be set before run(): if the child exits between run() and a later
         // assignment, the handler never fires and awaiters hang forever.
         process.terminationHandler = { [weak self] proc in
             let code = proc.terminationStatus
-            Task { await self?.emitExit(code) }
+            guard let child = self else { return }
+            Task { await child.emitExit(code) }
         }
         try process.run()
         launched = true

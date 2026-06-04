@@ -204,7 +204,18 @@ without regressing the invalidation drop A6 delivered.
 
 Tracked separately. Not blocking Gate 0.
 
-## 8. Updates to this document
+## 8. Sparkle follow-ups
+
+Sparkle full-update archives ship first. Two follow-ups remain outside
+the initial PR:
+
+- Delta updates after at least two full Sparkle archives exist.
+- Sparkle key-rotation drill after the first production appcast has
+  been exercised.
+
+These are release-operations drills, not runtime blockers.
+
+## 9. Updates to this document
 
 When an item listed here ships, the corresponding section should be
 deleted (not crossed out) in the PR that ships it, and the doc should

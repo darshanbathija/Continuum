@@ -21,6 +21,9 @@ extension Notification.Name {
     /// needed and re-emits to the Sidebar via FocusState binding.
     static let clawdmeterFocusCodeSearch = Notification.Name("clawdmeter.focusCodeSearch")
     static let clawdmeterOpenGlobalPalette = Notification.Name("clawdmeter.openGlobalPalette")
+    /// Carries `userInfo["section"]` for settings deep links such as
+    /// "updates" and "devices".
+    static let clawdmeterOpenSettingsSection = Notification.Name("clawdmeter.openSettingsSection")
     static let clawdmeterOpenShortcutSheet = Notification.Name("clawdmeter.openShortcutSheet")
     static let clawdmeterOpenFilePicker = Notification.Name("clawdmeter.openFilePicker")
     static let clawdmeterExportSession = Notification.Name("clawdmeter.exportSession")
@@ -107,6 +110,16 @@ struct ClawdmeterMacApp: App {
                     )
                 }
                 .keyboardShortcut(",", modifiers: .command)
+            }
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    runtime.updateCoordinator.checkForUpdates()
+                    NotificationCenter.default.post(
+                        name: .clawdmeterOpenSettingsSection,
+                        object: nil,
+                        userInfo: ["section": "updates"]
+                    )
+                }
             }
             CommandGroup(after: .toolbar) {
                 Button("Chat") { Self.postSwitchTab("chat") }

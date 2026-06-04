@@ -109,21 +109,22 @@ affecting Continuum.
 
 ### 1.5 In-app update check
 
-Once 8 seconds after launch and every 24 hours while running, the
-Mac app fetches
-`https://api.github.com/repos/darshanbathija/Clawdmeter/releases/latest`
-to learn whether a newer release is available. The request transmits:
+The Mac app uses Sparkle to check the public GitHub Pages appcast at
+`https://darshanbathija.github.io/Continuum/updates/appcast.xml`.
+When release notes or history are shown in Settings, the app also reads
+static files under `https://darshanbathija.github.io/Continuum/updates/`.
+These requests transmit:
 
 - The user's IP address.
-- A legacy `Clawdmeter/<version>` User-Agent header.
+- Standard HTTPS request metadata from the OS networking stack.
 
 It does NOT transmit any unique device identifier, install id,
-session token, or app body. It is equivalent to visiting the GitHub
-releases page in Safari once a day.
+session token, chat content, repo paths, or app body. GitHub Releases is
+only opened when the user clicks the fallback link or Sparkle cannot
+complete the update path.
 
-Users who never want this request to fire can override the URL via
-`defaults write com.clawdmeter.mac ClawdmeterDebugReleasesURL "https://…"`
-(QA hook) or simply firewall the request.
+Users who never want this request to fire can disable automatic checks
+in Settings → Updates or firewall the Pages URL.
 
 ## 2. What stays local
 
@@ -305,8 +306,8 @@ There is no embedded web view used for analytics. There are no
 cookies. There are no third-party trackers. There is no `localStorage`
 or `IndexedDB` carrying identifiers.
 
-The in-app GitHub release check (§1.5) goes to a single GitHub API
-URL and does not carry cookies.
+The in-app Sparkle update check (§1.5) goes to static GitHub Pages
+files and does not carry cookies.
 
 ## 8. Children's privacy
 

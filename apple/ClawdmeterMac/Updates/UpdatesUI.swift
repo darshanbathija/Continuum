@@ -2,110 +2,225 @@ import SwiftUI
 import Combine
 import ClawdmeterShared
 
-// MARK: - Pure visibility logic (the testable unit)
-
-/// Three states the titlebar chip can be in. Translocation wins over
-/// update-available because a translocated user can't follow the
-/// drag-to-Applications flow anyway — surfacing the upgrade prompt
-/// would just nag them forever with no way to act on it.
-enum ChipState: Equatable {
-    case hidden
-    case updateAvailable(version: String)
+enum UpdateControlSnapshot: Equatable {
+    case unavailable
+    case idle
+    case checking
+    case upToDate
+    case available(String)
+    case installing
+    case relaunchPending(String?)
+    case cancelled(String?)
+    case failed(String)
+    case invalidAppcast(String)
+    case corruptedDownload(String)
     case translocated
+    case nonApplicationsInstall
+    case setupBlocked(String)
+    case automaticChecksDisabled
 }
 
-/// Pure function — derives the chip's visibility from the coordinator's
-/// current state. Extracted from the view body so unit tests can assert
-/// the state-machine behavior without spinning up SwiftUI.
 @MainActor
-func chipState(_ coordinator: UpdateCoordinator?) -> ChipState {
-    guard let coordinator else { return .hidden }
-    if coordinator.isTranslocated { return .translocated }
-    guard let update = coordinator.availableUpdate,
-          let version = GitHubReleaseConstants.parseVersion(fromTag: update.tagName)
-    else { return .hidden }
-    return .updateAvailable(version: version)
+func updateControlSnapshot(_ coordinator: UpdateCoordinator?) -> UpdateControlSnapshot {
+    guard let coordinator else { return .unavailable }
+    switch coordinator.state {
+    case .idle:
+        return .idle
+    case .checking:
+        return .checking
+    case .upToDate:
+        return .upToDate
+    case .updateAvailable(let update):
+        return .available(update.displayVersion)
+    case .installing:
+        return .installing
+    case .installedRelaunchPending(let version):
+        return .relaunchPending(version)
+    case .userCancelled(let version):
+        return .cancelled(version)
+    case .failed(let reason, _):
+        return .failed(reason)
+    case .invalidAppcastSignature(let reason, _):
+        return .invalidAppcast(reason)
+    case .corruptedDownload(let reason, _):
+        return .corruptedDownload(reason)
+    case .translocated:
+        return .translocated
+    case .nonApplicationsInstall:
+        return .nonApplicationsInstall
+    case .setupBlocked(let reason, _):
+        return .setupBlocked(reason)
+    case .automaticChecksDisabled:
+        return .automaticChecksDisabled
+    }
 }
 
-// MARK: - UpdateChip (titlebar pill)
+struct UpdateAppControl: View {
+    @ObservedObject private var coordinator: UpdateCoordinatorObservable
+    private let compact: Bool
+    @State private var popoverPresented = false
 
-/// Titlebar chip that surfaces update availability. Self-hides when
-/// the coordinator is nil (Preview path) or when there's nothing to
-/// say. Click opens a popover with details and actions.
-struct UpdateChip: View {
-    @ObservedObject var coordinator: UpdateCoordinatorObservable
-    @State private var popoverPresented: Bool = false
-
-    /// Wrapper because SwiftUI's `@ObservedObject` can't bind to an
-    /// optional. Callers pass `UpdateCoordinator?`; we wrap it.
-    init(coordinator: UpdateCoordinator?) {
+    init(coordinator: UpdateCoordinator?, compact: Bool = false) {
         self.coordinator = UpdateCoordinatorObservable(wrapped: coordinator)
+        self.compact = compact
     }
 
     var body: some View {
-        switch chipState(coordinator.wrapped) {
-        case .hidden:
-            EmptyView()
-        case .updateAvailable(let version):
-            chipButton(
-                label: "Update \(version)",
-                icon: "arrow.down.circle.fill",
-                tint: Theme.accent
-            )
-        case .translocated:
-            chipButton(
-                label: "Move to Applications",
-                icon: "exclamationmark.triangle.fill",
-                tint: Theme.statusWarning
-            )
-        }
-    }
-
-    @ViewBuilder
-    private func chipButton(label: String, icon: String, tint: Color) -> some View {
-        Button(action: { popoverPresented.toggle() }) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(label)
-                    .font(.system(size: 11.5, weight: .semibold))
+        Button(action: primaryAction) {
+            HStack(spacing: compact ? 5 : 6) {
+                icon
+                if !compact || labelAlwaysVisible {
+                    Text(label)
+                        .font(TahoeFont.body(compact ? 11 : 11.5, weight: .semibold))
+                        .lineLimit(1)
+                }
             }
             .foregroundStyle(tint)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, compact ? 8 : 10)
             .padding(.vertical, 4)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(tint.opacity(0.14))
-            }
+            .frame(height: 24)
+            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay {
-                Capsule(style: .continuous)
-                    .stroke(tint.opacity(0.35), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(tint.opacity(0.28), lineWidth: 0.5)
             }
         }
         .buttonStyle(.plain)
-        .help(helpText(for: label))
+        .disabled(disabled)
+        .help(helpText)
         .popover(isPresented: $popoverPresented, arrowEdge: .bottom) {
             UpdatePopoverContent(coordinator: coordinator.wrapped)
-                .frame(width: 380)
+                .frame(width: 400)
         }
     }
 
-    private func helpText(for label: String) -> String {
-        if label.hasPrefix("Move to") {
-            return "Continuum is running from a temporary location. Move it to /Applications to enable updates."
+    private var snapshot: UpdateControlSnapshot {
+        updateControlSnapshot(coordinator.wrapped)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        if case .checking = snapshot {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.72)
+        } else if case .installing = snapshot {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.72)
+        } else {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
         }
-        return "A new version of Clawdmeter is available — click for details."
+    }
+
+    private var labelAlwaysVisible: Bool {
+        switch snapshot {
+        case .available, .translocated, .nonApplicationsInstall, .setupBlocked, .invalidAppcast, .corruptedDownload, .failed:
+            return true
+        default:
+            return !compact
+        }
+    }
+
+    private var systemImage: String {
+        switch snapshot {
+        case .available:
+            return "arrow.down.circle.fill"
+        case .checking, .installing:
+            return "arrow.triangle.2.circlepath"
+        case .upToDate:
+            return "checkmark.circle.fill"
+        case .translocated, .nonApplicationsInstall, .setupBlocked, .failed, .invalidAppcast, .corruptedDownload:
+            return "exclamationmark.triangle.fill"
+        case .automaticChecksDisabled:
+            return "arrow.down.circle"
+        case .relaunchPending:
+            return "power.circle.fill"
+        default:
+            return "arrow.down.circle"
+        }
+    }
+
+    private var label: String {
+        switch snapshot {
+        case .available(let version):
+            return compact ? "Update \(version)" : "Update App \(version)"
+        case .checking:
+            return "Checking"
+        case .installing:
+            return "Installing"
+        case .upToDate:
+            return compact ? "Updated" : "Up to date"
+        case .translocated:
+            return "Move App"
+        case .nonApplicationsInstall:
+            return "Install App"
+        case .setupBlocked:
+            return "Update Setup"
+        case .automaticChecksDisabled:
+            return compact ? "Updates" : "Update App"
+        case .relaunchPending:
+            return "Relaunch"
+        case .failed, .invalidAppcast, .corruptedDownload:
+            return "Update Failed"
+        default:
+            return compact ? "Update" : "Update App"
+        }
+    }
+
+    private var tint: Color {
+        switch snapshot {
+        case .available:
+            return Theme.accent
+        case .upToDate:
+            return ClawdmeterTheme.Colors.statusOK
+        case .translocated, .nonApplicationsInstall, .setupBlocked, .failed, .invalidAppcast, .corruptedDownload:
+            return Theme.statusWarning
+        default:
+            return Theme.secondary
+        }
+    }
+
+    private var disabled: Bool {
+        switch snapshot {
+        case .checking, .installing, .unavailable:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var helpText: String {
+        switch snapshot {
+        case .available(let version):
+            return "Install Continuum \(version) with Sparkle."
+        case .translocated:
+            return "Continuum is running from a temporary Gatekeeper location."
+        case .nonApplicationsInstall:
+            return "Move Continuum to /Applications before enabling in-app updates."
+        case .setupBlocked:
+            return "Sparkle setup is blocked. Open update details."
+        case .automaticChecksDisabled:
+            return "Automatic checks are off. Click to check manually."
+        default:
+            return "Check for Continuum updates."
+        }
+    }
+
+    private func primaryAction() {
+        switch snapshot {
+        case .idle, .upToDate, .automaticChecksDisabled, .cancelled:
+            coordinator.wrapped?.checkForUpdates()
+            popoverPresented = true
+        default:
+            popoverPresented = true
+        }
     }
 }
 
-// MARK: - UpdatePopoverContent
-
-/// Popover body. Renders one of three states depending on the
-/// coordinator's snapshot at open time. Re-reads `coordinator` so a
-/// background check that lands while the popover is open updates the
-/// UI live.
 struct UpdatePopoverContent: View {
-    @ObservedObject var coordinator: UpdateCoordinatorObservable
+    @ObservedObject private var coordinator: UpdateCoordinatorObservable
 
     init(coordinator: UpdateCoordinator?) {
         self.coordinator = UpdateCoordinatorObservable(wrapped: coordinator)
@@ -113,140 +228,230 @@ struct UpdatePopoverContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            switch chipState(coordinator.wrapped) {
-            case .translocated:
-                translocatedBody
-            case .updateAvailable(let version):
-                updateAvailableBody(version: version)
-            case .hidden:
-                // The chip wouldn't be visible to open the popover in
-                // this state, but render a sane default just in case.
-                upToDateBody
-            }
+            header
+            detail
+            actions
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { coordinator.wrapped?.refreshReleaseMetadata() }
     }
 
-    // MARK: Update-available state
-
     @ViewBuilder
-    private func updateAvailableBody(version: String) -> some View {
-        Text("Continuum \(version) is available")
-            .font(.system(size: 15, weight: .semibold))
-
-        if let release = coordinator.wrapped?.availableUpdate {
-            if let name = release.name, !name.isEmpty, name != release.tagName {
-                Text(name)
-                    .font(.system(size: 12))
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: headerIcon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(headerTint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(headerTitle)
+                    .font(TahoeFont.body(14, weight: .semibold))
+                Text("Current \(coordinator.wrapped?.currentVersion ?? "unknown") (\(coordinator.wrapped?.currentBuild ?? "unknown"))")
+                    .font(TahoeFont.body(11))
                     .foregroundStyle(.secondary)
             }
+            Spacer()
+        }
+    }
 
+    @ViewBuilder
+    private var detail: some View {
+        switch coordinator.wrapped?.state {
+        case .updateAvailable(let update):
+            VStack(alignment: .leading, spacing: 8) {
+                if let title = update.title, !title.isEmpty {
+                    Text(title)
+                        .font(TahoeFont.body(12, weight: .semibold))
+                }
+                releaseNotesView
+            }
+        case .failed(let reason, _), .setupBlocked(let reason, _),
+             .invalidAppcastSignature(let reason, _), .corruptedDownload(let reason, _):
+            Text(reason)
+                .font(TahoeFont.body(12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        case .translocated(let url):
+            Text("Continuum is running from a temporary Gatekeeper path. Reveal the app in Finder, move it to /Applications, then relaunch.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(url.path)
+                .font(TahoeFont.mono(10))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+        case .nonApplicationsInstall(let url):
+            Text("Sparkle can only replace installed apps reliably from /Applications. Move Continuum there before using in-app updates.")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(url.path)
+                .font(TahoeFont.mono(10))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+        default:
+            releaseNotesView
+        }
+    }
+
+    @ViewBuilder
+    private var releaseNotesView: some View {
+        if coordinator.wrapped?.isLoadingReleaseMetadata == true {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Loading release notes")
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(.secondary)
+            }
+        } else if let notes = coordinator.wrapped?.releaseNotes, !notes.isEmpty {
             ScrollView {
-                Text(renderMarkdown(release.body ?? "_No release notes provided._"))
-                    .font(.system(size: 12))
+                Text(renderMarkdown(notes))
+                    .font(TahoeFont.body(12))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
-            .frame(maxHeight: 280)
-        }
-
-        HStack(spacing: 8) {
-            Button(action: openInBrowser) {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.down.circle.fill")
-                    Text("Download in Browser")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .controlSize(.large)
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.accent)
-
-            Button("Later", action: dismiss)
-                .controlSize(.large)
-                .buttonStyle(.bordered)
-        }
-
-        HStack {
-            Spacer()
-            Button(action: checkAgain) {
-                HStack(spacing: 4) {
-                    if coordinator.wrapped?.isCheckingForUpdates == true {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text(coordinator.wrapped?.isCheckingForUpdates == true ? "Checking…" : "Check again")
-                }
-            }
-            .buttonStyle(.link)
-            .font(.system(size: 11))
-            .disabled(coordinator.wrapped?.isCheckingForUpdates == true)
-        }
-    }
-
-    // MARK: Translocated state
-
-    @ViewBuilder
-    private var translocatedBody: some View {
-        Text("Move Clawdmeter to Applications")
-            .font(.system(size: 15, weight: .semibold))
-
-        Text("Continuum is running from a temporary location and can't be updated in place. Drag it to your Applications folder, then reopen.")
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-
-        HStack(spacing: 8) {
-            Button(action: showInFinder) {
-                HStack(spacing: 6) {
-                    Image(systemName: "folder.fill")
-                    Text("Show in Finder")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .controlSize(.large)
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.statusWarning)
-        }
-    }
-
-    // MARK: Up-to-date fallback (rare — chip is hidden in this state)
-
-    @ViewBuilder
-    private var upToDateBody: some View {
-        Text("Clawdmeter is up to date")
-            .font(.system(size: 14, weight: .semibold))
-
-        if let last = coordinator.wrapped?.lastCheckedAt {
-            Text("Last checked \(last.formatted(.relative(presentation: .named)))")
-                .font(.system(size: 11))
+            .frame(maxHeight: 240)
+        } else if let error = coordinator.wrapped?.releaseMetadataError {
+            Text("Release notes unavailable: \(error)")
+                .font(TahoeFont.body(12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text("Release notes will appear here after the appcast is available.")
+                .font(TahoeFont.body(12))
                 .foregroundStyle(.secondary)
         }
+    }
 
-        HStack {
-            Spacer()
-            Button("Check now", action: checkAgain)
-                .buttonStyle(.link)
-                .font(.system(size: 11))
+    @ViewBuilder
+    private var actions: some View {
+        HStack(spacing: 8) {
+            Button(primaryActionTitle, action: primaryAction)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(headerTint)
+                .disabled(primaryActionDisabled)
+
+            Button(secondaryActionTitle, action: secondaryAction)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
         }
     }
 
-    // MARK: - Actions
-
-    private func openInBrowser() {
-        coordinator.wrapped?.openReleasePageFallback()
+    private var headerTitle: String {
+        switch coordinator.wrapped?.state {
+        case .updateAvailable(let update):
+            return "Continuum \(update.displayVersion) is available"
+        case .checking:
+            return "Checking for updates"
+        case .upToDate:
+            return "Continuum is up to date"
+        case .installing:
+            return "Installing update"
+        case .installedRelaunchPending(let version):
+            return "Relaunch to finish \(version ?? "the update")"
+        case .automaticChecksDisabled:
+            return "Automatic updates are off"
+        case .translocated:
+            return "Move Continuum to Applications"
+        case .nonApplicationsInstall:
+            return "Install Continuum in Applications"
+        case .setupBlocked:
+            return "Update setup is blocked"
+        case .invalidAppcastSignature:
+            return "Appcast signature failed"
+        case .corruptedDownload:
+            return "Downloaded update is corrupted"
+        case .failed:
+            return "Update failed"
+        default:
+            return "Continuum updates"
+        }
     }
 
-    private func dismiss() {
-        coordinator.wrapped?.dismissUpdate()
+    private var headerIcon: String {
+        switch updateControlSnapshot(coordinator.wrapped) {
+        case .available:
+            return "arrow.down.circle.fill"
+        case .upToDate:
+            return "checkmark.circle.fill"
+        case .checking, .installing:
+            return "arrow.triangle.2.circlepath"
+        case .relaunchPending:
+            return "power.circle.fill"
+        case .translocated, .nonApplicationsInstall, .setupBlocked, .failed, .invalidAppcast, .corruptedDownload:
+            return "exclamationmark.triangle.fill"
+        default:
+            return "arrow.down.circle"
+        }
     }
 
-    private func checkAgain() {
-        coordinator.wrapped?.checkForUpdates()
+    private var headerTint: Color {
+        switch updateControlSnapshot(coordinator.wrapped) {
+        case .available:
+            return Theme.accent
+        case .upToDate:
+            return ClawdmeterTheme.Colors.statusOK
+        case .translocated, .nonApplicationsInstall, .setupBlocked, .failed, .invalidAppcast, .corruptedDownload:
+            return Theme.statusWarning
+        default:
+            return Theme.secondary
+        }
     }
 
-    private func showInFinder() {
-        coordinator.wrapped?.showCurrentBundleInFinder()
+    private var primaryActionTitle: String {
+        switch coordinator.wrapped?.state {
+        case .updateAvailable:
+            return "Update App"
+        case .translocated, .nonApplicationsInstall:
+            return "Show in Finder"
+        case .failed, .setupBlocked, .invalidAppcastSignature, .corruptedDownload:
+            return "Open Fallback"
+        case .checking, .installing:
+            return "Working"
+        default:
+            return "Check Now"
+        }
+    }
+
+    private var secondaryActionTitle: String {
+        switch coordinator.wrapped?.state {
+        case .updateAvailable:
+            return "Later"
+        default:
+            return "Release Notes"
+        }
+    }
+
+    private var primaryActionDisabled: Bool {
+        switch coordinator.wrapped?.state {
+        case .checking, .installing:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func primaryAction() {
+        switch coordinator.wrapped?.state {
+        case .translocated, .nonApplicationsInstall:
+            coordinator.wrapped?.showCurrentBundleInFinder()
+        case .failed, .setupBlocked, .invalidAppcastSignature, .corruptedDownload:
+            coordinator.wrapped?.openReleasePageFallback()
+        default:
+            coordinator.wrapped?.checkForUpdates()
+        }
+    }
+
+    private func secondaryAction() {
+        switch coordinator.wrapped?.state {
+        case .updateAvailable:
+            coordinator.wrapped?.dismissUpdate()
+        default:
+            coordinator.wrapped?.openReleaseNotes()
+        }
     }
 
     private func renderMarkdown(_ source: String) -> AttributedString {
@@ -260,25 +465,127 @@ struct UpdatePopoverContent: View {
     }
 }
 
-// MARK: - Theme tokens (terra-cotta accent + status warning)
-//
-// We do NOT pull in TahoeSyncChip directly because it's hardcoded to
-// `t.accent` and our translocation state needs a different tint.
-// Inline the two color tokens here using the same hex values from
-// `ClawdmeterShared.Theme/Theme.swift` so the chip visually matches
-// the rest of the app's accent palette.
+struct UpdateSettingsPanel: View {
+    @ObservedObject private var coordinator: UpdateCoordinatorObservable
+
+    init(coordinator: UpdateCoordinator?) {
+        self.coordinator = UpdateCoordinatorObservable(wrapped: coordinator)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            UpdateSettingsRow(label: "Installed version", hint: "Bundle version used by Sparkle and appcast matching.") {
+                Text("\(coordinator.wrapped?.currentVersion ?? "unknown") (\(coordinator.wrapped?.currentBuild ?? "unknown"))")
+                    .font(TahoeFont.mono(11))
+                    .foregroundStyle(.secondary)
+            }
+
+            UpdateSettingsRow(label: "Last checked", hint: "Updated by Sparkle, not by a GitHub API poll.") {
+                Text(lastCheckedText)
+                    .font(TahoeFont.body(12))
+                    .foregroundStyle(.secondary)
+            }
+
+            UpdateSettingsRow(label: "Check automatically", hint: "Sparkle schedules future appcast checks.") {
+                Toggle("", isOn: automaticChecksBinding)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+
+            UpdateSettingsRow(label: "Download automatically", hint: "Sparkle can prepare updates in the background.") {
+                Toggle("", isOn: automaticDownloadsBinding)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+
+            HStack(spacing: 8) {
+                UpdateAppControl(coordinator: coordinator.wrapped)
+                Button("Open Appcast") { coordinator.wrapped?.openAppcast() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                Button("Fallback") { coordinator.wrapped?.openReleasePageFallback() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+
+            releaseHistory
+        }
+        .onAppear { coordinator.wrapped?.refreshReleaseMetadata() }
+    }
+
+    private var automaticChecksBinding: Binding<Bool> {
+        Binding(
+            get: { coordinator.wrapped?.automaticChecksEnabled ?? false },
+            set: { coordinator.wrapped?.setAutomaticChecksEnabled($0) }
+        )
+    }
+
+    private var automaticDownloadsBinding: Binding<Bool> {
+        Binding(
+            get: { coordinator.wrapped?.automaticDownloadsEnabled ?? false },
+            set: { coordinator.wrapped?.setAutomaticDownloadsEnabled($0) }
+        )
+    }
+
+    private var lastCheckedText: String {
+        guard let last = coordinator.wrapped?.lastCheckedAt else { return "Never" }
+        return last.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    @ViewBuilder
+    private var releaseHistory: some View {
+        if let history = coordinator.wrapped?.releaseHistory, !history.isEmpty {
+            TahoeHair().padding(.vertical, 4)
+            Text("Release history")
+                .font(TahoeFont.body(11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            ForEach(history.prefix(6)) { entry in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(entry.version) \(entry.title)")
+                        .font(TahoeFont.body(12, weight: .semibold))
+                    if let publishedAt = entry.publishedAt {
+                        Text(publishedAt.formatted(date: .abbreviated, time: .omitted))
+                            .font(TahoeFont.body(11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+}
 
 private enum Theme {
     static let accent = SessionsV2Theme.accent
     static let statusWarning = ClawdmeterTheme.Colors.statusWarning
+    static let secondary = Color.secondary
 }
 
-// MARK: - Optional-coordinator wrapper for SwiftUI
+private struct UpdateSettingsRow<Control: View>: View {
+    @Environment(\.tahoe) private var t
+    var label: String
+    var hint: String?
+    @ViewBuilder var control: Control
 
-/// `@ObservedObject` can't bind to an optional ObservableObject, so we
-/// wrap the optional in a non-optional ObservableObject and forward
-/// the wrapped value's publisher. When `wrapped` is nil (Preview path),
-/// nothing publishes and the view stays in its initial state.
+    var body: some View {
+        HStack(alignment: .center, spacing: 24) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label)
+                    .font(TahoeFont.body(14, weight: .semibold))
+                    .foregroundStyle(t.fg)
+                if let hint {
+                    Text(hint)
+                        .font(TahoeFont.body(12))
+                        .foregroundStyle(t.fg3)
+                        .frame(maxWidth: 460, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            control
+        }
+    }
+}
+
 @MainActor
 final class UpdateCoordinatorObservable: ObservableObject {
     let wrapped: UpdateCoordinator?

@@ -1,299 +1,357 @@
 import XCTest
 @testable import Clawdmeter
 
-/// v0.24.0 — locks the in-app update checker's behavior across version
-/// comparison, dismissal cooldown, translocation detection, debug URL
-/// override, GitHub API decoding, and the chipState pure function.
 @MainActor
 final class UpdateCoordinatorTests: XCTestCase {
-
-    // MARK: - Defaults helpers
-
-    /// Isolated UserDefaults suite per test — never touch
-    /// `.standard` so tests can't bleed into each other or pollute
-    /// the user's real preferences when run via Xcode.
-    private func makeDefaults(_ name: String = #function) -> UserDefaults {
-        let suite = "Clawdmeter.UpdateCoordinatorTests.\(name).\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
-    }
-
     private func makeCoordinator(
+        driver providedDriver: FakeSparkleUpdateDriver? = nil,
         session: URLSession = MockURLProtocol.makeSession(),
-        defaults: UserDefaults? = nil,
-        bundleURL: URL = URL(fileURLWithPath: "/Applications/Clawdmeter.app"),
-        currentVersion: String? = "0.23.8",
-        now: Date = Date(timeIntervalSince1970: 1_716_000_000)
-    ) -> UpdateCoordinator {
-        UpdateCoordinator(
+        bundleURL: URL = URL(fileURLWithPath: "/Applications/Continuum.app"),
+        currentVersion: String? = "0.29.16",
+        build: String? = "155",
+        now: Date = Date(timeIntervalSince1970: 1_779_840_000),
+        opener: @escaping (URL) -> Void = { _ in },
+        finderRevealer: @escaping (URL) -> Void = { _ in }
+    ) -> (UpdateCoordinator, FakeSparkleUpdateDriver) {
+        let driver = providedDriver ?? FakeSparkleUpdateDriver()
+        let coordinator = UpdateCoordinator(
             session: session,
-            defaults: defaults ?? makeDefaults(),
             bundleURLProvider: { bundleURL },
             currentVersionProvider: { currentVersion },
+            buildProvider: { build },
             nowProvider: { now },
-            opener: { _ in },
-            finderRevealer: { _ in },
-            startBackgroundScheduling: false
+            opener: opener,
+            finderRevealer: finderRevealer,
+            driverFactory: { delegate in
+                driver.delegate = delegate
+                return driver
+            }
         )
+        return (coordinator, driver)
     }
-
-    // MARK: - Version comparison + tag parsing (5 tests)
 
     func testCompareVersionsCanonicalCases() {
-        XCTAssertEqual(GitHubReleaseConstants.compareVersions("0.23.10", "0.23.9"), .orderedDescending,
-                       "0.23.10 must be > 0.23.9 — lexicographic order would give the opposite")
-        XCTAssertEqual(GitHubReleaseConstants.compareVersions("1.0.0", "0.99.99"), .orderedDescending,
-                       "1.0.0 must be > 0.99.99")
-        XCTAssertEqual(GitHubReleaseConstants.compareVersions("0.24.0", "0.23.99"), .orderedDescending)
-        XCTAssertEqual(GitHubReleaseConstants.compareVersions("0.23.8", "0.23.8"), .orderedSame)
-        XCTAssertEqual(GitHubReleaseConstants.compareVersions("0.23.7", "0.23.8"), .orderedAscending)
+        XCTAssertEqual(ReleaseUpdateConfig.compareVersions("0.23.10", "0.23.9"), .orderedDescending)
+        XCTAssertEqual(ReleaseUpdateConfig.compareVersions("1.0.0", "0.99.99"), .orderedDescending)
+        XCTAssertEqual(ReleaseUpdateConfig.compareVersions("0.24.0", "0.23.99"), .orderedDescending)
+        XCTAssertEqual(ReleaseUpdateConfig.compareVersions("0.23.8", "0.23.8"), .orderedSame)
+        XCTAssertEqual(ReleaseUpdateConfig.compareVersions("0.23.7", "0.23.8"), .orderedAscending)
     }
 
-    func testParseVersionFromValidTag() {
-        XCTAssertEqual(GitHubReleaseConstants.parseVersion(fromTag: "v0.23.8-mac"), "0.23.8")
-        XCTAssertEqual(GitHubReleaseConstants.parseVersion(fromTag: "v1.0.0-mac"), "1.0.0")
+    func testParseVersionFromMacTagOnly() {
+        XCTAssertEqual(ReleaseUpdateConfig.parseVersion(fromTag: "v0.29.16-mac"), "0.29.16")
+        XCTAssertNil(ReleaseUpdateConfig.parseVersion(fromTag: "v0.29.16-beta1-mac"))
+        XCTAssertNil(ReleaseUpdateConfig.parseVersion(fromTag: "v0.29.16-linux"))
+        XCTAssertNil(ReleaseUpdateConfig.parseVersion(fromTag: "v0.29"))
     }
 
-    func testParseVersionRejectsBetaTag() {
-        XCTAssertNil(GitHubReleaseConstants.parseVersion(fromTag: "v0.24.0-beta1-mac"),
-                     "channel suffix should fail parse until channel support exists")
+    func testReleaseURLsMatchExpectedHosts() {
+        XCTAssertEqual(ReleaseUpdateConfig.releasesLatestURL.absoluteString,
+                       "https://github.com/darshanbathija/Continuum/releases/latest")
+        XCTAssertEqual(ReleaseUpdateConfig.appcastURL.absoluteString,
+                       "https://darshanbathija.github.io/Continuum/updates/appcast.xml")
+        XCTAssertEqual(ReleaseUpdateConfig.releaseTagURL(version: "0.29.16").absoluteString,
+                       "https://github.com/darshanbathija/Continuum/releases/tag/v0.29.16-mac")
     }
 
-    func testParseVersionRejectsLinuxTag() {
-        XCTAssertNil(GitHubReleaseConstants.parseVersion(fromTag: "v0.23.8-linux"))
-        XCTAssertNil(GitHubReleaseConstants.parseVersion(fromTag: "v0.23.8"))
+    func testStartsSparkleDriverOnApplicationsInstall() {
+        let (coordinator, driver) = makeCoordinator()
+        XCTAssertTrue(driver.didStart)
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertTrue(coordinator.automaticChecksEnabled)
     }
 
-    func testParseVersionRejectsMalformed() {
-        XCTAssertNil(GitHubReleaseConstants.parseVersion(fromTag: ""))
-        XCTAssertNil(GitHubReleaseConstants.parseVersion(fromTag: "v"))
-        XCTAssertNil(GitHubReleaseConstants.parseVersion(fromTag: "0.23.8"))
-        XCTAssertNil(GitHubReleaseConstants.parseVersion(fromTag: "v0.23-mac"))
-        XCTAssertNil(GitHubReleaseConstants.parseVersion(fromTag: "v0.23.x-mac"))
+    func testAutomaticChecksDisabledInitialState() {
+        let driver = FakeSparkleUpdateDriver()
+        driver.automaticallyChecksForUpdates = false
+        let (coordinator, _) = makeCoordinator(driver: driver)
+        XCTAssertEqual(coordinator.state, .automaticChecksDisabled)
     }
 
-    // MARK: - Dismissal cooldown (3 tests)
-
-    func testDismissalCooldownSuppressesSameVersion() async {
-        let defaults = makeDefaults()
-        let now = Date(timeIntervalSince1970: 1_716_000_000)
-        defaults.set("0.23.9", forKey: UpdateCoordinator.kDismissedVersion)
-        defaults.set(now, forKey: UpdateCoordinator.kDismissedAt)
-
-        MockURLProtocol.responder = { _ in
-            MockURLProtocol.json(Self.release(tag: "v0.23.9-mac"))
-        }
-
-        let coord = makeCoordinator(defaults: defaults, now: now)
-        coord.checkForUpdates()
-        await Self.waitForNotChecking(coord)
-
-        XCTAssertNil(coord.availableUpdate, "same-version dismissal within 24h should suppress")
+    func testTranslocationBlocksSparkle() {
+        let driver = FakeSparkleUpdateDriver()
+        let url = URL(fileURLWithPath: "/private/var/folders/x/y/T/AppTranslocation/Continuum.app")
+        let (coordinator, _) = makeCoordinator(driver: driver, bundleURL: url)
+        XCTAssertEqual(coordinator.state, .translocated(bundleURL: url.standardizedFileURL))
+        XCTAssertFalse(driver.didStart)
+        coordinator.checkForUpdates()
+        XCTAssertEqual(driver.manualChecks, 0)
     }
 
-    func testDismissalCooldownExpiresAfter24h() async {
-        let defaults = makeDefaults()
-        let now = Date(timeIntervalSince1970: 1_716_000_000)
-        defaults.set("0.23.9", forKey: UpdateCoordinator.kDismissedVersion)
-        defaults.set(now.addingTimeInterval(-25 * 3_600), forKey: UpdateCoordinator.kDismissedAt)
-
-        MockURLProtocol.responder = { _ in
-            MockURLProtocol.json(Self.release(tag: "v0.23.9-mac"))
-        }
-
-        let coord = makeCoordinator(defaults: defaults, now: now)
-        coord.checkForUpdates()
-        await Self.waitForNotChecking(coord)
-
-        XCTAssertNotNil(coord.availableUpdate, "after >24h, the chip must reappear")
+    func testNonApplicationsInstallBlocksSparkle() {
+        let driver = FakeSparkleUpdateDriver()
+        let url = URL(fileURLWithPath: "/Users/me/Downloads/Continuum.app")
+        let (coordinator, _) = makeCoordinator(driver: driver, bundleURL: url)
+        XCTAssertEqual(coordinator.state, .nonApplicationsInstall(bundleURL: url.standardizedFileURL))
+        XCTAssertFalse(driver.didStart)
     }
 
-    func testDismissalCooldownAllowsDifferentVersion() async {
-        let defaults = makeDefaults()
-        let now = Date(timeIntervalSince1970: 1_716_000_000)
-        defaults.set("0.23.9", forKey: UpdateCoordinator.kDismissedVersion)
-        defaults.set(now, forKey: UpdateCoordinator.kDismissedAt)
-
-        MockURLProtocol.responder = { _ in
-            MockURLProtocol.json(Self.release(tag: "v0.24.0-mac"))
-        }
-
-        let coord = makeCoordinator(defaults: defaults, now: now)
-        coord.checkForUpdates()
-        await Self.waitForNotChecking(coord)
-
-        XCTAssertNotNil(coord.availableUpdate, "a NEWER version than the dismissed one must surface immediately")
-        XCTAssertEqual(coord.availableUpdate?.tagName, "v0.24.0-mac")
+    func testSetupBlockedWhenSparkleCannotStart() {
+        let driver = FakeSparkleUpdateDriver()
+        driver.startError = NSError(domain: "Sparkle", code: 42, userInfo: [NSLocalizedDescriptionKey: "bad public key"])
+        let (coordinator, _) = makeCoordinator(driver: driver)
+        XCTAssertEqual(coordinator.state, .setupBlocked(reason: "bad public key", fallbackURL: ReleaseUpdateConfig.releasesLatestURL))
     }
 
-    // MARK: - Coordinator boundary behavior (4 tests)
-
-    func testDebugReleasesURLOverride() {
-        let defaults = makeDefaults()
-        let overrideString = "https://example.test/releases/latest.json"
-        defaults.set(overrideString, forKey: UpdateCoordinator.kDebugReleasesURL)
-
-        let coord = makeCoordinator(defaults: defaults)
-        XCTAssertEqual(coord.effectiveAPIURL.absoluteString, overrideString)
+    func testManualCheckUsesSparkleDriver() {
+        let (coordinator, driver) = makeCoordinator()
+        coordinator.checkForUpdates()
+        XCTAssertEqual(driver.manualChecks, 1)
+        XCTAssertEqual(coordinator.state, .checking)
     }
 
-    func testTranslocationDetectionFromPrivateVarFolders() {
-        let translocatedURL = URL(fileURLWithPath: "/private/var/folders/aa/bb/T/AppTranslocation/xxx/d/Clawdmeter.app")
-        let coordT = makeCoordinator(bundleURL: translocatedURL)
-        XCTAssertTrue(coordT.isTranslocated)
+    func testManualCheckWhenDriverCannotCheckShowsSetupBlocked() {
+        let driver = FakeSparkleUpdateDriver()
+        driver.canCheckForUpdates = false
+        let (coordinator, _) = makeCoordinator(driver: driver)
 
-        let coordA = makeCoordinator(bundleURL: URL(fileURLWithPath: "/Applications/Clawdmeter.app"))
-        XCTAssertFalse(coordA.isTranslocated)
-    }
+        coordinator.checkForUpdates()
 
-    func testManualCheckDebouncedWithin5Seconds() async {
-        let now = Date(timeIntervalSince1970: 1_716_000_000)
-        let counter = MockURLProtocol.Counter()
-        MockURLProtocol.responder = { _ in
-            counter.bump()
-            return MockURLProtocol.json(Self.release(tag: "v0.23.7-mac"))  // older — won't set chip
-        }
-
-        let coord = makeCoordinator(now: now)
-        coord.checkForUpdates()
-        await Self.waitForNotChecking(coord)
-        coord.checkForUpdates()  // immediate second call — should be debounced
-        // small wait to give any second fetch a chance
-        try? await Task.sleep(nanoseconds: 50_000_000)
-
-        XCTAssertEqual(counter.value, 1, "second manual check within 5s must be debounced")
-    }
-
-    func testAPIErrorPopulatesLastError() async {
-        MockURLProtocol.responder = { _ in
-            MockURLProtocol.status(500)
-        }
-
-        let coord = makeCoordinator()
-        coord.checkForUpdates()
-        await Self.waitForNotChecking(coord)
-
-        XCTAssertNotNil(coord.lastError, "5xx must populate lastError")
-        XCTAssertNil(coord.availableUpdate)
-    }
-
-    // MARK: - API decoding (2 tests)
-
-    func testGitHubReleaseDecodesRealResponse() throws {
-        // Captured from `gh release view v0.23.8-mac --json
-        // tagName,name,body,htmlUrl,publishedAt` — minimal but real.
-        let json = """
-        {
-          "tag_name": "v0.23.8-mac",
-          "name": "Clawdmeter v0.23.8 (Mac) — README refresh + Linux compat shims",
-          "body": "## Changed\\n\\n- Root README updated.",
-          "html_url": "https://github.com/darshanbathija/concept-fake-clawdmeter/releases/tag/v0.23.8-mac",
-          "published_at": "2026-05-23T01:47:06Z"
-        }
-        """.data(using: .utf8)!
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let release = try decoder.decode(GitHubRelease.self, from: json)
-
-        XCTAssertEqual(release.tagName, "v0.23.8-mac")
-        XCTAssertEqual(release.name, "Clawdmeter v0.23.8 (Mac) — README refresh + Linux compat shims")
-        XCTAssertTrue(release.body?.contains("README updated") ?? false)
-        XCTAssertEqual(release.htmlURL.absoluteString,
-                       "https://github.com/darshanbathija/concept-fake-clawdmeter/releases/tag/v0.23.8-mac")
-        XCTAssertNotNil(release.publishedAt)
-    }
-
-    func testGitHubReleaseDecodeFailsGracefully() {
-        let json = "{}".data(using: .utf8)!
-        let decoder = JSONDecoder()
-        XCTAssertThrowsError(try decoder.decode(GitHubRelease.self, from: json),
-                             "empty object must fail decode because tag_name + html_url are required")
-    }
-
-    // MARK: - chipState pure function (3 tests)
-
-    func testChipStateNilCoordinatorIsHidden() {
-        XCTAssertEqual(chipState(nil), .hidden)
-    }
-
-    func testChipStateNoUpdateAndNotTranslocatedIsHidden() {
-        let coord = makeCoordinator()
-        XCTAssertEqual(chipState(coord), .hidden,
-                       "no update + /Applications path should hide the chip entirely")
-    }
-
-    func testChipStateTranslocationWinsOverUpdate() async {
-        MockURLProtocol.responder = { _ in
-            MockURLProtocol.json(Self.release(tag: "v0.99.0-mac"))
-        }
-        let translocatedURL = URL(fileURLWithPath: "/private/var/folders/aa/bb/T/AppTranslocation/xxx/d/Clawdmeter.app")
-        let coord = makeCoordinator(bundleURL: translocatedURL)
-        coord.checkForUpdates()
-        await Self.waitForNotChecking(coord)
-
-        XCTAssertTrue(coord.isTranslocated)
-        XCTAssertNotNil(coord.availableUpdate, "update should be decoded even when translocated")
-        XCTAssertEqual(chipState(coord), .translocated,
-                       "translocation must win over update — install would fail anyway")
-    }
-
-    // MARK: - GitHubReleaseConstants URL assertions (3 tests)
-
-    func testReleasesLatestURLMatchesExpectedPath() {
-        XCTAssertEqual(GitHubReleaseConstants.releasesLatestURL.absoluteString,
-                       "https://github.com/darshanbathija/Clawdmeter/releases/latest")
-    }
-
-    func testReleasesLatestAPIURLMatchesExpectedPath() {
-        XCTAssertEqual(GitHubReleaseConstants.releasesLatestAPIURL.absoluteString,
-                       "https://api.github.com/repos/darshanbathija/Clawdmeter/releases/latest")
-    }
-
-    func testReleaseTagURLFormatsCorrectly() {
-        XCTAssertEqual(GitHubReleaseConstants.releaseTagURL(version: "0.23.9").absoluteString,
-                       "https://github.com/darshanbathija/Clawdmeter/releases/tag/v0.23.9-mac")
-    }
-
-    // MARK: - Helpers
-
-    private static func release(tag: String, body: String = "Test body") -> GitHubRelease {
-        GitHubRelease(
-            tagName: tag,
-            name: "Test \(tag)",
-            body: body,
-            htmlURL: URL(string: "https://github.com/darshanbathija/Clawdmeter/releases/tag/\(tag)")!,
-            publishedAt: nil
+        XCTAssertEqual(driver.manualChecks, 0)
+        XCTAssertEqual(
+            coordinator.state,
+            .setupBlocked(
+                reason: "Sparkle cannot check for updates right now. Open the app from /Applications and try again.",
+                fallbackURL: ReleaseUpdateConfig.releasesLatestURL
+            )
         )
     }
 
-    /// Poll for `isCheckingForUpdates == false`. The coordinator
-    /// uses an unstructured Task internally; XCTest's expectations
-    /// don't trivially attach. 1-second cap is plenty for a mocked
-    /// URLProtocol response.
-    private static func waitForNotChecking(_ coord: UpdateCoordinator) async {
+    func testManualCheckDebouncesRapidClicks() {
+        let (coordinator, driver) = makeCoordinator()
+        coordinator.checkForUpdates()
+        coordinator.checkForUpdates()
+        XCTAssertEqual(driver.manualChecks, 1)
+    }
+
+    func testBackgroundCheckRespectsAutomaticToggle() {
+        let (coordinator, driver) = makeCoordinator()
+        coordinator.setAutomaticChecksEnabled(false)
+        coordinator.checkForUpdatesInBackground()
+        XCTAssertEqual(driver.backgroundChecks, 0)
+        XCTAssertEqual(coordinator.state, .automaticChecksDisabled)
+
+        coordinator.setAutomaticChecksEnabled(true)
+        coordinator.checkForUpdatesInBackground()
+        XCTAssertEqual(driver.backgroundChecks, 1)
+    }
+
+    func testAutomaticDownloadToggleWritesDriver() {
+        let (coordinator, driver) = makeCoordinator()
+        coordinator.setAutomaticDownloadsEnabled(true)
+        XCTAssertTrue(driver.automaticallyDownloadsUpdates)
+        XCTAssertTrue(coordinator.automaticDownloadsEnabled)
+    }
+
+    func testUpdateAvailableState() {
+        let (coordinator, driver) = makeCoordinator()
+        let update = SparkleUpdateInfo(version: "156", displayVersion: "0.29.17", title: "Fixes")
+        driver.emitFound(update)
+        XCTAssertEqual(coordinator.state, .updateAvailable(update))
+        XCTAssertEqual(updateControlSnapshot(coordinator), .available("0.29.17"))
+    }
+
+    func testUpToDateState() {
+        let (coordinator, driver) = makeCoordinator()
+        driver.lastUpdateCheckDate = Date(timeIntervalSince1970: 10)
+        driver.emitNoUpdate()
+        XCTAssertEqual(coordinator.state, .upToDate(lastCheckedAt: Date(timeIntervalSince1970: 10)))
+    }
+
+    func testInstallingAndRelaunchStates() {
+        let (coordinator, driver) = makeCoordinator()
+        let update = SparkleUpdateInfo(version: "156", displayVersion: "0.29.17")
+        driver.emitInstalling(update)
+        XCTAssertEqual(coordinator.state, .installing(update))
+        driver.emitRelaunch(version: "0.29.17")
+        XCTAssertEqual(coordinator.state, .installedRelaunchPending(version: "0.29.17"))
+    }
+
+    func testUserCancelledState() {
+        let (coordinator, driver) = makeCoordinator()
+        driver.emitCancelled(version: "0.29.17")
+        XCTAssertEqual(coordinator.state, .userCancelled(version: "0.29.17"))
+    }
+
+    func testInvalidAppcastErrorClassification() {
+        let error = NSError(domain: "SUSparkleErrorDomain", code: 100, userInfo: [
+            NSLocalizedDescriptionKey: "The appcast signature is invalid"
+        ])
+        XCTAssertEqual(
+            SparkleErrorClassifier.state(for: error, fallbackURL: ReleaseUpdateConfig.releasesLatestURL),
+            .invalidAppcastSignature(reason: "The appcast signature is invalid", fallbackURL: ReleaseUpdateConfig.releasesLatestURL)
+        )
+    }
+
+    func testSparkleNoUpdateErrorIsNotFailure() {
+        let error = NSError(domain: "SUSparkleErrorDomain", code: 1001, userInfo: [
+            NSLocalizedDescriptionKey: "No update is available"
+        ])
+        XCTAssertTrue(SparkleErrorClassifier.isNoUpdate(error))
+        XCTAssertFalse(SparkleErrorClassifier.isUserCancellation(error))
+    }
+
+    func testSparkleCancellationErrorsAreUserCancelled() {
+        let cancelled = NSError(domain: "SUSparkleErrorDomain", code: 4007, userInfo: [
+            NSLocalizedDescriptionKey: "Installation was cancelled"
+        ])
+        let authorizeLater = NSError(domain: "SUSparkleErrorDomain", code: 4008, userInfo: [
+            NSLocalizedDescriptionKey: "Installation was authorized for later"
+        ])
+        XCTAssertTrue(SparkleErrorClassifier.isUserCancellation(cancelled))
+        XCTAssertTrue(SparkleErrorClassifier.isUserCancellation(authorizeLater))
+    }
+
+    func testCorruptedDownloadErrorClassification() {
+        let error = NSError(domain: "SUSparkleErrorDomain", code: 101, userInfo: [
+            NSLocalizedDescriptionKey: "The downloaded archive is corrupt"
+        ])
+        XCTAssertEqual(
+            SparkleErrorClassifier.state(for: error, fallbackURL: ReleaseUpdateConfig.releasesLatestURL),
+            .corruptedDownload(reason: "The downloaded archive is corrupt", fallbackURL: ReleaseUpdateConfig.releasesLatestURL)
+        )
+    }
+
+    func testGenericFailureClassification() {
+        let error = NSError(domain: "SUSparkleErrorDomain", code: 102, userInfo: [
+            NSLocalizedDescriptionKey: "Network unavailable"
+        ])
+        XCTAssertEqual(
+            SparkleErrorClassifier.state(for: error, fallbackURL: ReleaseUpdateConfig.releasesLatestURL),
+            .failed(reason: "Network unavailable", fallbackURL: ReleaseUpdateConfig.releasesLatestURL)
+        )
+    }
+
+    func testFallbackAndFinderActionsUseInjectedClosures() {
+        var opened: URL?
+        var revealed: URL?
+        let bundleURL = URL(fileURLWithPath: "/Applications/Continuum.app")
+        let (coordinator, _) = makeCoordinator(
+            bundleURL: bundleURL,
+            opener: { opened = $0 },
+            finderRevealer: { revealed = $0 }
+        )
+        coordinator.openReleasePageFallback()
+        coordinator.showCurrentBundleInFinder()
+        XCTAssertEqual(opened, ReleaseUpdateConfig.releasesLatestURL)
+        XCTAssertEqual(revealed, bundleURL)
+    }
+
+    func testReleaseMetadataLoadsThroughCoordinator() async {
+        MockURLProtocol.responder = { request in
+            if request.url?.path == "/Continuum/updates/history.json" {
+                let data = """
+                [{"version":"0.29.16","build":"155","title":"Sparkle","publishedAt":null,"notesURL":"https://example.test/notes.md"}]
+                """.data(using: .utf8)!
+                return MockURLProtocol.response(url: request.url!, status: 200, data: data)
+            }
+            let notes = "# Notes\n\n- Sparkle update"
+            return MockURLProtocol.response(url: request.url!, status: 200, data: notes.data(using: .utf8)!)
+        }
+
+        let (coordinator, _) = makeCoordinator()
+        coordinator.refreshReleaseMetadata()
+        await Self.waitForMetadata(coordinator)
+
+        XCTAssertEqual(coordinator.releaseHistory.first?.version, "0.29.16")
+        XCTAssertTrue(coordinator.releaseNotes?.contains("Sparkle update") == true)
+    }
+
+    func testReleaseMetadataFailureSurfacesCoordinatorError() async {
+        MockURLProtocol.responder = { request in
+            MockURLProtocol.response(url: request.url!, status: 500, data: nil)
+        }
+
+        let (coordinator, _) = makeCoordinator()
+        coordinator.refreshReleaseMetadata()
+        await Self.waitForMetadata(coordinator)
+
+        XCTAssertTrue(coordinator.releaseHistory.isEmpty)
+        XCTAssertNotNil(coordinator.releaseMetadataError)
+    }
+
+    func testOpenReleaseNotesPrefersAvailableUpdateURL() {
+        var opened: URL?
+        let notesURL = URL(string: "https://example.test/Continuum-0.29.17.md")!
+        let (coordinator, driver) = makeCoordinator(opener: { opened = $0 })
+        driver.emitFound(SparkleUpdateInfo(version: "156", displayVersion: "0.29.17", releaseNotesURL: notesURL))
+
+        coordinator.openReleaseNotes()
+
+        XCTAssertEqual(opened, notesURL)
+    }
+
+    func testUpdateControlSnapshotsCoverBlockedStates() {
+        let missing = updateControlSnapshot(nil)
+        XCTAssertEqual(missing, .unavailable)
+
+        let translocatedURL = URL(fileURLWithPath: "/private/var/folders/x/T/AppTranslocation/Continuum.app")
+        let (coordinator, _) = makeCoordinator(bundleURL: translocatedURL)
+        XCTAssertEqual(updateControlSnapshot(coordinator), .translocated)
+    }
+
+    private static func waitForMetadata(_ coordinator: UpdateCoordinator) async {
         for _ in 0..<100 {
-            if !coord.isCheckingForUpdates { return }
+            if !coordinator.isLoadingReleaseMetadata,
+               !coordinator.releaseHistory.isEmpty || coordinator.releaseNotes != nil || coordinator.releaseMetadataError != nil {
+                return
+            }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
     }
 }
 
-// MARK: - URLProtocol-based URLSession mock
+@MainActor
+final class FakeSparkleUpdateDriver: SparkleUpdateDriving {
+    weak var delegate: SparkleUpdateDriverDelegate?
+    var canCheckForUpdates: Bool = true
+    var automaticallyChecksForUpdates: Bool = true
+    var automaticallyDownloadsUpdates: Bool = false
+    var lastUpdateCheckDate: Date?
+    var didStart = false
+    var manualChecks = 0
+    var backgroundChecks = 0
+    var startError: Error?
 
-/// Intercepts URLSession requests so tests can return canned responses
-/// without a real network round-trip. Set `responder` before each test;
-/// it runs synchronously inside `startLoading()`.
-final class MockURLProtocol: URLProtocol, @unchecked Sendable {
-    /// `nonisolated(unsafe)` because XCTest tests run serialized per
-    /// class but URLProtocol's loaders dispatch on its own queue.
-    /// The simple "set before each test, no concurrent mutation" usage
-    /// here is fine; if a test ever fans out, swap for a lock.
-    nonisolated(unsafe) static var responder: ((URLRequest) -> (HTTPURLResponse, Data?)) = { _ in
-        (HTTPURLResponse(url: URL(string: "https://example.test/")!,
-                         statusCode: 500, httpVersion: nil, headerFields: nil)!,
-         nil)
+    func start() throws {
+        if let startError { throw startError }
+        didStart = true
+    }
+
+    func checkForUpdates() {
+        manualChecks += 1
+        delegate?.updateDriverDidStartChecking()
+    }
+
+    func checkForUpdatesInBackground() {
+        backgroundChecks += 1
+        delegate?.updateDriverDidStartChecking()
+    }
+
+    func emitFound(_ update: SparkleUpdateInfo) {
+        delegate?.updateDriverDidFindUpdate(update)
+    }
+
+    func emitNoUpdate() {
+        delegate?.updateDriverDidNotFindUpdate()
+    }
+
+    func emitInstalling(_ update: SparkleUpdateInfo?) {
+        delegate?.updateDriverDidStartInstalling(update)
+    }
+
+    func emitRelaunch(version: String?) {
+        delegate?.updateDriverDidInstallAndAwaitRelaunch(version: version)
+    }
+
+    func emitCancelled(version: String?) {
+        delegate?.updateDriverDidCancel(version: version)
+    }
+}
+
+final class MockURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var responder: ((URLRequest) -> (HTTPURLResponse, Data?)) = { request in
+        response(url: request.url ?? URL(string: "https://example.test")!, status: 500, data: nil)
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -314,39 +372,8 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
         return URLSession(configuration: config)
     }
 
-    static func json(_ release: GitHubRelease) -> (HTTPURLResponse, Data?) {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try! encoder.encode(release)
-        let response = HTTPURLResponse(
-            url: URL(string: "https://api.github.com/repos/test/test/releases/latest")!,
-            statusCode: 200, httpVersion: nil,
-            headerFields: ["Content-Type": "application/json"]
-        )!
+    static func response(url: URL, status: Int, data: Data?) -> (HTTPURLResponse, Data?) {
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!
         return (response, data)
     }
-
-    static func status(_ code: Int, headers: [String: String] = [:]) -> (HTTPURLResponse, Data?) {
-        let response = HTTPURLResponse(
-            url: URL(string: "https://api.github.com/repos/test/test/releases/latest")!,
-            statusCode: code, httpVersion: nil, headerFields: headers
-        )!
-        return (response, Data())
-    }
-
-    /// Thread-safe counter for tests that need to assert how many
-    /// requests fired. Don't read until after `waitForNotChecking`
-    /// has returned (the in-flight Task completed).
-    final class Counter: @unchecked Sendable {
-        private var _value: Int = 0
-        private let lock = NSLock()
-        func bump() { lock.lock(); _value += 1; lock.unlock() }
-        var value: Int { lock.lock(); defer { lock.unlock() }; return _value }
-    }
 }
-
-// MARK: - Fixed `json` helper that returns a HTTPURLResponse + Data
-//
-// The `Counter` lives outside `responder` so multiple tests can share
-// instances without thread-bouncing. The mock keeps state minimal by
-// design — each test sets `responder` fresh.
