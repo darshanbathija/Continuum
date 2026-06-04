@@ -116,3 +116,24 @@ the App Store profiles, re-archive build 192 (manual signing) → TestFlight.
 **Gap 4 — verify on device:** pair iPhone → background app → trigger a
 plan-approval/done event on the Mac → confirm lock-screen push (TestFlight =
 PRODUCTION gateway). Watch `wrangler tail --env production` for the send.
+
+---
+
+## 2026-06-05 — ALL 4 DONE (push live; device-verify is the only remainder)
+
+1. **Bearer key** ✅ one 32-byte base64url key set on gateway Worker secret
+   `RELAY_BEARER_SIGNING_KEY` (staging+prod) + operator Mac
+   `launchctl setenv CLAWDMETER_RELAY_BEARER_SIGNING_KEY` (relaunch Mac app to
+   apply; not reboot-durable → LaunchAgent for permanence later).
+2. **iOS registration** ✅ iOSAppDelegate + APNSDeviceTokenHolder →
+   POST /devices/apns-token (pairing sid). iOS+shared build green. Watch n/a.
+3. **Push capability** ✅ enabled PUSH_NOTIFICATIONS on ai.continuum.ios
+   (`259XLR2PR8`) via ASC API (was missing — the root cause). Profile regen
+   folded into the archive (Automatic signing + -allowProvisioningUpdates).
+4. **Archive→TestFlight** ✅ build 192 archived/exported/uploaded
+   (Delivery UUID 39e18db2-…; app signed with aps-environment). Processing.
+
+**User-only remaining:** relaunch Mac app → install TF build 192 on the paired
+iPhone → grant notif perms + pair → background → trigger a plan-approval/done
+on the Mac → confirm the lock-screen push. `wrangler tail --env production`
+on clawdmeter-apns-gateway shows the send.
