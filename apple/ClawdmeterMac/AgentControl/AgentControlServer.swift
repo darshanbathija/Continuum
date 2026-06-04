@@ -5407,7 +5407,7 @@ public final class AgentControlServer {
         // (SessionCommandRouter `.harnessBridge`). The legacy SDK/agentapi/tmux
         // chat paths below are deprecated, reachable only via the per-provider
         // kill-switch (default off). Codex → `codex app-server`.
-        if req.provider == .codex, Self.codexAppServerEnabled {
+        if req.provider == .codex {
             await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
             return
         }
@@ -5635,8 +5635,9 @@ public final class AgentControlServer {
     /// codex behind its kill-switch (default on); claude → tmux, opencode → SSE.
     private func isChatHarnessEligible(_ provider: AgentKind) -> Bool {
         switch provider {
-        case .grok, .cursor, .gemini: return true
-        case .codex: return Self.codexAppServerEnabled
+        // Codex chat now ALWAYS drives over `codex app-server` (same engine as
+        // Code, readOnly+never posture) — the legacy SDK relay is removed.
+        case .grok, .cursor, .gemini, .codex: return true
         default: return false
         }
     }
