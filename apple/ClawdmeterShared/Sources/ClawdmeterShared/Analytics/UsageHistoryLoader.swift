@@ -244,7 +244,13 @@ public actor UsageHistoryLoader {
         let agyBrainIndex: BrainSummaryIndex
         let agyModel: String
         if let agyDir, FileManager.default.fileExists(atPath: agyDir.path) {
-            agyFiles = enumerate(dir: agyDir, suffix: ".pb")
+            // agy writes SQLite `.db` conversations (no `.pb`), so walk BOTH
+            // extensions and dedup by UUID exactly like the desktop pass.
+            // The prior `.pb`-only walk silently dropped 100% of agy CLI
+            // usage — every agy conversation in antigravity-cli/ is a `.db`.
+            let agyPB = enumerate(dir: agyDir, suffix: ".pb")
+            let agyDB = enumerate(dir: agyDir, suffix: ".db")
+            agyFiles = Self.dedupedDesktopFiles(pb: agyPB, db: agyDB)
             let root = agyDir.deletingLastPathComponent()
             agyDataDir = root
             // agy doesn't write `agyhub_summaries_proto.pb`; the loader

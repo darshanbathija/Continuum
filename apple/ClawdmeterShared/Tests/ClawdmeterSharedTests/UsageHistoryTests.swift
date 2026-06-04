@@ -728,6 +728,51 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertGreaterThan(snapshot.gemini.allTime.totals.costUSD, 0, "Gemini 3.1 Pro pricing must apply to agy CLI records")
     }
 
+    /// Regression: agy writes SQLite `.db` conversations (no `.pb`). The
+    /// loader's agy pass used to walk `.pb` only, so 100% of real agy CLI
+    /// usage was dropped from the gauge. Mirrors the .pb test but drops a
+    /// `.db`; must still count as one session with non-zero tokens.
+    func test_loaderPicksUpAgyCliDBFiles() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        let claudeDir = temp.appendingPathComponent("claude")
+        let codexDir = temp.appendingPathComponent("codex")
+        let geminiDir = temp.appendingPathComponent("gemini-empty")
+        let agyRoot = temp.appendingPathComponent("antigravity-cli")
+        let agyDir = agyRoot.appendingPathComponent("conversations")
+        let agyBrain = agyRoot.appendingPathComponent("brain")
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: geminiDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: agyDir, withIntermediateDirectories: true)
+
+        let uuid = UUID().uuidString.lowercased()
+        let brainUUID = agyBrain.appendingPathComponent(uuid, isDirectory: true)
+        try FileManager.default.createDirectory(at: brainUUID, withIntermediateDirectories: true)
+        try "{}".write(to: brainUUID.appendingPathComponent("turn-0.metadata.json"), atomically: true, encoding: .utf8)
+        try String(repeating: "y", count: 4000).write(to: brainUUID.appendingPathComponent("transcript.jsonl"), atomically: true, encoding: .utf8)
+        // agy persists conversations as SQLite `.db` (content irrelevant —
+        // the parser stats the file and estimates tokens from the brain dir).
+        try Data(count: 128).write(to: agyDir.appendingPathComponent("\(uuid).db"))
+        try #"{ "model": "Gemini 3.1 Pro" }"#.write(
+            to: agyRoot.appendingPathComponent("settings.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let loader = UsageHistoryLoader(
+            claudeDir: claudeDir,
+            codexDir: codexDir,
+            geminiDir: geminiDir,
+            agyDir: agyDir,
+            opencodeDBURL: temp.appendingPathComponent("missing.db"),
+            cacheURL: temp.appendingPathComponent("cache.json")
+        )
+        let snapshot = await loader.loadAll()
+        XCTAssertEqual(snapshot.sessionCount, 1, "the agy .db file must count once (regression: .pb-only walk dropped it)")
+        XCTAssertGreaterThan(snapshot.gemini.allTime.totals.totalTokens, 0, "agy .db usage must contribute tokens to the gemini bucket")
+    }
+
     // MARK: - Helpers
 
     private func writeTempFile(name: String, lines: [String]) throws -> URL {
