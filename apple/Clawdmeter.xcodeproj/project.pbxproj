@@ -137,7 +137,6 @@
 		5086B43B094BD0BA2060D47B /* WorkspaceTabSpawnObservers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 285867E8785606458A9D3562 /* WorkspaceTabSpawnObservers.swift */; };
 		51F807AB2E5043005973D0AD /* CodexAppServerDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753EB761E1DF82346FD995FC /* CodexAppServerDriver.swift */; };
 		5222E839CB29135AD4571C1D /* iOSDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93D530AD60605887515476C0 /* iOSDiffView.swift */; };
-		5240BAE235CBD12500E5D374 /* AntigravityChatIngestor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD70BFA80A3ABD8BCFCAC347 /* AntigravityChatIngestor.swift */; };
 		5281DED2AAE3EF81A11A7207 /* clawdmeter-agents in Resources */ = {isa = PBXBuildFile; fileRef = E90EC02F84561040F698EE87 /* clawdmeter-agents */; };
 		52C4CF8A1F4419F555A4219B /* WorkspaceTerminalPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 412A35101FFC2DBB6623AD83 /* WorkspaceTerminalPane.swift */; };
 		536D0374AE837765530A760E /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCDF9317290F56870BC0564 /* CommandPalette.swift */; };
@@ -770,7 +769,6 @@
 		CBFE9C8CEE283AE1484C157A /* CodeRunProfileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeRunProfileService.swift; sourceTree = "<group>"; };
 		CCB7FB7DB2059E1F3425D94C /* GitHubReleaseConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubReleaseConstants.swift; sourceTree = "<group>"; };
 		CCCDF9317290F56870BC0564 /* CommandPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPalette.swift; sourceTree = "<group>"; };
-		CD70BFA80A3ABD8BCFCAC347 /* AntigravityChatIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityChatIngestor.swift; sourceTree = "<group>"; };
 		CE0273C0880168A1CE3A2927 /* AttachmentChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentChip.swift; sourceTree = "<group>"; };
 		CE974641D2A7140BA003A9E8 /* IOSQuickStartSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSQuickStartSheet.swift; sourceTree = "<group>"; };
 		CEF05AC9FA45E3C41CA839BF /* ClawdmeteriOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ClawdmeteriOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -918,7 +916,6 @@
 				AF9881A0E3387C6A605D8D83 /* AgentEventStream.swift */,
 				8C1B8A7FA6946383349924D1 /* AgentSessionRegistry.swift */,
 				60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */,
-				CD70BFA80A3ABD8BCFCAC347 /* AntigravityChatIngestor.swift */,
 				BF28538668960FBDC23F107F /* AntigravityHeadlessDriver.swift */,
 				A3AC79CBA2A61141DA7FCBCF /* AntigravitySidecarManager.swift */,
 				21239F87404DC4B4E7F21AB7 /* APNSCredentialStore.swift */,
@@ -2000,7 +1997,6 @@
 				A72C99A824DF7B93FF4CFFC2 /* AgentSessionRegistry.swift in Sources */,
 				457E68D990E7B761C11DF6CC /* AgentSpawner.swift in Sources */,
 				DD4A5C6456455C79978A09ED /* AnalyticsRangeAdapter.swift in Sources */,
-				5240BAE235CBD12500E5D374 /* AntigravityChatIngestor.swift in Sources */,
 				2C8BF8EB3B2FA60C51FE5C57 /* AntigravityHeadlessDriver.swift in Sources */,
 				F54AA92455AB651F391E0FB3 /* AntigravityPlanPane.swift in Sources */,
 				17B9A55BA4BA2A2FA8722959 /* AntigravitySidecarManager.swift in Sources */,

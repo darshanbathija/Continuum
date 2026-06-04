@@ -20,10 +20,12 @@ private let interruptLogger = Logger(subsystem: "com.clawdmeter.mac", category: 
 /// still be CLI-mode, e.g. transient spawn failure). Source of truth:
 ///   - `session.agent == .codex && session.codexChatBackend == .sdk`
 ///     → SDK sidecar cancel via `CodexSubscriptionRelay`.
-///   - `session.agent == .gemini && session.geminiBackend == .agentapi`
-///     → Antigravity agentapi via `AntigravityChatIngestor`.
 ///   - Anything else (Claude tmux, Codex CLI, opencode, unknown)
 ///     → tmux ESC.
+///
+/// (Harness-driven sessions — agy/gemini, ACP cursor/grok, codex app-server —
+/// are interrupted upstream via the bridge in `handleInterrupt` before this
+/// dispatcher's tmux fallback is reached.)
 ///
 /// **Cancel semantics**: the dispatcher only returns `.interrupted`
 /// after it dispatches a real upstream cancel path (SDK relay stop,
@@ -60,23 +62,17 @@ public final class SessionInterruptDispatcher {
     private weak var codexRelay: CodexSubscriptionRelay?
     private weak var tmux: TmuxControlClient?
     private weak var chatStoreRegistry: DaemonChatStoreRegistry?
-    /// Resolves the per-session Antigravity ingestor (one per active
-    /// agentapi chat). The closure shape lets the daemon hand us a
-    /// lookup function without exposing the ingestor pool's full API.
-    private let antigravityIngestor: (UUID) -> AntigravityChatIngestor?
 
     public init(
         registry: AgentSessionRegistry,
         codexRelay: CodexSubscriptionRelay?,
         tmux: TmuxControlClient?,
-        chatStoreRegistry: DaemonChatStoreRegistry?,
-        antigravityIngestor: @escaping (UUID) -> AntigravityChatIngestor? = { _ in nil }
+        chatStoreRegistry: DaemonChatStoreRegistry?
     ) {
         self.registry = registry
         self.codexRelay = codexRelay
         self.tmux = tmux
         self.chatStoreRegistry = chatStoreRegistry
-        self.antigravityIngestor = antigravityIngestor
     }
 
     /// Dispatch a Stop for `sessionId`. Caller is the HTTP handler;
@@ -104,24 +100,6 @@ public final class SessionInterruptDispatcher {
             markInterrupted()
             interruptLogger.info("interrupt: codex-sdk relay stopped session=\(sessionId.uuidString, privacy: .public)")
             return .interrupted
-        }
-
-        // Antigravity agentapi: cancel the in-process ingestor; the
-        // SQLite-backed conversation state remains in
-        // ~/.gemini/antigravity/conversations/<id>.db so the next send
-        // resumes against the same conversationId.
-        if session.agent == .gemini,
-           session.geminiBackend == .agentapi {
-            if let ingestor = antigravityIngestor(sessionId) {
-                // AntigravityChatIngestor is an `actor` so `stop()`
-                // is actor-isolated — must hop.
-                await ingestor.stop()
-                markInterrupted()
-                interruptLogger.info("interrupt: agentapi ingestor stopped session=\(sessionId.uuidString, privacy: .public)")
-                return .interrupted
-            }
-            interruptLogger.info("interrupt: agentapi no active ingestor session=\(sessionId.uuidString, privacy: .public)")
-            return .notSupported
         }
 
         // Default path: tmux ESC. Covers Claude (CLI), Codex CLI,

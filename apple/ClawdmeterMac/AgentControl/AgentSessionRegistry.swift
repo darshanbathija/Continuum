@@ -452,39 +452,6 @@ public final class AgentSessionRegistry: ObservableObject {
         update(id: id) { _ in projected }
     }
 
-    /// v0.9 — patch the agentapi binding fields on an existing chat
-    /// session after the daemon's POST /chat-sessions handler kicks off
-    /// agentapi `new-conversation`. Two-phase create because the
-    /// chat-cwd needs to exist before we know the conversation id, but
-    /// the session record needs to exist before we can store the
-    /// chat-cwd. Idempotent.
-    public func setAntigravityChatBinding(
-        id: UUID,
-        conversationId: UUID,
-        projectId: String
-    ) async throws {
-        guard let s = session(id: id) else { return }
-        let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
-            agent: s.agent,
-            model: s.model,
-            codexBackend: s.codexChatBackend,
-            geminiBackend: .agentapi,
-            antigravityConversationId: conversationId,
-            antigravityProjectId: projectId
-        )).updating(
-            externalSessionId: .some(conversationId.uuidString),
-            projectId: .some(projectId)
-        )
-        let projected = with(
-            s,
-            geminiBackend: .agentapi,
-            antigravityConversationId: conversationId,
-            antigravityProjectId: projectId,
-            runtimeBinding: binding
-        )
-        try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
-        update(id: id) { _ in projected }
-    }
 
     /// Update the persisted codex thread id for an SDK chat session after
     /// the first turn returns its `thread.started` event. Lets resume-
