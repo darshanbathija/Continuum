@@ -59,18 +59,15 @@ public final class SessionInterruptDispatcher {
     }
 
     private weak var registry: AgentSessionRegistry?
-    private weak var codexRelay: CodexSubscriptionRelay?
     private weak var tmux: TmuxControlClient?
     private weak var chatStoreRegistry: DaemonChatStoreRegistry?
 
     public init(
         registry: AgentSessionRegistry,
-        codexRelay: CodexSubscriptionRelay?,
         tmux: TmuxControlClient?,
         chatStoreRegistry: DaemonChatStoreRegistry?
     ) {
         self.registry = registry
-        self.codexRelay = codexRelay
         self.tmux = tmux
         self.chatStoreRegistry = chatStoreRegistry
     }
@@ -89,17 +86,6 @@ public final class SessionInterruptDispatcher {
             if let store = chatStoreRegistry?.snapshotStore(for: session) {
                 store.setCurrentTurnState(.interrupted)
             }
-        }
-
-        // Codex SDK: tear down the sidecar; conversation persists via
-        // codexChatThreadId so the next send resumes the same thread.
-        if session.agent == .codex,
-           session.codexChatBackend == .sdk,
-           let relay = codexRelay {
-            await relay.stop(sessionId: sessionId)
-            markInterrupted()
-            interruptLogger.info("interrupt: codex-sdk relay stopped session=\(sessionId.uuidString, privacy: .public)")
-            return .interrupted
         }
 
         // Default path: tmux ESC. Covers Claude (CLI), Codex CLI,

@@ -126,13 +126,10 @@ public actor ChatProviderProbe {
             let cursorEnabled = ProviderEnablement.isEnabled("cursor")
             let claudeAvailable = claudeEnabled && ShellRunner.locateBinary("claude") != nil
             let codexAvailable = codexEnabled && ShellRunner.locateBinary("codex") != nil
-            // CodexSDKManager is @MainActor — hop for the read only when Codex is enabled.
-            let codexSDKAvailable: Bool
-            if codexEnabled {
-                codexSDKAvailable = await MainActor.run { CodexSDKManager.shared.isProvisioned }
-            } else {
-                codexSDKAvailable = false
-            }
+            // Codex SDK sidecar removed — Codex chat+code drive `codex app-server`
+            // directly. The vestigial codex:sdk probe entry always reports
+            // unavailable (it is no longer surfaced in the provider UI).
+            let codexSDKAvailable = false
             // Antigravity LS live probe is cheap (one localhost HEAD).
             let lsLive: Bool = await MainActor.run {
                 guard geminiEnabled else { return false }

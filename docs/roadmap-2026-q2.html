@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clawdmeter — 2026-Q2 / Q3 Product Roadmap</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&display=swap');
+        
+        :root {
+            --accent: #d97757;
+            --accent-glow: rgba(217, 119, 87, 0.15);
+            --accent-deep: #b4533c;
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --glass-bg: rgba(20, 21, 26, 0.6);
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+            background-color: #050608;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(217, 119, 87, 0.08) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(62, 142, 255, 0.05) 0px, transparent 50%);
+            background-attachment: fixed;
+        }
+        
+        .heading-font {
+            font-family: 'Outfit', -apple-system, "SF Pro Rounded", sans-serif;
+        }
+
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        .glass-card-interactive {
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .glass-card-interactive:hover {
+            transform: translateY(-2px);
+            border-color: rgba(217, 119, 87, 0.3);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 
+                        0 0 24px rgba(217, 119, 87, 0.08),
+                        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        }
+
+        .accent-gradient-text {
+            background: linear-gradient(135deg, #f5a98d 0%, #d97757 50%, #b4533c 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .accent-pill {
+            background: linear-gradient(180deg, #d97757 0%, #b4533c 100%);
+            box-shadow: 0 0 12px rgba(180, 83, 60, 0.3), 
+                        inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        }
+
+        .wedge-quote {
+            position: relative;
+            background: linear-gradient(135deg, rgba(217, 119, 87, 0.08) 0%, rgba(180, 83, 60, 0.03) 100%);
+            border-left: 3px solid var(--accent);
+        }
+
+        .toc-link {
+            transition: all 0.15s ease;
+        }
+        
+        .toc-link:hover {
+            color: #d97757;
+            transform: translateX(4px);
+        }
+
+        .toc-link.active {
+            color: #d97757;
+        }
+
+        table {
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        th {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        td {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 99px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .effort-pill {
+            font-family: 'SF Mono', Menlo, monospace;
+            font-size: 10px;
+            letter-spacing: 0.02em;
+        }
+
+        .roadmap-item {
+            position: relative;
+            padding-left: 1.75rem;
+        }
+
+        .roadmap-item::before {
+            content: "";
+            position: absolute;
+            left: 0.5rem;
+            top: 0.5rem;
+            width: 0.5rem;
+            height: 0.5rem;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 12px var(--accent-glow);
+        }
+
+        .roadmap-item.tier-2::before {
+            background: #3b82f6;
+            box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .roadmap-item.tier-3::before {
+            background: #71717a;
+            box-shadow: 0 0 8px rgba(113, 113, 122, 0.3);
+        }
+
+        .roadmap-item.cut::before {
+            background: #ef4444;
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.3);
+        }
+
+        .roadmap-item.monday::before {
+            background: #10b981;
+            box-shadow: 0 0 14px rgba(16, 185, 129, 0.5);
+            animation: pulse-glow 2.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 14px rgba(16, 185, 129, 0.5); }
+            50% { box-shadow: 0 0 22px rgba(16, 185, 129, 0.8); }
+        }
+
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+            body {
+                background: white !important;
+                color: black !important;
+            }
+            .glass-panel {
+                background: white !important;
+                border: 1px solid #ddd !important;
+                box-shadow: none !important;
+                color: black !important;
+            }
+            .accent-gradient-text {
+                -webkit-text-fill-color: initial !important;
+                color: #b4533c !important;
+            }
+            .wedge-quote {
+                background: #fef7f4 !important;
+            }
+        }
+    </style>
+</head>
+<body class="text-zinc-200 min-h-screen selection:bg-[#d97757]/30 selection:text-white">
+    
+    <!-- Top Static Navbar -->
+    <div class="border-b border-zinc-900 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-50 no-print">
+        <div class="max-w-[1200px] mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-x-3">
+                <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-[#d97757] to-[#b4533c] flex items-center justify-center shadow-md">
+                    <i class="fa-solid fa-route text-white text-sm"></i>
+                </div>
+                <div>
+                    <span class="heading-font font-bold text-lg tracking-tight text-white">Clawdmeter</span>
+                    <span class="text-[9px] text-[#d97757] font-semibold tracking-wider block -mt-1.5">PRODUCT ROADMAP</span>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-x-4">
+                <div class="text-[11px] px-3 py-1 rounded-full bg-zinc-900/60 border border-zinc-800 flex items-center gap-x-2">
+                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                    <span class="font-mono text-zinc-400">v0.29.30 build 169</span>
+                </div>
+                
+                <button onclick="window.print()" 
+                        class="accent-pill flex items-center gap-x-2 px-4 py-2 text-xs font-semibold rounded-full text-white hover:opacity-90 active:scale-95 transition-all">
+                    <i class="fa-solid fa-print"></i>
+                    <span>Print / Save PDF</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content Frame -->
+    <div class="max-w-[1200px] mx-auto px-6 pt-12 pb-24 grid grid-cols-1 lg:grid-cols-4 gap-8">
+        
+        <!-- Left Sidebar Navigation (Sticky) -->
+        <div class="lg:col-span-1 no-print">
+            <div class="sticky top-24 space-y-8">
+                <div>
+                    <div class="text-[10px] font-bold text-[#d97757] tracking-widest uppercase mb-4">Roadmap</div>
+                    <nav class="space-y-1 font-medium text-sm flex flex-col">
+                        <a href="#tldr" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">01</span> TL;DR Thesis</a>
+                        <a href="#intel" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">02</span> Fresh Competitor Intel</a>
+                        <a href="#wedge" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">03</span> Updated Wedge Map</a>
+                        <a href="#tier1" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">04</span> Tier 1 — This Quarter</a>
+                        <a href="#tier2" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">05</span> Tier 2 — Next Quarter</a>
+                        <a href="#tier3" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">06</span> Tier 3 — Strategic Bets</a>
+                        <a href="#cut" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">07</span> What I'd CUT</a>
+                        <a href="#cross" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">08</span> Cross-Cutting Bets</a>
+                        <a href="#monday" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">09</span> Start on Monday</a>
+                        <a href="#questions" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">10</span> Open Questions</a>
+                    </nav>
+                </div>
+                
+                <div class="p-4 rounded-2xl bg-zinc-900/40 border border-zinc-900 text-xs text-zinc-500 leading-relaxed">
+                    <i class="fa-solid fa-circle-info text-[#d97757] mr-1.5"></i>
+                    Built on top of the existing May 25 &amp; May 30 docs — those remain the deep architecture &amp; feature reviews. This is the "what to ship next" layer.
+                </div>
+
+                <div class="p-4 rounded-2xl bg-zinc-900/40 border border-zinc-900 text-xs text-zinc-500 leading-relaxed">
+                    <i class="fa-solid fa-clock text-[#d97757] mr-1.5"></i>
+                    <span class="font-semibold text-zinc-400">Generated:</span> 2026-06-01<br>
+                    <span class="font-semibold text-zinc-400">Scope:</span> Q2 + Q3 2026
+                </div>
+            </div>
+        </div>
+        
+        <!-- Right Main Report Stream -->
+        <div class="lg:col-span-3 space-y-16">
+            
+            <!-- Hero Title Block -->
+            <div id="hero" class="border-b border-zinc-900 pb-8">
+                <div class="inline-flex items-center gap-x-2 rounded-full bg-zinc-900 border border-zinc-800 px-3 py-1 text-[10px] font-semibold text-emerald-400 tracking-wider uppercase mb-5">
+                    <i class="fa-solid fa-compass"></i>
+                    <span>Product Roadmap</span>
+                </div>
+                
+                <h1 class="heading-font text-5xl lg:text-6xl font-bold tracking-tight text-white leading-none">
+                    Defend the moat.<br><span class="accent-gradient-text">Own the swarm.</span>
+                </h1>
+                
+                <p class="mt-4 text-zinc-400 text-lg leading-relaxed max-w-2xl">
+                    A 6-month, opinionated roadmap for Clawdmeter built on top of the existing May 25 &amp; May 30 docs, fresh external intel on Conductor v0.28–0.29 and Cursor 2.0–3.5, and the v0.29.30 codebase.
+                </p>
+                
+                <div class="mt-8 flex flex-wrap gap-4 text-xs font-mono text-zinc-500">
+                    <div class="flex items-center gap-x-2"><i class="fa-solid fa-calendar text-[#d97757]"></i> <span>June 1, 2026</span></div>
+                    <div>•</div>
+                    <div class="flex items-center gap-x-2"><i class="fa-solid fa-code-fork text-[#d97757]"></i> <span>v0.29.30 build 169</span></div>
+                    <div>•</div>
+                    <div class="flex items-center gap-x-2"><i class="fa-solid fa-flag-checkered text-[#d97757]"></i> <span>22 initiatives across 3 tiers</span></div>
+                </div>
+            </div>
+            
+            <!-- Section 01: TL;DR Thesis -->
+            <div id="tldr" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">01</span>
+                    <span>TL;DR — The Thesis</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 leading-relaxed text-sm space-y-4">
+                    <p>
+                        The May 30 report's "Conductor-Killer / Cursor-Complement / Mobile-Polish" framing is right, but I'd restructure by <strong>defense vs offense</strong> rather than by competitor:
+                    </p>
+                    <ul class="space-y-2 list-none pl-0">
+                        <li><strong class="text-white">Defensive (this quarter):</strong> close the 4 specific gaps Conductor v0.28–0.29 opened — <code class="text-[#e09177]">conductor.json</code> setup scripts, Linear ingestion, diff commenting with GitHub sync, merge-blocking todos — before they become table-stakes.</li>
+                        <li><strong class="text-white">Offensive (this quarter):</strong> push the mobile wedge hard — relay GA, Watch 4-complication family, voice handoff — because <em>neither competitor has any of this and both are raising rounds to build AI platforms, not Apple Watch apps.</em></li>
+                        <li><strong class="text-white">Strategic (next quarter):</strong> cost-aware fleet dashboard as the new north-star. Clawdmeter is the only product that can show "this $200/day in Opus is going to the auth-service PR, the redis PR, and a dead-end spike." Cursor hides cost. Conductor ignores it.</li>
+                    </ul>
+                </div>
+                
+                <!-- Wedge Sentence Hero Callout -->
+                <div class="wedge-quote glass-panel rounded-2xl p-6 mt-4">
+                    <div class="text-[10px] font-bold text-[#d97757] tracking-widest uppercase mb-3">
+                        <i class="fa-solid fa-quote-left mr-1.5"></i> The Homepage Sentence
+                    </div>
+                    <p class="heading-font text-xl lg:text-2xl font-semibold text-white leading-snug">
+                        "Run 3 Claude + 2 Codex + 1 Gemini in parallel. Voice-spawn the 7th from your watch. Approve plans from your lock screen. See the per-PR cost in real time. Migrate from Conductor in one click. Works offline. $0/month."
+                    </p>
+                </div>
+            </div>
+            
+            <!-- Section 02: Fresh Competitor Intel -->
+            <div id="intel" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">02</span>
+                    <span>What Shipped at the Competitors Since May 30</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 text-sm leading-relaxed">
+                    <p>
+                        Fresh external intel gathered this week. Two things the existing reports didn't have and that change the calculus:
+                    </p>
+                    <ul class="space-y-1.5 list-disc list-inside text-zinc-400">
+                        <li><strong class="text-white">Cursor 3.5 (May 20 2026) shipped Cursor Automations + multi-repo scheduled runs</strong> — your <code class="text-zinc-500">SessionScheduler</code> (G15) has the engine but no UX. They own "recurring agents" right now.</li>
+                        <li><strong class="text-white">Cursor 3.0 (Apr 2026) brought 8 parallel agents and Cloud Agents</strong> — Cursor repositioned from "AI editor" to "AI platform with editor." Your "cockpit for the swarm" framing is now directly competitive. Own local-first hard.</li>
+                    </ul>
+                </div>
+                
+                <div class="overflow-x-auto rounded-3xl border border-zinc-900 bg-zinc-950/40 custom-scrollbar">
+                    <table class="w-full text-xs text-left">
+                        <thead>
+                            <tr class="bg-zinc-900/60 font-semibold text-zinc-300">
+                                <th class="px-5 py-4 w-44">Competitor</th>
+                                <th class="px-5 py-4">What landed</th>
+                                <th class="px-5 py-4 text-[#d97757] font-bold">Clawdmeter implication</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-zinc-900 text-zinc-400 leading-relaxed">
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Conductor<br><span class="text-[10px] text-zinc-500 font-mono">v0.28.0–0.29.1</span></td>
+                                <td class="px-5 py-3.5">Workspaces history, <code class="text-zinc-500">.context</code> dir, <strong>diff commenting + GitHub sync</strong> (v0.29.0), <strong>merge-blocking todos in Notes</strong> (v0.28.4), per-repo customizable review/PR/branch-rename prompts (v0.29.1), Claude + Codex simultaneously</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Closing the multi-model gap. Linear on their roadmap but not shipped. A/B mode and our Broadcast are now in the same neighborhood.</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Cursor<br><span class="text-[10px] text-zinc-500 font-mono">2.0 (Oct 2025)</span></td>
+                                <td class="px-5 py-3.5">Composer model (4× faster), Multi-Agent Interface, native browser integration, agent-centric UI</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Cursor repositioned from "AI editor" to "AI platform with editor." Our "cockpit for the swarm" framing is now directly competitive.</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Cursor<br><span class="text-[10px] text-zinc-500 font-mono">3.0 (Apr 2026)</span></td>
+                                <td class="px-5 py-3.5">Composer 2 (61.3 CursorBench, 200 tok/s), up to 8 parallel agents, Background Agents GA, Cloud Agents</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Matches our "fleet" story. Local-or-cloud. We own "private by design" if we stay local-only.</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Cursor<br><span class="text-[10px] text-zinc-500 font-mono">3.5 (May 20 2026)</span></td>
+                                <td class="px-5 py-3.5">Cursor Automations in Agents Window, multi-repo automations, scheduled runs, <code class="text-zinc-500">/loop</code> skill</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Their answer to our SessionScheduler. We need to ship the UX or they own "recurring agents."</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Cursor CLI<br><span class="text-[10px] text-zinc-500 font-mono">Jan 2026 → stable</span></td>
+                                <td class="px-5 py-3.5">Plan/Ask modes, cloud handoff (<code class="text-zinc-500">&amp;</code> prefix), one-click MCP auth, headless invocation, stable on macOS/Linux/Windows</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">A <code class="text-zinc-500">cursor --headless</code> shim that pipes into our daemon would be huge for CI users — zero-friction adoption path.</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Cursor mobile</td>
+                                <td class="px-5 py-3.5">Native iOS + Android app for kicking off tasks, getting a PR before you're at your desk</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Closes the mobile gap from their side. But: still no Apple Watch, no Live Activities, no mid-run steering, no voice.</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Cursor BugBot<br><span class="text-[10px] text-zinc-500 font-mono">Feb 2026 GA</span></td>
+                                <td class="px-5 py-3.5">$40/user/mo GitHub PR reviewer, separate from editor plans</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Our PRMirror is free and in-app. Position: "BugBot is great, but we surface PR review inside your fleet dashboard, not as a separate $40 sub."</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">SpaceX $60B<br><span class="text-[10px] text-zinc-500 font-mono">Apr 2026 rumor</span></td>
+                                <td class="px-5 py-3.5">In negotiation. If closes, Composer 2 might swap to a Grok variant</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">If true, our vendor-agnostic positioning gets even stronger. Worth watching the deal.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Section 03: Updated Wedge Map -->
+            <div id="wedge" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">03</span>
+                    <span>Updated Wedge Map</span>
+                </h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="glass-panel rounded-3xl p-5 border border-emerald-500/20">
+                        <div class="inline-flex items-center gap-x-1.5 bg-emerald-500/10 text-emerald-400 text-[9px] font-bold px-2 py-0.5 rounded-full border border-emerald-500/20 mb-3 tracking-widest">
+                            <i class="fa-solid fa-shield-halved"></i> WE WIN
+                        </div>
+                        <h3 class="heading-font font-bold text-white text-sm tracking-tight mb-2">Defensible vs both</h3>
+                        <ul class="text-xs text-zinc-400 leading-relaxed space-y-1.5 list-disc list-inside">
+                            <li>Apple Watch + Live Activities + APNS &lt; 2s</li>
+                            <li>Voice input (iPhone + Watch crown)</li>
+                            <li>Real-time $ burn on lock screen</li>
+                            <li>ccusage-parity cost ledger</li>
+                            <li>Vendor-agnostic (Claude, Codex, Gemini, OpenCode, OpenRouter, Cursor)</li>
+                            <li>Encrypted relay pairing (E3/E4/E7) — no Tailscale, no public IP</li>
+                            <li>Local-first privacy</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="glass-panel rounded-3xl p-5 border border-orange-500/20">
+                        <div class="inline-flex items-center gap-x-1.5 bg-orange-500/10 text-orange-400 text-[9px] font-bold px-2 py-0.5 rounded-full border border-orange-500/20 mb-3 tracking-widest">
+                            <i class="fa-solid fa-bullseye"></i> DEFEND
+                        </div>
+                        <h3 class="heading-font font-bold text-white text-sm tracking-tight mb-2">Conductor catching up</h3>
+                        <ul class="text-xs text-zinc-400 leading-relaxed space-y-1.5 list-disc list-inside">
+                            <li>A/B comparison → we have Broadcast + pick-winner (better)</li>
+                            <li><strong class="text-white">Setup scripts</strong> → we don't have these; ship now</li>
+                            <li><strong class="text-white">Linear</strong> → on their roadmap; ship ours first</li>
+                            <li><strong class="text-white">GitHub diff commenting with sync</strong> → ship in PR pane</li>
+                            <li>Multi-model simultaneous chats → we have v3 broadcast</li>
+                            <li>Multi-repo → on their roadmap; we have WorkspaceStore</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="glass-panel rounded-3xl p-5 border border-blue-500/20">
+                        <div class="inline-flex items-center gap-x-1.5 bg-blue-500/10 text-blue-400 text-[9px] font-bold px-2 py-0.5 rounded-full border border-blue-500/20 mb-3 tracking-widest">
+                            <i class="fa-solid fa-bullseye"></i> DEFEND
+                        </div>
+                        <h3 class="heading-font font-bold text-white text-sm tracking-tight mb-2">Cursor catching up</h3>
+                        <ul class="text-xs text-zinc-400 leading-relaxed space-y-1.5 list-disc list-inside">
+                            <li>Mobile (iOS app for kick-off) → we have full iOS workbench</li>
+                            <li>8 parallel agents → we support parallel sessions, surface as Kanban</li>
+                            <li>Background Agents (cloud) → we are local-only, <strong class="text-white">own "private by design"</strong></li>
+                            <li>Automations (scheduled) → we have SessionScheduler, need UX</li>
+                            <li>Cursor CLI (headless) → our daemon is headless, need CLI shim</li>
+                            <li>Cursor Hooks → trivial to add to daemon</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section 04: Tier 1 -->
+            <div id="tier1" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">04</span>
+                    <span>Tier 1 — Ship this Quarter</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 text-sm leading-relaxed">
+                    <p>
+                        <strong class="text-white">Goal:</strong> defend the moat + close the 4 Conductor v0.28–0.29 gaps that aren't shipped yet. <span class="text-zinc-500">(June – August 2026)</span>
+                    </p>
+                </div>
+                
+                <div class="space-y-3">
+                    <div class="roadmap-item glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">1. Conductor <code class="text-[#e09177] text-sm">conductor.json</code> setup script runner</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">1–2 days</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed mb-2">
+                            Closes TODOS's #1 deferred item. Run <code class="text-zinc-500">setup</code> + <code class="text-zinc-500">run</code> scripts inside each workspace on creation. Timeout, streaming output, audit log, no blocking modals.
+                        </p>
+                        <p class="text-[11px] text-[#d97757] font-mono"><i class="fa-solid fa-bolt mr-1"></i> Why P0: every Conductor user evaluating us hits this gap on day 1. The cheapest possible "Conductor import" enabler.</p>
+                    </div>
+
+                    <div class="roadmap-item glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">2. Encrypted relay GA + APNS push default-on</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">1–2 days</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed mb-2">
+                            E3/E4/E6/E7 already in <code class="text-zinc-500">[Unreleased]</code> per CHANGELOG. Flip the defaults, add a "Discoverable on iPhone without Tailscale" CTA in the pairing sheet.
+                        </p>
+                        <p class="text-[11px] text-[#d97757] font-mono"><i class="fa-solid fa-bolt mr-1"></i> Why P0: 90% built per CHANGELOG. This is the #1 blocker in the GTM doc. Just ship it.</p>
+                    </div>
+
+                    <div class="roadmap-item glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">3. Apple Watch full 4-complication family</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">2–3 days</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed mb-2">
+                            <code class="text-zinc-500">.accessoryCorner</code>, <code class="text-zinc-500">.accessoryRectangular</code>, <code class="text-zinc-500">.accessoryInline</code> (already have <code class="text-zinc-500">.accessoryCircular</code> per TODOS). Live token burn + plan status + session city on every watch face.
+                        </p>
+                        <p class="text-[11px] text-[#d97757] font-mono"><i class="fa-solid fa-bolt mr-1"></i> Why P0: no competitor will ever ship this. The single best demo in the GTM thesis.</p>
+                    </div>
+
+                    <div class="roadmap-item glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">4. Linear → workspace ingestion</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">3–4 days</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed mb-2">
+                            Mirror Conductor's roadmap. "Create workspace from Linear issue" reads the issue title + description as the initial prompt, tags the workspace, links the resulting PR back.
+                        </p>
+                        <p class="text-[11px] text-[#d97757] font-mono"><i class="fa-solid fa-bolt mr-1"></i> Why P0: closes the "where do tasks come from?" question; Conductor has it on roadmap but not shipped yet.</p>
+                    </div>
+
+                    <div class="roadmap-item glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">5. GitHub PR diff commenting with sync</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">~1 week</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed mb-2">
+                            Conductor v0.29.0. Comment on a hunk in Clawdmeter's PR pane → posts as a PR review comment. Reply from GitHub → surfaces in our pane. <code class="text-zinc-500">gh</code> CLI wrapper + PR pane UI.
+                        </p>
+                        <p class="text-[11px] text-[#d97757] font-mono"><i class="fa-solid fa-bolt mr-1"></i> Why P0: review is where the team actually lives. Without it, the PR pane is a read-only viewer.</p>
+                    </div>
+
+                    <div class="roadmap-item glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">6. Cost-aware fleet dashboard (the new Usage tab)</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">~1 week</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed mb-2">
+                            Promote the May 30 report's "Real-time per-turn $ ticker + fine attribution" item out of the Usage analytics tab. Live fleet-view: per-active-session $ burn, projected cost-to-completion, repo-level attribution, "this PR will cost $X."
+                        </p>
+                        <p class="text-[11px] text-[#d97757] font-mono"><i class="fa-solid fa-bolt mr-1"></i> Why P0: this is the only moat Cursor can't easily copy and Conductor doesn't have. Make it the headline.</p>
+                    </div>
+
+                    <div class="roadmap-item glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">7. Voice-first new session creation (iPhone + Watch)</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">1 day → 1 week</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed mb-2">
+                            "Hey Siri, start a Claude session in Clawdmeter to fix the redis bug." Foundation Models on-device intent parse → pre-fill NewSessionSheet.
+                        </p>
+                        <p class="text-[11px] text-[#d97757] font-mono"><i class="fa-solid fa-bolt mr-1"></i> Why P0: Watch-crown session creation is the demo that goes viral on Twitter.</p>
+                    </div>
+
+                    <div class="roadmap-item glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">8. Pause/Resume the swarm</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">2–3 days</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed mb-2">
+                            One click suspends all running agents (kills tmux panes cleanly with checkpointing). One click resumes from the JSONL cursor.
+                        </p>
+                        <p class="text-[11px] text-[#d97757] font-mono"><i class="fa-solid fa-bolt mr-1"></i> Why P0: "suspend overnight to save $50 in tokens" is a 5-second viral demo, and the only local product to ship it.</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section 05: Tier 2 -->
+            <div id="tier2" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">05</span>
+                    <span>Tier 2 — Ship Next Quarter</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 text-sm leading-relaxed">
+                    <p>
+                        <strong class="text-white">Goal:</strong> breadth on the agent-orchestration surface, plus the App Store unlock. <span class="text-zinc-500">(September – November 2026)</span>
+                    </p>
+                </div>
+                
+                <div class="space-y-3">
+                    <div class="roadmap-item tier-2 glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">9. App Store + TestFlight path</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">1 day setup</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Paid Apple Developer Program, App Store Connect API, TestFlight pipeline. <em>Why P1:</em> until this ships, iOS is sideload-only. Biggest growth unlock.
+                        </p>
+                    </div>
+
+                    <div class="roadmap-item tier-2 glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">10. Multi-repo workspaces</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">2–3 weeks</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Conductor's roadmap item. A workspace that spans <code class="text-zinc-500">~/code/api/</code> + <code class="text-zinc-500">~/code/web/</code> + <code class="text-zinc-500">~/code/shared/</code>. Cross-repo changes in one agent. <em>Why P1:</em> monorepo is the single biggest reason power users pick Conductor over us.
+                        </p>
+                    </div>
+
+                    <div class="roadmap-item tier-2 glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">11. Multi-Mac federation</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">~1 week</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            One iPhone, multiple paired Macs. Per-Mac pairing tokens. Sessions grouped by host. <em>Why P1:</em> in TODOS as long-deferred; the user has 2+ Macs; unlocks "run agents on the laptop, approve from the desktop."
+                        </p>
+                    </div>
+
+                    <div class="roadmap-item tier-2 glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">12. File-level search before local RAG</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">1 wk → 3 wks</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Ship ripgrep + AST-aware grep first, expose as daemon endpoint + MentionPicker. Add embeddings <em>only</em> if measurements show it helps. <em>Why P1:</em> closes "I can't ask my repo questions from iPhone" without the 200MB+ binary cost.
+                        </p>
+                    </div>
+
+                    <div class="roadmap-item tier-2 glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">13. Agent worktree collision detection</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">1–2 weeks</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Pre-merge analysis: "agent A edited <code class="text-zinc-500">routing.ts</code> while agent B edited <code class="text-zinc-500">auth.ts</code> — conflict likely on shared types." Both Conductor and Cursor punt. <em>Why P1:</em> the obvious "swarm at scale" problem nobody has solved.
+                        </p>
+                    </div>
+
+                    <div class="roadmap-item tier-2 glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">14. Per-PR cost attribution</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">~1 week</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Extend <code class="text-zinc-500">UsageHistoryLoader</code> to track cost-by-PR. Show "$4.23 of Opus for the auth-service PR" on the PR card. <em>Why P1:</em> per-PR is the granularity that turns "interesting" into "decision-making."
+                        </p>
+                    </div>
+
+                    <div class="roadmap-item tier-2 glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">15. Sparkle auto-update</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">2–3 weeks</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Already in TODOS. Blocked on Developer ID + notarization. <em>Why P1:</em> every release today requires manual DMG drag. Friction for the long tail.
+                        </p>
+                    </div>
+
+                    <div class="roadmap-item tier-2 glass-panel glass-card-interactive rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <h3 class="heading-font font-bold text-white text-base tracking-tight">16. Cursor CLI shim</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">2–3 days</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            <code class="text-zinc-500">cursor --headless "fix tests"</code> routes through our daemon, returns a Clawdmeter session ID, the user can monitor from the app. <em>Why P1:</em> zero-friction adoption for the existing Cursor CLI user base.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section 06: Tier 3 -->
+            <div id="tier3" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">06</span>
+                    <span>Tier 3 — Strategic Bets (6–12 months)</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 text-sm leading-relaxed">
+                    <p>
+                        <strong class="text-white">Goal:</strong> these are bets, not features. Each is at least 1–3 weeks and unlocks a category nobody else has shipped.
+                    </p>
+                </div>
+                
+                <div class="space-y-3">
+                    <div class="roadmap-item tier-3 glass-panel rounded-2xl p-4 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-1">
+                            <h3 class="heading-font font-bold text-white text-sm tracking-tight">17. "Routines" — prompt-template library</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">2–3 wks</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">Cursor has Routines. Pre-built prompt chains for common workflows. Skills system is the foundation.</p>
+                    </div>
+
+                    <div class="roadmap-item tier-3 glass-panel rounded-2xl p-4 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-1">
+                            <h3 class="heading-font font-bold text-white text-sm tracking-tight">18. "Automations" — scheduled agent runs</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">1–2 wks</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">Cursor 3.5 added this. We have SessionScheduler (G15) but no UX. Cron-style recurring agents.</p>
+                    </div>
+
+                    <div class="roadmap-item tier-3 glass-panel rounded-2xl p-4 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-1">
+                            <h3 class="heading-font font-bold text-white text-sm tracking-tight">19. Conductor import — one-click migration</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">1–2 wks</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">Reads <code class="text-zinc-500">~/conductor/workspaces/</code>, preserves branches + setup scripts, re-homes into Clawdmeter sessions. Conductor is the on-ramp; Clawdmeter is the destination.</p>
+                    </div>
+
+                    <div class="roadmap-item tier-3 glass-panel rounded-2xl p-4 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-1">
+                            <h3 class="heading-font font-bold text-white text-sm tracking-tight">20. Public benchmark suite</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">~1 week</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">"Clawdmeter orchestrates 8 agents at $X/hour with Y% success rate." Reproducible methodology, published numbers. The marketing wedge for power users.</p>
+                    </div>
+
+                    <div class="roadmap-item tier-3 glass-panel rounded-2xl p-4 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-1">
+                            <h3 class="heading-font font-bold text-white text-sm tracking-tight">21. Agent health pulse dashboard</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">1–2 wks</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">"Last 7 days: 23 sessions, 18 finished cleanly, 3 timed out, 2 OOM-killed." Both competitors lack.</p>
+                    </div>
+
+                    <div class="roadmap-item tier-3 glass-panel rounded-2xl p-4 border border-zinc-900">
+                        <div class="flex items-start justify-between gap-x-4 mb-1">
+                            <h3 class="heading-font font-bold text-white text-sm tracking-tight">22. Mac launch agent (daemon survives app quit)</h3>
+                            <span class="effort-pill flex-shrink-0 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">3–4 days</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">Long-deferred TODOS item. <code class="text-zinc-500">LaunchAgent</code> keeps the daemon running headless when the Clawdmeter app quits.</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section 07: What I'd CUT -->
+            <div id="cut" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">07</span>
+                    <span>What I'd CUT (or push to Tier 4 / never)</span>
+                </h2>
+                
+                <div class="glass-panel rounded-3xl p-6 border border-zinc-900 space-y-4">
+                    <div class="roadmap-item cut">
+                        <p class="text-sm text-zinc-300 leading-relaxed">
+                            <strong class="text-white">"Local RAG with vector embeddings" before file-level</strong> — ship file-level search first (just ripgrep + AST-aware grep), add embeddings only after measuring whether it actually helps. The cost of a good local embedding model is 200MB+ of binary and a real perf hit.
+                        </p>
+                    </div>
+                    <div class="roadmap-item cut">
+                        <p class="text-sm text-zinc-300 leading-relaxed">
+                            <strong class="text-white">Linux parity as a v1 priority</strong> — Linux is the lowest-leverage target. Stay WIP, don't promote. The Tahoe design language doesn't port.
+                        </p>
+                    </div>
+                    <div class="roadmap-item cut">
+                        <p class="text-sm text-zinc-300 leading-relaxed">
+                            <strong class="text-white">Full WCAG AA on every surface</strong> — ship AA on the 5 critical user flows, audit the rest over time. Don't block the roadmap on this.
+                        </p>
+                    </div>
+                    <div class="roadmap-item cut">
+                        <p class="text-sm text-zinc-300 leading-relaxed">
+                            <strong class="text-white">Custom editor surface</strong> — we will never beat Cursor at being a text editor. Don't try. The "send to Clawdmeter" shim is enough.
+                        </p>
+                    </div>
+                    <div class="roadmap-item cut">
+                        <p class="text-sm text-zinc-300 leading-relaxed">
+                            <strong class="text-white">Native Cloud Agents (Cursor-style cloud background)</strong> — out of scope. Local-first is the brand. If users want cloud, they can use Cursor for that and Clawdmeter for everything else.
+                        </p>
+                    </div>
+                    <div class="roadmap-item cut">
+                        <p class="text-sm text-zinc-300 leading-relaxed">
+                            <strong class="text-white">Full E2E test suite (T16) before Tier 1 ships</strong> — ship a critical-path smoke test only; let Tier 2 expand coverage. Test debt is fine for a one-person team shipping daily.
+                        </p>
+                    </div>
+                    <div class="roadmap-item cut">
+                        <p class="text-sm text-zinc-300 leading-relaxed">
+                            <strong class="text-white">GitHub Issues importer</strong> (vs Linear) — GitHub Issues matters but Linear is the wedge for the existing Conductor user base. Do GitHub Issues in Tier 3 if there's demand.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section 08: Cross-Cutting Bets -->
+            <div id="cross" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">08</span>
+                    <span>Cross-Cutting Bets</span>
+                </h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
+                        <div class="text-[10px] font-bold text-[#d97757] tracking-widest uppercase mb-2">
+                            <i class="fa-solid fa-dollar-sign mr-1.5"></i> Apple Developer Program enrollment
+                        </div>
+                        <h3 class="font-bold text-white text-sm tracking-tight mb-2">$99/yr, the highest-ROI spend in the whole roadmap</h3>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Unblocks TestFlight, Sparkle, multi-Mac iOS install, and notarization. Ship before Tier 1 ends.
+                        </p>
+                    </div>
+                    
+                    <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
+                        <div class="text-[10px] font-bold text-[#d97757] tracking-widest uppercase mb-2">
+                            <i class="fa-solid fa-coins mr-1.5"></i> Per-session cost budget + alerts
+                        </div>
+                        <h3 class="font-bold text-white text-sm tracking-tight mb-2">2 days, mid-session interrupt prompt</h3>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            The GTM doc's preflight cost banner is shipped, but we don't yet warn mid-session when a session is 2× over its projected cost.
+                        </p>
+                    </div>
+                    
+                    <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
+                        <div class="text-[10px] font-bold text-[#d97757] tracking-widest uppercase mb-2">
+                            <i class="fa-solid fa-file-code mr-1.5"></i> conductor.json as community RFC
+                        </div>
+                        <h3 class="font-bold text-white text-sm tracking-tight mb-2">First-mover advantage in agent-orchestration schema</h3>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            When we ship the runner, propose the format as a community RFC.
+                        </p>
+                    </div>
+                    
+                    <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
+                        <div class="text-[10px] font-bold text-[#d97757] tracking-widest uppercase mb-2">
+                            <i class="fa-solid fa-road mr-1.5"></i> Public ROADMAP.md on GitHub
+                        </div>
+                        <h3 class="font-bold text-white text-sm tracking-tight mb-2">TODOS.md is internal. Curate, date, ship.</h3>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            A "what's shipping next" doc builds trust with the closed beta and reduces "is this alive?" uncertainty.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section 09: Start on Monday -->
+            <div id="monday" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">09</span>
+                    <span>Start on Monday</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 text-sm leading-relaxed">
+                    <p>
+                        Three things, in order. If those three land in the next 30 days, the homepage tagline stops being aspirational. It becomes a product fact.
+                    </p>
+                </div>
+                
+                <div class="space-y-4">
+                    <div class="roadmap-item monday glass-panel glass-card-interactive rounded-2xl p-6 border-2 border-emerald-500/30">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <div>
+                                <div class="text-[9px] font-bold text-emerald-400 tracking-widest uppercase mb-1">
+                                    <i class="fa-solid fa-calendar-day mr-1"></i> Monday #1
+                                </div>
+                                <h3 class="heading-font font-bold text-white text-lg tracking-tight"><code class="text-[#e09177]">conductor.json</code> runner</h3>
+                            </div>
+                            <span class="effort-pill flex-shrink-0 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-semibold">1–2 days</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Tier 1 #1. Closes the #1 documented gap. Existing Conductor users will try us, see this is missing, and leave. Easy.
+                        </p>
+                    </div>
+
+                    <div class="roadmap-item monday glass-panel glass-card-interactive rounded-2xl p-6 border-2 border-emerald-500/30">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <div>
+                                <div class="text-[9px] font-bold text-emerald-400 tracking-widest uppercase mb-1">
+                                    <i class="fa-solid fa-calendar-day mr-1"></i> Monday #2
+                                </div>
+                                <h3 class="heading-font font-bold text-white text-lg tracking-tight">Relay GA + APNS default-on</h3>
+                            </div>
+                            <span class="effort-pill flex-shrink-0 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-semibold">1–2 days</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Tier 1 #2. Already 90% built per CHANGELOG. Just flip the defaults, add the discoverability CTA, ship.
+                        </p>
+                    </div>
+
+                    <div class="roadmap-item monday glass-panel glass-card-interactive rounded-2xl p-6 border-2 border-emerald-500/30">
+                        <div class="flex items-start justify-between gap-x-4 mb-2">
+                            <div>
+                                <div class="text-[9px] font-bold text-emerald-400 tracking-widest uppercase mb-1">
+                                    <i class="fa-solid fa-calendar-day mr-1"></i> Monday #3
+                                </div>
+                                <h3 class="heading-font font-bold text-white text-lg tracking-tight">Cost-aware fleet dashboard</h3>
+                            </div>
+                            <span class="effort-pill flex-shrink-0 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-semibold">~1 week</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Tier 1 #6. The new Usage tab. This is the moat. Make it the headline.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section 10: Open Questions -->
+            <div id="questions" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">10</span>
+                    <span>Open Questions (Worth a 30-min Conversation)</span>
+                </h2>
+                
+                <div class="space-y-3">
+                    <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start gap-x-3">
+                            <span class="text-[#d97757] font-mono font-bold text-sm mt-0.5">Q1.</span>
+                            <div>
+                                <h3 class="font-bold text-white text-sm tracking-tight mb-1.5">Apple Developer Program timing</h3>
+                                <p class="text-xs text-zinc-400 leading-relaxed">
+                                    Is there a reason we're still on Personal Team? The blockers in TODOS are real but the cost is now blocking ~$200K/yr worth of work (Sparkle, TestFlight, multi-Mac iOS).
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start gap-x-3">
+                            <span class="text-[#d97757] font-mono font-bold text-sm mt-0.5">Q2.</span>
+                            <div>
+                                <h3 class="font-bold text-white text-sm tracking-tight mb-1.5">Linux bet</h3>
+                                <p class="text-xs text-zinc-400 leading-relaxed">
+                                    Keep as WIP indefinitely, or pick a deadline to either ship or archive? "Linux Tier 2 with real Tahoe parity" is a 4–6 week bet; "Linux as-is, no parity promise" is fine.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start gap-x-3">
+                            <span class="text-[#d97757] font-mono font-bold text-sm mt-0.5">Q3.</span>
+                            <div>
+                                <h3 class="font-bold text-white text-sm tracking-tight mb-1.5">Cloud Agents strategy</h3>
+                                <p class="text-xs text-zinc-400 leading-relaxed">
+                                    If Cursor's Cloud Agents (Max tier $200/mo) start eating into the "I want agents that survive my laptop closing" market, do we (a) ignore it and double down on local, (b) build a "rent a Mac" relay, or (c) ship a thin client that runs in the user's iCloud / Linode? The answer shapes whether we're a Mac-only tool forever.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-2xl p-5 border border-zinc-900">
+                        <div class="flex items-start gap-x-3">
+                            <span class="text-[#d97757] font-mono font-bold text-sm mt-0.5">Q4.</span>
+                            <div>
+                                <h3 class="font-bold text-white text-sm tracking-tight mb-1.5">Cost dashboard naming</h3>
+                                <p class="text-xs text-zinc-400 leading-relaxed">
+                                    "Cockpit"? "Bridge"? "Mission Control" (taken by Antigravity)? The name matters for marketing.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Footer note -->
+            <div class="border-t border-zinc-900 pt-8 mt-16 text-center">
+                <p class="text-xs text-zinc-500 leading-relaxed max-w-2xl mx-auto">
+                    <i class="fa-solid fa-book text-[#d97757] mr-1.5"></i>
+                    This document intentionally references and builds on the existing <code class="text-zinc-400">docs/competitive_analysis.md</code> and <code class="text-zinc-400">docs/clawdmeter-competitive-analysis-report.md</code> rather than duplicating them. Those remain the deep feature-by-feature and architecture reviews. This is the "what to ship next" layer on top.
+                </p>
+            </div>
+            
+        </div>
+    </div>
+    
+    <script>
+        // Highlight active TOC link on scroll
+        const sections = document.querySelectorAll('div[id]');
+        const tocLinks = document.querySelectorAll('.toc-link');
+        
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    tocLinks.forEach(link => link.classList.remove('active'));
+                    const activeLink = document.querySelector(`.toc-link[href="#${entry.target.id}"]`);
+                    if (activeLink) activeLink.classList.add('active');
+                }
+            });
+        }, { rootMargin: '-20% 0px -70% 0px' });
+        
+        sections.forEach(section => observer.observe(section));
+    </script>
+</body>
+</html>

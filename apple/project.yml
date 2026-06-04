@@ -73,14 +73,6 @@ targets:
         type: folder
         buildPhase: resources
         optional: true
-      # v0.7.1: bundled Codex SDK main.mjs — same Resources copy path
-      # as the Node binary. CodexSDKManager.locateMainMJSSource() reads
-      # it from `Bundle.main.url(forResource:"main", withExtension:"mjs")`
-      # in production (xcodegen keeps the original filename in
-      # Resources/).
-      - path: ../tools/clawdmeter-codex-sdk/main.mjs
-        buildPhase: resources
-        optional: true
       # v0.7.14: bundle the Antigravity Python sidecar so
       # AntigravitySidecarManager.locateSidecarMain() can resolve it
       # from /Applications/Clawdmeter.app/Contents/Resources/clawdmeter-agents/.

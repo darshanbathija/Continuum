@@ -1,0 +1,2333 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawdmeter Go-To-Market Strategy</title>
+    <meta
+      name="description"
+      content="A visual go-to-market strategy for Clawdmeter, the mobile-first control plane for local coding agents."
+    />
+    <link rel="icon" href="../apple/ClawdmeterMac/Assets.xcassets/AppIcon.appiconset/icon_64.png" />
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f6f1e8;
+        --paper-2: #fffaf2;
+        --ink: #171512;
+        --muted: #655f55;
+        --line: #ded3c2;
+        --line-strong: #c9b9a0;
+        --terra: #d97757;
+        --terra-dark: #9f432d;
+        --blue: #2c66d6;
+        --green: #247a59;
+        --gold: #b8791a;
+        --plum: #7b4aa5;
+        --rose: #bc3f5f;
+        --cyan: #217c8f;
+        --white: #ffffff;
+        --shadow: 0 18px 60px rgba(45, 31, 18, 0.16);
+        --soft-shadow: 0 10px 30px rgba(45, 31, 18, 0.1);
+        --radius: 8px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        color: var(--ink);
+        background:
+          linear-gradient(90deg, rgba(217, 119, 87, 0.08) 1px, transparent 1px),
+          linear-gradient(180deg, rgba(217, 119, 87, 0.06) 1px, transparent 1px),
+          var(--paper);
+        background-size: 42px 42px;
+        letter-spacing: 0;
+      }
+
+      img,
+      svg {
+        max-width: 100%;
+        display: block;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .page {
+        width: min(1180px, calc(100% - 32px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        border-bottom: 1px solid rgba(23, 21, 18, 0.12);
+        background: rgba(246, 241, 232, 0.92);
+        backdrop-filter: blur(18px);
+      }
+
+      .nav {
+        min-height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 190px;
+      }
+
+      .brand img {
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+        box-shadow: var(--soft-shadow);
+      }
+
+      .brand strong {
+        display: block;
+        font-size: 0.98rem;
+      }
+
+      .brand span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .navlinks {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .navlinks a {
+        text-decoration: none;
+        color: #403a32;
+        font-size: 0.84rem;
+        padding: 8px 10px;
+        border: 1px solid transparent;
+        border-radius: 999px;
+      }
+
+      .navlinks a:hover {
+        border-color: var(--line);
+        background: rgba(255, 250, 242, 0.8);
+      }
+
+      .hero {
+        position: relative;
+        padding: 76px 0 44px;
+        overflow: hidden;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 0.95fr) minmax(460px, 1.05fr);
+        gap: 42px;
+        align-items: center;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--terra-dark);
+        font-weight: 750;
+        font-size: 0.82rem;
+        padding: 7px 10px;
+        border: 1px solid rgba(217, 119, 87, 0.32);
+        background: rgba(255, 250, 242, 0.74);
+        border-radius: 999px;
+      }
+
+      .eyebrow::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        background: var(--terra);
+        border-radius: 999px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin: 18px 0 18px;
+        font-size: 4.15rem;
+        line-height: 0.96;
+        max-width: 700px;
+      }
+
+      .lede {
+        font-size: 1.24rem;
+        line-height: 1.58;
+        color: #3f3930;
+        max-width: 700px;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 28px 0;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0 15px;
+        border-radius: 8px;
+        border: 1px solid var(--ink);
+        text-decoration: none;
+        font-weight: 760;
+        background: var(--ink);
+        color: var(--paper-2);
+        box-shadow: var(--soft-shadow);
+      }
+
+      .button.secondary {
+        background: var(--paper-2);
+        color: var(--ink);
+        border-color: var(--line-strong);
+      }
+
+      .hero-facts {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 28px;
+      }
+
+      .fact {
+        min-height: 86px;
+        padding: 14px;
+        background: rgba(255, 250, 242, 0.78);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+
+      .fact b {
+        display: block;
+        font-size: 0.96rem;
+      }
+
+      .fact span {
+        display: block;
+        margin-top: 5px;
+        color: var(--muted);
+        line-height: 1.4;
+        font-size: 0.9rem;
+      }
+
+      .device-stage {
+        position: relative;
+        min-height: 590px;
+      }
+
+      .halo-map {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(circle at 20% 24%, rgba(217, 119, 87, 0.18), transparent 34%),
+          radial-gradient(circle at 74% 20%, rgba(36, 122, 89, 0.16), transparent 32%),
+          radial-gradient(circle at 74% 78%, rgba(44, 102, 214, 0.15), transparent 34%);
+        border: 1px solid rgba(201, 185, 160, 0.9);
+        border-radius: 8px;
+        transform: rotate(-1.5deg);
+      }
+
+      .mac-window,
+      .phone,
+      .watch {
+        position: absolute;
+        background: var(--paper-2);
+        border: 1px solid rgba(23, 21, 18, 0.16);
+        box-shadow: var(--shadow);
+      }
+
+      .mac-window {
+        left: 0;
+        right: 56px;
+        top: 54px;
+        min-height: 366px;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .traffic {
+        height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--line);
+        background: #efe4d6;
+      }
+
+      .traffic i {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        display: block;
+      }
+
+      .traffic i:nth-child(1) {
+        background: #e35b47;
+      }
+
+      .traffic i:nth-child(2) {
+        background: #e4ad36;
+      }
+
+      .traffic i:nth-child(3) {
+        background: #3caa5d;
+      }
+
+      .mac-content {
+        display: grid;
+        grid-template-columns: 120px 1fr 160px;
+        min-height: 332px;
+      }
+
+      .rail {
+        border-right: 1px solid var(--line);
+        background: #f1e7da;
+        padding: 14px 10px;
+      }
+
+      .rail .tab {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 34px;
+        padding: 0 9px;
+        margin-bottom: 8px;
+        border-radius: 7px;
+        color: #4b443b;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .rail .tab.active {
+        background: var(--ink);
+        color: var(--paper-2);
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: currentColor;
+      }
+
+      .thread {
+        padding: 18px;
+        background: #fffaf2;
+      }
+
+      .session-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      .session-title b {
+        font-size: 0.96rem;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 25px;
+        padding: 0 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+        color: #4b443b;
+        font-size: 0.75rem;
+        font-weight: 750;
+        white-space: nowrap;
+      }
+
+      .message {
+        margin-bottom: 10px;
+        padding: 10px 11px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        line-height: 1.35;
+        font-size: 0.83rem;
+      }
+
+      .message.user {
+        background: #f7efe4;
+        max-width: 82%;
+      }
+
+      .message.agent {
+        background: #ffffff;
+      }
+
+      .code-strip {
+        margin-top: 12px;
+        border: 1px solid rgba(44, 102, 214, 0.25);
+        background: #eef4ff;
+        border-radius: 8px;
+        padding: 10px;
+        color: #1d3976;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.76rem;
+        line-height: 1.45;
+      }
+
+      .review-pane {
+        border-left: 1px solid var(--line);
+        padding: 14px;
+        background: #f8efe3;
+      }
+
+      .review-card {
+        border: 1px solid var(--line);
+        background: #fffaf2;
+        border-radius: 8px;
+        padding: 11px;
+        margin-bottom: 10px;
+        min-height: 70px;
+      }
+
+      .review-card b {
+        display: block;
+        font-size: 0.78rem;
+        margin-bottom: 6px;
+      }
+
+      .bar {
+        height: 8px;
+        border-radius: 999px;
+        background: #ead9c4;
+        overflow: hidden;
+      }
+
+      .bar span {
+        display: block;
+        height: 100%;
+        border-radius: 999px;
+      }
+
+      .phone {
+        right: 6px;
+        top: 175px;
+        width: 210px;
+        height: 404px;
+        border-radius: 34px;
+        padding: 13px;
+      }
+
+      .phone-screen {
+        height: 100%;
+        border-radius: 25px;
+        background: #101010;
+        color: #f7f1e8;
+        padding: 17px 14px;
+        overflow: hidden;
+      }
+
+      .phone-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 0.72rem;
+        color: rgba(247, 241, 232, 0.72);
+        margin-bottom: 18px;
+      }
+
+      .phone-title {
+        font-weight: 800;
+        font-size: 1.04rem;
+        margin-bottom: 12px;
+      }
+
+      .provider-row {
+        display: grid;
+        grid-template-columns: 26px 1fr auto;
+        align-items: center;
+        gap: 8px;
+        padding: 8px;
+        margin-bottom: 8px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+
+      .provider-row img,
+      .provider-row .letter-logo {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        background: #fff;
+        object-fit: contain;
+      }
+
+      .letter-logo {
+        display: grid;
+        place-items: center;
+        font-size: 0.75rem;
+        font-weight: 850;
+        color: #101010;
+      }
+
+      .provider-row b {
+        font-size: 0.77rem;
+      }
+
+      .provider-row span {
+        color: rgba(247, 241, 232, 0.62);
+        font-size: 0.68rem;
+      }
+
+      .approve {
+        margin-top: 13px;
+        padding: 11px;
+        border-radius: 8px;
+        background: #e8fff5;
+        color: #123d2d;
+        border: 1px solid #98d7bd;
+      }
+
+      .approve b {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .mini-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .mini-actions span {
+        min-height: 32px;
+        display: grid;
+        place-items: center;
+        border-radius: 7px;
+        font-weight: 800;
+        font-size: 0.72rem;
+      }
+
+      .mini-actions span:first-child {
+        background: #247a59;
+        color: white;
+      }
+
+      .mini-actions span:last-child {
+        background: rgba(255, 255, 255, 0.12);
+        color: white;
+      }
+
+      .watch {
+        width: 132px;
+        height: 156px;
+        right: 278px;
+        bottom: 0;
+        border-radius: 36px;
+        padding: 10px;
+        background: #1d1c1a;
+      }
+
+      .watch-screen {
+        height: 100%;
+        border-radius: 28px;
+        background: #080807;
+        color: #f7f1e8;
+        padding: 15px 13px;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 8px;
+      }
+
+      .watch-screen b {
+        font-size: 0.86rem;
+      }
+
+      .watch-screen span {
+        font-size: 0.66rem;
+        color: rgba(247, 241, 232, 0.68);
+      }
+
+      .watch-button {
+        min-height: 28px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        background: var(--green);
+        font-size: 0.66rem;
+        font-weight: 850;
+      }
+
+      section {
+        padding: 44px 0;
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 0.7fr) minmax(280px, 0.3fr);
+        gap: 28px;
+        align-items: end;
+        margin-bottom: 22px;
+      }
+
+      .section-kicker {
+        color: var(--terra-dark);
+        font-size: 0.82rem;
+        font-weight: 850;
+        margin-bottom: 8px;
+      }
+
+      h2 {
+        font-size: 2.2rem;
+        line-height: 1.05;
+        margin-bottom: 10px;
+      }
+
+      .section-head p {
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .panel {
+        background: rgba(255, 250, 242, 0.86);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 18px;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+      }
+
+      .panel.dark {
+        background: #1c1915;
+        color: #fff8ec;
+        border-color: #1c1915;
+      }
+
+      .panel h3 {
+        font-size: 1.06rem;
+        margin-bottom: 10px;
+      }
+
+      .panel p,
+      .panel li {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .panel.dark p,
+      .panel.dark li {
+        color: rgba(255, 248, 236, 0.74);
+      }
+
+      .number {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        margin-bottom: 13px;
+        background: var(--ink);
+        color: var(--paper);
+        font-weight: 850;
+      }
+
+      .number.terra {
+        background: var(--terra);
+      }
+
+      .number.green {
+        background: var(--green);
+      }
+
+      .number.blue {
+        background: var(--blue);
+      }
+
+      .wide-visual {
+        border: 1px solid var(--line);
+        background: var(--paper-2);
+        border-radius: var(--radius);
+        padding: 22px;
+        box-shadow: var(--soft-shadow);
+      }
+
+      .wedge-flow {
+        display: grid;
+        grid-template-columns: 1fr 42px 1fr 42px 1fr 42px 1fr;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .flow-step {
+        min-height: 150px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+        background: #fffaf2;
+      }
+
+      .flow-step img {
+        width: 42px;
+        height: 42px;
+        border-radius: 8px;
+        object-fit: contain;
+        margin-bottom: 14px;
+      }
+
+      .arrow {
+        height: 2px;
+        background: var(--line-strong);
+        position: relative;
+      }
+
+      .arrow::after {
+        content: "";
+        position: absolute;
+        right: -1px;
+        top: -5px;
+        width: 0;
+        height: 0;
+        border-top: 6px solid transparent;
+        border-bottom: 6px solid transparent;
+        border-left: 9px solid var(--line-strong);
+      }
+
+      .truth-board {
+        display: grid;
+        grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+        gap: 14px;
+      }
+
+      .truth-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 10px;
+      }
+
+      .truth-list li {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 9px;
+        align-items: start;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.58);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      .mark {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        color: white;
+        font-size: 0.72rem;
+        font-weight: 900;
+      }
+
+      .mark.yes {
+        background: var(--green);
+      }
+
+      .mark.no {
+        background: var(--rose);
+      }
+
+      .audience {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 14px;
+      }
+
+      .persona-stack {
+        display: grid;
+        gap: 10px;
+      }
+
+      .persona {
+        display: grid;
+        grid-template-columns: 70px 1fr;
+        gap: 14px;
+        align-items: center;
+        padding: 15px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper-2);
+      }
+
+      .persona .rank {
+        width: 60px;
+        height: 60px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        color: white;
+        font-size: 1.35rem;
+        font-weight: 900;
+      }
+
+      .rank.one {
+        background: var(--terra);
+      }
+
+      .rank.two {
+        background: var(--blue);
+      }
+
+      .rank.three {
+        background: var(--green);
+      }
+
+      .jobs {
+        display: grid;
+        gap: 10px;
+      }
+
+      .job {
+        padding: 12px 14px;
+        border-left: 4px solid var(--terra);
+        background: rgba(255, 250, 242, 0.9);
+      }
+
+      .timeline {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .timeline::before {
+        content: "";
+        position: absolute;
+        left: 8%;
+        right: 8%;
+        top: 38px;
+        height: 2px;
+        background: var(--line-strong);
+      }
+
+      .phase {
+        position: relative;
+        padding-top: 72px;
+      }
+
+      .phase-dot {
+        position: absolute;
+        top: 25px;
+        left: 0;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        background: var(--paper-2);
+        border: 6px solid var(--terra);
+        z-index: 2;
+      }
+
+      .phase:nth-child(2) .phase-dot,
+      .phase:nth-child(5) .phase-dot {
+        border-color: var(--blue);
+      }
+
+      .phase:nth-child(3) .phase-dot,
+      .phase:nth-child(6) .phase-dot {
+        border-color: var(--green);
+      }
+
+      .phase-card {
+        min-height: 226px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        background: #fffaf2;
+        border-radius: 8px;
+      }
+
+      .phase-card small {
+        color: var(--terra-dark);
+        font-weight: 850;
+      }
+
+      .phase-card h3 {
+        margin-top: 7px;
+        font-size: 1rem;
+      }
+
+      .phase-card p {
+        font-size: 0.88rem;
+      }
+
+      .screenshot-grid {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(140px, 1fr));
+        gap: 10px;
+        overflow-x: auto;
+        padding-bottom: 6px;
+      }
+
+      .shot {
+        min-height: 250px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: #1a1815;
+        color: #fff8ec;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+
+      .shot-screen {
+        aspect-ratio: 9 / 14;
+        border-radius: 20px;
+        border: 6px solid #0b0b0a;
+        background: #fffaf2;
+        color: var(--ink);
+        padding: 12px;
+        display: grid;
+        gap: 7px;
+        align-content: start;
+      }
+
+      .shot-line {
+        height: 9px;
+        border-radius: 999px;
+        background: #e4d3bd;
+      }
+
+      .shot-line.short {
+        width: 62%;
+      }
+
+      .shot-line.blue {
+        background: rgba(44, 102, 214, 0.62);
+      }
+
+      .shot-line.green {
+        background: rgba(36, 122, 89, 0.62);
+      }
+
+      .shot-line.terra {
+        background: rgba(217, 119, 87, 0.68);
+      }
+
+      .shot b {
+        font-size: 0.9rem;
+      }
+
+      .shot span {
+        color: rgba(255, 248, 236, 0.68);
+        font-size: 0.72rem;
+      }
+
+      .sitemap {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 14px;
+      }
+
+      .site-col {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper-2);
+        padding: 14px;
+      }
+
+      .site-col h3 {
+        margin-bottom: 12px;
+      }
+
+      .url-pill {
+        display: block;
+        margin-bottom: 8px;
+        padding: 9px 10px;
+        border-radius: 7px;
+        background: #f1e6d7;
+        color: #433a30;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.78rem;
+        text-decoration: none;
+      }
+
+      .loops {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .loop {
+        min-height: 250px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper-2);
+        padding: 18px;
+      }
+
+      .loop-ring {
+        width: 152px;
+        height: 152px;
+        border-radius: 999px;
+        margin: 0 auto 18px;
+        border: 16px solid #e9dac7;
+        border-top-color: var(--terra);
+        border-right-color: var(--blue);
+        border-bottom-color: var(--green);
+        display: grid;
+        place-items: center;
+        text-align: center;
+        font-weight: 850;
+        line-height: 1.1;
+      }
+
+      .model-grid {
+        display: grid;
+        grid-template-columns: 0.9fr 1.1fr;
+        gap: 14px;
+      }
+
+      .meter {
+        height: 280px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, transparent 0 19%, rgba(23, 21, 18, 0.06) 20% 20%, transparent 21% 39%, rgba(23, 21, 18, 0.06) 40% 40%, transparent 41% 59%, rgba(23, 21, 18, 0.06) 60% 60%, transparent 61% 79%, rgba(23, 21, 18, 0.06) 80% 80%, transparent 81%),
+          var(--paper-2);
+        padding: 18px;
+        display: grid;
+        align-items: end;
+      }
+
+      .meter-bars {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        align-items: end;
+        gap: 10px;
+        height: 210px;
+      }
+
+      .meter-bar {
+        border-radius: 8px 8px 0 0;
+        min-height: 38px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        color: white;
+        font-size: 0.72rem;
+        font-weight: 850;
+        padding-bottom: 7px;
+      }
+
+      .hook-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .hook {
+        display: grid;
+        grid-template-columns: 42px 1fr;
+        gap: 12px;
+        align-items: center;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fffaf2;
+      }
+
+      .hook img,
+      .hook .letter-logo {
+        width: 42px;
+        height: 42px;
+        border-radius: 8px;
+        object-fit: contain;
+      }
+
+      .matrix-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper-2);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 860px;
+      }
+
+      th,
+      td {
+        padding: 12px 13px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        font-size: 0.88rem;
+      }
+
+      th {
+        background: #f0e4d4;
+        font-size: 0.78rem;
+        color: #42382e;
+      }
+
+      td.ok {
+        color: var(--green);
+        font-weight: 850;
+      }
+
+      td.gate {
+        color: var(--gold);
+        font-weight: 850;
+      }
+
+      td.nope {
+        color: var(--rose);
+        font-weight: 850;
+      }
+
+      .gate-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .gate-card {
+        min-height: 210px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-top: 6px solid var(--terra);
+        border-radius: 8px;
+        background: var(--paper-2);
+      }
+
+      .gate-card:nth-child(2),
+      .gate-card:nth-child(5) {
+        border-top-color: var(--blue);
+      }
+
+      .gate-card:nth-child(3) {
+        border-top-color: var(--green);
+      }
+
+      .gate-card:nth-child(4) {
+        border-top-color: var(--gold);
+      }
+
+      .metric-wall {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 14px;
+      }
+
+      .north-star {
+        display: grid;
+        grid-template-columns: 160px 1fr;
+        gap: 22px;
+        align-items: center;
+      }
+
+      .big-number {
+        aspect-ratio: 1;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        background: var(--ink);
+        color: var(--paper);
+        padding: 20px;
+        font-size: 1.5rem;
+        line-height: 1.12;
+        font-weight: 900;
+      }
+
+      .funnel {
+        display: grid;
+        gap: 9px;
+      }
+
+      .funnel-step {
+        min-height: 38px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 0 12px;
+        background: #f1e6d7;
+        border-radius: 8px;
+        font-size: 0.84rem;
+      }
+
+      .funnel-step:nth-child(1) {
+        width: 100%;
+      }
+
+      .funnel-step:nth-child(2) {
+        width: 92%;
+      }
+
+      .funnel-step:nth-child(3) {
+        width: 82%;
+      }
+
+      .funnel-step:nth-child(4) {
+        width: 70%;
+      }
+
+      .funnel-step:nth-child(5) {
+        width: 58%;
+      }
+
+      .check-board {
+        display: grid;
+        grid-template-columns: 1fr 1fr 0.8fr;
+        gap: 14px;
+      }
+
+      .checks {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 9px;
+      }
+
+      .checks li {
+        display: grid;
+        grid-template-columns: 20px 1fr;
+        gap: 9px;
+        align-items: start;
+        line-height: 1.4;
+        color: var(--muted);
+      }
+
+      .checkbox {
+        width: 18px;
+        height: 18px;
+        border-radius: 5px;
+        border: 2px solid var(--line-strong);
+        background: #fff;
+      }
+
+      .source-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      .source-list {
+        columns: 2;
+        column-gap: 18px;
+        padding-left: 18px;
+      }
+
+      .source-list li {
+        break-inside: avoid;
+        margin-bottom: 8px;
+      }
+
+      .footer {
+        padding: 30px 0 50px;
+        color: var(--muted);
+      }
+
+      @media (max-width: 980px) {
+        .nav {
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 12px 0;
+        }
+
+        .hero-grid,
+        .section-head,
+        .truth-board,
+        .audience,
+        .model-grid,
+        .metric-wall,
+        .source-grid,
+        .check-board {
+          grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: 3.05rem;
+        }
+
+        .device-stage {
+          min-height: 700px;
+        }
+
+        .mac-window {
+          right: 0;
+        }
+
+        .phone {
+          right: 22px;
+          top: 360px;
+        }
+
+        .watch {
+          right: 260px;
+          bottom: 10px;
+        }
+
+        .grid-3,
+        .grid-2,
+        .loops,
+        .sitemap {
+          grid-template-columns: 1fr;
+        }
+
+        .timeline,
+        .gate-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .wedge-flow {
+          grid-template-columns: 1fr;
+        }
+
+        .arrow {
+          width: 2px;
+          height: 26px;
+          margin: 0 auto;
+        }
+
+        .arrow::after {
+          right: -5px;
+          top: auto;
+          bottom: -1px;
+          border-left: 6px solid transparent;
+          border-right: 6px solid transparent;
+          border-top: 9px solid var(--line-strong);
+          border-bottom: 0;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .page {
+          width: min(100% - 22px, 1180px);
+        }
+
+        h1 {
+          font-size: 2.55rem;
+        }
+
+        h2 {
+          font-size: 1.78rem;
+        }
+
+        .hero {
+          padding-top: 42px;
+        }
+
+        .hero-facts,
+        .timeline,
+        .gate-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .device-stage {
+          min-height: 760px;
+        }
+
+        .mac-window {
+          top: 25px;
+        }
+
+        .mac-content {
+          grid-template-columns: 88px 1fr;
+        }
+
+        .review-pane {
+          display: none;
+        }
+
+        .phone {
+          width: 195px;
+          height: 380px;
+          right: 4px;
+          top: 355px;
+        }
+
+        .watch {
+          right: 188px;
+          bottom: 8px;
+          width: 116px;
+          height: 142px;
+        }
+
+        .source-list {
+          columns: 1;
+        }
+
+        .north-star {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media print {
+        body {
+          background: #fff;
+        }
+
+        .topbar,
+        .hero-actions {
+          display: none;
+        }
+
+        section,
+        .hero {
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="page nav">
+        <a class="brand" href="#top" aria-label="Clawdmeter GTM report">
+          <img src="../apple/ClawdmeterMac/Assets.xcassets/AppIcon.appiconset/icon_1024.png" alt="Clawdmeter app icon" />
+          <span>
+            <strong>Clawdmeter GTM</strong>
+            <span>Mobile-first IDE strategy</span>
+          </span>
+        </a>
+        <nav class="navlinks" aria-label="Report sections">
+          <a href="#position">Position</a>
+          <a href="#truth">Truth</a>
+          <a href="#wedge">Wedge</a>
+          <a href="#launch">90 days</a>
+          <a href="#aso">ASO</a>
+          <a href="#seo">SEO</a>
+          <a href="#execute">Execute</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="page hero-grid">
+          <div>
+            <div class="eyebrow">Generated May 25, 2026 from codebase review</div>
+            <h1>Your coding agents, in your pocket.</h1>
+            <p class="lede">
+              A visual go-to-market plan for Clawdmeter: a native Mac, iPhone, and Watch control plane for local coding agents.
+              The launch strategy is honest by design: ship Mac-first, prove iPhone and Watch reliability, then scale App Store,
+              SEO, community, and model-optimization distribution.
+            </p>
+            <div class="hero-actions">
+              <a class="button" href="#execute">Start with the checklist</a>
+              <a class="button secondary" href="./go-to-market-strategy-mobile-first-ide.md">Read source markdown</a>
+            </div>
+            <div class="hero-facts">
+              <div class="fact">
+                <b>Public motion</b>
+                <span>Mac-first closed beta with iPhone companion. TestFlight after pairing and review gates are real.</span>
+              </div>
+              <div class="fact">
+                <b>Core wedge</b>
+                <span>Run agents on Mac, approve and steer long-running work from iPhone or Watch.</span>
+              </div>
+              <div class="fact">
+                <b>Category</b>
+                <span>Native control plane for coding agents, framed as a mobile-first IDE only where the workflow proves it.</span>
+              </div>
+              <div class="fact">
+                <b>Credibility rule</b>
+                <span>No Linux, App Store, Cursor parity, or open-source claims until the gates pass.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="device-stage" aria-label="Clawdmeter Mac, iPhone, and Watch workflow visualization">
+            <div class="halo-map" aria-hidden="true"></div>
+            <div class="mac-window">
+              <div class="traffic"><i></i><i></i><i></i></div>
+              <div class="mac-content">
+                <div class="rail">
+                  <div class="tab"><span class="dot"></span>Chat</div>
+                  <div class="tab"><span class="dot"></span>Usage</div>
+                  <div class="tab active"><span class="dot"></span>Code</div>
+                  <div class="tab"><span class="dot"></span>Settings</div>
+                </div>
+                <div class="thread">
+                  <div class="session-title">
+                    <b>Refactor checkout flow</b>
+                    <span class="pill">Claude Opus | plan</span>
+                  </div>
+                  <div class="message user">Start a coding session and inspect the payment retry path.</div>
+                  <div class="message agent">
+                    Plan ready. I will update the state machine, add tests, and open a PR summary.
+                  </div>
+                  <div class="code-strip">
+                    + CheckoutRetryPolicy.swift<br />
+                    + PaymentStateMachineTests.swift<br />
+                    Waiting for approval...
+                  </div>
+                </div>
+                <div class="review-pane">
+                  <div class="review-card">
+                    <b>Diff confidence</b>
+                    <div class="bar"><span style="width: 78%; background: var(--green)"></span></div>
+                  </div>
+                  <div class="review-card">
+                    <b>Cost cap</b>
+                    <div class="bar"><span style="width: 41%; background: var(--gold)"></span></div>
+                  </div>
+                  <div class="review-card">
+                    <b>Provider stack</b>
+                    <span class="pill">Claude</span>
+                    <span class="pill">Codex</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="phone">
+              <div class="phone-screen">
+                <div class="phone-top"><span>9:41</span><span>Paired Mac</span></div>
+                <div class="phone-title">Agents</div>
+                <div class="provider-row">
+                  <img src="../apple/ClawdmeterMac/Resources/ClaudeLogo.svg" alt="Claude logo" />
+                  <b>Claude</b>
+                  <span>Plan</span>
+                </div>
+                <div class="provider-row">
+                  <img src="../apple/ClawdmeterMac/Resources/CodexLogo.png" alt="Codex logo" />
+                  <b>Codex</b>
+                  <span>Ready</span>
+                </div>
+                <div class="provider-row">
+                  <img src="../apple/ClawdmeterMac/Resources/GeminiLogo.svg" alt="Gemini logo" />
+                  <b>Gemini</b>
+                  <span>Compare</span>
+                </div>
+                <div class="approve">
+                  <b>Plan approval</b>
+                  Checkout refactor is blocked until you approve.
+                  <div class="mini-actions"><span>Approve</span><span>Inspect</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="watch">
+              <div class="watch-screen">
+                <b>Plan ready</b>
+                <span>Refactor checkout flow</span>
+                <div class="watch-button">Approve</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="position">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">01 - Positioning</div>
+              <h2>The category is control plane first, mobile IDE second.</h2>
+            </div>
+            <p>
+              "IDE" invites a direct fight with Cursor, VS Code, Zed, and Xcode. "Control plane" matches the architecture:
+              Mac daemon, paired mobile surfaces, provider runtimes, session orchestration, model choices, usage analytics, and approvals.
+            </p>
+          </div>
+
+          <div class="grid-3">
+            <article class="panel">
+              <div class="number terra">1</div>
+              <h3>Default one-liner</h3>
+              <p>
+                Clawdmeter is a native Mac, iPhone, and Watch control plane for coding agents: launch sessions, compare models,
+                track costs, approve plans, and steer long-running work from your phone.
+              </p>
+            </article>
+            <article class="panel">
+              <div class="number blue">2</div>
+              <h3>Primary user</h3>
+              <p>
+                Mac-based coding-agent power users who already use Claude Code, Codex, Cursor, OpenCode, Gemini, or Antigravity
+                and need their agents to keep moving when they step away.
+              </p>
+            </article>
+            <article class="panel dark">
+              <div class="number green">3</div>
+              <h3>Strategic thesis</h3>
+              <p>
+                Coding agents are becoming separate CLIs, desktop apps, subscriptions, model choices, and cost ledgers.
+                Clawdmeter wins by becoming the local, native, mobile-aware cockpit for that swarm.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="truth">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">02 - Product truth</div>
+              <h2>Lead with what the code proves. Gate everything else.</h2>
+            </div>
+            <p>
+              The strongest marketing move is specificity. The report should make the product feel more trustworthy because it names
+              the current boundaries instead of sanding them down.
+            </p>
+          </div>
+
+          <div class="truth-board">
+            <article class="panel">
+              <h3>Real today</h3>
+              <ul class="truth-list">
+                <li><span class="mark yes">Y</span><span>Native Mac shell with Chat, Usage, Code, and Settings tabs.</span></li>
+                <li><span class="mark yes">Y</span><span>Mac Code workbench with session sidebar, thread, review pane, plan approval, terminal, PR, diff, artifact, and source panes.</span></li>
+                <li><span class="mark yes">Y</span><span>iPhone companion with pairing, new-session creation, model and effort controls, preflight estimates, session detail, and retrying command outbox.</span></li>
+                <li><span class="mark yes">Y</span><span>Watch approval and glance surface for sessions needing attention.</span></li>
+                <li><span class="mark yes">Y</span><span>Provider/runtime concepts for Claude, Codex, Gemini/Antigravity, OpenCode, and Cursor.</span></li>
+                <li><span class="mark yes">Y</span><span>Usage analytics, pricing, confidence labels, model catalog, effort, and cap projections.</span></li>
+              </ul>
+            </article>
+
+            <article class="panel">
+              <h3>Claims to avoid</h3>
+              <ul class="truth-list">
+                <li><span class="mark no">N</span><span>"Works equally across every provider." Use a provider capability matrix instead.</span></li>
+                <li><span class="mark no">N</span><span>"Six-provider broadcast chat." Broadcast comparison is for supported chat paths, not every runtime.</span></li>
+                <li><span class="mark no">N</span><span>"Cursor replacement." Say Clawdmeter works alongside Cursor where supported.</span></li>
+                <li><span class="mark no">N</span><span>"Universal perfect cost accounting." Show provider-reported, estimated, local, or unavailable confidence.</span></li>
+                <li><span class="mark no">N</span><span>"Linux is ready." Keep Linux private until packaging and daemon surfaces are real.</span></li>
+                <li><span class="mark no">N</span><span>"App Store ready." Wait for TestFlight, review notes, screenshots, privacy labels, and physical-device gates.</span></li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="audience">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">03 - Audience</div>
+              <h2>Start narrow. The beachhead is agent-heavy Mac users.</h2>
+            </div>
+            <p>
+              The first users should tolerate a DMG beta, provider quirks, and Tailscale while giving high-signal feedback on the mobile workflow.
+            </p>
+          </div>
+
+          <div class="audience">
+            <div class="persona-stack">
+              <div class="persona">
+                <div class="rank one">1</div>
+                <div>
+                  <h3>Primary ICP</h3>
+                  <p>Mac-based coding-agent power users with real Claude, Codex, Cursor, OpenCode, Gemini, or Antigravity workflows.</p>
+                </div>
+              </div>
+              <div class="persona">
+                <div class="rank two">2</div>
+                <div>
+                  <h3>Secondary ICP</h3>
+                  <p>Indie builders and agent-heavy founders who want a phone control surface more than an enterprise dashboard.</p>
+                </div>
+              </div>
+              <div class="persona">
+                <div class="rank three">3</div>
+                <div>
+                  <h3>Tertiary ICP</h3>
+                  <p>Agent researchers and power users who care about multi-agent comparison, telemetry, and model optimization.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h3>Jobs to be done</h3>
+              <div class="jobs">
+                <div class="job">Tell me when an agent needs approval.</div>
+                <div class="job">Let me approve, reject, or inspect progress from my phone.</div>
+                <div class="job">Show me what the agent is doing without SSH or reopening Terminal.</div>
+                <div class="job">Help me choose a cheaper, faster, or smarter model before I burn quota.</div>
+                <div class="job">Let me compare provider answers without manually copying prompts.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="wedge">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">04 - Wedge</div>
+              <h2>The demo must make the mobile workflow obvious in ten seconds.</h2>
+            </div>
+            <p>
+              The wedge is not "AI coding on a phone." The wedge is "your Mac keeps doing the real work, and your phone keeps the run moving."
+            </p>
+          </div>
+
+          <div class="wide-visual">
+            <div class="wedge-flow">
+              <div class="flow-step">
+                <img src="../apple/ClawdmeterMac/Assets.xcassets/AppIcon.appiconset/icon_1024.png" alt="Clawdmeter icon" />
+                <h3>Start on Mac</h3>
+                <p>Mac owns the daemon, provider runtimes, local auth, repo context, usage parsing, and diagnostics.</p>
+              </div>
+              <div class="arrow" aria-hidden="true"></div>
+              <div class="flow-step">
+                <img src="../apple/ClawdmeteriOS/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" alt="Clawdmeter iOS icon" />
+                <h3>Pair iPhone</h3>
+                <p>iPhone becomes the control surface for sessions, model choice, preflight cost, and live inspection.</p>
+              </div>
+              <div class="arrow" aria-hidden="true"></div>
+              <div class="flow-step">
+                <img src="../apple/ClawdmeterWatch/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" alt="Clawdmeter Watch icon" />
+                <h3>Approve on Watch</h3>
+                <p>Plan approval becomes glanceable and tactile, not buried in a terminal at your desk.</p>
+              </div>
+              <div class="arrow" aria-hidden="true"></div>
+              <div class="flow-step">
+                <div class="letter-logo" aria-hidden="true">PR</div>
+                <h3>Keep work moving</h3>
+                <p>Inspect diffs, terminal output, PRs, artifacts, and cost so the agent can continue with supervision.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="launch">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">05 - 90-day launch map</div>
+              <h2>Sequence trust, demo proof, beta, TestFlight, then public launch.</h2>
+            </div>
+            <p>
+              The schedule is not a marketing calendar. It is a readiness machine: every phase earns the right to widen distribution.
+            </p>
+          </div>
+
+          <div class="timeline">
+            <div class="phase">
+              <div class="phase-dot"></div>
+              <div class="phase-card">
+                <small>Week 1</small>
+                <h3>Truth and trust</h3>
+                <p>Sync versions, remove stale claims, create provider matrix, security page, privacy page, known limitations, and update tag contract.</p>
+              </div>
+            </div>
+            <div class="phase">
+              <div class="phase-dot"></div>
+              <div class="phase-card">
+                <small>Week 2</small>
+                <h3>Demo and onboarding</h3>
+                <p>Record Mac+iPhone+Watch demo, build landing page, create waitlist, write pair-your-iPhone and first-session guides.</p>
+              </div>
+            </div>
+            <div class="phase">
+              <div class="phase-dot"></div>
+              <div class="phase-card">
+                <small>Weeks 3-4</small>
+                <h3>Private alpha</h3>
+                <p>Invite 10 to 25 known users, watch onboarding calls, collect friction, fix only activation blockers.</p>
+              </div>
+            </div>
+            <div class="phase">
+              <div class="phase-dot"></div>
+              <div class="phase-card">
+                <small>Weeks 5-6</small>
+                <h3>Public Mac beta</h3>
+                <p>Publish GitHub Release, support docs, provider pages, build notes, and demo-first social launch.</p>
+              </div>
+            </div>
+            <div class="phase">
+              <div class="phase-dot"></div>
+              <div class="phase-card">
+                <small>Weeks 7-10</small>
+                <h3>TestFlight and SEO</h3>
+                <p>Validate entitlements, submit TestFlight, publish core SEO pages, add analytics, and prep App Store variants.</p>
+              </div>
+            </div>
+            <div class="phase">
+              <div class="phase-dot"></div>
+              <div class="phase-card">
+                <small>Weeks 11-12</small>
+                <h3>Launch decision</h3>
+                <p>Review activation and retention. Choose App Store launch or continued TestFlight based on mobile reliability.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="aso">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">06 - ASO and screenshots</div>
+              <h2>The App Store page should be a workflow storyboard.</h2>
+            </div>
+            <p>
+              Screenshots must show the app in use: iPhone starts or controls a session, Watch approves, Mac workbench proves the source of truth,
+              then analytics and pairing explain trust.
+            </p>
+          </div>
+
+          <div class="screenshot-grid">
+            <div class="shot">
+              <div class="shot-screen">
+                <div class="shot-line terra"></div>
+                <div class="shot-line"></div>
+                <div class="shot-line short"></div>
+                <div class="shot-line blue"></div>
+                <div class="shot-line green"></div>
+              </div>
+              <div><b>Start from iPhone</b><br /><span>Repo, agent, model, effort, preflight</span></div>
+            </div>
+            <div class="shot">
+              <div class="shot-screen">
+                <div class="shot-line green"></div>
+                <div class="shot-line short"></div>
+                <div class="shot-line"></div>
+                <div class="shot-line terra"></div>
+              </div>
+              <div><b>Approve from Watch</b><br /><span>The aha moment in one frame</span></div>
+            </div>
+            <div class="shot">
+              <div class="shot-screen">
+                <div class="shot-line blue"></div>
+                <div class="shot-line"></div>
+                <div class="shot-line"></div>
+                <div class="shot-line green"></div>
+                <div class="shot-line short"></div>
+              </div>
+              <div><b>Inspect the work</b><br /><span>Plan, diff, PR, terminal, artifacts</span></div>
+            </div>
+            <div class="shot">
+              <div class="shot-screen">
+                <div class="shot-line terra"></div>
+                <div class="shot-line blue"></div>
+                <div class="shot-line green"></div>
+                <div class="shot-line"></div>
+              </div>
+              <div><b>Compare models</b><br /><span>Claude, Codex, Gemini side by side</span></div>
+            </div>
+            <div class="shot">
+              <div class="shot-screen">
+                <div class="shot-line green"></div>
+                <div class="shot-line green"></div>
+                <div class="shot-line terra"></div>
+                <div class="shot-line blue"></div>
+              </div>
+              <div><b>Know the cost</b><br /><span>Usage, quota, confidence by provider</span></div>
+            </div>
+            <div class="shot">
+              <div class="shot-screen">
+                <div class="shot-line"></div>
+                <div class="shot-line"></div>
+                <div class="shot-line green"></div>
+                <div class="shot-line short"></div>
+              </div>
+              <div><b>Pair with Mac</b><br /><span>Trust, QR, Tailscale, local-first</span></div>
+            </div>
+          </div>
+
+          <div class="grid-3" style="margin-top: 14px">
+            <article class="panel">
+              <h3>App name</h3>
+              <p><b>Clawdmeter</b></p>
+              <p>Keep the name. The work is in making the first screenshots explain the paired-device workflow.</p>
+            </article>
+            <article class="panel">
+              <h3>Subtitle</h3>
+              <p><b>Control coding agents</b></p>
+              <p>Clear, keyword-bearing, and avoids overclaiming a full standalone mobile IDE.</p>
+            </article>
+            <article class="panel">
+              <h3>Preview video</h3>
+              <p><b>30 seconds</b></p>
+              <p>iPhone opens, session starts, Mac runs, Watch approves, diff inspected, cost shown.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="seo">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">07 - SEO architecture</div>
+              <h2>Own the questions people will ask as agent sprawl gets worse.</h2>
+            </div>
+            <p>
+              SEO should grow from real workflows: mobile control, provider compatibility, model costs, local-first security, and build logs.
+            </p>
+          </div>
+
+          <div class="sitemap">
+            <div class="site-col">
+              <h3>Core conversion</h3>
+              <a class="url-pill" href="#">/</a>
+              <a class="url-pill" href="#">/download</a>
+              <a class="url-pill" href="#">/testflight</a>
+              <a class="url-pill" href="#">/security</a>
+              <a class="url-pill" href="#">/docs/pairing</a>
+            </div>
+            <div class="site-col">
+              <h3>Provider pages</h3>
+              <a class="url-pill" href="#">/docs/providers/claude-code</a>
+              <a class="url-pill" href="#">/docs/providers/codex</a>
+              <a class="url-pill" href="#">/docs/providers/gemini-antigravity</a>
+              <a class="url-pill" href="#">/docs/providers/opencode</a>
+              <a class="url-pill" href="#">/docs/providers/cursor</a>
+            </div>
+            <div class="site-col">
+              <h3>Intent capture</h3>
+              <a class="url-pill" href="#">/docs/model-costs</a>
+              <a class="url-pill" href="#">/compare/cursor</a>
+              <a class="url-pill" href="#">/compare/opencode</a>
+              <a class="url-pill" href="#">/compare/claude-code</a>
+              <a class="url-pill" href="#">/blog</a>
+            </div>
+          </div>
+
+          <div class="grid-3" style="margin-top: 14px">
+            <article class="panel">
+              <h3>Bottom-funnel queries</h3>
+              <p>control Claude Code from iPhone, Codex mobile app, OpenCode iOS, Cursor agent CLI usage, AI coding agent cost tracker.</p>
+            </article>
+            <article class="panel">
+              <h3>Content pillars</h3>
+              <p>Mobile control, model optimization, provider workflows, trust/local-first, and release/build logs.</p>
+            </article>
+            <article class="panel">
+              <h3>Execution rules</h3>
+              <p>Useful pages first, descriptive URLs, unique metadata, crawlable docs, screenshots near text, alt text, internal links, and structured data.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="social">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">08 - Social and community loops</div>
+              <h2>Distribution should look like proof, not launch copy.</h2>
+            </div>
+            <p>
+              Every channel should start from a visual demo, a workflow guide, or a model-cost insight. The product is technical enough that generic hype will underperform.
+            </p>
+          </div>
+
+          <div class="loops">
+            <article class="loop">
+              <div class="loop-ring">Demo<br />loop</div>
+              <h3>Clip to feedback</h3>
+              <p>30-90 second workflow clip, beta install, user feedback, public fix, next clip.</p>
+            </article>
+            <article class="loop">
+              <div class="loop-ring">Provider<br />loop</div>
+              <h3>Guide to compatibility</h3>
+              <p>Provider-specific page, community discussion, caveat discovered, matrix updated.</p>
+            </article>
+            <article class="loop">
+              <div class="loop-ring">Cost<br />loop</div>
+              <h3>Insight to trust</h3>
+              <p>Usage or benchmark insight, model optimization content, credibility, install.</p>
+            </article>
+          </div>
+
+          <div class="panel dark" style="margin-top: 14px">
+            <h3>Launch thread skeleton</h3>
+            <p>
+              I built Clawdmeter because my coding agents kept running while I was away from the Mac.
+              The Mac still does the real work. The phone is the control plane. The aha moment is a Watch approval that keeps the run moving.
+              It is early: Mac DMG beta first, TestFlight next, Linux later.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="model">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">09 - Model optimization</div>
+              <h2>Sell "right model, right effort, right cost, right confidence."</h2>
+            </div>
+            <p>
+              Most tools sell a smarter model. Clawdmeter can sell model choice as an operating system for agent work.
+            </p>
+          </div>
+
+          <div class="model-grid">
+            <div class="meter" aria-label="Illustrative model cost bars">
+              <div class="meter-bars">
+                <div class="meter-bar" style="height: 38%; background: var(--green)">fast</div>
+                <div class="meter-bar" style="height: 54%; background: var(--blue)">balanced</div>
+                <div class="meter-bar" style="height: 72%; background: var(--terra)">deep</div>
+                <div class="meter-bar" style="height: 92%; background: var(--plum)">max</div>
+                <div class="meter-bar" style="height: 44%; background: var(--gold)">auto</div>
+              </div>
+            </div>
+
+            <div class="hook-list">
+              <div class="hook">
+                <img src="../apple/ClawdmeterMac/Resources/ClaudeLogo.svg" alt="Claude logo" />
+                <div><b>Stop burning premium models on chores.</b><br />Use expensive models where the task justifies it.</div>
+              </div>
+              <div class="hook">
+                <img src="../apple/ClawdmeterMac/Resources/CodexLogo.png" alt="Codex logo" />
+                <div><b>Know the cost before you send.</b><br />Preflight estimates turn model choice into a visible decision.</div>
+              </div>
+              <div class="hook">
+                <img src="../apple/ClawdmeterMac/Resources/GeminiLogo.svg" alt="Gemini logo" />
+                <div><b>Compare answers, then continue with the winner.</b><br />Broadcast for uncertainty, continue when a provider earns it.</div>
+              </div>
+              <div class="hook">
+                <img src="../apple/ClawdmeterMac/Assets.xcassets/OpencodeLogo.imageset/OpencodeLogo.png" alt="OpenCode logo" />
+                <div><b>Your coding-agent spend by repo, not vibes.</b><br />Provider-reported, local, estimated, or unavailable confidence stays explicit.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="matrix">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">10 - Provider capability matrix</div>
+              <h2>Turn limitations into trust by making support visible.</h2>
+            </div>
+            <p>
+              This table is a GTM asset. It prevents bad expectations and gives provider-specific campaigns a source of truth.
+            </p>
+          </div>
+
+          <div class="matrix-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th>Launch session</th>
+                  <th>Resume</th>
+                  <th>Chat</th>
+                  <th>Code session</th>
+                  <th>Plan mode</th>
+                  <th>Model/effort</th>
+                  <th>Usage/cost</th>
+                  <th>Mobile support</th>
+                  <th>Caveat</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><b>Claude</b></td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Strong</td>
+                  <td class="ok">Strong</td>
+                  <td>Keep local auth and release sandbox docs explicit.</td>
+                </tr>
+                <tr>
+                  <td><b>Codex CLI/SDK</b></td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Strong</td>
+                  <td class="ok">Strong</td>
+                  <td>Different CLI and SDK semantics must stay labeled.</td>
+                </tr>
+                <tr>
+                  <td><b>Gemini/Antigravity</b></td>
+                  <td class="gate">Gated</td>
+                  <td class="gate">Gated</td>
+                  <td class="ok">Yes</td>
+                  <td class="gate">Gated</td>
+                  <td class="gate">Gated</td>
+                  <td class="ok">Yes</td>
+                  <td class="gate">Partial</td>
+                  <td class="gate">Gated</td>
+                  <td>V2 source and sidecar behavior must remain current.</td>
+                </tr>
+                <tr>
+                  <td><b>OpenCode</b></td>
+                  <td class="ok">Yes</td>
+                  <td class="gate">Partial</td>
+                  <td class="gate">Runtime path</td>
+                  <td class="ok">Yes</td>
+                  <td class="gate">Runtime-specific</td>
+                  <td class="gate">Partial</td>
+                  <td class="ok">Yes</td>
+                  <td class="gate">Gated</td>
+                  <td>Position as integration, not fork or replacement.</td>
+                </tr>
+                <tr>
+                  <td><b>Cursor</b></td>
+                  <td class="ok">Yes</td>
+                  <td class="gate">Proven IDs only</td>
+                  <td class="nope">No broad claim</td>
+                  <td class="ok">Yes</td>
+                  <td class="gate">Gated</td>
+                  <td class="ok">Dynamic</td>
+                  <td class="gate">Live-period</td>
+                  <td class="gate">Gated</td>
+                  <td>Works alongside Cursor. Do not claim Cursor replacement.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="gates">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">11 - Launch gates</div>
+              <h2>Each public claim gets a gate.</h2>
+            </div>
+            <p>
+              Gates keep the strategy from outrunning the product and make the launch feel more credible to technical users.
+            </p>
+          </div>
+
+          <div class="gate-grid">
+            <div class="gate-card">
+              <h3>Gate 0 - Truth cleanup</h3>
+              <p>Sync versions, fix stale docs, decide license posture, publish security/privacy/limitations, fix release tag contract.</p>
+            </div>
+            <div class="gate-card">
+              <h3>Gate 1 - Mac beta</h3>
+              <p>Clean install works, provider matrix is accurate, real session launches, iPhone pairs, usage is plausible.</p>
+            </div>
+            <div class="gate-card">
+              <h3>Gate 2 - TestFlight</h3>
+              <p>Paid Developer setup, Fastlane proven, entitlements validated, reviewer path documented, real screenshots created.</p>
+            </div>
+            <div class="gate-card">
+              <h3>Gate 3 - App Store</h3>
+              <p>Fresh install to mobile-controlled session is under ten minutes, pairing errors are legible, support path exists.</p>
+            </div>
+            <div class="gate-card">
+              <h3>Gate 4 - Linux</h3>
+              <p>Daemon, desktop UI, AppImage, deb, VM QA, and release assets are real. Until then, private QA only.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="metrics">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">12 - Metrics</div>
+              <h2>Optimize for activated mobile control, not reach.</h2>
+            </div>
+            <p>
+              The north star is not downloads. It is a user taking a meaningful control action from iPhone or Watch while the Mac does the real work.
+            </p>
+          </div>
+
+          <div class="metric-wall">
+            <article class="panel north-star">
+              <div class="big-number">Weekly mobile-controlled sessions</div>
+              <div>
+                <h3>North star definition</h3>
+                <p>
+                  A coding-agent session where the user performs at least one meaningful control action from iPhone or Watch:
+                  start, approve, interrupt, send, resume, inspect diff, inspect PR, terminal, or artifact.
+                </p>
+              </div>
+            </article>
+            <article class="panel">
+              <h3>Activation funnel</h3>
+              <div class="funnel">
+                <div class="funnel-step"><span>Mac installed</span><b>1</b></div>
+                <div class="funnel-step"><span>Provider detected</span><b>2</b></div>
+                <div class="funnel-step"><span>iPhone paired</span><b>3</b></div>
+                <div class="funnel-step"><span>Session started</span><b>4</b></div>
+                <div class="funnel-step"><span>Mobile command succeeds</span><b>5</b></div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="execute">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">13 - Execution board</div>
+              <h2>Start here. These are the next work items.</h2>
+            </div>
+            <p>
+              The first week should make the product easier to trust before it makes the product louder.
+            </p>
+          </div>
+
+          <div class="check-board">
+            <article class="panel">
+              <h3>High priority</h3>
+              <ul class="checks">
+                <li><span class="checkbox"></span><span>Sync README version with VERSION and apple/project.yml.</span></li>
+                <li><span class="checkbox"></span><span>Add docs/security.md.</span></li>
+                <li><span class="checkbox"></span><span>Add docs/provider-capability-matrix.md.</span></li>
+                <li><span class="checkbox"></span><span>Add docs/known-limitations.md.</span></li>
+                <li><span class="checkbox"></span><span>Fix or document GitHub Release tag parser contract.</span></li>
+                <li><span class="checkbox"></span><span>Create landing page H1, subhead, screenshots, and CTA.</span></li>
+                <li><span class="checkbox"></span><span>Record iPhone start-session demo.</span></li>
+                <li><span class="checkbox"></span><span>Record Watch plan-approval demo.</span></li>
+              </ul>
+            </article>
+            <article class="panel">
+              <h3>Medium priority</h3>
+              <ul class="checks">
+                <li><span class="checkbox"></span><span>Add pricing snapshot date to UI and docs.</span></li>
+                <li><span class="checkbox"></span><span>Add App Store screenshot set.</span></li>
+                <li><span class="checkbox"></span><span>Add TestFlight review notes.</span></li>
+                <li><span class="checkbox"></span><span>Add Search Console and sitemap.</span></li>
+                <li><span class="checkbox"></span><span>Create provider SEO pages.</span></li>
+                <li><span class="checkbox"></span><span>Create support template for pairing failures.</span></li>
+                <li><span class="checkbox"></span><span>Validate clean Mac install.</span></li>
+              </ul>
+            </article>
+            <article class="panel">
+              <h3>Later</h3>
+              <ul class="checks">
+                <li><span class="checkbox"></span><span>Linux public launch.</span></li>
+                <li><span class="checkbox"></span><span>Sparkle auto-update.</span></li>
+                <li><span class="checkbox"></span><span>Team and multi-Mac workflows.</span></li>
+                <li><span class="checkbox"></span><span>Android.</span></li>
+                <li><span class="checkbox"></span><span>Enterprise positioning.</span></li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="page">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">14 - Sources</div>
+              <h2>Evidence used to build the strategy.</h2>
+            </div>
+            <p>
+              The HTML condenses the markdown strategy and keeps the source trail visible for execution and review.
+            </p>
+          </div>
+
+          <div class="source-grid">
+            <article class="panel">
+              <h3>Local code evidence</h3>
+              <ul class="source-list">
+                <li>README.md</li>
+                <li>VERSION</li>
+                <li>apple/project.yml</li>
+                <li>CHANGELOG.md</li>
+                <li>MacRootView.swift</li>
+                <li>SessionWorkspaceView.swift</li>
+                <li>MacChatV2View.swift</li>
+                <li>IOSRootView.swift</li>
+                <li>NewSessionSheet.swift</li>
+                <li>IOSSessionDetailView.swift</li>
+                <li>MobileCommandOutbox.swift</li>
+                <li>PlanApprovalView.swift</li>
+                <li>Protocol.swift</li>
+                <li>UsageHistoryLoader.swift</li>
+                <li>Pricing.swift</li>
+                <li>CursorSource.swift</li>
+                <li>apple/fastlane/Fastfile</li>
+              </ul>
+            </article>
+            <article class="panel">
+              <h3>External platform sources</h3>
+              <ul class="source-list">
+                <li><a href="https://developer.apple.com/app-store/product-page/">Apple product page guidance</a></li>
+                <li><a href="https://developer.apple.com/app-store/product-page-optimization/">Apple product page optimization</a></li>
+                <li><a href="https://developer.apple.com/app-store/custom-product-pages/">Apple custom product pages</a></li>
+                <li><a href="https://developer.apple.com/app-store/review/guidelines/">Apple App Review Guidelines</a></li>
+                <li><a href="https://developer.apple.com/help/app-store-connect-analytics/overview/analytics-dashboard">App Store Connect Analytics dashboard</a></li>
+                <li><a href="https://support.google.com/googleplay/android-developer/answer/9867158">Google Play custom store listings</a></li>
+                <li><a href="https://play.google.com/console/about/store-listing-experiments/">Google Play store listing experiments</a></li>
+                <li><a href="https://developers.google.com/search/docs/fundamentals/seo-starter-guide">Google SEO Starter Guide</a></li>
+                <li><a href="https://developer.android.com/docs/quality-guidelines/core-app-quality">Android core app quality</a></li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="page">
+        <p>
+          Visual companion to
+          <a href="./go-to-market-strategy-mobile-first-ide.md">docs/go-to-market-strategy-mobile-first-ide.md</a>.
+          Built for execution, not decoration.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

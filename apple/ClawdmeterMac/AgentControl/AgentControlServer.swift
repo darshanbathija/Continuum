@@ -144,11 +144,6 @@ public final class AgentControlServer {
         Set(sessionWiring.values.map { $0.sessionFileURL.path })
     }
 
-    /// v0.8 Phase 4.5: per-session Codex SDK chat ingestors. Created on
-    /// the first /send for an SDK chat session; torn down on DELETE or
-    /// SDK chat-session idle evict. Holding a strong reference keeps the
-    /// Combine sink alive across the session lifetime.
-    private var sdkChatIngestors: [UUID: CodexSDKEventIngestor] = [:]
 
     /// v0.8 QA: per-session warmup task for chat-mode CLI sessions. The
     /// handler that handles `POST /sessions/:id/send` awaits the task
@@ -651,65 +646,6 @@ public final class AgentControlServer {
                 )
                 serverLogger.info("compose-draft received: text length=\(payload.text.count, privacy: .public), repo=\(payload.repoKey ?? "-", privacy: .public), peer=\(peer, privacy: .public)")
 
-                // v0.7.2 wire v8 additive: when the iOS client attaches a
-                // `codexThreadId` AND the draft suggests Codex agent, dispatch
-                // the prompt to the Codex SDK's one-shot resume. Posts the
-                // resume_result back to the iOS client over the same WS as a
-                // second JSON frame before closing. SDK runs against the
-                // user's ChatGPT subscription quota (no per-token billing).
-                if let threadId = payload.codexThreadId,
-                   !threadId.isEmpty,
-                   payload.suggestedAgent == .codex,
-                   await CodexSDKManager.shared.isProvisioned {
-                    // Resolve workingDirectory: prefer the draft's repoKey,
-                    // fall back to the user's home dir so the SDK can run
-                    // outside a git repo too.
-                    let workingDirectory = payload.repoKey
-                        ?? ClawdmeterRealHome.path()
-                    do {
-                        let result = try await CodexSDKManager.shared.runResume(
-                            threadId: threadId,
-                            prompt: payload.text,
-                            workingDirectory: workingDirectory,
-                            timeout: 120
-                        )
-                        // Post a structured result frame so iOS can render the
-                        // resumed-thread response inline. The wire format is a
-                        // single JSON line: {type, threadId, finalResponse,
-                        // usage}. iOS parses this from the WS receive.
-                        let response: [String: Any] = [
-                            "type": "codex_resume_result",
-                            "threadId": result.threadId,
-                            "finalResponse": result.finalResponse,
-                            "usage": [
-                                "inputTokens": result.usage?.inputTokens ?? 0,
-                                "cachedInputTokens": result.usage?.cachedInputTokens ?? 0,
-                                "outputTokens": result.usage?.outputTokens ?? 0,
-                                "reasoningOutputTokens": result.usage?.reasoningOutputTokens ?? 0,
-                            ]
-                        ]
-                        if let body = try? JSONSerialization.data(withJSONObject: response),
-                           let text = String(data: body, encoding: .utf8) {
-                            sendWSText(text, on: connection)
-                            serverLogger.info("compose-draft codex-resume succeeded: threadId=\(threadId, privacy: .public), tokens=\(result.usage?.outputTokens ?? 0, privacy: .public)")
-                        }
-                    } catch {
-                        // Send a structured error frame; iOS can show "Resume
-                        // failed" without conflating it with the original
-                        // draft delivery.
-                        let response: [String: Any] = [
-                            "type": "codex_resume_error",
-                            "threadId": threadId,
-                            "msg": error.localizedDescription,
-                        ]
-                        if let body = try? JSONSerialization.data(withJSONObject: response),
-                           let text = String(data: body, encoding: .utf8) {
-                            sendWSText(text, on: connection)
-                        }
-                        serverLogger.warning("compose-draft codex-resume failed: \(error.localizedDescription, privacy: .public)")
-                    }
-                }
-
                 // Send a 1-byte application-layer ACK before closing so the
                 // iOS caller can `task.receive()` instead of guessing a
                 // sleep duration. Replaces the prior 200ms hope-it-flushed
@@ -837,25 +773,6 @@ public final class AgentControlServer {
             )
             wsChannels[ObjectIdentifier(connection)] = frontierChannel
             frontierChannel.start()
-        case "codex-stream-subscribe":
-            // v0.7.4: live SDK observation. Each event the Codex SDK
-            // observer sidecar emits flows here as a JSON text frame.
-            // Multi-subscriber by construction — the local ingestor can
-            // be reading the same session in parallel without contending.
-            guard let sessionIdString = envelope.sessionId,
-                  let sessionId = UUID(uuidString: sessionIdString),
-                  let session = registry.session(id: sessionId)
-            else {
-                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
-                return
-            }
-            let codexChannel = CodexStreamWebSocketChannel(
-                connection: connection,
-                session: session,
-                relay: CodexSubscriptionRelay.shared
-            )
-            wsChannels[ObjectIdentifier(connection)] = codexChannel
-            codexChannel.start()
         default:
             sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
         }
@@ -1699,19 +1616,6 @@ public final class AgentControlServer {
         guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSend, on: connection); return
         }
-        // v0.8 Phase 4.5: SDK chat sessions route to CodexSubscriptionRelay
-        // instead of tmux. Detect via (kind=.chat, agent=.codex,
-        // backend=.sdk) — those sessions have no tmux pane.
-        if route == .codexSDK {
-            await sendChatSDKPrompt(
-                session: session,
-                prompt: req.text,
-                idempotencyKey: req.idempotencyKey,
-                payloadHash: payloadHash,
-                connection: connection
-            )
-            return
-        }
         // v0.23.2 P1-04: OpenCode send. Wires the iOS / Mac composer's
         // POST /sessions/:id/send to opencode's `POST /session/<id>/message`.
         // The reply streams back asynchronously via the SSE `message.added`
@@ -2232,7 +2136,6 @@ public final class AgentControlServer {
         // immediately, then dispatches the per-backend cancel.
         let dispatcher = SessionInterruptDispatcher(
             registry: registry,
-            codexRelay: CodexSubscriptionRelay.shared,
             tmux: tmux,
             chatStoreRegistry: chatStoreRegistry
         )
@@ -5503,15 +5406,7 @@ public final class AgentControlServer {
             ChatCwdManager.markTrustedForClaude(path: chatCwd)
         }
         let argv = AgentSpawner.argv(for: updatedSession)
-        if argv.isEmpty && updatedSession.agent == .codex && updatedSession.codexChatBackend == .sdk {
-            // SDK chat: pre-create the SDK-only SessionChatStore via the
-            // registry so `chat-subscribe` WS subscribers and
-            // `/chat-snapshot` HTTP polls can find it immediately. The
-            // actual CodexSubscriptionRelay.start() is deferred until the
-            // first /send (we don't have an initial prompt at create
-            // time, and the SDK requires one to begin streaming).
-            _ = chatStoreRegistry.snapshotStore(for: updatedSession)
-        } else if argv.isEmpty {
+        if argv.isEmpty {
             // No binary on PATH for this provider — clean up + surface 503.
             try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
@@ -6261,38 +6156,6 @@ public final class AgentControlServer {
             await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
         }
-        // SDK (Codex)
-        if session.kind == .chat && session.agent == .codex && session.codexChatBackend == .sdk {
-            do {
-                let cwd = session.effectiveCwd
-                if session.codexChatThreadId != nil {
-                    try CodexSubscriptionRelay.shared.forwardPrompt(
-                        sessionId: session.id,
-                        workingDirectory: cwd,
-                        prompt: text,
-                        threadId: session.codexChatThreadId,
-                        skipGitRepoCheck: true,
-                        deepResearch: session.deepResearch
-                    )
-                } else {
-                    _ = try CodexSubscriptionRelay.shared.start(
-                        session: session,
-                        workingDirectory: cwd,
-                        initialPrompt: text,
-                        threadId: nil,
-                        model: session.model,
-                        sandboxMode: "read-only",
-                        modelReasoningEffort: session.effort?.codexConfigValue,
-                        skipGitRepoCheck: true
-                    )
-                }
-                await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
-                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
-            } catch {
-                serverLogger.warning("frontier child codex-sdk send failed: \(error.localizedDescription, privacy: .public)")
-                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: error.localizedDescription)
-            }
-        }
         // OpenCode sidecar
         if session.kind == .chat && session.agent == .opencode {
             do {
@@ -6362,7 +6225,6 @@ public final class AgentControlServer {
         // Delete the old session (cleans up chat-cwd + chat store entry).
         // Stop a harness child first (no-op for legacy children).
         await harnessRegistry.remove(existing.id)
-        await teardownSDKChat(sessionId: existing.id)
         if let wiring = sessionWiring.removeValue(forKey: existing.id) {
             wiring.stop()
         }
@@ -6943,142 +6805,6 @@ public final class AgentControlServer {
         return ["providerID": "openrouter", "modelID": id]
     }
 
-    private func sendChatSDKPrompt(
-        session: AgentSession,
-        prompt: String,
-        idempotencyKey: String? = nil,
-        payloadHash: String = "",
-        connection: NWConnection
-    ) async {
-        // D1 chat naming: tag the customName from the first user prompt
-        // when none is set yet. Trim + truncate to 40 chars (with ellipsis
-        // if longer). Existing rename handler normalizes empties to nil
-        // so the placeholder "New <Provider> chat" still renders pre-send.
-        if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-            let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                let truncated: String = {
-                    let cap = 40
-                    if trimmed.count <= cap { return trimmed }
-                    let idx = trimmed.index(trimmed.startIndex, offsetBy: cap - 1)
-                    return String(trimmed[..<idx]) + "…"
-                }()
-                try? await registry.rename(id: session.id, name: truncated)
-            }
-        }
-        let chatCwd = session.effectiveCwd
-        // v0.8 QA: echo the user's prompt into the SessionChatStore so it
-        // shows up as a user bubble in the thread immediately. Without
-        // this, the user sees nothing until the SDK assistant response
-        // streams in (or never, if there's a network hiccup). Marks the
-        // message with an SDK-prefixed id so it doesn't collide with
-        // assistant events that come back through the ingestor.
-        if let store = chatStoreRegistry.snapshotStore(for: session) {
-            let userMsgId = "user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
-            store.appendSDKMessages([
-                ChatMessage(
-                    id: userMsgId,
-                    kind: .userText,
-                    title: "You",
-                    body: prompt,
-                    at: Date()
-                )
-            ], at: Date())
-        }
-        do {
-            if CodexSubscriptionRelay.shared.isActive(sessionId: session.id) {
-                // Subsequent prompt — forward to the running sidecar with
-                // the resume threadId so the SDK reuses the same server-
-                // side thread.
-                try CodexSubscriptionRelay.shared.forwardPrompt(
-                    sessionId: session.id,
-                    workingDirectory: chatCwd,
-                    prompt: prompt,
-                    threadId: session.codexChatThreadId,
-                    skipGitRepoCheck: true,
-                    deepResearch: session.deepResearch
-                )
-            } else {
-                // First prompt — spawn the relay + ingestor. The ingestor
-                // captures `thread.started` and persists the threadId on
-                // the session record for resume-after-evict (NEW-T13).
-                let registryRef = self.registry
-                if let store = chatStoreRegistry.snapshotStore(for: session) {
-                    let ingestor = CodexSDKEventIngestor(
-                        sessionId: session.id,
-                        store: store,
-                        onThreadStarted: { [weak registryRef] threadId in
-                            Task { @MainActor in
-                                // F2-wire: best-effort; thread-id binding
-                                // failure here doesn't break the chat,
-                                // it just means resume-after-evict will
-                                // miss this thread.
-                                try? await registryRef?.setCodexChatThreadId(id: session.id, threadId: threadId)
-                            }
-                        }
-                    )
-                    ingestor.start()
-                    sdkChatIngestors[session.id] = ingestor
-                }
-                // v0.8 QA: chat-cwd (~/Library/.../chat-sessions/<uuid>/) is
-                // not a git repo. The Codex CLI rejects the call without
-                // `--skip-git-repo-check` and the SDK silently hangs with
-                // a stream_error sidecar-side ("Not inside a trusted
-                // directory…"). Pass true unconditionally for chat — the
-                // chat-cwd is sandboxed inside the app's Application
-                // Support dir and never holds user code.
-                _ = try CodexSubscriptionRelay.shared.start(
-                    session: session,
-                    workingDirectory: chatCwd,
-                    initialPrompt: prompt,
-                    threadId: session.codexChatThreadId,
-                    model: session.model,
-                    sandboxMode: "read-only",
-                    modelReasoningEffort: session.effort?.codexConfigValue,
-                    skipGitRepoCheck: true
-                )
-            }
-        } catch {
-            serverLogger.error("SDK chat send failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-            return
-        }
-        let peer = Self.endpointString(connection.endpoint)
-        await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: peer, text: prompt)
-        let updated = registry.session(id: session.id) ?? session
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        // v16 outbox: inline the receipt into the AgentSession body and
-        // cache the response bytes so a retried same-key request returns
-        // the same payload without re-driving CodexSubscriptionRelay
-        // (which would silently fire a second turn through the SDK).
-        if let body = try? encoder.encode(updated),
-           var dict = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
-            if let key = idempotencyKey, !key.isEmpty {
-                let receipt = MobileCommandReceipt(
-                    idempotencyKey: key, status: .acknowledged, processedAt: Date()
-                )
-                dict["receipt"] = receipt.jsonDictionary
-            }
-            if let merged = try? JSONSerialization.data(withJSONObject: dict) {
-                await recordIdempotent(
-                    key: idempotencyKey,
-                    kind: .send,
-                    sessionId: session.id,
-                    connection: connection,
-                    payloadHash: payloadHash,
-                    responseBody: merged,
-                    responseStatus: 200
-                )
-                sendResponse(.ok(contentType: "application/json", body: merged), on: connection)
-            } else {
-                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
-            }
-        } else {
-            sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
-        }
-    }
-
     /// v0.8 QA: prepare a CLI pane (code or chat) for the user's first
     /// prompt. Same flow either way:
     /// - **Codex update prompt**: auto-update (per user spec — always
@@ -7418,18 +7144,6 @@ public final class AgentControlServer {
         }
     }
 
-    /// v0.8 Phase 4.5 cleanup: tear down SDK chat ingestor + relay for a
-    /// session. Called from handleDeleteSession when removing a chat
-    /// session, and idempotent on non-SDK sessions / sessions that never
-    /// started a relay.
-    private func teardownSDKChat(sessionId: UUID) async {
-        if let ingestor = sdkChatIngestors.removeValue(forKey: sessionId) {
-            ingestor.stop()
-        }
-        if CodexSubscriptionRelay.shared.isActive(sessionId: sessionId) {
-            await CodexSubscriptionRelay.shared.stop(sessionId: sessionId)
-        }
-    }
 
     private func attachClaudeWiring(for session: AgentSession, cwd: String) {
         // Claude encodes the cwd as a directory name with `/` → `-`.
@@ -7746,9 +7460,6 @@ public final class AgentControlServer {
         if let task = chatWarmupTasks.removeValue(forKey: uuid) {
             task.cancel()
         }
-        // v0.8 Phase 4.5: tear down any SDK chat infrastructure first
-        // (ingestor sink + relay sidecar). Idempotent on non-SDK sessions.
-        await teardownSDKChat(sessionId: uuid)
         // ACP harness teardown (Grok): terminate the stdio child + driver and
         // release the chat store the bridge pinned. Idempotent on non-ACP
         // sessions (remove is a no-op when no bridge is registered).

@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clawdmeter — Strategic Competitive Analysis &amp; Opportunities Report</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&display=swap');
+        
+        :root {
+            --accent: #d97757;
+            --accent-glow: rgba(217, 119, 87, 0.15);
+            --accent-deep: #b4533c;
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --glass-bg: rgba(20, 21, 26, 0.6);
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+            background-color: #050608;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(217, 119, 87, 0.08) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(62, 142, 255, 0.05) 0px, transparent 50%);
+            background-attachment: fixed;
+        }
+        
+        .heading-font {
+            font-family: 'Outfit', -apple-system, "SF Pro Rounded", sans-serif;
+        }
+
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        .glass-card-interactive {
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .glass-card-interactive:hover {
+            transform: translateY(-2px);
+            border-color: rgba(217, 119, 87, 0.3);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 
+                        0 0 24px rgba(217, 119, 87, 0.08),
+                        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        }
+
+        .accent-gradient-text {
+            background: linear-gradient(135deg, #f5a98d 0%, #d97757 50%, #b4533c 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .accent-pill {
+            background: linear-gradient(180deg, #d97757 0%, #b4533c 100%);
+            box-shadow: 0 0 12px rgba(180, 83, 60, 0.3), 
+                        inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        }
+
+        .toc-link {
+            transition: all 0.15s ease;
+        }
+        
+        .toc-link:hover {
+            color: #d97757;
+            transform: translateX(4px);
+        }
+
+        table {
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        th {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        td {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 99px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+            body {
+                background: white !important;
+                color: black !important;
+            }
+            .glass-panel {
+                background: white !important;
+                border: 1px solid #ddd !important;
+                box-shadow: none !important;
+                color: black !important;
+            }
+            .accent-gradient-text {
+                -webkit-text-fill-color: initial !important;
+                color: #b4533c !important;
+            }
+        }
+    </style>
+</head>
+<body class="text-zinc-200 min-h-screen selection:bg-[#d97757]/30 selection:text-white">
+    
+    <!-- Top Static Navbar -->
+    <div class="border-b border-zinc-900 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-50 no-print">
+        <div class="max-w-[1200px] mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-x-3">
+                <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-[#d97757] to-[#b4533c] flex items-center justify-center shadow-md">
+                    <i class="fa-solid fa-gauge-high text-white text-sm"></i>
+                </div>
+                <div>
+                    <span class="heading-font font-bold text-lg tracking-tight text-white">Clawdmeter</span>
+                    <span class="text-[9px] text-[#d97757] font-semibold tracking-wider block -mt-1.5">STRATEGIC ANALYSIS</span>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-x-4">
+                <div class="text-[11px] px-3 py-1 rounded-full bg-zinc-900/60 border border-zinc-800 flex items-center gap-x-2">
+                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                    <span class="font-mono text-zinc-400">v0.29.30 (Continuum)</span>
+                </div>
+                
+                <button onclick="window.print()" 
+                        class="accent-pill flex items-center gap-x-2 px-4 py-2 text-xs font-semibold rounded-full text-white hover:opacity-90 active:scale-95 transition-all">
+                    <i class="fa-solid fa-print"></i>
+                    <span>Print / Save PDF</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content Frame -->
+    <div class="max-w-[1200px] mx-auto px-6 pt-12 pb-24 grid grid-cols-1 lg:grid-cols-4 gap-8">
+        
+        <!-- Left Sidebar Navigation (Sticky) -->
+        <div class="lg:col-span-1 no-print">
+            <div class="sticky top-24 space-y-8">
+                <div>
+                    <div class="text-[10px] font-bold text-[#d97757] tracking-widest uppercase mb-4">Report Navigation</div>
+                    <nav class="space-y-1 font-medium text-sm flex flex-col">
+                        <a href="#executive-summary" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">01</span> Executive Summary</a>
+                        <a href="#matrix" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">02</span> Comparison Matrix</a>
+                        <a href="#codebase-deep-dive" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">03</span> Codebase Assessment</a>
+                        <a href="#unfair-advantages" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">04</span> Unfair Advantages</a>
+                        <a href="#defeat-conductor" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">05</span> Killer Opportunities</a>
+                        <a href="#complement-cursor" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">06</span> Complementing Cursor</a>
+                        <a href="#action-plan" class="toc-link py-2 text-zinc-400 hover:text-white flex items-center gap-x-2.5"><span class="font-mono text-xs text-zinc-600">07</span> Tactical Action Plan</a>
+                    </nav>
+                </div>
+                
+                <div class="p-4 rounded-2xl bg-zinc-900/40 border border-zinc-900 text-xs text-zinc-500 leading-relaxed">
+                    <i class="fa-solid fa-circle-info text-[#d97757] mr-1.5"></i>
+                    This HTML document is optimized for clean styling in both a standard browser viewport and direct printed output to a PDF dashboard.
+                </div>
+            </div>
+        </div>
+        
+        <!-- Right Main Report Stream -->
+        <div class="lg:col-span-3 space-y-16">
+            
+            <!-- Hero Title Block -->
+            <div id="hero" class="border-b border-zinc-900 pb-8">
+                <div class="inline-flex items-center gap-x-2 rounded-full bg-zinc-900 border border-zinc-800 px-3 py-1 text-[10px] font-semibold text-emerald-400 tracking-wider uppercase mb-5">
+                    <i class="fa-solid fa-shield-halved"></i>
+                    <span>Competitive Strategy Brief</span>
+                </div>
+                
+                <h1 class="heading-font text-5xl lg:text-6xl font-bold tracking-tight text-white leading-none">
+                    The Cockpit for the <br><span class="accent-gradient-text">Agent Swarm</span>
+                </h1>
+                
+                <p class="mt-4 text-zinc-400 text-lg leading-relaxed max-w-2xl">
+                    A thorough assessment of Clawdmeter's codebase architecture, strategic positioning, and engineering avenues to outpace Conductor and complement Cursor.
+                </p>
+                
+                <div class="mt-8 flex flex-wrap gap-4 text-xs font-mono text-zinc-500">
+                    <div class="flex items-center gap-x-2"><i class="fa-solid fa-calendar text-[#d97757]"></i> <span>May 30, 2026</span></div>
+                    <div>•</div>
+                    <div class="flex items-center gap-x-2"><i class="fa-solid fa-code-fork text-[#d97757]"></i> <span>v0.29.30 Codebase</span></div>
+                    <div>•</div>
+                    <div class="flex items-center gap-x-2"><i class="fa-solid fa-robot text-[#d97757]"></i> <span>Parallel Multi-Agent Audit</span></div>
+                </div>
+            </div>
+            
+            <!-- Section: Executive Summary -->
+            <div id="executive-summary" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">01</span>
+                    <span>Executive Summary</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 leading-relaxed text-sm space-y-4">
+                    <p>
+                        Clawdmeter occupies a highly unique, developer-centric niche: it is a <strong>native, local-first control plane, telemetry ledger, and multi-device companion cockpit</strong> for heterogeneous coding agents (Claude Code, Codex, Gemini/Antigravity, and OpenCode).
+                    </p>
+                    
+                    <p>
+                        The core product wedge is visceral and immediate: <strong>"Run heavy agents locally on your Mac; monitor, approve, and steer them from your iPhone or Apple Watch while you walk away."</strong>
+                    </p>
+                    
+                    <p>
+                        However, to become a dominant, high-leverage developer platform, Clawdmeter must be strategically positioned and engineered against two dominant, highly capitalized product paradigms:
+                    </p>
+                </div>
+                
+                <!-- Quick Competitor Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                    <div class="glass-panel rounded-3xl p-5 border border-zinc-900">
+                        <div class="flex items-center gap-x-2 mb-3">
+                            <div class="w-6 h-6 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-400 text-xs font-bold">CR</div>
+                            <span class="font-semibold text-white tracking-tight">Cursor</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            An AI-first VS Code fork that owns the editor loop. It excels at low-latency autocomplete, active file buffer modifications (Composer), and automated codebase vector indexing.
+                        </p>
+                    </div>
+                    
+                    <div class="glass-panel rounded-3xl p-5 border border-zinc-900">
+                        <div class="flex items-center gap-x-2 mb-3">
+                            <div class="w-6 h-6 rounded-lg bg-orange-500/10 flex items-center justify-center text-orange-400 text-xs font-bold">CO</div>
+                            <span class="font-semibold text-white tracking-tight">Conductor (Melty Labs)</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            A desktop-only workbench designed specifically to coordinate parallel agents. It automates git worktree sandboxing and represents agents as virtual developers on a board.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section: Comparison Matrix -->
+            <div id="matrix" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">02</span>
+                    <span>Landscape Comparison Matrix</span>
+                </h2>
+                
+                <div class="overflow-x-auto rounded-3xl border border-zinc-900 bg-zinc-950/40 custom-scrollbar">
+                    <table class="w-full text-xs text-left">
+                        <thead>
+                            <tr class="bg-zinc-900/60 font-semibold text-zinc-300">
+                                <th class="px-5 py-4 w-40">Feature / Dimension</th>
+                                <th class="px-5 py-4 text-[#d97757] font-bold">Clawdmeter</th>
+                                <th class="px-5 py-4">Cursor</th>
+                                <th class="px-5 py-4">Conductor</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-zinc-900 text-zinc-400 leading-relaxed">
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Category</td>
+                                <td class="px-5 py-3.5 text-[#e09177] font-medium">Native multi-device control plane</td>
+                                <td class="px-5 py-3.5">AI-first integrated editor (IDE)</td>
+                                <td class="px-5 py-3.5">Parallel agent desktop orchestrator</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Form Factor</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Mac, iOS, watchOS, Linux</td>
+                                <td class="px-5 py-3.5">Desktop only (VS Code Fork)</td>
+                                <td class="px-5 py-3.5">macOS desktop app only</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Wedge</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Mobile approvals, local cost tracking</td>
+                                <td class="px-5 py-3.5">Inline autocomplete & Composer</td>
+                                <td class="px-5 py-3.5">Parallel worktrees & issue board</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Code Modifications</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Indirect (spawns background tmux CLIs)</td>
+                                <td class="px-5 py-3.5 font-medium text-emerald-400">Direct (in-editor inline diffs)</td>
+                                <td class="px-5 py-3.5">Indirect (spawns external CLIs)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Repo Intelligence</td>
+                                <td class="px-5 py-3.5 text-[#e09177]">Basic `@` mentions & recent files</td>
+                                <td class="px-5 py-3.5 font-medium text-emerald-400">Auto vector index & semantic RAG</td>
+                                <td class="px-5 py-3.5">None (relies entirely on CLI)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Mobile Control</td>
+                                <td class="px-5 py-3.5 font-medium text-emerald-400">iPhone / Watch steering (Yes)</td>
+                                <td class="px-5 py-3.5">None</td>
+                                <td class="px-5 py-3.5">None</td>
+                            </tr>
+                            <tr>
+                                <td class="px-5 py-3.5 font-medium text-zinc-300 bg-zinc-950/20">Telemetry & Cost</td>
+                                <td class="px-5 py-3.5 font-medium text-emerald-400">Best-in-class local pricing ledger</td>
+                                <td class="px-5 py-3.5">Opaque cloud plans</td>
+                                <td class="px-5 py-3.5">None (BYOK only)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Section: Codebase Deep-Dive -->
+            <div id="codebase-deep-dive" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">03</span>
+                    <span>Codebase &amp; Architecture Assessment</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 text-sm leading-relaxed">
+                    <p>
+                        Clawdmeter is powered by a solid macOS daemon. The code shows highly advanced, low-level coordination primitives, but highlights specific areas of structural complexity and deferred implementation.
+                    </p>
+                </div>
+                
+                <!-- Architecture Blueprint diagram (SVG) -->
+                <div class="glass-panel rounded-3xl p-6 border border-zinc-900">
+                    <div class="text-xs font-mono text-zinc-500 uppercase tracking-widest mb-4">SYSTEM TOPOLOGY BLUEPRINT</div>
+                    <svg viewBox="0 0 760 300" class="w-full h-auto text-zinc-300">
+                        <!-- Background Grid Lines -->
+                        <path d="M 0,50 L 760,50 M 0,150 L 760,150 M 0,250 L 760,250 M 150,0 L 150,300 M 380,0 L 380,300 M 610,0 L 610,300" stroke="rgba(255,255,255,0.02)" stroke-width="1" />
+                        
+                        <!-- Client Layer -->
+                        <rect x="20" y="30" width="110" height="60" rx="12" fill="rgba(20,21,26,0.8)" stroke="rgba(255,255,255,0.06)" />
+                        <text x="75" y="55" font-size="11" font-weight="600" fill="white" text-anchor="middle">iOS Client</text>
+                        <text x="75" y="70" font-size="8" fill="#d97757" font-family="monospace" text-anchor="middle">Tahoe UI</text>
+                        
+                        <rect x="20" y="110" width="110" height="60" rx="12" fill="rgba(20,21,26,0.8)" stroke="rgba(255,255,255,0.06)" />
+                        <text x="75" y="135" font-size="11" font-weight="600" fill="white" text-anchor="middle">watchOS Client</text>
+                        <text x="75" y="150" font-size="8" fill="#d97757" font-family="monospace" text-anchor="middle">Wrist approvals</text>
+
+                        <rect x="20" y="190" width="110" height="60" rx="12" fill="rgba(20,21,26,0.8)" stroke="rgba(255,255,255,0.06)" />
+                        <text x="75" y="215" font-size="11" font-weight="600" fill="white" text-anchor="middle">Linux Desktop</text>
+                        <text x="75" y="230" font-size="8" fill="zinc" font-family="monospace" text-anchor="middle">Hummingbird API</text>
+
+                        <!-- Daemon Box (Center) -->
+                        <rect x="210" y="20" width="310" height="240" rx="20" fill="rgba(217, 119, 87, 0.03)" stroke="rgba(217, 119, 87, 0.2)" />
+                        <text x="365" y="42" font-size="12" font-weight="700" fill="white" text-anchor="middle">macOS Daemon (AgentControlServer)</text>
+                        
+                        <rect x="230" y="65" width="270" height="35" rx="8" fill="#15171b" stroke="rgba(255,255,255,0.05)" />
+                        <text x="365" y="86" font-size="10" fill="white" text-anchor="middle">AgentSessionRegistry (Monotonic Sequencing)</text>
+
+                        <rect x="230" y="110" width="270" height="35" rx="8" fill="#15171b" stroke="rgba(255,255,255,0.05)" />
+                        <text x="365" y="131" font-size="10" fill="white" text-anchor="middle">WorktreeManager (Conductor-style Isolation)</text>
+
+                        <rect x="230" y="155" width="270" height="35" rx="8" fill="#15171b" stroke="rgba(255,255,255,0.05)" />
+                        <text x="365" y="176" font-size="10" fill="white" text-anchor="middle">UsageHistoryLoader ( cc-usage pricing.json )</text>
+
+                        <rect x="230" y="200" width="270" height="40" rx="8" fill="#15171b" stroke="rgba(255,255,255,0.05)" />
+                        <text x="365" y="217" font-size="9" font-weight="600" fill="#28c840" text-anchor="middle">● MobileCommandOutbox</text>
+                        <text x="365" y="230" font-size="8" fill="zinc" text-anchor="middle">Idempotent Background Retry Queue</text>
+
+                        <!-- Agent Runtimes -->
+                        <rect x="590" y="30" width="140" height="50" rx="10" fill="rgba(20,21,26,0.8)" stroke="rgba(255,255,255,0.06)" />
+                        <text x="660" y="55" font-size="11" font-weight="600" fill="white" text-anchor="middle">tmux Control Mode</text>
+                        <text x="660" y="68" font-size="8" fill="zinc" text-anchor="middle">Claude Code &amp; Codex CLI</text>
+
+                        <rect x="590" y="110" width="140" height="50" rx="10" fill="rgba(20,21,26,0.8)" stroke="rgba(255,255,255,0.06)" />
+                        <text x="660" y="135" font-size="11" font-weight="600" fill="white" text-anchor="middle">Antigravity gRPC</text>
+                        <text x="660" y="148" font-size="8" fill="zinc" text-anchor="middle">Gemini LSP Client</text>
+
+                        <rect x="590" y="190" width="140" height="50" rx="10" fill="rgba(20,21,26,0.8)" stroke="rgba(255,255,255,0.06)" />
+                        <text x="660" y="215" font-size="11" font-weight="600" fill="white" text-anchor="middle">OpenCode Server</text>
+                        <text x="660" y="228" font-size="8" fill="zinc" text-anchor="middle">SSE / OpenRouter API</text>
+
+                        <!-- Connective Arrows -->
+                        <path d="M 130,60 L 210,60" stroke="#d97757" stroke-width="1.5" stroke-dasharray="3,3" />
+                        <path d="M 130,140 L 210,140" stroke="#d97757" stroke-width="1.5" stroke-dasharray="3,3" />
+                        <path d="M 130,220 L 210,220" stroke="zinc" stroke-width="1" />
+                        
+                        <path d="M 520,55 L 590,55" stroke="emerald" stroke-width="1.5" />
+                        <path d="M 520,135 L 590,135" stroke="emerald" stroke-width="1.5" />
+                        <path d="M 520,215 L 590,215" stroke="emerald" stroke-width="1.5" />
+                    </svg>
+                </div>
+                
+                <!-- Detailed Code Component Breakdowns -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs leading-relaxed">
+                    <div class="glass-panel rounded-3xl p-5 border border-zinc-900">
+                        <div class="font-bold text-white mb-2 uppercase tracking-wider text-[10px]">1. Control &amp; tmux supervision</div>
+                        <p class="text-zinc-400">
+                            The daemon runs a tmux-control-mode supervisor (<code class="text-[#e09177]">TmuxControlClient.swift</code>) to orchestrate raw PTY sessions in the background. It reads local transcripts via <code class="text-[#e09177]">JSONLTail.swift</code> and wires events dynamically.
+                        </p>
+                    </div>
+                    
+                    <div class="glass-panel rounded-3xl p-5 border border-zinc-900">
+                        <div class="font-bold text-white mb-2 uppercase tracking-wider text-[10px]">2. Worktree Provisioning</div>
+                        <p class="text-zinc-400">
+                            <code class="text-[#e09177]">WorktreeManager.swift</code> provisions isolated git worktrees, writes ownership manifests, and implements a multi-gate garbage-collection schema to avoid deleting user modifications.
+                        </p>
+                    </div>
+                    
+                    <div class="glass-panel rounded-3xl p-5 border border-zinc-900">
+                        <div class="font-bold text-white mb-2 uppercase tracking-wider text-[10px]">3. Local ccusage Cost Ledger</div>
+                        <p class="text-zinc-400">
+                            <code class="text-[#e09177]">UsageHistoryLoader.swift</code> parses local JSONLs and SQLite Trajectories in parallel task groups, pricing tokens using an embedded LiteLLM model map snapshot with 0% data exfiltration.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section: Unfair Advantages -->
+            <div id="unfair-advantages" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">04</span>
+                    <span>Clawdmeter's Unfair Advantages</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 text-sm leading-relaxed">
+                    <p>
+                        We shouldn't compete with Cursor on editor design, or with Conductor on desktop-only fleet layout. Instead, Clawdmeter must double down on its highly defensible, native Apple-device ecosystem.
+                    </p>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div class="glass-panel rounded-3xl p-6 border border-zinc-900 flex flex-col justify-between">
+                        <div>
+                            <div class="w-8 h-8 rounded-xl bg-orange-500/10 flex items-center justify-center text-[#d97757] mb-4 text-sm">
+                                <i class="fa-solid fa-mobile-screen-button"></i>
+                            </div>
+                            <h3 class="font-bold text-white text-base tracking-tight mb-2">Glanceable Control</h3>
+                            <p class="text-xs text-zinc-400 leading-relaxed">
+                                Live Activities &amp; Dynamic Island display token burns, compilation steps, and execution states. High-priority Watch complications let you steer worktrees with a crown-press or wrist-tap.
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-3xl p-6 border border-zinc-900 flex flex-col justify-between">
+                        <div>
+                            <div class="w-8 h-8 rounded-xl bg-orange-500/10 flex items-center justify-center text-[#d97757] mb-4 text-sm">
+                                <i class="fa-solid fa-shuffle"></i>
+                            </div>
+                            <h3 class="font-bold text-white text-base tracking-tight mb-2">Broadcaster Consensus</h3>
+                            <p class="text-xs text-zinc-400 leading-relaxed">
+                                Clawdmeter's broadcast chat comparative engine lets you issue a single task to Claude, Codex, and Gemini side-by-side, benchmark outputs, and promote the winner to a live session.
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-3xl p-6 border border-zinc-900 flex flex-col justify-between">
+                        <div>
+                            <div class="w-8 h-8 rounded-xl bg-orange-500/10 flex items-center justify-center text-[#d97757] mb-4 text-sm">
+                                <i class="fa-solid fa-calculator"></i>
+                            </div>
+                            <h3 class="font-bold text-white text-base tracking-tight mb-2">Cost &amp; Quota Ledger</h3>
+                            <p class="text-xs text-zinc-400 leading-relaxed">
+                                Fully offline token tracking that monitors weekly limits. Before firing off a large run, preflight diagnostics estimate cost projections, pricing the swarm accurately by provider and repository.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section: Killer Opportunities vs Conductor -->
+            <div id="defeat-conductor" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">05</span>
+                    <span>Opportunities to Defeat Conductor</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 text-sm leading-relaxed">
+                    <p>
+                        Conductor treats AI agents as parallel virtual junior developers on a desktop board. Clawdmeter can dismantle this wedge by taking this exact orchestration concept and mirroring it to the Apple device ecosystem.
+                    </p>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="glass-panel glass-card-interactive rounded-3xl p-5 border border-zinc-900 flex flex-col justify-between">
+                        <div>
+                            <div class="inline-block text-[9px] font-bold text-[#d97757] tracking-wider uppercase mb-2">OPPORTUNITY 01</div>
+                            <h3 class="font-bold text-white text-base tracking-tight mb-2">The Mobile Fleet Kanban Board</h3>
+                            <p class="text-xs text-zinc-400 leading-relaxed">
+                                Map Clawdmeter's worktrees into a multi-device Kanban dashboard: <code class="text-zinc-500">Backlog ➔ In Progress ➔ Review ➔ Done</code>. Represent running agent processes as distinct visual developer cards (with avatars and city-name branch labels). Mirror the technical lead's steer board directly to iOS.
+                            </p>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-zinc-900 flex justify-between text-[10px] text-zinc-500 font-mono">
+                            <span>Status: Proposed</span>
+                            <span class="text-[#d97757] font-semibold">High Value</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-panel glass-card-interactive rounded-3xl p-5 border border-zinc-900 flex flex-col justify-between">
+                        <div>
+                            <div class="inline-block text-[9px] font-bold text-[#d97757] tracking-wider uppercase mb-2">OPPORTUNITY 02</div>
+                            <h3 class="font-bold text-white text-base tracking-tight mb-2">Post-Provisioning Script Execution</h3>
+                            <p class="text-xs text-zinc-400 leading-relaxed">
+                                Closes the top functional gap in Clawdmeter's worktree manager. Read <code class="text-zinc-500">conductor.json</code> or a custom workspace script file to automatically trigger <code class="text-zinc-500">npm install</code>, build targets, or setup environments inside the sandboxed folder before runtime spawning starts.
+                            </p>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-zinc-900 flex justify-between text-[10px] text-zinc-500 font-mono">
+                            <span>Status: Planned</span>
+                            <span class="text-[#d97757] font-semibold">Essential Parity</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-panel glass-card-interactive rounded-3xl p-5 border border-zinc-900 flex flex-col justify-between">
+                        <div>
+                            <div class="inline-block text-[9px] font-bold text-[#d97757] tracking-wider uppercase mb-2">OPPORTUNITY 03</div>
+                            <h3 class="font-bold text-white text-base tracking-tight mb-2">Consensus Synthesis Diffs</h3>
+                            <p class="text-xs text-zinc-400 leading-relaxed">
+                                When broadcasting prompts to multiple agents (e.g. Claude on branch A, Codex on branch B), display hunktrees side-by-side. Build a consensus merger tool, allowing developers to cherry-pick files and hunks from different runs to combine into a final merged output.
+                            </p>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-zinc-900 flex justify-between text-[10px] text-zinc-500 font-mono">
+                            <span>Status: Conceptual</span>
+                            <span class="text-[#d97757] font-semibold">UX Delighter</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-panel glass-card-interactive rounded-3xl p-5 border border-zinc-900 flex flex-col justify-between">
+                        <div>
+                            <div class="inline-block text-[9px] font-bold text-[#d97757] tracking-wider uppercase mb-2">OPPORTUNITY 04</div>
+                            <h3 class="font-bold text-white text-base tracking-tight mb-2">Watch Crown Actions &amp; Complications</h3>
+                            <p class="text-xs text-zinc-400 leading-relaxed">
+                                Expand watchOS complications to display aggregations of the agent swarm ("3 running, 1 plan waiting"). Tapping the complication launches a scrollable list. Approve the plan with a simple double-tap or steer it directly from your wrist.
+                            </p>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-zinc-900 flex justify-between text-[10px] text-zinc-500 font-mono">
+                            <span>Status: Proposed</span>
+                            <span class="text-[#d97757] font-semibold">Wearable Wedge</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section: Complementing Cursor -->
+            <div id="complement-cursor" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">06</span>
+                    <span>Opportunities to Complement Cursor</span>
+                </h2>
+                
+                <div class="prose prose-invert max-w-none text-zinc-300 text-sm leading-relaxed">
+                    <p>
+                        Do not try to build a better text editor than Cursor. Instead, position Clawdmeter as the ultimate background companion cockpit that hooks into the editor writing loop.
+                    </p>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div class="glass-panel rounded-3xl p-5 border border-zinc-900">
+                        <div class="w-6 h-6 rounded-lg bg-[#d97757]/10 flex items-center justify-center text-[#d97757] text-xs font-mono mb-3">05</div>
+                        <h4 class="font-bold text-white mb-2 text-sm tracking-tight">"Send to Clawdmeter" Shim</h4>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Create a lightweight VS Code extension. Highlight code, press a hotkey, and offload the task to Clawdmeter. The extension spawns background worktree runs so you never freeze your active editor layout.
+                        </p>
+                    </div>
+                    
+                    <div class="glass-panel rounded-3xl p-5 border border-zinc-900">
+                        <div class="w-6 h-6 rounded-lg bg-[#d97757]/10 flex items-center justify-center text-[#d97757] text-xs font-mono mb-3">06</div>
+                        <h4 class="font-bold text-white mb-2 text-sm tracking-tight">Embeddings-in-a-Box (RAG)</h4>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Integrate a lightweight, sandboxed vector engine (e.g. SQLite-VSS) into the Mac daemon. Build a background semantic indexer of the repo, enabling mobile users to command agents using rich context commands like <code class="text-zinc-500">@Codebase</code>.
+                        </p>
+                    </div>
+                    
+                    <div class="glass-panel rounded-3xl p-5 border border-zinc-900">
+                        <div class="w-6 h-6 rounded-lg bg-[#d97757]/10 flex items-center justify-center text-[#d97757] text-xs font-mono mb-3">07</div>
+                        <h4 class="font-bold text-white mb-2 text-sm tracking-tight">Swarm Loop CPU Health Monitor</h4>
+                        <p class="text-xs text-zinc-400 leading-relaxed">
+                            Monitor spawned tmux processes for CPU spikes and endless loops. If an agent gets caught in a failing test cycle and overheats your Mac, send an alert to iPhone with a one-tap "Kill &amp; Rollback" trigger.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section: Tactical Action Plan -->
+            <div id="action-plan" class="scroll-mt-24 space-y-6">
+                <h2 class="heading-font text-2xl font-bold text-white flex items-center gap-x-3">
+                    <span class="text-xs text-[#d97757] font-mono tracking-widest bg-zinc-900 px-2.5 py-1 rounded-lg">07</span>
+                    <span>Concrete Tactical Action Plan</span>
+                </h2>
+                
+                <div class="relative pl-6 border-l-2 border-zinc-900 space-y-8">
+                    <!-- Phase 1 -->
+                    <div class="relative">
+                        <div class="absolute -left-[31px] top-1.5 w-4 h-4 rounded-full bg-[#d97757] border-4 border-[#050608]"></div>
+                        <div class="inline-flex items-center gap-x-2 bg-orange-500/10 text-orange-400 text-[10px] font-bold px-2 py-px rounded-full border border-orange-500/20 mb-2">PHASE 1: HARDEN THE HOOKS</div>
+                        <h3 class="font-bold text-white text-base tracking-tight mb-2">Deliver Zero-Latency Push &amp; Provisioning Scripts</h3>
+                        <p class="text-xs text-zinc-400 leading-relaxed max-w-2xl">
+                            Deploy the client implementations for <code class="text-zinc-500">RelayClient.swift</code> (E3/E4) and <code class="text-zinc-500">APNSGatewayClient.swift</code> (E6). Resolve the XChaCha20-Poly1305 cross-implementation gap in Swift by adding <code class="text-zinc-500">libsodium-swift</code> or implementing the subkey prelude natively. Add post-provisioning scripts to worktrees to run setup steps before the agent spawns.
+                        </p>
+                    </div>
+                    
+                    <!-- Phase 2 -->
+                    <div class="relative">
+                        <div class="absolute -left-[31px] top-1.5 w-4 h-4 rounded-full bg-zinc-800 border-4 border-[#050608]"></div>
+                        <div class="inline-flex items-center gap-x-2 bg-zinc-900 text-zinc-400 text-[10px] font-bold px-2 py-px rounded-full border border-zinc-800 mb-2">PHASE 2: ORCHESTRATE &amp; EMBED</div>
+                        <h3 class="font-bold text-white text-base tracking-tight mb-2">Build the Fleet Board &amp; Sandboxed RAG</h3>
+                        <p class="text-xs text-zinc-400 leading-relaxed max-w-2xl">
+                            Implement the Kanban Fleet Dashboard in the Mac UI and mirror the status groupings to the iPhone. Wire a sandboxed local vector indexer (SQLite-VSS) into the repository indexing actor, adding support for the <code class="text-zinc-500">@Codebase</code> search commands in the composer.
+                        </p>
+                    </div>
+
+                    <!-- Phase 3 -->
+                    <div class="relative">
+                        <div class="absolute -left-[31px] top-1.5 w-4 h-4 rounded-full bg-zinc-800 border-4 border-[#050608]"></div>
+                        <div class="inline-flex items-center gap-x-2 bg-zinc-900 text-zinc-400 text-[10px] font-bold px-2 py-px rounded-full border border-zinc-800 mb-2">PHASE 3: EDITOR HOOKS</div>
+                        <h3 class="font-bold text-white text-base tracking-tight mb-2">Create the Cursor Extension &amp; Consensus Merger</h3>
+                        <p class="text-xs text-zinc-400 leading-relaxed max-w-2xl">
+                            Publish the "Send to Clawdmeter" TypeScript shim extension on the VS Code Marketplace. Implement the Hunk Synthesis editor in Clawdmeter, giving developers a dedicated comparative panel to reconcile branches and commits from multiple agent rollouts.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+    
+</body>
+</html>
