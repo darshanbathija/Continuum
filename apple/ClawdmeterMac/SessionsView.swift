@@ -2556,28 +2556,13 @@ public final class SessionsModel: ObservableObject {
               let session = registry.session(id: id),
               let windowId = session.tmuxWindowId,
               session.status == .planning,
-              (session.planText?.isEmpty == false || session.agent == .codex || session.agent == .cursor)
+              (session.planText?.isEmpty == false || session.agent == .codex)
         else { return }
         var windowKilled = false
         do {
-            let providerResumeId: String
-            if session.agent == .cursor {
-                guard let cursorResumeId = Self.cursorResumeId(for: session) else {
-                    try? await registry.setPlanText(
-                        id: id,
-                        planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
-                    )
-                    try? await registry.updateStatus(id: id, status: .degraded)
-                    WorkspaceFeedback.failure(
-                        "Can't approve plan",
-                        detail: "Cursor needs a real chat id — start Cursor in code mode or import a session with a proven id."
-                    )
-                    return
-                }
-                providerResumeId = cursorResumeId
-            } else {
-                providerResumeId = session.id.uuidString
-            }
+            // Cursor approve-plan goes through the ACP bridge (daemon), not this
+            // tmux respawn path — only Claude/Codex CLI reach here.
+            let providerResumeId = session.id.uuidString
             let argv = AgentSpawner.respawnArgv(
                 agent: session.agent,
                 resumeSessionId: providerResumeId,
@@ -2659,11 +2644,4 @@ public final class SessionsModel: ObservableObject {
         workspaceStore.syncActiveSessions(repoRoot: repoRoot, sessionIds: ids)
     }
 
-    private static func cursorResumeId(for session: AgentSession) -> String? {
-        let candidate = session.runtimeBinding?.externalSessionId
-            ?? session.runtimeBinding?.externalThreadId
-        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else { return nil }
-        return trimmed
-    }
 }

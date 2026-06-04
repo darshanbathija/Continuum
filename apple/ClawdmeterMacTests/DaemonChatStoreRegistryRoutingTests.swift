@@ -40,48 +40,8 @@ final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
         )
     }
 
-    func test_antigravityConversationDBURL_followsExpectedLayout() {
-        let convId = UUID(uuidString: "4D67B68A-7D62-45BD-A3CC-E4F46FB27EF3")!
-        let home = URL(fileURLWithPath: "/Users/test")
-        let url = DaemonChatStoreRegistry.antigravityConversationDBURL(
-            conversationId: convId,
-            homeDirectory: home
-        )
-        XCTAssertEqual(
-            url.path,
-            "/Users/test/.gemini/antigravity/conversations/4D67B68A-7D62-45BD-A3CC-E4F46FB27EF3.db"
-        )
-    }
-
-    func test_defaultResolveURL_geminiAgentapiPointsAtSQLiteDB() {
-        let convId = UUID()
-        let session = makeSession(
-            agent: .gemini,
-            geminiBackend: .agentapi,
-            antigravityConversationId: convId
-        )
-        let url = DaemonChatStoreRegistry.defaultResolveURL(sessionId: session.id, session: session)
-        XCTAssertNotNil(url, "agentapi sessions must resolve to a DB URL even when the file is absent")
-        XCTAssertTrue(url?.pathExtension == "db",
-            "agentapi sessions must NOT route to JSONL — expected .db, got \(url?.pathExtension ?? "nil")")
-        XCTAssertTrue(url?.path.contains(".gemini/antigravity/conversations/") ?? false,
-            "url path must be under ~/.gemini/antigravity/conversations/")
-    }
-
-    func test_defaultResolveURL_geminiAgentapiWithoutConversationIdFallsThrough() {
-        // When the agentapi handshake hasn't returned a conversationId yet
-        // (e.g. session created mid-flight before agentapi RPC succeeded),
-        // we don't have a DB URL to return. The fallthrough should pick
-        // SOMETHING — Codex newest-JSONL is the path of least surprise.
-        let session = makeSession(
-            agent: .gemini,
-            geminiBackend: .agentapi,
-            antigravityConversationId: nil
-        )
-        // Doesn't crash — the result is whatever Codex newest-JSONL
-        // returns (could be nil on a system with no codex sessions).
-        _ = DaemonChatStoreRegistry.defaultResolveURL(sessionId: session.id, session: session)
-    }
+    // (The agentapi conversation-DB routing tests were removed with the
+    // Antigravity agentapi drive — Gemini now drives headless via `agy`.)
 
     func test_defaultResolveURL_legacyGeminiWithoutBackendUsesCodexFallback() {
         // Sessions created before v0.8.0 have geminiBackend == nil. These
