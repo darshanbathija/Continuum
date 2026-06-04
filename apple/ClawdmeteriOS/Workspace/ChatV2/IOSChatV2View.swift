@@ -89,7 +89,7 @@ private struct ChatBody: View {
     private var header: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("CLAWDMETER")
+                Text("CONTINUUM")
                     .font(TahoeFont.body(10, weight: .bold))
                     .foregroundStyle(t.fg4)
                 Text("Chat")

@@ -61,52 +61,35 @@ final class WireV10Tests: XCTestCase {
         XCTAssertEqual(AgentControlWireVersion.codexSDKMinimum, 8)
     }
 
-    // MARK: - GeminiBackend enum
+    // MARK: - AgentSession ignores legacy agentapi keys (now removed)
 
-    func test_geminiBackend_codableRoundTrip() throws {
-        let value: GeminiBackend = .agentapi
-        let data = try JSONEncoder().encode(value)
-        let decoded = try JSONDecoder().decode(GeminiBackend.self, from: data)
-        XCTAssertEqual(decoded, .agentapi)
-    }
-
-    func test_geminiBackend_rawValueIsAgentapi() {
-        XCTAssertEqual(GeminiBackend.agentapi.rawValue, "agentapi")
-    }
-
-    // MARK: - AgentSession schema v6 round-trip
-
-    func test_agentSession_schemaV6_roundTripWithAgentapiFields() throws {
-        let convId = UUID()
-        let session = AgentSession(
-            id: UUID(),
-            repoKey: "/Users/dev/repo",
-            repoDisplayName: "repo",
-            agent: .gemini,
-            model: "gemini-3.5-flash",
-            goal: "ship v0.8.0",
-            worktreePath: nil,
-            tmuxWindowId: nil,
-            tmuxPaneId: nil,
-            status: .running,
-            planText: nil,
-            createdAt: Date(timeIntervalSince1970: 1779000000),
-            lastEventAt: Date(timeIntervalSince1970: 1779000100),
-            lastEventSeq: 42,
-            geminiBackend: .agentapi,
-            antigravityConversationId: convId
-        )
-        let data = try JSONEncoder().encode(session)
-        let decoded = try JSONDecoder().decode(AgentSession.self, from: data)
-        XCTAssertEqual(decoded.geminiBackend, .agentapi)
-        XCTAssertEqual(decoded.antigravityConversationId, convId)
+    /// Old sessions.json files (pre-agy-migration) carried geminiBackend /
+    /// antigravityConversationId / antigravityProjectId. Those fields are gone;
+    /// the decoder must IGNORE the unknown keys, not throw, so legacy session
+    /// lists still load.
+    func test_agentSession_decodesLegacyAgentapiKeysWithoutThrowing() throws {
+        let legacyJSON = #"""
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "repoKey": "/Users/dev/repo",
+          "repoDisplayName": "repo",
+          "agent": "gemini",
+          "status": "running",
+          "createdAt": "2026-05-19T18:30:00Z",
+          "lastEventAt": "2026-05-19T18:31:00Z",
+          "lastEventSeq": 0,
+          "mode": "local",
+          "geminiBackend": "agentapi",
+          "antigravityConversationId": "22222222-2222-2222-2222-222222222222",
+          "antigravityProjectId": "proj-1"
+        }
+        """#
+        let decoded = try JSONDecoder.iso8601.decode(AgentSession.self, from: legacyJSON.data(using: .utf8)!)
         XCTAssertEqual(decoded.agent, .gemini)
     }
 
-    func test_agentSession_schemaV5PayloadDecodesWithNilV6Fields() throws {
-        // Simulates a sessions.json written by v0.7.x (no geminiBackend,
-        // no antigravityConversationId). Decoder should set them to nil
-        // without erroring.
+    func test_agentSession_schemaV5PayloadDecodes() throws {
+        // A sessions.json written without the agentapi keys decodes cleanly.
         let v5json = #"""
         {
           "id": "11111111-1111-1111-1111-111111111111",
@@ -122,8 +105,6 @@ final class WireV10Tests: XCTestCase {
         """#
         let decoded = try JSONDecoder.iso8601.decode(AgentSession.self, from: v5json.data(using: .utf8)!)
         XCTAssertEqual(decoded.agent, .gemini)
-        XCTAssertNil(decoded.geminiBackend)
-        XCTAssertNil(decoded.antigravityConversationId)
     }
 
     func test_agentSession_v6EncodingOmitsNilFields() throws {
@@ -150,8 +131,7 @@ final class WireV10Tests: XCTestCase {
         let jsonString = String(data: data, encoding: .utf8)!
         // Round-trip should still work even without the v6 fields.
         let decoded = try JSONDecoder().decode(AgentSession.self, from: data)
-        XCTAssertNil(decoded.geminiBackend)
-        XCTAssertNil(decoded.antigravityConversationId)
+        XCTAssertEqual(decoded.agent, .claude)
         // Wire shape lean: nil fields should NOT appear in output.
         // JSONEncoder default behavior is to omit nil for Optional via encodeIfPresent,
         // but Swift's auto-synthesized Codable emits null. This is a soft

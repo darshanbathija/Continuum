@@ -30,5 +30,5 @@ import Foundation
 /// Mach service name the Mac app vends `UsageWriterProtocol` at. The
 /// `group.<team>.<bundle>.` prefix is required for sandboxed callers (e.g.
 /// the widget extension) to be entitled to look it up via App Group access.
-public let UsageWriterMachServiceName = "group.76S62SDSD3.com.clawdmeter.UsageQuery"
+public let UsageWriterMachServiceName = "group.LRL8MRH6B4.ai.continuum.UsageQuery"
 #endif // os(macOS)

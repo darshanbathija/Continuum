@@ -100,7 +100,7 @@ public actor AcpAgentDriver: AgentDriver {
 
         // session/new — try first; authenticate + retry only if the agent
         // demands it (cached-auth agents skip the auth round-trip entirely).
-        let newReq = ACPNewSessionRequest(cwd: cwd)
+        let newReq = ACPNewSessionRequest(cwd: cwd, mcpServers: [])  // ACP requires mcpServers present as an array (cursor-agent rejects nil with -32603)
         let newRaw: ACPJSONValue
         do {
             newRaw = try await connection.request(ACP.AgentMethod.sessionNew, params: try encodeValue(newReq))

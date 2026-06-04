@@ -1337,6 +1337,10 @@ private struct ComposerBar: View {
         let enabled = ProviderEnablement.isEnabled(vendor)
         let available = isVendorAvailable(vendor)
         let canSelect = enabled && (selected || available)
+        // A not-yet-enabled provider stays tappable so the row can opt it in
+        // inline (toggleProviderRow enables + selects it); once enabled, normal
+        // availability gating applies.
+        let canInteract = canSelect || !enabled
         HStack(spacing: 10) {
             Button { toggleProviderRow(vendor) } label: {
                 Image(systemName: selected ? "checkmark.square.fill" : "square")
@@ -1344,7 +1348,7 @@ private struct ComposerBar: View {
                     .foregroundStyle(selected ? t.accent : t.fg4)
             }
             .buttonStyle(.plain)
-            .disabled(!canSelect)
+            .disabled(!canInteract)
 
             TahoeProviderGlyph(provider: vendor.backingProvider.tahoeProvider, size: 18)
 
@@ -1374,7 +1378,19 @@ private struct ComposerBar: View {
     }
 
     private func toggleProviderRow(_ vendor: ChatVendor) {
-        guard ProviderEnablement.isEnabled(vendor) else { return }
+        // Inline-enable: checking a not-yet-enabled provider (e.g. Antigravity/
+        // Gemini or OpenRouter) opts it in right here instead of forcing a detour
+        // to Settings → Providers, then selects it. The provider probe + model
+        // catalog refresh off the changed-notification setEnabled posts; the
+        // ChatV2Store selection change re-renders the row to its enabled state.
+        if !ProviderEnablement.isEnabled(vendor) {
+            // setEnabled posts ProviderEnablement.changedNotification, which
+            // ChatRoot observes to re-run the probe + model-catalog refresh — so
+            // the row un-greys and its model dropdown populates on the next render.
+            ProviderEnablement.setEnabled(vendor.backingProvider.rawValue, true)
+            if !store.isVendorSelected(vendor) { store.toggleVendor(vendor) }
+            return
+        }
         if !store.isVendorSelected(vendor), !isVendorAvailable(vendor) { return }
         store.toggleVendor(vendor)
     }
@@ -1677,7 +1693,12 @@ private struct ComposerBar: View {
     }
 
     private var providerPickerVendors: [ChatVendor] {
-        var vendors = providerEnabledVendors
+        // Show EVERY chat-capable vendor (incl. Antigravity/Gemini + OpenRouter) so
+        // they're discoverable in chat even before they're enabled. Disabled rows
+        // render greyed with an "Enable … in Settings → Providers" reason and a
+        // tap enables them inline (see toggleProviderRow). Selected vendors are
+        // always present even if reordered.
+        var vendors = ChatV2Store.defaultChatVendorOrder
         for vendor in store.selectedVendors where !vendors.contains(vendor) {
             vendors.append(vendor)
         }

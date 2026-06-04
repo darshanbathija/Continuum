@@ -8,7 +8,7 @@
 	     App Group works here (unlike on macOS where we needed XPC). -->
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.76S62SDSD3.com.clawdmeter</string>
+		<string>group.LRL8MRH6B4.ai.continuum</string>
 	</array>
 	<!-- Shared Keychain access group: iCloud Keychain syncs the Anthropic
 	     OAuth token written by the Mac app into this entry, and the iPhone
@@ -16,7 +16,7 @@
 	     user has iCloud Keychain on with the same Apple ID. -->
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.clawdmeter</string>
+		<string>$(AppIdentifierPrefix)ai.continuum</string>
 	</array>
 	<!-- iCloud Key-Value store for Mac→iOS Codex usage sync. DISABLED on
 	     personal-team builds — flip on once we're on a paid Developer
@@ -27,7 +27,7 @@
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array/>
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
-	<string>$(TeamIdentifierPrefix)com.clawdmeter</string>
+	<string>$(TeamIdentifierPrefix)ai.continuum</string>
 	-->
 </dict>
 </plist>

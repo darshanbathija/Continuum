@@ -152,3 +152,151 @@ lane :release do
 
   UI.success "Release v#{market} build #{build} drafted on GitHub. TestFlight upload in flight."
 end
+
+# ---------------------------------------------------------------------
+# v27 Continuum TestFlight pipeline (App Store Connect API key auth)
+# ---------------------------------------------------------------------
+
+# Load the App Store Connect API key from env (key id / issuer id / .p8 path).
+# Sets the lane-context token so produce / gym / pilot reuse it without a 2FA
+# prompt. Returns the api_key hash for explicit `api_key:` args.
+def continuum_asc_key
+  app_store_connect_api_key(
+    key_id: ENV["CLAWDMETER_ASC_KEY_ID"],
+    issuer_id: ENV["CLAWDMETER_ASC_ISSUER_ID"],
+    key_filepath: ENV["CLAWDMETER_ASC_KEY_PATH"],
+    duration: 1200,
+    in_house: false
+  )
+end
+
+desc "Read-only: verify the ASC API key auths + list existing apps."
+lane :asc_verify do
+  continuum_asc_key
+  apps = Spaceship::ConnectAPI::App.all
+  if apps.empty?
+    UI.important "API key OK. No apps exist yet under this team."
+  else
+    UI.success "API key OK. #{apps.size} app(s): #{apps.map { |a| a.bundle_id }.join(', ')}"
+  end
+end
+
+desc "Probe whether a bundle-id prefix is available (creates PROBE_ID)."
+lane :probe_prefix do
+  continuum_asc_key
+  id = ENV["PROBE_ID"]
+  begin
+    Spaceship::ConnectAPI::BundleId.create(
+      name: id.tr(".", " "), identifier: id,
+      platform: Spaceship::ConnectAPI::BundleIdPlatform::IOS
+    )
+    UI.success "AVAILABLE (created): #{id}"
+  rescue => e
+    UI.error "NOT available: #{id} :: #{e.message.gsub(/\s+/, ' ')[0, 200]}"
+  end
+end
+
+desc "Pre-create the 6 App IDs via the App Store Connect API (the API key path
+that works headlessly — fastlane's own App-ID creation needs a portal login).
+Best-effort capabilities so the app-store profiles carry the entitlements."
+lane :continuum_bootstrap_ids do
+  continuum_asc_key
+  ios = Spaceship::ConnectAPI::BundleIdPlatform::IOS
+  mac = Spaceship::ConnectAPI::BundleIdPlatform::MAC_OS
+  specs = [
+    ["ai.continuum.ios",          ios, "Continuum iOS"],
+    ["ai.continuum.ios.widgets",  ios, "Continuum iOS Widgets"],
+    ["ai.continuum.watch",        ios, "Continuum Watch"],
+    ["ai.continuum.watch.widgets",ios, "Continuum Watch Widgets"],
+    ["ai.continuum.mac",          mac, "Continuum Mac"],
+    ["ai.continuum.mac.widgets",  mac, "Continuum Mac Widgets"],
+  ]
+  existing = Spaceship::ConnectAPI::BundleId.all.map(&:identifier)
+  specs.each do |identifier, platform, name|
+    if existing.include?(identifier)
+      UI.message "exists: #{identifier}"
+    else
+      Spaceship::ConnectAPI::BundleId.create(name: name, identifier: identifier, platform: platform)
+      UI.success "created App ID: #{identifier}"
+    end
+  end
+  UI.success "App IDs ready."
+end
+
+desc "Sync App Store distribution cert + profiles for all bundle IDs (API key
+auth via match; app-store profiles need no devices)."
+lane :continuum_match do
+  key = continuum_asc_key
+  match(api_key: key, type: "appstore", readonly: false)
+  UI.success "match appstore synced."
+end
+
+desc "Read-only: confirm the API key can reach Certificates/IDs/Profiles."
+lane :asc_check_devportal do
+  continuum_asc_key
+  begin
+    certs = Spaceship::ConnectAPI::Certificate.all
+    bundles = Spaceship::ConnectAPI::BundleId.all
+    UI.success "Dev-portal OK. certs=#{certs.size} bundleIds=#{bundles.size}"
+    UI.message "certs: #{certs.map { |c| c.certificate_type }.join(', ')}"
+    UI.message "bundleIds: #{bundles.map { |b| b.identifier }.join(', ')}"
+    apps = Spaceship::ConnectAPI::App.all
+    UI.message "apps: #{apps.map { |a| a.bundle_id }.join(', ')}"
+  rescue => e
+    UI.error "Dev-portal access FAILED (key role likely too low — needs Admin): #{e.class}: #{e.message}"
+  end
+end
+
+desc "Create the iOS App Store Connect app record (ASC API key — no dev-center
+login). Requires the App ID to already exist (created by the archive's
+-allowProvisioningUpdates). Idempotent."
+lane :continuum_produce do
+  continuum_asc_key  # sets the lane-context ASC API token produce reuses
+  produce(
+    app_identifier: "ai.continuum.ios",
+    app_name: ENV["CONTINUUM_APP_NAME"] || "Continuum",
+    language: "English",
+    sku: "continuum-ios-001",
+    team_id: ENV["CLAWDMETER_TEAM_ID"],
+    company_name: "Montauk Analytics Inc",
+    skip_itc: false,
+    skip_devcenter: true,
+    platform: "ios"
+  )
+  UI.success "iOS App Store Connect record ready."
+end
+
+desc "Archive iOS + Watch only (Xcode-managed automatic signing + API key)."
+lane :continuum_archive do
+  continuum_asc_key  # sets lane-context token (used by produce/pilot later)
+  # Pass the ASC API key straight to xcodebuild so -allowProvisioningUpdates
+  # can create the cert/profiles/App-IDs/capabilities headlessly (no 2FA).
+  auth = "-authenticationKeyPath #{ENV['CLAWDMETER_ASC_KEY_PATH']} " \
+         "-authenticationKeyID #{ENV['CLAWDMETER_ASC_KEY_ID']} " \
+         "-authenticationKeyIssuerID #{ENV['CLAWDMETER_ASC_ISSUER_ID']}"
+  sh("cd .. && xcodegen >/dev/null")
+  build_app(
+    project: "Clawdmeter.xcodeproj",
+    scheme: "Clawdmeter (iOS)",
+    destination: "generic/platform=iOS",
+    export_method: "app-store",
+    output_directory: "./build",
+    output_name: "Continuum-iOS.ipa",
+    include_symbols: true,
+    xcargs: "-allowProvisioningUpdates #{auth}",
+    export_xcargs: "-allowProvisioningUpdates #{auth}"
+  )
+  UI.success "iOS + Watch archived → ./build/Continuum-iOS.ipa"
+end
+
+desc "Full iOS TestFlight: archive (auto-provision) → app record → upload."
+lane :continuum_ios_testflight do
+  continuum_archive
+  continuum_produce
+  continuum_asc_key  # re-assert the lane-context token for pilot
+  upload_to_testflight(
+    skip_waiting_for_build_processing: true,
+    ipa: "./build/Continuum-iOS.ipa"
+  )
+  UI.success "iOS + Watch uploaded to TestFlight."
+end

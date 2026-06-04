@@ -101,6 +101,20 @@ final class MacComposerSender {
         return try decoder.decode(CreateFrontierResponse.self, from: data)
     }
 
+    /// v27 Code-tab harness migration: create a session via the daemon's
+    /// `POST /sessions` harness spawn (paneless codex/cursor/gemini) and return
+    /// the registered `AgentSession`. Mirrors the Mac→daemon loopback the Code
+    /// tab already uses for send/interrupt, so Mac + iOS share one create path.
+    /// Uses the 30s timeout (daemon-side worktree provisioning can take a few
+    /// seconds) — harness bridges are live by the time this returns.
+    func createSession(_ request: NewSessionRequest) async throws -> AgentSession {
+        let req = try makeRequest(path: "/sessions", jsonBody: request)
+        let data = try await execute(req)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(AgentSession.self, from: data)
+    }
+
     // MARK: - HTTP
 
     private func makeRequest<Body: Encodable>(path: String, jsonBody: Body) throws -> URLRequest {

@@ -144,11 +144,6 @@ public final class AgentControlServer {
         Set(sessionWiring.values.map { $0.sessionFileURL.path })
     }
 
-    /// v0.8 Phase 4.5: per-session Codex SDK chat ingestors. Created on
-    /// the first /send for an SDK chat session; torn down on DELETE or
-    /// SDK chat-session idle evict. Holding a strong reference keeps the
-    /// Combine sink alive across the session lifetime.
-    private var sdkChatIngestors: [UUID: CodexSDKEventIngestor] = [:]
 
     /// v0.8 QA: per-session warmup task for chat-mode CLI sessions. The
     /// handler that handles `POST /sessions/:id/send` awaits the task
@@ -651,65 +646,6 @@ public final class AgentControlServer {
                 )
                 serverLogger.info("compose-draft received: text length=\(payload.text.count, privacy: .public), repo=\(payload.repoKey ?? "-", privacy: .public), peer=\(peer, privacy: .public)")
 
-                // v0.7.2 wire v8 additive: when the iOS client attaches a
-                // `codexThreadId` AND the draft suggests Codex agent, dispatch
-                // the prompt to the Codex SDK's one-shot resume. Posts the
-                // resume_result back to the iOS client over the same WS as a
-                // second JSON frame before closing. SDK runs against the
-                // user's ChatGPT subscription quota (no per-token billing).
-                if let threadId = payload.codexThreadId,
-                   !threadId.isEmpty,
-                   payload.suggestedAgent == .codex,
-                   await CodexSDKManager.shared.isProvisioned {
-                    // Resolve workingDirectory: prefer the draft's repoKey,
-                    // fall back to the user's home dir so the SDK can run
-                    // outside a git repo too.
-                    let workingDirectory = payload.repoKey
-                        ?? ClawdmeterRealHome.path()
-                    do {
-                        let result = try await CodexSDKManager.shared.runResume(
-                            threadId: threadId,
-                            prompt: payload.text,
-                            workingDirectory: workingDirectory,
-                            timeout: 120
-                        )
-                        // Post a structured result frame so iOS can render the
-                        // resumed-thread response inline. The wire format is a
-                        // single JSON line: {type, threadId, finalResponse,
-                        // usage}. iOS parses this from the WS receive.
-                        let response: [String: Any] = [
-                            "type": "codex_resume_result",
-                            "threadId": result.threadId,
-                            "finalResponse": result.finalResponse,
-                            "usage": [
-                                "inputTokens": result.usage?.inputTokens ?? 0,
-                                "cachedInputTokens": result.usage?.cachedInputTokens ?? 0,
-                                "outputTokens": result.usage?.outputTokens ?? 0,
-                                "reasoningOutputTokens": result.usage?.reasoningOutputTokens ?? 0,
-                            ]
-                        ]
-                        if let body = try? JSONSerialization.data(withJSONObject: response),
-                           let text = String(data: body, encoding: .utf8) {
-                            sendWSText(text, on: connection)
-                            serverLogger.info("compose-draft codex-resume succeeded: threadId=\(threadId, privacy: .public), tokens=\(result.usage?.outputTokens ?? 0, privacy: .public)")
-                        }
-                    } catch {
-                        // Send a structured error frame; iOS can show "Resume
-                        // failed" without conflating it with the original
-                        // draft delivery.
-                        let response: [String: Any] = [
-                            "type": "codex_resume_error",
-                            "threadId": threadId,
-                            "msg": error.localizedDescription,
-                        ]
-                        if let body = try? JSONSerialization.data(withJSONObject: response),
-                           let text = String(data: body, encoding: .utf8) {
-                            sendWSText(text, on: connection)
-                        }
-                        serverLogger.warning("compose-draft codex-resume failed: \(error.localizedDescription, privacy: .public)")
-                    }
-                }
-
                 // Send a 1-byte application-layer ACK before closing so the
                 // iOS caller can `task.receive()` instead of guessing a
                 // sleep duration. Replaces the prior 200ms hope-it-flushed
@@ -837,25 +773,6 @@ public final class AgentControlServer {
             )
             wsChannels[ObjectIdentifier(connection)] = frontierChannel
             frontierChannel.start()
-        case "codex-stream-subscribe":
-            // v0.7.4: live SDK observation. Each event the Codex SDK
-            // observer sidecar emits flows here as a JSON text frame.
-            // Multi-subscriber by construction — the local ingestor can
-            // be reading the same session in parallel without contending.
-            guard let sessionIdString = envelope.sessionId,
-                  let sessionId = UUID(uuidString: sessionIdString),
-                  let session = registry.session(id: sessionId)
-            else {
-                sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
-                return
-            }
-            let codexChannel = CodexStreamWebSocketChannel(
-                connection: connection,
-                session: session,
-                relay: CodexSubscriptionRelay.shared
-            )
-            wsChannels[ObjectIdentifier(connection)] = codexChannel
-            codexChannel.start()
         default:
             sendWSClose(on: connection, code: .protocolCode(.unsupportedData))
         }
@@ -1692,67 +1609,12 @@ public final class AgentControlServer {
             agent: session.agent,
             kind: session.kind,
             codexChatBackend: session.codexChatBackend,
-            geminiBackend: session.geminiBackend,
-            hasAntigravityConversation: session.antigravityConversationId != nil,
             runtimeIsACPDriven: session.runtimeBinding?.runtimeKind.isACPDriven == true,
             hasLiveBridge: harnessRegistry.bridge(for: uuid) != nil
         )
         let route = SessionCommandRouter.resolve(routeCtx)
-        // v0.8.1 agy-migration (Codex P1.3): Antigravity 2 agentapi
-        // sessions have no tmux pane — sends route through
-        // `LanguageServerClient.sendMessage` against the running
-        // language_server. Same rate-limit + audit-log path as tmux
-        // sends; the only difference is the transport. This branch
-        // runs BEFORE the chat-tab SDK dispatch + paneId guard below.
-        if route == .antigravityAgentapi,
-           let conversationId = session.antigravityConversationId {
-            guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
-                sendResponse(.tooManyRequestsSend, on: connection); return
-            }
-            do {
-                try await sendAntigravityMessage(
-                    session: session,
-                    conversationId: conversationId,
-                    content: req.text
-                )
-                let peer = Self.endpointString(connection.endpoint)
-                await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
-                await sendCommandResponse(
-                    body: ["ok": true],
-                    key: req.idempotencyKey,
-                    kind: .send,
-                    sessionId: uuid,
-                    payloadHash: payloadHash,
-                    on: connection
-                )
-            } catch let LanguageServerClientError.notRunning {
-                serverLogger.warning("send-prompt for agentapi session \(uuid.uuidString, privacy: .public): LS not running")
-                sendResponse(HTTPResponse(
-                    status: 503, reason: "Service Unavailable",
-                    contentType: "application/json",
-                    body: Data(#"{"error":"antigravity_not_running","cta":"Open Antigravity 2 to continue this session"}"#.utf8)
-                ), on: connection)
-            } catch {
-                serverLogger.error("send-prompt agentapi failed: \(error.localizedDescription, privacy: .public)")
-                sendResponse(.internalError, on: connection)
-            }
-            return
-        }
         guard RateLimiter.shared.tryAcquireSend(sessionId: uuid) else {
             sendResponse(.tooManyRequestsSend, on: connection); return
-        }
-        // v0.8 Phase 4.5: SDK chat sessions route to CodexSubscriptionRelay
-        // instead of tmux. Detect via (kind=.chat, agent=.codex,
-        // backend=.sdk) — those sessions have no tmux pane.
-        if route == .codexSDK {
-            await sendChatSDKPrompt(
-                session: session,
-                prompt: req.text,
-                idempotencyKey: req.idempotencyKey,
-                payloadHash: payloadHash,
-                connection: connection
-            )
-            return
         }
         // v0.23.2 P1-04: OpenCode send. Wires the iOS / Mac composer's
         // POST /sessions/:id/send to opencode's `POST /session/<id>/message`.
@@ -1872,9 +1734,6 @@ public final class AgentControlServer {
             }
             let peer = Self.endpointString(connection.endpoint)
             await AuditLog.shared.recordSend(sessionId: uuid, sourcePeer: peer, text: req.text)
-            if session.agent == .cursor {
-                appendCursorTranscriptEcho(session: session, prompt: req.text, paneId: paneId)
-            }
             await sendCommandResponse(
                 body: ["ok": true],
                 key: req.idempotencyKey,
@@ -1885,285 +1744,6 @@ public final class AgentControlServer {
             )
         } catch {
             serverLogger.error("send-prompt failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-        }
-    }
-
-    private func appendCursorTranscriptEcho(session: AgentSession, prompt: String, paneId: String) {
-        guard let store = chatStoreRegistry.snapshotStore(for: session) else { return }
-        let now = Date()
-        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        var messages: [ChatMessage] = []
-        if !trimmedPrompt.isEmpty {
-            messages.append(ChatMessage(
-                id: "cursor-user-\(UUID().uuidString)",
-                kind: .userText,
-                title: "You",
-                body: trimmedPrompt,
-                at: now
-            ))
-        }
-        let hasMirror = !SDKChatTranscriptMirror.readAll(sessionId: session.id).isEmpty
-        if !hasMirror && store.snapshot.items.isEmpty {
-            messages.append(ChatMessage(
-                id: "cursor-meta-\(UUID().uuidString)",
-                kind: .meta,
-                title: "Cursor",
-                body: "Cursor Agent is running in the Terminal pane. Clawdmeter mirrors sends and terminal snapshots here until native Cursor transcript import can attach a proven Cursor chat id.",
-                at: now
-            ))
-        }
-        store.appendSDKMessages(messages, at: now)
-        store.setCurrentTurnState(.streaming)
-
-        Task { @MainActor [weak self, sessionId = session.id] in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            guard let self,
-                  let refreshed = self.registry.session(id: sessionId),
-                  let refreshedStore = self.chatStoreRegistry.snapshotStore(for: refreshed),
-                  let captured = try? await self.tmux.command(["capture-pane", "-p", "-t", paneId, "-S", "-80"])
-            else { return }
-            let body = captured.lines
-                .joined(separator: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !body.isEmpty else {
-                refreshedStore.setCurrentTurnState(.completed)
-                return
-            }
-            let cappedBody = String(body.suffix(6_000))
-            refreshedStore.appendSDKMessages([
-                ChatMessage(
-                    id: "cursor-terminal-\(UUID().uuidString)",
-                    kind: .assistantText,
-                    title: "Cursor terminal",
-                    body: cappedBody,
-                    at: Date()
-                )
-            ])
-            refreshedStore.setCurrentTurnState(.completed)
-        }
-    }
-
-    /// v0.8.1 agentapi send-message bridge. Resolves the Antigravity
-    /// project for this session's repoKey (cached by 60s TTL inside
-    /// `AntigravityProjectResolver`), then dispatches the user's text
-    /// through `LanguageServerClient.sendMessage`. Throws on LS-not-
-    /// running or RPC error so the caller can surface a proper CTA.
-    private func sendAntigravityMessage(
-        session: AgentSession,
-        conversationId: UUID,
-        content: String
-    ) async throws {
-        let lsClient = LanguageServerClient()
-        let projectId: String
-        // v0.9: prefer the persisted `antigravityProjectId` (chat
-        // sessions set this at create-time; v0.9+ code sessions can opt
-        // in too). Fall back to the v0.8.1 repoKey-resolution path so
-        // pre-v0.9 sessions.json records still send cleanly.
-        if let persistedProjectId = session.antigravityProjectId {
-            projectId = persistedProjectId
-        } else {
-            let projectsDir = ClawdmeterRealHome.url()
-                .appendingPathComponent(".gemini/config/projects", isDirectory: true)
-            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-            guard let repoKey = session.repoKey,
-                  let info = await resolver.resolve(forRepoKey: repoKey) else {
-                throw LanguageServerClientError.notRunning
-            }
-            projectId = info.id
-        }
-        do {
-            try await lsClient.sendMessage(
-                conversationId: conversationId.uuidString,
-                content: content,
-                projectId: projectId
-            )
-        } catch let LanguageServerClientError.rpcError(message) {
-            // v0.9.x — CM3 hook: 401 / auth-class errors flip the
-            // ChatProviderProbe override so /chat-providers surfaces
-            // the failure to iOS without a fresh re-probe wait.
-            if message.contains("401") || message.lowercased().contains("auth") {
-                await ChatProviderAuthObserver.shared.recordAntigravityAuthError(
-                    sessionId: session.id,
-                    message: message
-                )
-            }
-            throw LanguageServerClientError.rpcError(message)
-        }
-    }
-
-    /// v0.9 — daemon-side spawn for Gemini chat sessions. Picks the
-    /// first available Antigravity project as a scratch workspace
-    /// (chat has no repoKey), creates a placeholder conversation via
-    /// agentapi `new-conversation`, persists conversationId + projectId
-    /// on the session, and warms the chat store so chat-subscribe WS
-    /// clients can attach immediately. Errors surface as 503 with
-    /// structured CTA bodies the iOS Chat tab can map directly to
-    /// user-facing prompts.
-    ///
-    /// DEPRECATED (harness migration, 2026-06): Gemini chat now drives over the
-    /// Cascade gRPC harness. This agentapi one-shot handler is reachable only via
-    /// the antigravity.grpc.enabled kill-switch.
-    private func handlePostGeminiChatSession(
-        model: String?,
-        effort: ReasoningEffort?,
-        deepResearch: Bool = false,
-        chatVendor: ChatVendor = .antigravity,
-        billingProvider: String? = nil,
-        connection: NWConnection
-    ) async {
-        let home = ClawdmeterRealHome.url()
-        let projectsDir = home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
-        let lsClient = LanguageServerClient()
-        let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-
-        let install = await AntigravityInstall.preflight(
-            forRepoKey: "",
-            isLanguageServerLive: {
-                if case .live = lsClient.discoverLive() { return true }
-                return false
-            },
-            resolveProject: { _ in
-                let projects = await resolver.allProjects()
-                return projects.first?.id
-            },
-            homeDirectory: home,
-            applicationsRoot: URL(fileURLWithPath: "/Applications", isDirectory: true)
-        )
-
-        let projectId: String
-        switch install {
-        case .absent:
-            sendResponse(HTTPResponse(
-                status: 503, reason: "Service Unavailable", contentType: "application/json",
-                body: Data(#"{"error":"antigravity_absent","cta":"Install Antigravity 2 from antigravity.google to start a Gemini chat."}"#.utf8)
-            ), on: connection); return
-        case .installedNotSignedIn:
-            sendResponse(HTTPResponse(
-                status: 503, reason: "Service Unavailable", contentType: "application/json",
-                body: Data(#"{"error":"antigravity_not_signed_in","cta":"Sign into Antigravity 2 first, then try again."}"#.utf8)
-            ), on: connection); return
-        case .appOnlyNotRunning:
-            sendResponse(HTTPResponse(
-                status: 503, reason: "Service Unavailable", contentType: "application/json",
-                body: Data(#"{"error":"antigravity_not_running","cta":"Open Antigravity 2 to start a Gemini chat."}"#.utf8)
-            ), on: connection); return
-        case .noProjectForRepo:
-            sendResponse(HTTPResponse(
-                status: 503, reason: "Service Unavailable", contentType: "application/json",
-                body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first — Clawdmeter Chat uses your first available project as a scratch workspace."}"#.utf8)
-            ), on: connection); return
-        case .ready(_, let resolvedProjectId):
-            projectId = resolvedProjectId
-        }
-
-        // v0.23 (Chat V2 — T7 Gemini Deep Research): when DR is on,
-        // pin the model to gemini-3-pro (max thinking) per the eng-
-        // review D3 decision. Antigravity already enables WebSearch
-        // by default in plan mode; the deep-research system prompt
-        // we prepend to the first turn (below) drives the structured
-        // research trace [research-step] convention. The user-picked
-        // model is overridden because the trade is intentional:
-        // Deep Research needs the heaviest reasoning, not whatever
-        // model the user had selected for fast iteration.
-        let effectiveModel = deepResearch ? "gemini-3-pro" : model
-        let session: AgentSession
-        do {
-            session = try await registry.createChat(
-                provider: .gemini,
-                model: effectiveModel,
-                chatCwd: "",
-                effort: effort,
-                deepResearch: deepResearch,
-                chatVendor: chatVendor,
-                billingProvider: billingProvider
-            )
-        } catch {
-            serverLogger.error("createChat write-ahead failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection); return
-        }
-        let chatCwd: String
-        do {
-            let url = try ChatCwdManager.ensure(for: session.id)
-            chatCwd = url.path
-        } catch {
-            serverLogger.error("agentapi chat-cwd create failed: \(error.localizedDescription, privacy: .public)")
-            try? await registry.delete(id: session.id)
-            sendResponse(.internalError, on: connection); return
-        }
-        try? await registry.updateRuntime(
-            id: session.id, worktreePath: chatCwd,
-            tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
-        )
-
-        let modelTier = AgentapiModelTier.from(modelCatalogId: effectiveModel)
-        // v0.23 T7 Gemini DR: prepend the deep-research contract as
-        // the conversation's seed prompt so the agentapi initial-turn
-        // ingests it before any user input. The bundled
-        // deep-research-prompt.txt is the same contract Claude /
-        // Codex SDK use — the `[research-step] N. ...` convention is
-        // what the V2 UI's trace extractor reads.
-        let seedPrompt: String = {
-            guard deepResearch,
-                  let header = AgentSpawner.loadDeepResearchPrompt() else {
-                return "(starting new chat)"
-            }
-            return "\(header)\n\nYou are now ready to receive the user's research question."
-        }()
-        do {
-            let conversationIdString = try await lsClient.newConversation(
-                modelTier: modelTier,
-                prompt: seedPrompt,
-                projectId: projectId
-            )
-            guard let conversationId = UUID(uuidString: conversationIdString) else {
-                serverLogger.error("agentapi returned non-UUID conversation id: \(conversationIdString, privacy: .public)")
-                try? await registry.delete(id: session.id)
-                try? ChatCwdManager.remove(for: session.id)
-                sendResponse(.internalError, on: connection); return
-            }
-            try? await registry.setAntigravityChatBinding(
-                id: session.id,
-                conversationId: conversationId,
-                projectId: projectId
-            )
-            let updated = registry.session(id: session.id) ?? session
-            _ = chatStoreRegistry.snapshotStore(for: updated)
-            AgentEventStream.recordEvent(sessionId: session.id, kind: .sessionCreated, payload: [
-                "agent": "gemini",
-                "geminiBackend": "agentapi",
-                "conversationId": conversationId.uuidString,
-                "projectId": projectId
-            ])
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            if let body = try? encoder.encode(updated) {
-                sendResponse(HTTPResponse(
-                    status: 201, reason: "Created",
-                    contentType: "application/json", body: body
-                ), on: connection)
-            } else {
-                sendResponse(.internalError, on: connection)
-            }
-        } catch let LanguageServerClientError.notRunning {
-            try? await registry.delete(id: session.id)
-            try? ChatCwdManager.remove(for: session.id)
-            sendResponse(HTTPResponse(
-                status: 503, reason: "Service Unavailable", contentType: "application/json",
-                body: Data(#"{"error":"antigravity_not_running","cta":"Open Antigravity 2 to continue this session"}"#.utf8)
-            ), on: connection)
-        } catch {
-            // `error.localizedDescription` on a bare Swift Error enum returns
-            // "(Module.Type error N.)" with a CASE INDEX, not the case name —
-            // and Swift's NSError bridging orders payload-carrying cases
-            // BEFORE payload-less ones, so reading the index against the
-            // enum's source-order is misleading (e.g. "error 3" looks like
-            // `binaryNotFound` but is actually `malformedResponse(String)`).
-            // Render via `String(describing:)` so the associated payload
-            // (stdout preview, stderr, exit code) shows up in /tmp/clawd.log.
-            serverLogger.error("agentapi new-conversation failed: \(String(describing: error), privacy: .public)")
-            try? await registry.delete(id: session.id)
-            try? ChatCwdManager.remove(for: session.id)
             sendResponse(.internalError, on: connection)
         }
     }
@@ -2248,14 +1828,10 @@ public final class AgentControlServer {
                 resumeSessionId: cliSessionId
             ) ?? []
         case .codex:
-            argv = AgentSpawner.codexArgv(
-                model: modelDefault,
-                planMode: false,
-                effort: defaults.effort,
-                autopilot: false,
-                resumeSessionId: cliSessionId,
-                workspacePath: req.repoKey
-            ) ?? []
+            // v27: codex is harness-driven; external "Continue here" resume is
+            // deprioritized — no tmux resume argv. Empty → the missing-binary
+            // surface returns a clean 4xx (start a fresh harness session instead).
+            argv = []
         case .gemini:
             // No interactive Gemini CLI yet — fall through to the
             // missing-binary surface so the request returns a 4xx
@@ -2560,7 +2136,6 @@ public final class AgentControlServer {
         // immediately, then dispatches the per-backend cancel.
         let dispatcher = SessionInterruptDispatcher(
             registry: registry,
-            codexRelay: CodexSubscriptionRelay.shared,
             tmux: tmux,
             chatStoreRegistry: chatStoreRegistry
         )
@@ -4168,11 +3743,24 @@ public final class AgentControlServer {
     static var codexAppServerEnabled: Bool {
         UserDefaults.standard.object(forKey: "clawdmeter.codex.appServer.enabled") as? Bool ?? true
     }
-    /// The Antigravity Cascade gRPC harness is the DEFAULT Gemini drive path now.
-    /// The legacy agentapi one-shot path is deprecated. Kill-switch only:
-    /// `defaults write com.clawdmeter.mac clawdmeter.antigravity.grpc.enabled -bool false`.
-    static var antigravityGrpcEnabled: Bool {
-        UserDefaults.standard.object(forKey: "clawdmeter.antigravity.grpc.enabled") as? Bool ?? true
+
+    /// v27 Code-tab harness migration: true when a live harness bridge is
+    /// driving this session (paneless codex/cursor/gemini/grok). The Code-tab
+    /// chat-store routing + first-send readiness use this to treat the session
+    /// like the Chat tab's harness sessions instead of waiting on a tmux pane.
+    func isHarnessLive(_ id: UUID) -> Bool { harnessRegistry.contains(id) }
+
+    /// v27: tear down a session's harness bridge (stdio child / gRPC channel)
+    /// and release the chat store it pinned. Idempotent (no-op when no bridge
+    /// is registered). The Mac's `endSession` + the optimistic-"+" failure path
+    /// call this so a harness child isn't leaked when the registry row is
+    /// deleted in-process out-of-band (the full `handleDeleteSession` only runs
+    /// for an explicit `DELETE /sessions/:id`). Mirrors that handler's harness
+    /// branch (AgentControlServer.swift handleDeleteSession).
+    func teardownHarnessSession(_ id: UUID) async {
+        guard harnessRegistry.contains(id) else { return }
+        await harnessRegistry.remove(id)
+        chatStoreRegistry.release(sessionId: id)
     }
 
     /// Generic harness spawn (Grok/Cursor over ACP, Codex over app-server,
@@ -4224,33 +3812,60 @@ public final class AgentControlServer {
         // Step 1: write-ahead the Clawdmeter session (no tmux pane). The
         // runtime kind is inferred as `.acpGrok` from `agent: .grok`.
         let session: AgentSession
-        do {
-            session = try await registry.create(
-                repoKey: req.repoKey,
-                repoDisplayName: (req.repoKey as NSString).lastPathComponent,
-                agent: req.agent,
-                model: req.model,
-                goal: req.goal,
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                tmuxWindowId: nil,
-                tmuxPaneId: nil,
-                planMode: false,  // ACP plan/approval flows through permission prompts, not the Codex synthetic-plan card
-                mode: worktreePath == nil ? .local : .worktree,
-                effort: req.effort,
-                ownsWorktree: worktreePath != nil,
-                envSetId: resolvedEnv?.set?.id,
-                envSetName: resolvedEnv?.set?.name,
-                id: provisionalSessionId ?? UUID()
-            )
-        } catch {
-            serverLogger.error("acp registry.create write-ahead failed: \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-            await cleanupUnregisteredWorktree(
-                repoRoot: req.repoKey, worktreePath: worktreePath,
-                provisioning: provisioning, provisionalSessionId: provisionalSessionId,
-                context: "acp registry create failure")
-            return
+        if let pre = provisionalSessionId, let existing = registry.session(id: pre) {
+            // v27 optimistic "+": the Mac already created this provisional row up
+            // front and drove the provisioning trail against it. `registry.create`
+            // has no id-dedup (it appends), so ADOPT the row in place — attach the
+            // worktree, clear plan/pane, mark running — rather than create a
+            // duplicate. The live bridge registered in Step 4 is what drives it.
+            // On failure the Mac owns the row + worktree cleanup (its createSession
+            // call throws), so we don't tear them down here.
+            do {
+                try await registry.updateRuntime(
+                    id: existing.id,
+                    worktreePath: worktreePath,
+                    runtimeCwd: cwd,
+                    tmuxWindowId: nil,
+                    tmuxPaneId: nil,
+                    mode: worktreePath == nil ? .local : .worktree,
+                    ownsWorktree: worktreePath != nil
+                )
+                try await registry.updateStatus(id: existing.id, status: .running)
+            } catch {
+                serverLogger.error("acp registry adopt failed: \(error.localizedDescription, privacy: .public)")
+                sendResponse(.internalError, on: connection)
+                return
+            }
+            session = registry.session(id: existing.id) ?? existing
+        } else {
+            do {
+                session = try await registry.create(
+                    repoKey: req.repoKey,
+                    repoDisplayName: (req.repoKey as NSString).lastPathComponent,
+                    agent: req.agent,
+                    model: req.model,
+                    goal: req.goal,
+                    worktreePath: worktreePath,
+                    provisioning: provisioning,
+                    tmuxWindowId: nil,
+                    tmuxPaneId: nil,
+                    planMode: false,  // ACP plan/approval flows through permission prompts, not the Codex synthetic-plan card
+                    mode: worktreePath == nil ? .local : .worktree,
+                    effort: req.effort,
+                    ownsWorktree: worktreePath != nil,
+                    envSetId: resolvedEnv?.set?.id,
+                    envSetName: resolvedEnv?.set?.name,
+                    id: provisionalSessionId ?? UUID()
+                )
+            } catch {
+                serverLogger.error("acp registry.create write-ahead failed: \(error.localizedDescription, privacy: .public)")
+                sendResponse(.internalError, on: connection)
+                await cleanupUnregisteredWorktree(
+                    repoRoot: req.repoKey, worktreePath: worktreePath,
+                    provisioning: provisioning, provisionalSessionId: provisionalSessionId,
+                    context: "acp registry create failure")
+                return
+            }
         }
 
         // Step 2: acquire the per-session chat store the bridge projects into.
@@ -5175,12 +4790,20 @@ public final class AgentControlServer {
         var cwd = req.repoKey  // assume repoKey is an absolute path
         var worktreePath: String? = nil
         var provisioning: WorktreeProvisioningMetadata? = nil
-        var provisionalSessionId: UUID?
-        if req.useWorktree {
+        // v27 Code-tab harness migration: honor a pre-minted session id so the
+        // Mac's optimistic provisional row and this session are one row.
+        var provisionalSessionId: UUID? = req.sessionId
+        if let existing = req.existingWorkspacePath, !existing.isEmpty {
+            // v27: the Mac client already provisioned this git worktree locally
+            // (to drive the optimistic "+" provisioning trail) and owns its
+            // lifecycle. Reuse it rather than provisioning a second worktree.
+            worktreePath = existing
+            cwd = existing
+        } else if req.useWorktree {
             // Mint a city up front so the worktree path + branch use the
             // same name. The session id we'll register with is captured
             // here so CityNamer's mapping is stable.
-            let sessionId = UUID()
+            let sessionId = provisionalSessionId ?? UUID()
             provisionalSessionId = sessionId
             let city = await MainActor.run {
                 CityNamer.shared.cityName(for: sessionId)
@@ -5240,7 +4863,7 @@ public final class AgentControlServer {
             }
             await handleSpawnHarnessSession(
                 req: req, displayName: display,
-                binary: support.binaryName,
+                binary: (AgentSpawner.cursorBinaryPath() ?? support.binaryName),
                 arguments: support.spawnArgv(model: nil, effort: nil, alwaysApprove: false),
                 cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId, connection: connection,
@@ -5282,7 +4905,7 @@ public final class AgentControlServer {
             let display = providerDisplayName(req.agent)
             await handleSpawnHarnessSession(
                 req: req, displayName: display,
-                binary: "codex", arguments: ["app-server"],
+                binary: (ShellRunner.locateBinary("codex") ?? "codex"), arguments: ["app-server"],
                 cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId, connection: connection,
                 makeBridge: { sid, store in
@@ -5291,31 +4914,28 @@ public final class AgentControlServer {
                 })
             return
         }
-        // (3) Antigravity Cascade over gRPC — the DEFAULT Gemini drive path.
-        // The legacy agentapi one-shot path is deprecated; `antigravityGrpcEnabled`
-        // is now a live-verify kill-switch (default on).
-        if req.agent == .gemini, Self.antigravityGrpcEnabled {
+        // (3) Gemini via Antigravity — headless `agy` CLI (Antigravity 2.0
+        // decoupled the agent from the IDE: no app, no gRPC, no provisional protos;
+        // verified live 2026-06-04). The reverse-engineered Cascade gRPC drive was
+        // removed once agy was proven.
+        if req.agent == .gemini {
             let display = providerDisplayName(req.agent)
-            let projectsDir = ClawdmeterRealHome.url()
-                .appendingPathComponent(".gemini/config/projects", isDirectory: true)
-            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-            guard let projectId = await resolver.allProjects().first?.id else {
+            guard let agyPath = ShellRunner.locateBinary("agy") else {
                 sendResponse(HTTPResponse(
                     status: 503, reason: "Service Unavailable", contentType: "application/json",
-                    body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first."}"#.utf8)
+                    body: Data(#"{"error":"agy_not_found","cta":"Install Antigravity 2 (the agy CLI) first."}"#.utf8)
                 ), on: connection)
                 return
             }
-            let lsClient = LanguageServerClient()
             await handleSpawnHarnessSession(
                 req: req, displayName: display,
-                binary: nil, arguments: [],   // the gRPC driver owns its transport
+                binary: nil, arguments: [],   // the headless driver owns its per-turn processes
                 cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
                 provisionalSessionId: provisionalSessionId, connection: connection,
                 makeBridge: { sid, store in
                     .transportOwning(sessionId: sid, store: store, model: req.model,
                                      agentDisplayName: display,
-                                     driver: AntigravityCascadeDriver(languageServer: lsClient, projectId: projectId))
+                                     driver: AntigravityHeadlessDriver(binaryPath: agyPath))
                 })
             return
         }
@@ -5690,7 +5310,7 @@ public final class AgentControlServer {
         // (SessionCommandRouter `.harnessBridge`). The legacy SDK/agentapi/tmux
         // chat paths below are deprecated, reachable only via the per-provider
         // kill-switch (default off). Codex → `codex app-server`.
-        if req.provider == .codex, Self.codexAppServerEnabled {
+        if req.provider == .codex {
             await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
             return
         }
@@ -5707,21 +5327,10 @@ public final class AgentControlServer {
         // Antigravity isn't installed / signed in / running / has no
         // projects open. agentapi-via-chat is live behind the wire v11 /
         // antigravityChatMinimum=11 gate.
-        if req.provider == .gemini, Self.antigravityGrpcEnabled {
-            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
-            return
-        }
         if req.provider == .gemini {
-            // Legacy agentapi one-shot chat path — deprecated, reachable only via
-            // the antigravityGrpcEnabled kill-switch (default off).
-            await handlePostGeminiChatSession(
-                model: req.model,
-                effort: req.effort,
-                deepResearch: req.deepResearch,
-                chatVendor: metadata.vendor,
-                billingProvider: metadata.billingProvider,
-                connection: connection
-            )
+            // Gemini chat always drives through the harness — the headless `agy`
+            // CLI. The legacy agentapi one-shot + Cascade gRPC chat paths are gone.
+            await handleCreateHarnessChatSession(req: req, metadata: metadata, connection: connection)
             return
         }
         if req.provider == .opencode {
@@ -5797,15 +5406,7 @@ public final class AgentControlServer {
             ChatCwdManager.markTrustedForClaude(path: chatCwd)
         }
         let argv = AgentSpawner.argv(for: updatedSession)
-        if argv.isEmpty && updatedSession.agent == .codex && updatedSession.codexChatBackend == .sdk {
-            // SDK chat: pre-create the SDK-only SessionChatStore via the
-            // registry so `chat-subscribe` WS subscribers and
-            // `/chat-snapshot` HTTP polls can find it immediately. The
-            // actual CodexSubscriptionRelay.start() is deferred until the
-            // first /send (we don't have an initial prompt at create
-            // time, and the SDK requires one to begin streaming).
-            _ = chatStoreRegistry.snapshotStore(for: updatedSession)
-        } else if argv.isEmpty {
+        if argv.isEmpty {
             // No binary on PATH for this provider — clean up + surface 503.
             try? await registry.delete(id: session.id)
             try? ChatCwdManager.remove(for: session.id)
@@ -5924,14 +5525,14 @@ public final class AgentControlServer {
     }
 
     /// Whether a provider's CHAT/FRONTIER child drives through the harness (vs a
-    /// legacy backend). Mirrors the Solo-chat routing in handlePostChatSession:
-    /// grok/cursor always (ACP); codex/gemini behind their kill-switch (default
-    /// on); claude → tmux, opencode → SSE (never harness).
+    /// legacy backend). grok/cursor always (ACP); gemini always (headless `agy`
+    /// by default, Cascade gRPC behind its opt-in flag — both via the harness);
+    /// codex behind its kill-switch (default on); claude → tmux, opencode → SSE.
     private func isChatHarnessEligible(_ provider: AgentKind) -> Bool {
         switch provider {
-        case .grok, .cursor: return true
-        case .codex: return Self.codexAppServerEnabled
-        case .gemini: return Self.antigravityGrpcEnabled
+        // Codex chat now ALWAYS drives over `codex app-server` (same engine as
+        // Code, readOnly+never posture) — the legacy SDK relay is removed.
+        case .grok, .cursor, .gemini, .codex: return true
         default: return false
         }
     }
@@ -6043,25 +5644,21 @@ public final class AgentControlServer {
                 driver: GrokHeadlessDriver(binaryPath: grokPath)
             )
         case .gemini:
-            // Antigravity Cascade over gRPC. Chat has no repoKey, so the first
-            // open Antigravity project is the scratch workspace. The gRPC driver
-            // owns its transport (no stdio child), so binary stays nil.
-            let projectsDir = ClawdmeterRealHome.url()
-                .appendingPathComponent(".gemini/config/projects", isDirectory: true)
-            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-            guard let projectId = await resolver.allProjects().first?.id else {
+            // Antigravity 2.0: headless `agy` CLI (no app, no gRPC). The Cascade
+            // gRPC drive was removed once agy was live-verified. Transport-owning
+            // (no stdio child), so binary stays nil.
+            guard let agyPath = ShellRunner.locateBinary("agy") else {
                 chatStoreRegistry.release(sessionId: session.id)
                 try? await registry.delete(id: session.id)
                 try? ChatCwdManager.remove(for: session.id)
-                throw HarnessChatSpawnError.noAntigravityProjects
+                throw HarnessChatSpawnError.startFailed("agy binary not found on PATH (install Antigravity 2)")
             }
-            let lsClient = LanguageServerClient()
             binary = nil
             arguments = []
             bridge = .transportOwning(
                 sessionId: session.id, store: store,
                 model: model, agentDisplayName: display,
-                driver: AntigravityCascadeDriver(languageServer: lsClient, projectId: projectId)
+                driver: AntigravityHeadlessDriver(binaryPath: agyPath)
             )
         default:
             chatStoreRegistry.release(sessionId: session.id)
@@ -6559,52 +6156,6 @@ public final class AgentControlServer {
             await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
         }
-        // agentapi (Gemini)
-        if session.geminiBackend == .agentapi,
-           let conversationId = session.antigravityConversationId {
-            do {
-                try await sendAntigravityMessage(
-                    session: session, conversationId: conversationId, content: text
-                )
-                await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
-                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
-            } catch {
-                serverLogger.warning("frontier child gemini send failed: \(error.localizedDescription, privacy: .public)")
-                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: error.localizedDescription)
-            }
-        }
-        // SDK (Codex)
-        if session.kind == .chat && session.agent == .codex && session.codexChatBackend == .sdk {
-            do {
-                let cwd = session.effectiveCwd
-                if session.codexChatThreadId != nil {
-                    try CodexSubscriptionRelay.shared.forwardPrompt(
-                        sessionId: session.id,
-                        workingDirectory: cwd,
-                        prompt: text,
-                        threadId: session.codexChatThreadId,
-                        skipGitRepoCheck: true,
-                        deepResearch: session.deepResearch
-                    )
-                } else {
-                    _ = try CodexSubscriptionRelay.shared.start(
-                        session: session,
-                        workingDirectory: cwd,
-                        initialPrompt: text,
-                        threadId: nil,
-                        model: session.model,
-                        sandboxMode: "read-only",
-                        modelReasoningEffort: session.effort?.codexConfigValue,
-                        skipGitRepoCheck: true
-                    )
-                }
-                await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
-                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
-            } catch {
-                serverLogger.warning("frontier child codex-sdk send failed: \(error.localizedDescription, privacy: .public)")
-                return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: false, reason: error.localizedDescription)
-            }
-        }
         // OpenCode sidecar
         if session.kind == .chat && session.agent == .opencode {
             do {
@@ -6624,9 +6175,6 @@ public final class AgentControlServer {
         do {
             let bytes = text.data(using: .utf8) ?? Data()
             try await tmux.pasteBytes(paneId: paneId, bytes: bytes + Data([0x0D]))
-            if session.agent == .cursor {
-                appendCursorTranscriptEcho(session: session, prompt: text, paneId: paneId)
-            }
             await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: "frontier", text: text)
             return FrontierChildSendResult(childIndex: session.frontierChildIndex ?? 0, sessionId: session.id, ok: true)
         } catch {
@@ -6677,7 +6225,6 @@ public final class AgentControlServer {
         // Delete the old session (cleans up chat-cwd + chat store entry).
         // Stop a harness child first (no-op for legacy children).
         await harnessRegistry.remove(existing.id)
-        await teardownSDKChat(sessionId: existing.id)
         if let wiring = sessionWiring.removeValue(forKey: existing.id) {
             wiring.stop()
         }
@@ -6855,10 +6402,11 @@ public final class AgentControlServer {
         }
 
         // Harness is the default drive path for non-Claude broadcast children
-        // (codex app-server / gemini gRPC / grok+cursor ACP), exactly as Solo
-        // chat. Reuse the shared core; map its errors to a slot failure reason.
-        // Claude → tmux + opencode → SSE (and any kill-switched codex/gemini)
-        // fall through to the legacy per-provider switch below.
+        // (codex app-server / gemini headless agy / grok+cursor ACP), exactly as
+        // Solo chat. Reuse the shared core; map its errors to a slot failure reason.
+        // Claude → tmux + opencode → SSE (and a kill-switched codex) fall through
+        // to the legacy per-provider switch below. Gemini is always harness-eligible
+        // so it never reaches the (now-unreachable) legacy gemini case below.
         if isChatHarnessEligible(slot.provider) {
             do {
                 return try await createHarnessChatSessionCore(
@@ -6873,10 +6421,12 @@ public final class AgentControlServer {
         }
 
         switch slot.provider {
-        case .claude, .codex, .cursor:
+        case .claude, .codex:
             // Reuse the same plumbing as Solo chat: createChat → chat-cwd →
             // spawn tmux (or SDK relay) → warm chat store. We don't need
             // the full HTTP wrapper since we already have all the data.
+            // (cursor is harness-eligible — it returns above via the ACP bridge
+            // and never reaches this tmux fork.)
             let session = try await registry.createChat(
                 provider: slot.provider,
                 model: slot.model,
@@ -6930,67 +6480,12 @@ public final class AgentControlServer {
                 throw SpawnFailure.message("tmux_spawn_failed: \(error.localizedDescription)")
             }
         case .gemini:
-            // Delegate to the agentapi spawn flow. We can't reuse
-            // handlePostGeminiChatSession directly (it owns the
-            // connection write), but we lift the same body into a
-            // shared helper-style inline call here.
-        let home = ClawdmeterRealHome.url()
-        let projectsDir = home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
-            let lsClient = LanguageServerClient()
-            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-            let projects = await resolver.allProjects()
-            guard let projectId = projects.first?.id else {
-                throw SpawnFailure.message("antigravity_no_projects")
-            }
-            let session = try await registry.createChat(
-                provider: .gemini,
-                model: slot.model,
-                chatCwd: "",
-                frontierGroupId: groupId,
-                frontierChildIndex: childIndex,
-                deepResearch: slot.deepResearch,
-                chatVendor: metadata.vendor,
-                billingProvider: metadata.billingProvider
-            )
-            let chatCwd: String
-            do {
-                let url = try ChatCwdManager.ensure(for: session.id)
-                chatCwd = url.path
-            } catch {
-                try? await registry.delete(id: session.id)
-                throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
-            }
-            try? await registry.updateRuntime(
-                id: session.id, worktreePath: chatCwd,
-                tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
-            )
-            let modelTier = AgentapiModelTier.from(modelCatalogId: slot.model)
-            do {
-                let conversationIdString = try await lsClient.newConversation(
-                    modelTier: modelTier,
-                    prompt: "(starting Frontier child)",
-                    projectId: projectId
-                )
-                guard let conversationId = UUID(uuidString: conversationIdString) else {
-                    try? await registry.delete(id: session.id)
-                    try? ChatCwdManager.remove(for: session.id)
-                    throw SpawnFailure.message("agentapi_bad_conversation_id")
-                }
-                try? await registry.setAntigravityChatBinding(
-                    id: session.id, conversationId: conversationId, projectId: projectId
-                )
-                let updated = registry.session(id: session.id) ?? session
-                _ = chatStoreRegistry.snapshotStore(for: updated)
-                return updated
-            } catch let LanguageServerClientError.notRunning {
-                try? await registry.delete(id: session.id)
-                try? ChatCwdManager.remove(for: session.id)
-                throw SpawnFailure.message("antigravity_not_running")
-            } catch {
-                try? await registry.delete(id: session.id)
-                try? ChatCwdManager.remove(for: session.id)
-                throw SpawnFailure.message("agentapi_new_conversation_failed: \(error.localizedDescription)")
-            }
+            // Unreachable: gemini is always harness-eligible (isChatHarnessEligible),
+            // so a broadcast gemini child spawns via createHarnessChatSessionCore
+            // above — the headless `agy` driver (Antigravity 2.0), bound to this
+            // frontier group exactly like the grok/cursor/codex children. The legacy
+            // agentapi one-shot frontier path has been retired.
+            throw SpawnFailure.message("gemini_unexpected_legacy_frontier_path")
         case .opencode:
             guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
                 switch OpencodeProcessManager.shared.state {
@@ -7085,10 +6580,11 @@ public final class AgentControlServer {
                 payload: ["repo": chatCwd, "agent": "opencode", "opencodeID": opencodeID]
             )
             return updated
-        case .unknown, .grok:
-            // X3: forward-compat unknown agent — no frontier-child spawn
-            // path. grok (ACP) isn't wired for broadcast/Frontier yet.
-            // Surfaces as a slot failure to the broadcast caller.
+        case .unknown, .grok, .cursor:
+            // Unreachable for cursor/grok: both are harness-eligible
+            // (isChatHarnessEligible) and return via createHarnessChatSessionCore
+            // above, so they never reach this legacy tmux switch. .unknown is the
+            // forward-compat catch-all. Defensive: surface a slot failure.
             throw SpawnFailure.message("unknown_agent_kind")
         }
     }
@@ -7283,148 +6779,30 @@ public final class AgentControlServer {
     /// provider and model from its own state; Clawdmeter no longer
     /// second-guesses that selection.
     private func opencodeMessageBody(session: AgentSession, prompt: String) -> [String: Any] {
-        _ = session
-        return [
+        var body: [String: Any] = [
             "parts": [
                 ["type": "text", "text": prompt]
             ]
         ]
+        // Honor the picked model. registry.create stored the OpenRouter slug
+        // on session.model, but until now it was dropped here and OpenCode
+        // silently ran its own opencode.json default — so the 320-model picker
+        // was cosmetic. OpenCode's /session/:id/message takes an optional
+        // `model:{providerID,modelID}`; the OpenRouter-backed vendor always
+        // routes via providerID "openrouter" with the full slug as modelID.
+        if let model = Self.opencodeModelObject(forModelId: session.model) {
+            body["model"] = model
+        }
+        return body
     }
 
-    private func sendChatSDKPrompt(
-        session: AgentSession,
-        prompt: String,
-        idempotencyKey: String? = nil,
-        payloadHash: String = "",
-        connection: NWConnection
-    ) async {
-        // D1 chat naming: tag the customName from the first user prompt
-        // when none is set yet. Trim + truncate to 40 chars (with ellipsis
-        // if longer). Existing rename handler normalizes empties to nil
-        // so the placeholder "New <Provider> chat" still renders pre-send.
-        if (session.customName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-            let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                let truncated: String = {
-                    let cap = 40
-                    if trimmed.count <= cap { return trimmed }
-                    let idx = trimmed.index(trimmed.startIndex, offsetBy: cap - 1)
-                    return String(trimmed[..<idx]) + "…"
-                }()
-                try? await registry.rename(id: session.id, name: truncated)
-            }
-        }
-        let chatCwd = session.effectiveCwd
-        // v0.8 QA: echo the user's prompt into the SessionChatStore so it
-        // shows up as a user bubble in the thread immediately. Without
-        // this, the user sees nothing until the SDK assistant response
-        // streams in (or never, if there's a network hiccup). Marks the
-        // message with an SDK-prefixed id so it doesn't collide with
-        // assistant events that come back through the ingestor.
-        if let store = chatStoreRegistry.snapshotStore(for: session) {
-            let userMsgId = "user-\(Date().timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
-            store.appendSDKMessages([
-                ChatMessage(
-                    id: userMsgId,
-                    kind: .userText,
-                    title: "You",
-                    body: prompt,
-                    at: Date()
-                )
-            ], at: Date())
-        }
-        do {
-            if CodexSubscriptionRelay.shared.isActive(sessionId: session.id) {
-                // Subsequent prompt — forward to the running sidecar with
-                // the resume threadId so the SDK reuses the same server-
-                // side thread.
-                try CodexSubscriptionRelay.shared.forwardPrompt(
-                    sessionId: session.id,
-                    workingDirectory: chatCwd,
-                    prompt: prompt,
-                    threadId: session.codexChatThreadId,
-                    skipGitRepoCheck: true,
-                    deepResearch: session.deepResearch
-                )
-            } else {
-                // First prompt — spawn the relay + ingestor. The ingestor
-                // captures `thread.started` and persists the threadId on
-                // the session record for resume-after-evict (NEW-T13).
-                let registryRef = self.registry
-                if let store = chatStoreRegistry.snapshotStore(for: session) {
-                    let ingestor = CodexSDKEventIngestor(
-                        sessionId: session.id,
-                        store: store,
-                        onThreadStarted: { [weak registryRef] threadId in
-                            Task { @MainActor in
-                                // F2-wire: best-effort; thread-id binding
-                                // failure here doesn't break the chat,
-                                // it just means resume-after-evict will
-                                // miss this thread.
-                                try? await registryRef?.setCodexChatThreadId(id: session.id, threadId: threadId)
-                            }
-                        }
-                    )
-                    ingestor.start()
-                    sdkChatIngestors[session.id] = ingestor
-                }
-                // v0.8 QA: chat-cwd (~/Library/.../chat-sessions/<uuid>/) is
-                // not a git repo. The Codex CLI rejects the call without
-                // `--skip-git-repo-check` and the SDK silently hangs with
-                // a stream_error sidecar-side ("Not inside a trusted
-                // directory…"). Pass true unconditionally for chat — the
-                // chat-cwd is sandboxed inside the app's Application
-                // Support dir and never holds user code.
-                _ = try CodexSubscriptionRelay.shared.start(
-                    session: session,
-                    workingDirectory: chatCwd,
-                    initialPrompt: prompt,
-                    threadId: session.codexChatThreadId,
-                    model: session.model,
-                    sandboxMode: "read-only",
-                    modelReasoningEffort: session.effort?.codexConfigValue,
-                    skipGitRepoCheck: true
-                )
-            }
-        } catch {
-            serverLogger.error("SDK chat send failed for \(session.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            sendResponse(.internalError, on: connection)
-            return
-        }
-        let peer = Self.endpointString(connection.endpoint)
-        await AuditLog.shared.recordSend(sessionId: session.id, sourcePeer: peer, text: prompt)
-        let updated = registry.session(id: session.id) ?? session
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        // v16 outbox: inline the receipt into the AgentSession body and
-        // cache the response bytes so a retried same-key request returns
-        // the same payload without re-driving CodexSubscriptionRelay
-        // (which would silently fire a second turn through the SDK).
-        if let body = try? encoder.encode(updated),
-           var dict = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
-            if let key = idempotencyKey, !key.isEmpty {
-                let receipt = MobileCommandReceipt(
-                    idempotencyKey: key, status: .acknowledged, processedAt: Date()
-                )
-                dict["receipt"] = receipt.jsonDictionary
-            }
-            if let merged = try? JSONSerialization.data(withJSONObject: dict) {
-                await recordIdempotent(
-                    key: idempotencyKey,
-                    kind: .send,
-                    sessionId: session.id,
-                    connection: connection,
-                    payloadHash: payloadHash,
-                    responseBody: merged,
-                    responseStatus: 200
-                )
-                sendResponse(.ok(contentType: "application/json", body: merged), on: connection)
-            } else {
-                sendResponse(.ok(contentType: "application/json", body: body), on: connection)
-            }
-        } else {
-            sendResponse(.ok(contentType: "application/json", body: Data("{}".utf8)), on: connection)
-        }
+    /// Maps a session's selected OpenRouter model id to OpenCode's message
+    /// `{providerID, modelID}` object. Returns nil for the "opencode-default"
+    /// sentinel (or no selection) so OpenCode keeps its own default model.
+    nonisolated static func opencodeModelObject(forModelId raw: String?) -> [String: String]? {
+        guard let id = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty, id != "opencode-default" else { return nil }
+        return ["providerID": "openrouter", "modelID": id]
     }
 
     /// v0.8 QA: prepare a CLI pane (code or chat) for the user's first
@@ -7575,11 +6953,9 @@ public final class AgentControlServer {
             // which OpencodeProcessManager + OpencodeSSEAdapter handle
             // out-of-band.
             break
-        case .cursor:
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            _ = try? await tmux.command(["capture-pane", "-p", "-t", paneId])
-        case .grok:
-            // ACP agents have no tmux pane — no warmup choreography.
+        case .cursor, .grok:
+            // ACP agents (cursor-agent acp / grok headless) have no tmux pane —
+            // no warmup choreography.
             break
         case .unknown:
             // X3: forward-compat unknown agent — no warmup choreography
@@ -7768,18 +7144,6 @@ public final class AgentControlServer {
         }
     }
 
-    /// v0.8 Phase 4.5 cleanup: tear down SDK chat ingestor + relay for a
-    /// session. Called from handleDeleteSession when removing a chat
-    /// session, and idempotent on non-SDK sessions / sessions that never
-    /// started a relay.
-    private func teardownSDKChat(sessionId: UUID) async {
-        if let ingestor = sdkChatIngestors.removeValue(forKey: sessionId) {
-            ingestor.stop()
-        }
-        if CodexSubscriptionRelay.shared.isActive(sessionId: sessionId) {
-            await CodexSubscriptionRelay.shared.stop(sessionId: sessionId)
-        }
-    }
 
     private func attachClaudeWiring(for session: AgentSession, cwd: String) {
         // Claude encodes the cwd as a directory name with `/` → `-`.
@@ -7896,18 +7260,10 @@ public final class AgentControlServer {
                 effort: session.effort,
                 autopilot: false
             )
-        case .codex:
-            argv = AgentSpawner.codexArgv(
-                model: session.model,
-                planMode: false,
-                effort: session.effort,
-                autopilot: false,
-                workspacePath: session.effectiveCwd
-            )
-        case .gemini, .grok:
-            // approve-plan via tmux respawn doesn't apply: Gemini has no CLI
-            // to respawn, and grok (ACP) approves via session/set_mode, which
-            // the daemon doesn't route yet. Surfaces as 500 below.
+        case .codex, .gemini, .grok:
+            // v27: codex/gemini/grok are harness-driven; approve-plan flows
+            // through the bridge (permission response / set_mode), not a tmux
+            // respawn. Surfaces as 500 below for any legacy tmux codex session.
             argv = nil
         case .opencode:
             // PR #29: opencode has no plan-mode → respawn-with-write
@@ -7916,28 +7272,10 @@ public final class AgentControlServer {
             // approve-plan from a stale UI doesn't pretend to succeed.
             argv = nil
         case .cursor:
-            guard let cursorResumeId = Self.cursorResumeId(for: session) else {
-                try? await registry.setPlanText(
-                    id: uuid,
-                    planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
-                )
-                try? await registry.updateStatus(id: uuid, status: .degraded)
-                sendResponse(HTTPResponse(
-                    status: 409,
-                    reason: "Conflict",
-                    contentType: "application/json",
-                    body: Data(#"{"error":"cursor_resume_id_missing","cta":"Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."}"#.utf8)
-                ), on: connection)
-                return
-            }
-            argv = AgentSpawner.cursorArgv(
-                model: session.model,
-                planMode: false,
-                effort: session.effort,
-                autopilot: false,
-                resumeSessionId: cursorResumeId,
-                workspacePath: session.effectiveCwd
-            )
+            // v27: cursor is harness-driven; approve-plan flows through the ACP
+            // session (set_mode / permission), not a tmux respawn. Surfaces as
+            // 500 below for any legacy tmux cursor session.
+            argv = nil
         case .unknown:
             // X3: forward-compat unknown agent — no respawn path.
             // Surfaces as 500 below.
@@ -8003,14 +7341,6 @@ public final class AgentControlServer {
             serverLogger.error("approve-plan failed: \(error.localizedDescription, privacy: .public)")
             sendResponse(.internalError, on: connection)
         }
-    }
-
-    private static func cursorResumeId(for session: AgentSession) -> String? {
-        let candidate = session.runtimeBinding?.externalSessionId
-            ?? session.runtimeBinding?.externalThreadId
-        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else { return nil }
-        return trimmed
     }
 
     /// Archive / unarchive a session (G7). Hides it from the default
@@ -8130,9 +7460,6 @@ public final class AgentControlServer {
         if let task = chatWarmupTasks.removeValue(forKey: uuid) {
             task.cancel()
         }
-        // v0.8 Phase 4.5: tear down any SDK chat infrastructure first
-        // (ingestor sink + relay sidecar). Idempotent on non-SDK sessions.
-        await teardownSDKChat(sessionId: uuid)
         // ACP harness teardown (Grok): terminate the stdio child + driver and
         // release the chat store the bridge pinned. Idempotent on non-ACP
         // sessions (remove is a no-op when no bridge is registered).

@@ -22,15 +22,11 @@ final class ChatSendPerProviderTests: XCTestCase {
     private func chatRoute(
         agent: AgentKind,
         codexBackend: CodexChatBackend? = nil,
-        geminiBackend: GeminiBackend? = nil,
-        hasConversation: Bool = false,
         hasLiveBridge: Bool = false
     ) -> SessionCommandRoute {
         SessionCommandRouter.resolve(.init(
             agent: agent, kind: .chat,
             codexChatBackend: codexBackend,
-            geminiBackend: geminiBackend,
-            hasAntigravityConversation: hasConversation,
             runtimeIsACPDriven: hasLiveBridge,
             hasLiveBridge: hasLiveBridge
         ))
@@ -44,10 +40,8 @@ final class ChatSendPerProviderTests: XCTestCase {
     }
 
     func test_send_geminiChat_routesToHarnessByDefault() {
+        // Gemini drives via the headless agy harness bridge.
         XCTAssertEqual(chatRoute(agent: .gemini, hasLiveBridge: true), .harnessBridge)
-        // Legacy agentapi (kill-switch) needs the backend axis + a conversation id.
-        XCTAssertEqual(chatRoute(agent: .gemini, geminiBackend: .agentapi, hasConversation: true),
-                       .antigravityAgentapi)
     }
 
     func test_send_grokChat_routesToHarness() {

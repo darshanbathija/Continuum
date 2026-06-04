@@ -2692,9 +2692,6 @@ public final class AgentControlClient: ObservableObject {
                     frontierChildIndex: s.frontierChildIndex,
                     codexChatBackend: s.codexChatBackend,
                     codexChatThreadId: s.codexChatThreadId,
-                    geminiBackend: s.geminiBackend,
-                    antigravityConversationId: s.antigravityConversationId,
-                    antigravityProjectId: s.antigravityProjectId,
                     deepResearch: s.deepResearch
                 )
             }
@@ -2736,9 +2733,6 @@ public final class AgentControlClient: ObservableObject {
                     frontierChildIndex: s.frontierChildIndex,
                     codexChatBackend: s.codexChatBackend,
                     codexChatThreadId: s.codexChatThreadId,
-                    geminiBackend: s.geminiBackend,
-                    antigravityConversationId: s.antigravityConversationId,
-                    antigravityProjectId: s.antigravityProjectId,
                     deepResearch: s.deepResearch
                 )
             }

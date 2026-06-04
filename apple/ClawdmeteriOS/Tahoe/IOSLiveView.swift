@@ -63,7 +63,7 @@ public struct IOSLiveView: View {
                 // Header
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("CLAWDMETER")
+                        Text("CONTINUUM")
                             .font(TahoeFont.body(11, weight: .semibold))
                             .tracking(0.5)
                             .foregroundStyle(t.fg3)

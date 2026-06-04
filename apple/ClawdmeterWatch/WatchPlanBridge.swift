@@ -33,7 +33,7 @@ public final class WatchPlanBridge: NSObject, ObservableObject, WCSessionDelegat
     /// view. Updated when iPhone pushes a new `sessionsSummaryJSON` blob.
     @Published public private(set) var sessionsSummary: [WatchSessionSummary] = []
 
-    private let defaultsSuiteName = "group.76S62SDSD3.com.clawdmeter"
+    private let defaultsSuiteName = "group.LRL8MRH6B4.ai.continuum"
     private lazy var defaults = UserDefaults(suiteName: defaultsSuiteName)
 
     public override init() {

@@ -15,8 +15,6 @@ final class SessionCommandRouterTests: XCTestCase {
         agent: AgentKind,
         kind: SessionKind = .code,
         codexChatBackend: CodexChatBackend? = nil,
-        geminiBackend: GeminiBackend? = nil,
-        hasAntigravityConversation: Bool = false,
         runtimeIsACPDriven: Bool = false,
         hasLiveBridge: Bool = false
     ) -> SessionCommandRouter.SessionContext {
@@ -24,8 +22,6 @@ final class SessionCommandRouterTests: XCTestCase {
             agent: agent,
             kind: kind,
             codexChatBackend: codexChatBackend,
-            geminiBackend: geminiBackend,
-            hasAntigravityConversation: hasAntigravityConversation,
             runtimeIsACPDriven: runtimeIsACPDriven,
             hasLiveBridge: hasLiveBridge
         )
@@ -56,15 +52,16 @@ final class SessionCommandRouterTests: XCTestCase {
         XCTAssertEqual(SessionCommandRouter.resolve(ctx(agent: .opencode)), .opencodeServe)
     }
 
-    func testAntigravityAgentapiResolvesAntigravity() {
+    func testGeminiWithLiveBridgeResolvesHarnessBridge() {
+        // Gemini drives via the headless `agy` harness bridge now — a live
+        // bridge resolves to harnessBridge, same as grok/cursor.
         XCTAssertEqual(
             SessionCommandRouter.resolve(ctx(
                 agent: .gemini,
                 kind: .chat,
-                geminiBackend: .agentapi,
-                hasAntigravityConversation: true
+                hasLiveBridge: true
             )),
-            .antigravityAgentapi
+            .harnessBridge
         )
     }
 
@@ -89,34 +86,6 @@ final class SessionCommandRouterTests: XCTestCase {
         let route = SessionCommandRouter.resolve(ctx(agent: .codex, kind: .chat, codexChatBackend: .sdk))
         XCTAssertEqual(route, .codexSDK)
         XCTAssertNotEqual(route, .tmux)
-    }
-
-    func testAntigravityBeatsEverything() {
-        // The agentapi branch is FIRST — before the chat-tab SDK dispatch and
-        // the tmux paneId guard. A Gemini agentapi session never falls into a
-        // later branch even if other axes were (impossibly) co-set.
-        let route = SessionCommandRouter.resolve(ctx(
-            agent: .gemini,
-            kind: .chat,
-            geminiBackend: .agentapi,
-            hasAntigravityConversation: true,
-            hasLiveBridge: true   // even a (nonsensical) live bridge loses to agentapi
-        ))
-        XCTAssertEqual(route, .antigravityAgentapi)
-    }
-
-    func testGeminiAgentapiWithoutConversationDoesNotResolveAntigravity() {
-        // The daemon guards on BOTH geminiBackend == .agentapi AND a non-nil
-        // conversation id. Missing the conversation → falls through (no agentapi
-        // send path). With no other backend axis set, that is tmux.
-        let route = SessionCommandRouter.resolve(ctx(
-            agent: .gemini,
-            kind: .chat,
-            geminiBackend: .agentapi,
-            hasAntigravityConversation: false
-        ))
-        XCTAssertNotEqual(route, .antigravityAgentapi)
-        XCTAssertEqual(route, .tmux)
     }
 
     func testLiveBridgeBeatsTmuxForAcpSession() {
@@ -179,8 +148,7 @@ final class SessionCommandRouterTests: XCTestCase {
     }
 
     func testPanelessFlagMatchesDaemonPaneExpectations() {
-        // The four short-circuit backends have no tmux pane; only .tmux does.
-        XCTAssertTrue(SessionCommandRoute.antigravityAgentapi.isPaneless)
+        // The short-circuit backends have no tmux pane; only .tmux does.
         XCTAssertTrue(SessionCommandRoute.codexSDK.isPaneless)
         XCTAssertTrue(SessionCommandRoute.opencodeServe.isPaneless)
         XCTAssertTrue(SessionCommandRoute.harnessBridge.isPaneless)

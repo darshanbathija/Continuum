@@ -501,6 +501,116 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         }
     }
 
+    // MARK: - Frontier broadcast: gemini drives via headless agy (Antigravity 2.0)
+
+    /// End-to-end through the REAL daemon: create a {gemini, grok} broadcast group,
+    /// send one prompt, and assert the GEMINI child streams a real assistant reply.
+    /// This is the honest proof of the migration — a broadcast gemini child routes
+    /// through the harness (`AntigravityHeadlessDriver` / `agy`), NOT the retired
+    /// agentapi conversation path. It exercises the full chain: spawn
+    /// (isChatHarnessEligible → createHarnessChatSessionCore), per-child send fan-out
+    /// (bridge-first), and snapshot streaming.
+    ///
+    /// Live (burns agy + grok quota); gated by the same live sentinel as the other
+    /// provider-route tests. Needs both `agy` (Antigravity 2) and `grok` on PATH —
+    /// broadcast requires ≥2 successful children.
+    func testFrontierGeminiBroadcastDrivesViaAgy() async throws {
+        try await requireLiveProviderRouteTests()
+        try XCTSkipUnless(ShellRunner.locateBinary("agy") != nil, "agy (Antigravity 2) not on PATH")
+        try XCTSkipUnless(ShellRunner.locateBinary("grok") != nil, "grok not on PATH (need a 2nd broadcast child)")
+
+        // The daemon gates spawns on ProviderEnablement; enable both, restore after.
+        let savedGemini = ProviderEnablement.isEnabled(AgentKind.gemini.rawValue)
+        let savedGrok = ProviderEnablement.isEnabled(AgentKind.grok.rawValue)
+        ProviderEnablement.setEnabled(AgentKind.gemini.rawValue, true)
+        ProviderEnablement.setEnabled(AgentKind.grok.rawValue, true)
+        defer {
+            ProviderEnablement.setEnabled(AgentKind.gemini.rawValue, savedGemini)
+            ProviderEnablement.setEnabled(AgentKind.grok.rawValue, savedGrok)
+        }
+
+        // 0) Picker gate: the provider probe must report gemini SELECTABLE
+        //    headlessly (agy on PATH) even with the Antigravity desktop app closed.
+        //    Before the agy migration this required `agentapiLive` (app running).
+        await ChatProviderProbe.shared.invalidate()
+        let providers = await ChatProviderProbe.shared.currentProviders()
+        let geminiRow = try XCTUnwrap(providers.providers.first { $0.provider == .gemini })
+        XCTAssertTrue(geminiRow.available && geminiRow.capabilityProbePassed,
+                      "gemini must be selectable headlessly via agy: \(geminiRow.reason ?? "no reason")")
+
+        // 1) Create the broadcast group. Slot 0 = gemini (headless agy), 1 = grok.
+        let createReq = CreateFrontierRequest(clientRequestId: UUID(), models: [
+            FrontierModelSlot(provider: .gemini),
+            FrontierModelSlot(provider: .grok),
+        ])
+        let createResp = try await postJSON("/chat-sessions/frontier", createReq, timeout: 60)
+        XCTAssertTrue([200, 201].contains(createResp.status),
+                      "frontier create status \(createResp.status): \(bodySnippet(createResp.data))")
+        let group = try decode(CreateFrontierResponse.self, from: createResp.data)
+        let geminiSlot = try XCTUnwrap(group.slots.first { $0.index == 0 }, "no gemini slot in response")
+        let geminiId = try XCTUnwrap(geminiSlot.sessionId,
+                                     "gemini child spawn failed: \(geminiSlot.reason ?? "unknown")")
+        XCTAssertTrue(group.hasMinimumBroadcast,
+                      "need ≥2 live children for a real broadcast; slots: \(group.slots)")
+
+        // 2) Migration invariant: the gemini child is HARNESS-driven (a live
+        //    bridge) — the agentapi conversation path is gone entirely.
+        XCTAssertTrue(server.isHarnessLive(geminiId),
+                      "gemini broadcast child must have a live harness bridge (agy)")
+        _ = try XCTUnwrap(registry.session(id: geminiId))
+
+        // 3) Broadcast one prompt; assert the gemini child streams a real reply.
+        //    The prompt itself contains "PONG" once (echoed as the user bubble), so
+        //    requiring ≥2 occurrences proves the ASSISTANT replied (not just the echo).
+        let sendReq = FrontierSendRequest(text: "Reply with the single word PONG and nothing else.")
+        let sendResp = try await postJSON(
+            "/chat-sessions/frontier/\(group.groupId.uuidString)/send", sendReq, timeout: 30)
+        XCTAssertTrue([200, 202].contains(sendResp.status),
+                      "frontier send status \(sendResp.status): \(bodySnippet(sendResp.data))")
+
+        // The frontier child does NOT echo the user prompt into its store, so the
+        // only "PONG" comes from the assistant. Require an assistantText item AND
+        // PONG present — proving the agy-driven child produced a real reply.
+        var geminiReplied = false
+        var lastSnapshot = "<none>"
+        for _ in 0..<150 {  // ~30s; agy --print typically replies in ~8-13s
+            let snap = try await requestRaw(
+                path: "/sessions/\(geminiId.uuidString)/chat-snapshot", method: "GET")
+            if snap.status == 200, let s = String(data: snap.data, encoding: .utf8) {
+                lastSnapshot = s
+                if s.contains("\"kind\":\"assistantText\"") && s.uppercased().contains("PONG") {
+                    geminiReplied = true
+                    break
+                }
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        XCTAssertTrue(geminiReplied,
+                      "gemini broadcast child did not stream an assistant reply via headless agy; last snapshot: \(lastSnapshot.prefix(400))")
+    }
+
+    // MARK: - OpenRouter model plumbing (opencode message body)
+
+    /// The OpenRouter/OpenCode vendor stores the picked model id on
+    /// session.model; opencodeMessageBody must forward it as OpenCode's
+    /// {providerID, modelID} object, except for the "opencode-default"
+    /// sentinel (and empty/nil), which must keep OpenCode's own default.
+    func testOpencodeModelObjectMapsRealSlugAndSkipsDefault() {
+        // Real OpenRouter slug → routed via providerID "openrouter".
+        let real = AgentControlServer.opencodeModelObject(forModelId: "anthropic/claude-opus-4.7")
+        XCTAssertEqual(real?["providerID"], "openrouter")
+        XCTAssertEqual(real?["modelID"], "anthropic/claude-opus-4.7")
+
+        // Arbitrary slug from the ~320-model live catalog also passes through.
+        let llama = AgentControlServer.opencodeModelObject(forModelId: "meta-llama/llama-3.3-70b-instruct")
+        XCTAssertEqual(llama?["modelID"], "meta-llama/llama-3.3-70b-instruct")
+
+        // Sentinel + empty + nil → nil (OpenCode keeps its config default).
+        XCTAssertNil(AgentControlServer.opencodeModelObject(forModelId: "opencode-default"))
+        XCTAssertNil(AgentControlServer.opencodeModelObject(forModelId: "   "))
+        XCTAssertNil(AgentControlServer.opencodeModelObject(forModelId: nil))
+    }
+
     private struct RawResponse {
         let status: Int
         let data: Data

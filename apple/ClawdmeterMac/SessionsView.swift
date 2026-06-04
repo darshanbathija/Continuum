@@ -495,6 +495,7 @@ public final class SessionsModel: ObservableObject {
             openOutsideJSONLPath = path
             openSessionId = nil
             forcedChatStoreURLs[existing.id] = url
+            needsURLRevalidation.insert(existing.id)
             externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
             return
         }
@@ -517,6 +518,7 @@ public final class SessionsModel: ObservableObject {
         )
         syntheticOutsideSessions[path] = synth
         forcedChatStoreURLs[synth.id] = url
+        needsURLRevalidation.insert(synth.id)
         externalForcedJSONLPaths.insert(Self.canonicalJSONLPath(path))
         draftWorkspaceTab = nil
         selectedWorkspaceTerminalTabId = nil
@@ -645,27 +647,37 @@ public final class SessionsModel: ObservableObject {
                     }
                 )
                 let cwd = provisioned.path
-                let argv = AgentSpawner.codexArgv(
-                    model: model, planMode: true, effort: effort, workspacePath: cwd
-                ) ?? []
-                guard !argv.isEmpty else {
-                    throw SpawnError.missingBinary("Codex CLI not found on PATH. Configure in Settings → Diagnostics.")
+                // v27: drive codex via the daemon ACP harness (paneless) instead
+                // of a tmux pane. The daemon adopts the optimistic row (same
+                // sessionId) and reuses this Mac-provisioned worktree
+                // (existingWorkspacePath). Guard with a deadline so a wedged
+                // daemon/spawn doesn't leave the trail spinning forever.
+                guard let runtime = AppDelegate.runtime,
+                      let port = runtime.agentControlServer.boundPort else {
+                    throw SpawnError.missingBinary("Daemon not started — relaunch Clawdmeter.")
                 }
-                let resolvedEnv = try resolveRepoEnv(repoRoot: repoKey, cwd: cwd)
-                let env = resolvedEnv?.environment ?? [:]
-                // Guard the pane spawn with a deadline — a wedged tmux control
-                // connection would otherwise leave the trail spinning on
-                // "Starting Codex" forever (the symptom just hit).
-                let window = try await Self.withSpawnTimeout(20) {
-                    try await tmux.newWindow(cwd: cwd, child: argv, environment: env)
+                let sender = MacComposerSender(
+                    port: Int(port),
+                    token: runtime.agentControlServer.localLoopbackToken ?? ""
+                )
+                let createReq = NewSessionRequest(
+                    repoKey: repoKey, agent: agent, model: model, planMode: false,
+                    goal: nil, useWorktree: true, effort: effort,
+                    existingWorkspacePath: cwd, sessionId: sessionId
+                )
+                _ = try await Self.withSpawnTimeout(30) {
+                    try await sender.createSession(createReq)
                 }
+                // Record the worktree provisioning metadata on the (adopted) row
+                // so end-of-session cleanup removes the worktree — the daemon
+                // adopt set worktree/owns but not the metadata (the Mac owns it).
                 try await registry.updateRuntime(
                     id: sessionId,
                     worktreePath: cwd,
                     provisioning: provisioned.metadata,
                     runtimeCwd: cwd,
-                    tmuxWindowId: window.windowId,
-                    tmuxPaneId: window.paneId,
+                    tmuxWindowId: nil,
+                    tmuxPaneId: nil,
                     mode: .worktree,
                     ownsWorktree: true
                 )
@@ -695,6 +707,12 @@ public final class SessionsModel: ObservableObject {
                 provisioningSessionIds.remove(sessionId)
                 provisioningProgress[sessionId] = nil
                 CityNamer.shared.release(sessionId)
+                // v27 timeout-race safety: createSession may have timed out on
+                // the Mac while the daemon actually succeeded (adopted the row +
+                // started the bridge). Tear down any harness bridge the daemon
+                // registered for this id before deleting the row, so we don't
+                // leak the driver child. No-op if no bridge exists.
+                await AppDelegate.runtime?.agentControlServer.teardownHarnessSession(sessionId)
                 try? await registry.delete(id: sessionId)
                 if openSessionId == sessionId { openSessionId = nil }
                 NSLog("[Clawdmeter] quickSpawn provision failed sid=%@ repo=%@: %@",
@@ -829,6 +847,26 @@ public final class SessionsModel: ObservableObject {
     private var chatStores: [UUID: SessionChatStore] = [:]
     private var chatStoreLRU: [UUID] = []
     private static let maxResidentChatStores = 3
+    /// Per-session cached `ComposerStore` (tab-switch perf). Built once on
+    /// first open and reused, so switching Code tabs no longer rebuilds the
+    /// composer (and discards the in-progress draft + model/effort/mode chip
+    /// selections) on every flip. Evicted alongside `chatStores` under the
+    /// same LRU window so it stays bounded.
+    private var composerStores: [UUID: ComposerStore] = [:]
+    /// The tmux pane id a session's chat store was last resolved against,
+    /// keyed by session id ("" = resolved against no live pane). Every respawn
+    /// (config swap, approve-plan, revive) assigns a NEW pane, so a changed
+    /// pane id is the cheap, can't-miss signal that the Codex rollout JSONL may
+    /// have rotated and the tailed file must be re-resolved. When the pane is
+    /// unchanged — the common tab-toggle case — we skip the synchronous
+    /// parent-walk + per-file stat scan `resolveSessionFileURL` runs, which on
+    /// every warm hit was the dominant main-thread stall when toggling tabs.
+    private var lastResolvedPaneId: [UUID: String] = [:]
+    /// Sessions whose tailed JSONL must be re-resolved on the next `chatStore`
+    /// access regardless of pane id — set when a forced JSONL pin is applied
+    /// (continue-here / resume / synthetic-read-only) so the override takes
+    /// effect immediately even though the pane id may be unchanged.
+    private var needsURLRevalidation: Set<UUID> = []
     /// Sessions explicitly protected from LRU eviction. The main
     /// workspace's currently-open session is always protected; popped-out
     /// session windows register themselves on mount (and unregister on
@@ -923,20 +961,46 @@ public final class SessionsModel: ObservableObject {
         // until the real worktree is attached; effectiveCwd then points at the
         // new worktree and resolution is correct.
         if isProvisioning(session.id) { return nil }
+        // v27 Code-tab harness migration: a paneless harness Code session
+        // (codex/cursor/gemini driven by a live bridge) reads the daemon-owned
+        // store the bridge writes into — exactly like a chat session — instead
+        // of resolving + tailing a JSONL. Mirror the `.chat` branch above.
+        if AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true {
+            if let existing = chatStores[session.id] {
+                touchLRU(session.id)
+                return existing
+            }
+            guard let daemonStore = AppDelegate.runtime?.agentControlServer.chatStore(for: session) else {
+                return nil
+            }
+            chatStores[session.id] = daemonStore
+            chatStoreLRU.append(session.id)
+            lastResolvedPaneId[session.id] = session.tmuxPaneId ?? ""
+            evictExcessChatStores()
+            return daemonStore
+        }
         if let existing = chatStores[session.id] {
             touchLRU(session.id)
             // Audit P1 fix: when the daemon spawns a fresh post-approve
-            // rollout (Codex `approve-plan` writes a new JSONL), the
-            // cached store keeps tailing the dead plan-mode file unless
-            // we swap it in place. Compare the cached URL against the
-            // currently-resolved one and call switchTailedFile when
-            // they diverge — without this the Mac chat freezes on the
-            // plan and the user has to relaunch the app to see live
-            // execution turns.
-            let resolved = forcedChatStoreURLs[session.id]
-                ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.effectiveCwd)
-            if let resolved, existing.currentFileURL != resolved {
-                existing.switchTailedFile(to: resolved)
+            // rollout (Codex `approve-plan` writes a new JSONL), the cached
+            // store keeps tailing the dead plan-mode file unless we swap it
+            // in place. But resolving on EVERY warm hit means a synchronous
+            // parent-walk + per-file stat scan of ~/.claude/projects/<repo>/
+            // on every Code-tab flip — the dominant main-thread stall when
+            // toggling tabs. Every respawn (approve-plan, config swap,
+            // revive) assigns a new tmux pane, so a changed pane id (or an
+            // explicit pin via needsURLRevalidation) is the cheap can't-miss
+            // signal that the rollout may have rotated; an unchanged pane —
+            // the common toggle case — skips the scan entirely.
+            let paneToken = session.tmuxPaneId ?? ""
+            let forcedRevalidation = needsURLRevalidation.remove(session.id) != nil
+            if lastResolvedPaneId[session.id] != paneToken || forcedRevalidation {
+                lastResolvedPaneId[session.id] = paneToken
+                let resolved = forcedChatStoreURLs[session.id]
+                    ?? SessionChatStore.resolveSessionFileURL(repoCwd: session.effectiveCwd)
+                if let resolved, existing.currentFileURL != resolved {
+                    existing.switchTailedFile(to: resolved)
+                }
             }
             return existing
         }
@@ -947,6 +1011,10 @@ public final class SessionsModel: ObservableObject {
         store.start()
         chatStores[session.id] = store
         chatStoreLRU.append(session.id)
+        // Record the pane the store was just resolved against so the next warm
+        // hit doesn't redundantly re-scan (see lastResolvedPaneId).
+        needsURLRevalidation.remove(session.id)
+        lastResolvedPaneId[session.id] = session.tmuxPaneId ?? ""
         evictExcessChatStores()
         return store
     }
@@ -1004,6 +1072,9 @@ public final class SessionsModel: ObservableObject {
             let evictId = chatStoreLRU.remove(at: evictIdx)
             chatStores[evictId]?.stop()
             chatStores.removeValue(forKey: evictId)
+            composerStores.removeValue(forKey: evictId)
+            lastResolvedPaneId.removeValue(forKey: evictId)
+            needsURLRevalidation.remove(evictId)
             prMirrors[evictId]?.detach()
             prMirrors.removeValue(forKey: evictId)
             prCoordinators[evictId]?.stopWatching()
@@ -1015,10 +1086,35 @@ public final class SessionsModel: ObservableObject {
         chatStores[sessionId]?.stop()
         chatStores.removeValue(forKey: sessionId)
         chatStoreLRU.removeAll { $0 == sessionId }
+        composerStores.removeValue(forKey: sessionId)
+        lastResolvedPaneId.removeValue(forKey: sessionId)
+        needsURLRevalidation.remove(sessionId)
         prMirrors[sessionId]?.detach()
         prMirrors.removeValue(forKey: sessionId)
         prCoordinators[sessionId]?.stopWatching()
         prCoordinators.removeValue(forKey: sessionId)
+    }
+
+    /// Tab-switch perf: lazy per-session composer store. Built once with the
+    /// session's effective model/effort/mode + autopilot state and reused, so
+    /// reopening a Code tab restores the in-progress draft + chip selections
+    /// instead of rebuilding (and discarding them) on every flip. `CenterThread`
+    /// observes this cached instance rather than constructing its own
+    /// `@StateObject`, which is what let us drop the `.id(session.id)` view-
+    /// identity teardown that made switching tabs feel heavy.
+    public func composerStore(for session: AgentSession, catalog: ModelCatalog) -> ComposerStore {
+        if let existing = composerStores[session.id] { return existing }
+        let store = ComposerStore(mode: .bound(sessionId: session.id))
+        let resolvedModel = CenterThread.effectiveModelId(for: session, catalog: catalog)
+        store.modelId = resolvedModel
+        store.effort = CenterThread.effectiveEffort(for: session, modelId: resolvedModel, catalog: catalog)
+        store.mode = session.mode
+        store.agent = session.agent
+        store.planMode = session.status == .planning
+        store.repoKey = session.repoKey
+        store.autopilotEnabled = AutopilotState.shared.isEnabled(sessionId: session.id)
+        composerStores[session.id] = store
+        return store
     }
 
     /// G16: lazy PR mirror, attached to this session's chat store on first
@@ -1509,6 +1605,50 @@ public final class SessionsModel: ObservableObject {
         }
     }
 
+    /// v27 Code-tab harness migration: spawn a paneless harness session
+    /// (codex/cursor/gemini) by delegating to the daemon's `POST /sessions`
+    /// over the loopback, then adopt it into the open-state exactly like the
+    /// tmux path's tail. `existingWorkspacePath`/`sessionId` are set by the
+    /// optimistic "+" path so the Mac-provisioned worktree + pre-minted row are
+    /// reused; nil for the New Session sheet (the daemon provisions + mints).
+    private func spawnHarnessSessionViaDaemon(
+        repoPath: String,
+        agent: AgentKind,
+        goal: String?,
+        mode: SessionMode,
+        model: String?,
+        effort: ReasoningEffort?,
+        existingWorkspacePath: String?,
+        sessionId: UUID?
+    ) async throws -> AgentSession {
+        guard let runtime = AppDelegate.runtime,
+              let port = runtime.agentControlServer.boundPort else {
+            throw SpawnError.missingBinary("Daemon not started — relaunch Clawdmeter.")
+        }
+        let sender = MacComposerSender(
+            port: Int(port),
+            token: runtime.agentControlServer.localLoopbackToken ?? ""
+        )
+        let req = NewSessionRequest(
+            repoKey: repoPath,
+            agent: agent,
+            model: model,
+            planMode: false,
+            goal: goal,
+            useWorktree: mode == .worktree,
+            effort: effort,
+            existingWorkspacePath: existingWorkspacePath,
+            sessionId: sessionId
+        )
+        let session = try await sender.createSession(req)
+        recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
+        expandedRepoKeys.insert(repoPath)
+        draftWorkspaceTab = nil
+        openSessionId = session.id
+        await refresh()
+        return registry.session(id: session.id) ?? session
+    }
+
     public func spawnSession(
         repoPath: String,
         agent: AgentKind,
@@ -1535,20 +1675,38 @@ public final class SessionsModel: ObservableObject {
         initialMessage: String? = nil
     ) async throws -> AgentSession {
         try assertProviderEnabled(agent)
-        // v0.8.0 agy-migration — Gemini sessions fork off here BEFORE the
-        // tmux pipeline runs. Antigravity 2's agentapi is HTTP-RPC, not a
-        // terminal CLI; there's no pane to spawn. Tier-2 v0.42 chat is
-        // gone (D4 hard-stop). Returns the new session or throws
-        // `.antigravityNotReady` with the CTA the composer surfaces.
-        if agent == .gemini, resumeSessionId == nil {
-            return try await spawnAntigravitySession(
-                repoPath: repoPath,
-                goal: goal,
-                mode: mode,
-                model: model,
-                effort: effort,
-                planMode: planMode,
-                initialMessage: initialMessage
+        // v27 Code-tab harness migration: route EVERY non-Claude Code spawn
+        // through the daemon's ACP harness (paneless codex/cursor/gemini) —
+        // tmux + agentapi are gone for non-Claude. Claude + OpenCode keep their
+        // own paths below. External "Continue here" resume is deprioritized: a
+        // resume of a codex JSONL opens a fresh harness session in the same
+        // worktree (true thread/resume is a fast-follow). This sits BEFORE the
+        // CLI preflight because Gemini (Antigravity) isn't a CLI binary.
+        if agent != .claude, agent != .opencode {
+            // Cursor preflight — the daemon's harness preflight doesn't
+            // auth-check cursor-agent, so do it here before provisioning.
+            if agent == .cursor {
+                if planMode, (resumeSessionId?.isEmpty ?? true) {
+                    throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
+                }
+                let cursorState = await CursorModelProbe.shared.currentState()
+                guard cursorState.binaryPath != nil else {
+                    throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
+                }
+                guard cursorState.authenticated else {
+                    throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
+                }
+                if let model,
+                   !CursorModelCatalog.isAutoModel(model),
+                   !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
+                    throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
+                }
+            } else if agent != .gemini, let reason = AgentSpawner.preflight(agent: agent) {
+                throw SpawnError.missingBinary(reason)
+            }
+            return try await spawnHarnessSessionViaDaemon(
+                repoPath: repoPath, agent: agent, goal: goal, mode: mode,
+                model: model, effort: effort, existingWorkspacePath: nil, sessionId: nil
             )
         }
         if agent == .cursor, planMode, (resumeSessionId?.isEmpty ?? true) {
@@ -1618,39 +1776,12 @@ public final class SessionsModel: ObservableObject {
                 acceptEdits: acceptEdits,
                 resumeSessionId: resumeSessionId
             ) ?? []
-        case .codex:
-            argv = AgentSpawner.codexArgv(
-                model: model,
-                planMode: effectivePlanMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId,
-                workspacePath: cwd
-            ) ?? []
-        case .gemini:
-            // v0.8.0 dead branch — the .gemini case is short-circuited
-            // by `spawnAntigravitySession` above. This argv assignment
-            // is unreachable but the compiler requires it for
-            // exhaustiveness; if execution gets here (resumeSessionId
-            // path for Gemini), the missingBinary error below catches.
+        case .codex, .gemini, .opencode, .cursor:
+            // v27: every non-Claude provider is harness-driven (paneless) — the
+            // fork at the top of spawnSession returns before this switch, so
+            // these are unreachable. Kept only for exhaustiveness; Claude is the
+            // sole tmux argv path now.
             argv = []
-        case .opencode:
-            // PR #29: OpenCode spawns don't go through this tmux argv
-            // path — OpencodeProcessManager + SSEAdapter handle them
-            // out-of-band. The missingBinary throw below surfaces a
-            // clean error if execution reaches here unexpectedly.
-            argv = []
-        case .cursor:
-            argv = AgentSpawner.cursorArgv(
-                model: model,
-                planMode: effectivePlanMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: resumeSessionId,
-                workspacePath: cwd
-            ) ?? []
         case .grok, .unknown:
             // grok is ACP (no tmux argv); unknown is X3 forward-compat. Both
             // fall through to the missingBinary throw below.
@@ -1699,6 +1830,7 @@ public final class SessionsModel: ObservableObject {
         )
         if let pinned = pinnedJSONLURL {
             forcedChatStoreURLs[session.id] = pinned
+            needsURLRevalidation.insert(session.id)
         }
         recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
         expandedRepoKeys.insert(repoPath)
@@ -1733,16 +1865,33 @@ public final class SessionsModel: ObservableObject {
             workspacePath: workspacePath,
             mode: mode
         )
-        if agent == .gemini {
-            let session = try await spawnAntigravitySession(
-                repoPath: repoPath,
-                workspacePath: workspacePath,
-                goal: goal,
-                mode: mode,
-                model: model,
-                effort: effort,
-                planMode: planMode,
-                initialMessage: initialMessage
+        // v27 Code-tab harness migration: route non-Claude into the EXISTING
+        // worktree via the daemon harness (reuse the worktree — existingWorkspace
+        // tells the daemon to skip provisioning — daemon creates the row).
+        // Claude + OpenCode keep their existing paths below.
+        if agent != .claude, agent != .opencode {
+            if agent == .cursor {
+                if planMode {
+                    throw SpawnError.unsupportedMode("Cursor plan mode requires a resumable Cursor session. Start Cursor in another permission mode.")
+                }
+                let cursorState = await CursorModelProbe.shared.currentState()
+                guard cursorState.binaryPath != nil else {
+                    throw SpawnError.missingBinary("Cursor Agent CLI not found or failed identity check: cursor-agent or agent. Configure in Settings -> Diagnostics.")
+                }
+                guard cursorState.authenticated else {
+                    throw SpawnError.missingBinary("Run cursor-agent login, then try again.")
+                }
+                if let model,
+                   !CursorModelCatalog.isAutoModel(model),
+                   !cursorState.models.contains(where: { $0.id == model || $0.cliAlias == model }) {
+                    throw SpawnError.missingBinary("Cursor model is not available for the authenticated account.")
+                }
+            } else if agent != .gemini, let reason = AgentSpawner.preflight(agent: agent) {
+                throw SpawnError.missingBinary(reason)
+            }
+            let session = try await spawnHarnessSessionViaDaemon(
+                repoPath: repoPath, agent: agent, goal: goal, mode: mode,
+                model: model, effort: effort, existingWorkspacePath: workspacePath, sessionId: nil
             )
             try await registry.setInheritedContextSources(sessionId: session.id, sourceIds: inheritedContextSourceIds)
             return registry.session(id: session.id) ?? session
@@ -1792,26 +1941,10 @@ public final class SessionsModel: ObservableObject {
                 acceptEdits: acceptEdits,
                 resumeSessionId: nil
             ) ?? []
-        case .codex:
-            argv = AgentSpawner.codexArgv(
-                model: model,
-                planMode: planMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: nil
-            ) ?? []
-        case .cursor:
-            argv = AgentSpawner.cursorArgv(
-                model: model,
-                planMode: planMode,
-                effort: effort,
-                autopilot: autopilot,
-                acceptEdits: acceptEdits,
-                resumeSessionId: nil,
-                workspacePath: cwd
-            ) ?? []
-        case .gemini, .opencode, .grok, .unknown:
+        case .codex, .cursor, .gemini, .opencode, .grok, .unknown:
+            // v27: non-Claude providers are harness-driven (paneless) — the fork
+            // at the top returns before this switch, so these are unreachable.
+            // Kept for exhaustiveness; Claude is the sole tmux argv path now.
             argv = []
         }
         guard !argv.isEmpty else {
@@ -1948,247 +2081,6 @@ public final class SessionsModel: ObservableObject {
         return registry.session(id: session.id) ?? session
     }
 
-    // MARK: - v0.8.0 Antigravity agentapi spawn (D4 hard-stop)
-
-    /// Spawn a Gemini session via Antigravity 2's HTTP-RPC agentapi.
-    /// No tmux pane is created — the language_server holds the session
-    /// state in `~/.gemini/antigravity/conversations/<id>.db` and T6's
-    /// `AntigravityConversationDB` feeds chat into SessionChatStore.
-    ///
-    /// Errors:
-    ///   - `.absent`:                "Install Antigravity 2 …"
-    ///   - `.installedNotSignedIn`:  "Sign into Antigravity 2 first"
-    ///   - `.appOnlyNotRunning`:     "Open Antigravity 2 to start a Gemini session"
-    ///   - `.noProjectForRepo`:      "Open this repo in Antigravity 2 first"
-    /// All surface as `.antigravityNotReady(message)` in the composer.
-    private func spawnAntigravitySession(
-        repoPath: String,
-        workspacePath: String? = nil,
-        goal: String?,
-        mode: SessionMode,
-        model: String?,
-        effort: ReasoningEffort?,
-        planMode: Bool,
-        initialMessage: String? = nil
-    ) async throws -> AgentSession {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let appBundle = URL(fileURLWithPath: "/Applications/Antigravity.app", isDirectory: true)
-        let lsClient = LanguageServerClient()
-        let projectResolver = AntigravityProjectResolver(
-            projectsDir: home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
-        )
-
-        func cleanupPreparedWorktree(
-            worktreePath: String?,
-            provisioning: WorktreeProvisioningMetadata?,
-            provisionalSessionId: UUID?
-        ) async {
-            await cleanupUnregisteredWorktree(
-                repoPath: repoPath,
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                provisionalSessionId: provisionalSessionId
-            )
-        }
-
-        // Preflight the provider before creating a worktree. For worktree
-        // sessions we run a second project-resolution preflight against the
-        // prepared cwd after branch creation, so Antigravity never silently
-        // edits the original checkout when the worktree project is unknown.
-        let baseInstall = await AntigravityInstall.preflight(
-            forRepoKey: repoPath,
-            isLanguageServerLive: {
-                if case .live = lsClient.discoverLive() { return true }
-                return false
-            },
-            resolveProject: { repoKey in
-                await projectResolver.resolve(forRepoKey: repoKey)?.id
-            },
-            homeDirectory: home,
-            applicationsRoot: appBundle.deletingLastPathComponent()
-        )
-
-        switch baseInstall {
-        case .absent:
-            throw SpawnError.antigravityNotReady(
-                "Install Antigravity 2 from antigravity.google to start a Gemini session."
-            )
-        case .installedNotSignedIn:
-            throw SpawnError.antigravityNotReady(
-                "Sign into Antigravity 2 first, then try again."
-            )
-        case .appOnlyNotRunning:
-            throw SpawnError.antigravityNotReady(
-                "Open Antigravity 2 to start a Gemini session."
-            )
-        case .noProjectForRepo:
-            throw SpawnError.antigravityNotReady(
-                "Open this repo in Antigravity 2 first, then come back."
-            )
-        case .ready:
-            break
-        }
-
-        var cwd = workspacePath ?? repoPath
-        var worktreePath: String? = mode == .worktree ? workspacePath : nil
-        var provisioning: WorktreeProvisioningMetadata?
-        var provisionalSessionId: UUID?
-        if mode == .worktree, workspacePath == nil {
-            let sessionId = UUID()
-            provisionalSessionId = sessionId
-            let city = CityNamer.shared.cityName(for: sessionId)
-            let slug = WorktreeManager.slug(city: city)
-            do {
-                let provisioned = try await WorktreeManager.shared.provision(
-                    repoRoot: repoPath,
-                    slug: slug,
-                    branchName: slug,
-                    filesToCopy: filesToCopySettings(forRepoRoot: repoPath),
-                    setupScript: RepoSetupScriptStore.script(forRepoRoot: repoPath)
-                )
-                cwd = provisioned.path
-                worktreePath = provisioned.path
-                provisioning = provisioned.metadata
-            } catch {
-                CityNamer.shared.release(sessionId)
-                throw error
-            }
-        }
-        let resolvedEnv: RepoEnvResolvedEnvironment?
-        do {
-            resolvedEnv = try resolveRepoEnv(repoRoot: repoPath, cwd: cwd)
-        } catch {
-            await cleanupPreparedWorktree(
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                provisionalSessionId: provisionalSessionId
-            )
-            throw error
-        }
-
-        let install = await AntigravityInstall.preflight(
-            forRepoKey: cwd,
-            isLanguageServerLive: {
-                if case .live = lsClient.discoverLive() { return true }
-                return false
-            },
-            resolveProject: { repoKey in
-                await projectResolver.resolve(forRepoKey: repoKey)?.id
-            },
-            homeDirectory: home,
-            applicationsRoot: appBundle.deletingLastPathComponent()
-        )
-
-        switch install {
-        case .absent:
-            await cleanupPreparedWorktree(
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                provisionalSessionId: provisionalSessionId
-            )
-            throw SpawnError.antigravityNotReady(
-                "Install Antigravity 2 from antigravity.google to start a Gemini session."
-            )
-        case .installedNotSignedIn:
-            await cleanupPreparedWorktree(
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                provisionalSessionId: provisionalSessionId
-            )
-            throw SpawnError.antigravityNotReady(
-                "Sign into Antigravity 2 first, then try again."
-            )
-        case .appOnlyNotRunning:
-            await cleanupPreparedWorktree(
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                provisionalSessionId: provisionalSessionId
-            )
-            throw SpawnError.antigravityNotReady(
-                "Open Antigravity 2 to start a Gemini session."
-            )
-        case .noProjectForRepo:
-            await cleanupPreparedWorktree(
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                provisionalSessionId: provisionalSessionId
-            )
-            throw SpawnError.antigravityNotReady(
-                "Open this prepared worktree in Antigravity 2 first, then try again."
-            )
-        case .ready(_, let projectId):
-            // The first turn of the conversation gets locked in here —
-            // agentapi has no separate "send first user message" call.
-            // Codex P1.2: original draft passed `goal` (truncated to 80
-            // chars) which made the chat thread start with a chopped
-            // version of the user's prompt. Prefer the composer's
-            // initialMessage (full rendered body) when provided.
-            let firstPrompt: String = {
-                if let initial = initialMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !initial.isEmpty {
-                    return initial
-                }
-                if let goalText = goal?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !goalText.isEmpty {
-                    return goalText
-                }
-                return "Start a new Gemini session in \(cwd)."
-            }()
-            let modelTier = AgentapiModelTier.from(modelCatalogId: model)
-            let conversationIdString: String
-            do {
-                conversationIdString = try await lsClient.newConversation(
-                    modelTier: modelTier,
-                    prompt: firstPrompt,
-                    projectId: projectId
-                )
-            } catch {
-                await cleanupPreparedWorktree(
-                    worktreePath: worktreePath,
-                    provisioning: provisioning,
-                    provisionalSessionId: provisionalSessionId
-                )
-                throw error
-            }
-            guard let conversationId = UUID(uuidString: conversationIdString) else {
-                await cleanupPreparedWorktree(
-                    worktreePath: worktreePath,
-                    provisioning: provisioning,
-                    provisionalSessionId: provisionalSessionId
-                )
-                throw SpawnError.antigravityNotReady(
-                    "Antigravity returned an unrecognized conversation id (\(conversationIdString)). Try reopening the app."
-                )
-            }
-            let session = try await registry.create(
-                repoKey: repoPath,
-                repoDisplayName: (repoPath as NSString).lastPathComponent,
-                agent: .gemini,
-                model: model,
-                goal: goal,
-                worktreePath: worktreePath,
-                provisioning: provisioning,
-                tmuxWindowId: nil,  // no tmux pane
-                tmuxPaneId: nil,
-                planMode: planMode,
-                mode: mode,
-                effort: effort,
-                geminiBackend: .agentapi,
-                antigravityConversationId: conversationId,
-                antigravityProjectId: projectId,
-                ownsWorktree: provisioning != nil && worktreePath != nil,
-                envSetId: resolvedEnv?.set?.id,
-                envSetName: resolvedEnv?.set?.name,
-                id: provisionalSessionId ?? UUID()
-            )
-            recordWorkspaceSession(repoRoot: repoPath, sessionId: session.id)
-            expandedRepoKeys.insert(repoPath)
-            draftWorkspaceTab = nil
-            openSessionId = session.id
-            await self.refresh()
-            return session
-        }
-    }
 
     /// Promote the currently-open read-only synthetic session into a live
     /// Clawdmeter-owned session by spawning a fresh tmux pane with the
@@ -2543,6 +2435,10 @@ public final class SessionsModel: ObservableObject {
             try? await registry.delete(id: id)
             return
         }
+        // v27: tear down the harness bridge (stdio child / gRPC channel) for
+        // paneless codex/cursor/gemini/grok sessions — registry.delete alone
+        // would leak the driver child. No-op for tmux (Claude) sessions.
+        await AppDelegate.runtime?.agentControlServer.teardownHarnessSession(id)
         if let runtime = AppDelegate.runtime, let windowId = session.tmuxWindowId {
             do { try await runtime.tmuxClient.killWindow(windowId) } catch {}
         }
@@ -2660,28 +2556,13 @@ public final class SessionsModel: ObservableObject {
               let session = registry.session(id: id),
               let windowId = session.tmuxWindowId,
               session.status == .planning,
-              (session.planText?.isEmpty == false || session.agent == .codex || session.agent == .cursor)
+              (session.planText?.isEmpty == false || session.agent == .codex)
         else { return }
         var windowKilled = false
         do {
-            let providerResumeId: String
-            if session.agent == .cursor {
-                guard let cursorResumeId = Self.cursorResumeId(for: session) else {
-                    try? await registry.setPlanText(
-                        id: id,
-                        planText: "Cursor approval needs a real Cursor chat id. Start Cursor in code mode or import a Cursor session with a proven id."
-                    )
-                    try? await registry.updateStatus(id: id, status: .degraded)
-                    WorkspaceFeedback.failure(
-                        "Can't approve plan",
-                        detail: "Cursor needs a real chat id — start Cursor in code mode or import a session with a proven id."
-                    )
-                    return
-                }
-                providerResumeId = cursorResumeId
-            } else {
-                providerResumeId = session.id.uuidString
-            }
+            // Cursor approve-plan goes through the ACP bridge (daemon), not this
+            // tmux respawn path — only Claude/Codex CLI reach here.
+            let providerResumeId = session.id.uuidString
             let argv = AgentSpawner.respawnArgv(
                 agent: session.agent,
                 resumeSessionId: providerResumeId,
@@ -2763,11 +2644,4 @@ public final class SessionsModel: ObservableObject {
         workspaceStore.syncActiveSessions(repoRoot: repoRoot, sessionIds: ids)
     }
 
-    private static func cursorResumeId(for session: AgentSession) -> String? {
-        let candidate = session.runtimeBinding?.externalSessionId
-            ?? session.runtimeBinding?.externalThreadId
-        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else { return nil }
-        return trimmed
-    }
 }

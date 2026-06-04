@@ -49,13 +49,13 @@
 	<!-- App group for the widget extension. -->
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.76S62SDSD3.com.clawdmeter</string>
+		<string>group.LRL8MRH6B4.ai.continuum</string>
 	</array>
 	<!-- Pasted-token Keychain entry; shared with the iPhone/Watch via
 	     iCloud Keychain (kSecAttrSynchronizable=true). -->
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.clawdmeter</string>
+		<string>$(AppIdentifierPrefix)ai.continuum</string>
 	</array>
 
 	<!-- v0.29.20: NSOpenPanel-picked file/folder access. The Add-Repo
@@ -220,7 +220,7 @@
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array/>
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
-	<string>$(TeamIdentifierPrefix)com.clawdmeter</string>
+	<string>$(TeamIdentifierPrefix)ai.continuum</string>
 	-->
 </dict>
 </plist>

@@ -74,7 +74,7 @@ final class WireV26GrokTests: XCTestCase {
         XCTAssertTrue(SessionRuntimeKind.acpGrok.isACPDriven)
         XCTAssertTrue(SessionRuntimeKind.acpCursor.isACPDriven)
         for rt in [SessionRuntimeKind.claudeCLI, .codexCLI, .codexSDK,
-                   .antigravityAgentAPI, .opencodeServer, .cursorCLI, .unknown] {
+                   .opencodeServer, .cursorCLI, .unknown] {
             XCTAssertFalse(rt.isACPDriven, "\(rt.rawValue) must not route to the ACP harness")
         }
     }

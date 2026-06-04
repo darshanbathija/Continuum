@@ -13,7 +13,14 @@ struct CenterThread: View {
     let onDensityChange: (TranscriptDensity) -> Void
     let onModeSwitch: (SessionMode) -> Void
 
-    @StateObject private var composerStore: ComposerStore
+    /// Sourced from `SessionsModel.composerStore(for:)` (a per-session cache)
+    /// rather than a locally-constructed `@StateObject`. This is what lets the
+    /// center thread keep SwiftUI identity across Code-tab switches (no
+    /// `.id(session.id)` teardown): on each switch `init` re-points this
+    /// observed wrapper at the newly-selected session's cached store, so the
+    /// draft + chip selections of every open tab are preserved instead of
+    /// being rebuilt from scratch. Mirrors the existing `prMirror` pattern.
+    @ObservedObject private var composerStore: ComposerStore
     /// PR mirror for the open session — drives the header branch chip's
     /// color (open/merged/closed). Synthetic read-only sessions get a
     /// mirror too; it just never resolves a PR URL.
@@ -38,6 +45,16 @@ struct CenterThread: View {
     /// surface the existing autopilot confirm sheet, then commit on
     /// approval.
     @State private var pendingBypassMode = false
+    /// Tab-switch perf guard: CenterThread now keeps SwiftUI identity across
+    /// Code-tab switches, so re-pointing the observed `composerStore` to a
+    /// different session transitions `composerStore.modelId`/`.effort` from the
+    /// previous session's value to the new one's — which would fire the chip
+    /// `.onChange` handlers below and spuriously respawn the agent on every
+    /// switch. We track the session id each chip handler last observed and skip
+    /// the change when it was caused by a session switch (re-point) rather than
+    /// a genuine in-session user edit. Seeded in `.onAppear`.
+    @State private var lastModelChipSessionId: UUID?
+    @State private var lastEffortChipSessionId: UUID?
 
     init(
         session: AgentSession,
@@ -59,16 +76,7 @@ struct CenterThread: View {
         self.density = density
         self.onDensityChange = onDensityChange
         self.onModeSwitch = onModeSwitch
-        let store = ComposerStore(mode: .bound(sessionId: session.id))
-        let resolvedModel = Self.effectiveModelId(for: session, catalog: catalog)
-        store.modelId = resolvedModel
-        store.effort = Self.effectiveEffort(for: session, modelId: resolvedModel, catalog: catalog)
-        store.mode = session.mode
-        store.agent = session.agent
-        store.planMode = session.status == .planning
-        store.repoKey = session.repoKey
-        store.autopilotEnabled = AutopilotState.shared.isEnabled(sessionId: session.id)
-        _composerStore = StateObject(wrappedValue: store)
+        _composerStore = ObservedObject(wrappedValue: model.composerStore(for: session, catalog: catalog))
         _prMirror = ObservedObject(wrappedValue: model.prMirror(for: session))
     }
 
@@ -109,6 +117,10 @@ struct CenterThread: View {
         }
         .onAppear {
             applyPendingFirstSendRecovery()
+            // Seed the chip-handler session trackers to the mounted session so
+            // the first genuine in-session edit isn't mistaken for a re-point.
+            lastModelChipSessionId = session.id
+            lastEffortChipSessionId = session.id
         }
         .onChange(of: model.pendingFirstSendRecoveryVersion) { _, _ in
             applyPendingFirstSendRecovery()
@@ -137,6 +149,29 @@ struct CenterThread: View {
         }
         .task(id: queueDrainKey) {
             await drainQueuedSendsIfPossible()
+        }
+        // Tab-switch perf: the center thread now keeps SwiftUI identity across
+        // Code-tab switches (the `.id(session.id)` that used to force a full
+        // teardown was removed so switching is cheap). Identity-scoped @State
+        // therefore survives a switch and would leak the previously-open
+        // session's transient UI into the newly-selected one, so reset it by
+        // hand here. The composer/transcript/prMirror are already keyed per
+        // session via caches, so they don't need this.
+        .onChange(of: session.id) { _, _ in
+            showingScheduler = false
+            showingTerminalOverlay = false
+            showingAutopilotConfirm = false
+            pendingBypassMode = false
+            restorePlan = nil
+            isPreparingCheckpointRestore = false
+            isRestoringCheckpoint = false
+            checkpointStatusText = nil
+            isDispatchingQueuedSend = false
+            dispatchedQueuedTurnForCurrentIdle = false
+            // The newly-selected session may have a queued first send waiting
+            // on readiness; onAppear won't fire again (identity is stable), so
+            // re-run the recovery hook explicitly.
+            applyPendingFirstSendRecovery()
         }
     }
 
@@ -660,17 +695,29 @@ struct CenterThread: View {
         // which calls `continueCurrentReadOnly()` first and promotes the
         // synthetic into a real session. Keeps typing zero-overhead.
         .onChange(of: composerStore.modelId) { _, new in
-            guard !isReadOnly, let new, new != session.model else { return }
+            // Skip the value change caused by re-pointing the observed composer
+            // store to a different session on a tab switch (not a user edit) —
+            // otherwise switching tabs would respawn the agent. See
+            // lastModelChipSessionId.
+            let isRepoint = lastModelChipSessionId != session.id
+            lastModelChipSessionId = session.id
+            // v27: harness Code sessions (codex/cursor/gemini) have no
+            // mid-session reconfigure in v1 — the AgentDriver spawns with the
+            // agent's defaults, so the chip is cosmetic. Skip the (tmux-only)
+            // SessionConfigChanger swap so it doesn't fail with a toast.
+            guard !isRepoint, !isReadOnly, !isHarnessDriven, let new, new != session.model else { return }
             if let entry = catalog.entry(forId: new) {
                 Task { await model.switchModel(sessionId: session.id, to: entry, effort: composerStore.effort) }
             }
         }
         .onChange(of: composerStore.effort) { _, new in
-            guard !isReadOnly, let new, new != session.effort else { return }
+            let isRepoint = lastEffortChipSessionId != session.id
+            lastEffortChipSessionId = session.id
+            guard !isRepoint, !isReadOnly, !isHarnessDriven, let new, new != session.effort else { return }
             Task { await model.switchEffort(sessionId: session.id, to: new) }
         }
         .onChange(of: composerStore.mode) { _, new in
-            guard !isReadOnly, new != session.mode else { return }
+            guard !isReadOnly, !isHarnessDriven, new != session.mode else { return }
             onModeSwitch(new)
         }
     }
@@ -1181,7 +1228,7 @@ struct CenterThread: View {
         return "\(session.agent.tahoeProvider.displayName) · \(modelText) · \(effortText) · \(session.mode.rawValue) mode"
     }
 
-    private static func effectiveModelId(for session: AgentSession, catalog: ModelCatalog) -> String? {
+    static func effectiveModelId(for session: AgentSession, catalog: ModelCatalog) -> String? {
         let candidates = [
             session.runtimeBinding?.providerModelId,
             session.model
@@ -1192,7 +1239,7 @@ struct CenterThread: View {
         return ComposerStore.ChipDefaults.for(agent: session.agent, catalog: catalog).modelId
     }
 
-    private static func effectiveEffort(
+    static func effectiveEffort(
         for session: AgentSession,
         modelId: String?,
         catalog: ModelCatalog
@@ -1308,6 +1355,14 @@ struct CenterThread: View {
         return entry.supportsEffort
     }
 
+    /// v27: true when this Code session is driven by a live harness bridge
+    /// (paneless codex/cursor/gemini) rather than a tmux pane. Gates the
+    /// mid-session config chips (no driver reconfigure in v1) + first-send
+    /// readiness.
+    private var isHarnessDriven: Bool {
+        AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true
+    }
+
     private func applyPendingFirstSendRecovery() {
         guard let recovery = model.takeFirstSendRecovery(sessionId: session.id) else { return }
         composerStore.restoreDraft(
@@ -1316,10 +1371,12 @@ struct CenterThread: View {
             error: recovery.autoSendWhenReady ? nil : recovery.error
         )
         // Auto-flush a prompt queued while the "+" session was provisioning —
-        // only once it's actually ready (worktree + pane attached). If the ready
-        // signal raced ahead of the session update, the draft is safely restored
-        // to the composer for a manual send.
-        if recovery.autoSendWhenReady, session.tmuxPaneId != nil {
+        // only once it's actually ready. Ready = a tmux pane attached (Claude)
+        // OR a live harness bridge driving it (v27 paneless codex/cursor/
+        // gemini). If the ready signal raced ahead of the session update, the
+        // draft is safely restored to the composer for a manual send.
+        let harnessReady = AppDelegate.runtime?.agentControlServer.isHarnessLive(session.id) == true
+        if recovery.autoSendWhenReady, session.tmuxPaneId != nil || harnessReady {
             Task { await performBoundSend() }
         }
     }

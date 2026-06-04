@@ -51,14 +51,34 @@ struct MarkdownRenderer: View {
 
     /// A chunk with its AttributedString pre-parsed (for prose) so the
     /// view body doesn't call `AttributedString(markdown:)` on every render.
-    private struct PreparedChunk: Identifiable, Equatable {
+    private struct PreparedChunk: Identifiable, Equatable, Sendable {
         let id: Int
         let kind: Kind
-        enum Kind: Equatable {
+        enum Kind: Equatable, Sendable {
             case prose(AttributedString, fallback: String)
             case code(language: String?, body: String)
         }
     }
+
+    /// Process-wide parsed-markdown cache keyed by the raw source string.
+    /// `prepare(source:)` is pure and colorScheme-independent (code-block
+    /// colors are applied at render time, not baked into the parsed chunks),
+    /// so chunks for a given body are reusable across every render AND across
+    /// view teardown. ChatThreadScroll re-creates its row subtree on each
+    /// Code-tab switch (it carries `.id(session.id)`), which would otherwise
+    /// re-run the 5–30ms-per-message markdown parse on every flip; this cache
+    /// turns a re-switch to an already-seen transcript into a lookup instead
+    /// of a re-parse. NSCache is thread-safe (read on main, written from the
+    /// detached parse task) and self-bounds under memory pressure.
+    private final class ChunkBox: Sendable {
+        let chunks: [PreparedChunk]
+        init(_ chunks: [PreparedChunk]) { self.chunks = chunks }
+    }
+    nonisolated(unsafe) private static let sharedChunkCache: NSCache<NSString, ChunkBox> = {
+        let cache = NSCache<NSString, ChunkBox>()
+        cache.countLimit = 600
+        return cache
+    }()
 
     var body: some View {
         // Only render chunks whose parse source matches the current view
@@ -100,12 +120,22 @@ struct MarkdownRenderer: View {
     private func kickParseIfNeeded(for src: String) {
         // Skip if we already have chunks for this exact source.
         if cache?.source == src { return }
+        // Shared-cache fast path: an identical body parsed earlier (e.g. before
+        // a Code-tab switch re-created this row) is reused synchronously — no
+        // re-parse, no detached hop, so a re-switch renders the transcript
+        // immediately instead of faulting markdown back in row-by-row.
+        if let boxed = Self.sharedChunkCache.object(forKey: src as NSString) {
+            cache = CacheEntry(source: src, chunks: boxed.chunks)
+            pendingSource = src
+            return
+        }
         // Record the live requested source in shared @State so the detached
         // closure below can compare against it (not the frozen captured
         // `source`) when it completes.
         pendingSource = src
         Task.detached(priority: .userInitiated) {
             let prepared = Self.prepare(source: src)
+            Self.sharedChunkCache.setObject(ChunkBox(prepared), forKey: src as NSString)
             await MainActor.run {
                 // Codex fix: an older parse can complete AFTER a newer
                 // one when SwiftUI recycles the row from source A to

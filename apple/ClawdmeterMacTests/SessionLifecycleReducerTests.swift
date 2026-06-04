@@ -49,14 +49,13 @@ final class SessionLifecycleReducerTests: XCTestCase {
                 .running
             ),
             (
-                "gemini agentapi running without tmux",
+                "gemini running without tmux (headless agy, paneless)",
                 snapshot(
                     session: session(
                         id: sessionId,
                         agent: .gemini,
                         tmuxWindowId: nil,
-                        tmuxPaneId: nil,
-                        geminiBackend: .agentapi
+                        tmuxPaneId: nil
                     )
                 ),
                 .running
@@ -378,8 +377,7 @@ final class SessionLifecycleReducerTests: XCTestCase {
         archivedAt: Date? = nil,
         prMirrorState: PRMirrorState? = nil,
         kind: SessionKind = .code,
-        codexChatBackend: CodexChatBackend? = nil,
-        geminiBackend: GeminiBackend? = nil
+        codexChatBackend: CodexChatBackend? = nil
     ) -> AgentSession {
         AgentSession(
             id: id,
@@ -402,8 +400,7 @@ final class SessionLifecycleReducerTests: XCTestCase {
             runtimeCwd: "/Users/example/Clawdmeter/.claude/worktrees/lifecycle",
             prMirrorState: prMirrorState,
             kind: kind,
-            codexChatBackend: codexChatBackend,
-            geminiBackend: geminiBackend
+            codexChatBackend: codexChatBackend
         )
     }
 

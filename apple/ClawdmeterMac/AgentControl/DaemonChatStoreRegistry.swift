@@ -50,14 +50,6 @@ public final class DaemonChatStoreRegistry {
     private var pathEntries: [URL: Entry] = [:]
     private var sweepTask: Task<Void, Never>?
     private var warmupTask: Task<Void, Never>?
-    /// v0.9 — Gemini agentapi chat sessions need a per-session ingestor
-    /// that subscribes to the SQLite WAL DB and forwards rows into the
-    /// store's appendSDKMessages pipe. One ingestor per resident
-    /// SessionChatStore; torn down when the entry is evicted (sweep
-    /// guard refuses to evict stores with pending permission prompts;
-    /// no equivalent for agentapi yet — the ingestor restart-via-resume
-    /// on next snapshotStore is safe).
-    private var antigravityIngestors: [UUID: AntigravityChatIngestor] = [:]
 
     /// Idle window after the last subscriber drops before the entry is
     /// evicted. 5 minutes balances "warm enough for tab-back" against
@@ -205,10 +197,18 @@ public final class DaemonChatStoreRegistry {
                 desiredURL = nil
             }
         case .code:
-            // Plan-mode rollout swap on approve-plan (PR #69 audit P1).
-            // resolveURL delegates to SessionFileResolver which tracks
-            // Codex respawn lineage via record(sessionId:rolloutURL:).
-            desiredURL = resolveURL(session.id, session)
+            // v27: paneless harness Code sessions are sdkOnly (bridge-fed) —
+            // never roll them over to a JSONL, or every snapshot would drop +
+            // rebuild the store and lose streamed content. Only LEGACY tmux Code
+            // sessions (real pane) track rollout lineage.
+            if session.tmuxPaneId == nil {
+                desiredURL = nil
+            } else {
+                // Plan-mode rollout swap on approve-plan (PR #69 audit P1).
+                // resolveURL delegates to SessionFileResolver which tracks
+                // Codex respawn lineage via record(sessionId:rolloutURL:).
+                desiredURL = resolveURL(session.id, session)
+            }
         }
         guard let desired = desiredURL, entry.store.currentFileURL != desired else { return }
         if entry.store.isSDKOnly {
@@ -279,33 +279,12 @@ public final class DaemonChatStoreRegistry {
     /// of trying to JSONL-parse a binary database.
     @MainActor
     public static func defaultResolveURL(sessionId: UUID, session: AgentSession) -> URL? {
-        // v0.8.1 agy-migration: Antigravity 2 agentapi sessions live in
-        // a SQLite WAL DB, not a JSONL — return the .db URL so future
-        // SessionChatStore work can attach an AntigravityConversationDB
-        // reader instead of trying to parse binary as JSONL.
-        if session.agent == .gemini, session.geminiBackend == .agentapi,
-           let conversationId = session.antigravityConversationId {
-            return Self.antigravityConversationDBURL(conversationId: conversationId)
-        }
         let cwd = session.effectiveCwd
         if session.agent == .claude {
             return SessionChatStore.resolveSessionFileURL(repoCwd: cwd)
         } else {
             return Self.newestCodexJSONL()
         }
-    }
-
-    /// Resolves the `<conversation-id>.db` path under
-    /// `~/.gemini/antigravity/conversations/`. Returns the URL even if
-    /// the file doesn't yet exist on disk — Antigravity creates the SQLite
-    /// file on the first WAL write after `agentapi new-conversation`.
-    nonisolated public static func antigravityConversationDBURL(
-        conversationId: UUID,
-        homeDirectory: URL = ClawdmeterRealHome.url()
-    ) -> URL {
-        homeDirectory
-            .appendingPathComponent(".gemini/antigravity/conversations", isDirectory: true)
-            .appendingPathComponent("\(conversationId.uuidString).db")
     }
 
     /// Same logic as `AgentControlServer.newestCodexJSONL()` — kept here so
@@ -471,31 +450,6 @@ public final class DaemonChatStoreRegistry {
                 SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
                 return store
             }
-            // v0.9: Gemini agentapi chat — start an sdkOnly store and
-            // attach an AntigravityChatIngestor that subscribes to the
-            // conversation's SQLite WAL DB. Each step row becomes a
-            // ChatMessage via appendSDKMessages, so chat-subscribe WS
-            // clients see uniform snapshot shapes across all providers.
-            if session.agent == .gemini && session.geminiBackend == .agentapi,
-               let conversationId = session.antigravityConversationId {
-                let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
-                store.start()
-                // v0.9.x.1: replay transcript mirror so previously-ingested
-                // SQLite WAL rows survive idle-eviction. The ingestor below
-                // will then dedup any rows that the mirror already covers
-                // (StagingParser keys on ChatMessage.id).
-                SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
-                let dbURL = Self.antigravityConversationDBURL(conversationId: conversationId)
-                let ingestor = AntigravityChatIngestor(
-                    sessionId: session.id,
-                    conversationId: conversationId,
-                    dbURL: dbURL,
-                    store: store
-                )
-                antigravityIngestors[session.id] = ingestor
-                Task { await ingestor.start() }
-                return store
-            }
             // Default chat fallback: sdkOnly store. v0.9.x.1 also replays
             // the transcript mirror for the rare case where a chat session
             // landed here via the "unknown agent" fall-through.
@@ -504,7 +458,19 @@ public final class DaemonChatStoreRegistry {
             SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
             return store
         }
-        if session.agent == .cursor {
+        // v27 Code-tab harness migration: paneless harness-driven Code sessions
+        // (cursor/grok always; gemini always — headless `agy` by default, gRPC
+        // Cascade when its flag is on; codex via app-server when its flag is on)
+        // are fed by the AcpHarnessBridge through `appendSDKMessages` — there is
+        // NO JSONL to tail. Use an sdkOnly store. Distinguished from a LEGACY tmux
+        // Code session (real pane + JSONL) by the absence of a tmux pane, so old
+        // tmux codex/cursor sessions keep resolving their JSONL below. Gemini has
+        // no tmux spawn path at all, so paneless gemini is always harness-driven.
+        if session.tmuxPaneId == nil,
+           session.agent == .cursor
+             || session.agent == .grok
+             || session.agent == .gemini
+             || (session.agent == .codex && AgentControlServer.codexAppServerEnabled) {
             let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
             store.start()
             SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)
@@ -635,11 +601,6 @@ public final class DaemonChatStoreRegistry {
         guard let entry = entries[sessionId] else { return }
         entry.store.stop()
         entries.removeValue(forKey: sessionId)
-        // v0.9: tear down the matching Gemini agentapi ingestor (if any)
-        // so its background subscription task ends with the store.
-        if let ingestor = antigravityIngestors.removeValue(forKey: sessionId) {
-            Task { await ingestor.stop() }
-        }
         registryLogger.info("evicted session=\(sessionId.uuidString, privacy: .public) resident=\(self.entries.count)")
     }
 

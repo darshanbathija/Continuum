@@ -23,7 +23,7 @@ public final class PastedAnthropicTokenProvider: TokenProvider, @unchecked Senda
     /// Shared Keychain access group, matching `keychain-access-groups`
     /// entitlements on both the Mac and iOS apps. Team-prefixed because
     /// that's what `AppIdentifierPrefix` resolves to at runtime.
-    public static let sharedAccessGroup = "76S62SDSD3.com.clawdmeter"
+    public static let sharedAccessGroup = "LRL8MRH6B4.ai.continuum"
 
     private let serviceName: String
     private let accessGroup: String?

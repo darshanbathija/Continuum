@@ -56,15 +56,9 @@ public final class SessionConfigChanger {
               let oldPaneId = session.tmuxPaneId ?? session.tmuxWindowId else {
             return .spawnError(message: "Session not found or has no pane")
         }
-        let providerResumeId: String
-        if session.agent == .cursor {
-            guard let cursorResumeId = Self.cursorResumeId(for: session) else {
-                return .spawnError(message: "cursor_resume_id_missing")
-            }
-            providerResumeId = cursorResumeId
-        } else {
-            providerResumeId = sessionId.uuidString
-        }
+        // Cursor swaps go through the ACP bridge, not this tmux respawn path —
+        // only Claude/Codex CLI reach here.
+        let providerResumeId = sessionId.uuidString
         let originalArgv = AgentSpawner.respawnArgv(
             agent: session.agent,
             resumeSessionId: providerResumeId,
@@ -189,15 +183,8 @@ public final class SessionConfigChanger {
         guard let session = registry.session(id: sessionId) else {
             return .spawnError(message: "Session not found")
         }
-        let providerResumeId: String
-        if session.agent == .cursor {
-            guard let cursorResumeId = Self.cursorResumeId(for: session) else {
-                return .spawnError(message: "cursor_resume_id_missing")
-            }
-            providerResumeId = cursorResumeId
-        } else {
-            providerResumeId = sessionId.uuidString
-        }
+        // Cursor revive goes through the ACP bridge, not this tmux respawn path.
+        let providerResumeId = sessionId.uuidString
         let argv = AgentSpawner.respawnArgv(
             agent: session.agent,
             resumeSessionId: providerResumeId,
@@ -262,11 +249,4 @@ public final class SessionConfigChanger {
         catch { return false }
     }
 
-    private static func cursorResumeId(for session: AgentSession) -> String? {
-        let candidate = session.runtimeBinding?.externalSessionId
-            ?? session.runtimeBinding?.externalThreadId
-        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else { return nil }
-        return trimmed
-    }
 }

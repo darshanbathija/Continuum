@@ -28,8 +28,8 @@ public struct UsageStore: Sendable {
     /// fall back to `~/Library/Application Support/Clawdmeter`. The Mac app
     /// and widget extension converge on whichever path actually resolves.
     public static let appGroups = [
-        "group.76S62SDSD3.com.clawdmeter",
-        "group.com.clawdmeter",
+        "group.LRL8MRH6B4.ai.continuum",
+        "group.ai.continuum",
     ]
 
     private static let logger = Logger(subsystem: "com.clawdmeter.shared", category: "UsageStore")
