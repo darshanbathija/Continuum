@@ -6916,12 +6916,30 @@ public final class AgentControlServer {
     /// provider and model from its own state; Clawdmeter no longer
     /// second-guesses that selection.
     private func opencodeMessageBody(session: AgentSession, prompt: String) -> [String: Any] {
-        _ = session
-        return [
+        var body: [String: Any] = [
             "parts": [
                 ["type": "text", "text": prompt]
             ]
         ]
+        // Honor the picked model. registry.create stored the OpenRouter slug
+        // on session.model, but until now it was dropped here and OpenCode
+        // silently ran its own opencode.json default — so the 320-model picker
+        // was cosmetic. OpenCode's /session/:id/message takes an optional
+        // `model:{providerID,modelID}`; the OpenRouter-backed vendor always
+        // routes via providerID "openrouter" with the full slug as modelID.
+        if let model = Self.opencodeModelObject(forModelId: session.model) {
+            body["model"] = model
+        }
+        return body
+    }
+
+    /// Maps a session's selected OpenRouter model id to OpenCode's message
+    /// `{providerID, modelID}` object. Returns nil for the "opencode-default"
+    /// sentinel (or no selection) so OpenCode keeps its own default model.
+    nonisolated static func opencodeModelObject(forModelId raw: String?) -> [String: String]? {
+        guard let id = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty, id != "opencode-default" else { return nil }
+        return ["providerID": "openrouter", "modelID": id]
     }
 
     private func sendChatSDKPrompt(

@@ -589,6 +589,28 @@ final class AgentControlServerChatRouteTests: XCTestCase {
                       "gemini broadcast child did not stream an assistant reply via headless agy; last snapshot: \(lastSnapshot.prefix(400))")
     }
 
+    // MARK: - OpenRouter model plumbing (opencode message body)
+
+    /// The OpenRouter/OpenCode vendor stores the picked model id on
+    /// session.model; opencodeMessageBody must forward it as OpenCode's
+    /// {providerID, modelID} object, except for the "opencode-default"
+    /// sentinel (and empty/nil), which must keep OpenCode's own default.
+    func testOpencodeModelObjectMapsRealSlugAndSkipsDefault() {
+        // Real OpenRouter slug → routed via providerID "openrouter".
+        let real = AgentControlServer.opencodeModelObject(forModelId: "anthropic/claude-opus-4.7")
+        XCTAssertEqual(real?["providerID"], "openrouter")
+        XCTAssertEqual(real?["modelID"], "anthropic/claude-opus-4.7")
+
+        // Arbitrary slug from the ~320-model live catalog also passes through.
+        let llama = AgentControlServer.opencodeModelObject(forModelId: "meta-llama/llama-3.3-70b-instruct")
+        XCTAssertEqual(llama?["modelID"], "meta-llama/llama-3.3-70b-instruct")
+
+        // Sentinel + empty + nil → nil (OpenCode keeps its config default).
+        XCTAssertNil(AgentControlServer.opencodeModelObject(forModelId: "opencode-default"))
+        XCTAssertNil(AgentControlServer.opencodeModelObject(forModelId: "   "))
+        XCTAssertNil(AgentControlServer.opencodeModelObject(forModelId: nil))
+    }
+
     private struct RawResponse {
         let status: Int
         let data: Data
