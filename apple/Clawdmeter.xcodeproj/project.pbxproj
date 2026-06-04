@@ -42,7 +42,6 @@
 		171C07FFCC37CF127B0480F7 /* PRCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F536C384FF521BC4C8C2A722 /* PRCoordinator.swift */; };
 		171E724E4E9A594EA115BDE8 /* AcpHarnessBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D57648012C2D3368CD2ED3C /* AcpHarnessBridge.swift */; };
 		1777EFD96F6AB3DA3918D8A1 /* IOSRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 985FCABEFBB5E2385E870CB3 /* IOSRootView.swift */; };
-		17B9A55BA4BA2A2FA8722959 /* AntigravitySidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3AC79CBA2A61141DA7FCBCF /* AntigravitySidecarManager.swift */; };
 		17EDD74704B4563A60BFE058 /* ClawdmeterWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 162F800D3CC14A1C33E3A4F8 /* ClawdmeterWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		180979EE1D21A4EC76344D81 /* IOSChatV2View.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFCA10DE26C860C326DE2FDB /* IOSChatV2View.swift */; };
 		180F0F522D2CF2CBD7EEE500 /* MacMenubarPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 015F6FD7463F3710A54A36EB /* MacMenubarPopover.swift */; };
@@ -706,7 +705,6 @@
 		A2507332067583B37F56219E /* InheritedContextChips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InheritedContextChips.swift; sourceTree = "<group>"; };
 		A27CA03750EC59D41E11FB18 /* iOSTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSTerminalView.swift; sourceTree = "<group>"; };
 		A340A844B01D4266CC5CED74 /* WorkspaceTabsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTabsTests.swift; sourceTree = "<group>"; };
-		A3AC79CBA2A61141DA7FCBCF /* AntigravitySidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravitySidecarManager.swift; sourceTree = "<group>"; };
 		A4BDBE8D894DEC31C57C6929 /* PairingTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTokenStore.swift; sourceTree = "<group>"; };
 		A5239318D643E1B51443A7C3 /* AutopilotState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutopilotState.swift; sourceTree = "<group>"; };
 		A5D45DC56F208EECABE85A42 /* DaemonChatStoreRegistryRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonChatStoreRegistryRoutingTests.swift; sourceTree = "<group>"; };
@@ -917,7 +915,6 @@
 				8C1B8A7FA6946383349924D1 /* AgentSessionRegistry.swift */,
 				60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */,
 				BF28538668960FBDC23F107F /* AntigravityHeadlessDriver.swift */,
-				A3AC79CBA2A61141DA7FCBCF /* AntigravitySidecarManager.swift */,
 				21239F87404DC4B4E7F21AB7 /* APNSCredentialStore.swift */,
 				C658DA77D0AAC2C5A8C152E6 /* APNSGatewayClient.swift */,
 				20C041B112C2313F5F6E6A54 /* APNSGatewaySettings.swift */,
@@ -1999,7 +1996,6 @@
 				DD4A5C6456455C79978A09ED /* AnalyticsRangeAdapter.swift in Sources */,
 				2C8BF8EB3B2FA60C51FE5C57 /* AntigravityHeadlessDriver.swift in Sources */,
 				F54AA92455AB651F391E0FB3 /* AntigravityPlanPane.swift in Sources */,
-				17B9A55BA4BA2A2FA8722959 /* AntigravitySidecarManager.swift in Sources */,
 				03A84A49FEA03B5FE83AAB9D /* AppDelegate.swift in Sources */,
 				75338A54670234E6728EACB9 /* AppModel.swift in Sources */,
 				91F59FC843FCFADA8995B62C /* AppRuntime.swift in Sources */,
