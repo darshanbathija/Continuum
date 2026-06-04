@@ -23,8 +23,8 @@ public enum APNSGatewayEnvironment: String, Codable, Sendable, CaseIterable {
     /// configuration when targeting these hosts.
     public var baseURL: String {
         switch self {
-        case .staging: return "https://apns-gateway-staging.clawdmeter.dev"
-        case .production: return "https://apns-gateway.clawdmeter.dev"
+        case .staging: return "https://clawdmeter-apns-gateway-staging.continuumai.workers.dev"
+        case .production: return "https://clawdmeter-apns-gateway.continuumai.workers.dev"
         }
     }
 

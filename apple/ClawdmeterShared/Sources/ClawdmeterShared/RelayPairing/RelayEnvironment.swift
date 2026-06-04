@@ -24,8 +24,8 @@ public enum RelayEnvironment: String, Codable, Sendable, CaseIterable {
     /// `ws://localhost` for `wrangler dev` round-trips.
     public var baseURL: String {
         switch self {
-        case .staging: return "wss://relay-staging.clawdmeter.dev"
-        case .production: return "wss://relay.clawdmeter.dev"
+        case .staging: return "wss://clawdmeter-relay-staging.continuumai.workers.dev"
+        case .production: return "wss://clawdmeter-relay.continuumai.workers.dev"
         }
     }
 

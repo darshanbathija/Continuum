@@ -62,3 +62,19 @@ Local notifications via `UNUserNotificationCenter` + `BGAppRefreshTask` (D15),
 plus in-process Live Activities. That keeps working until the APNS path is
 switched on; the switch should be gated so a half-configured gateway never
 silently drops notifications.
+
+---
+
+## 2026-06 UPDATE — cloud is LIVE
+
+All 4 Workers deployed + healthy on `continuumai.workers.dev` (account `1bad887b…`):
+- gateway: `clawdmeter-apns-gateway-staging` (sandbox) + `clawdmeter-apns-gateway` (prod, api.push.apple.com). APNs key `SZ9FYQ7BG5`, team `LRL8MRH6B4`, topic `ai.continuum.ios`. `/health` green, `.p8` loaded.
+- relay: `clawdmeter-relay-staging` + `clawdmeter-relay` (Durable Object + KV + operator key).
+
+App now points at these (APNSGatewayEnvironment + RelayEnvironment defaults → workers.dev). iOS has `aps-environment=production` + `remote-notification` background mode.
+
+### Remaining last mile (to a real push)
+1. **iOS device-token registration** (not yet wired): add a `UIApplicationDelegate` (via `@UIApplicationDelegateAdaptor`), call `registerForRemoteNotifications()` after notif-auth, implement `didRegisterForRemoteNotificationsWithDeviceToken` → forward the hex token to the **Mac daemon** over the relay/pairing channel. The Mac stores it (`APNSPushDeviceTokenStore`) and includes `deviceToken` in each gateway push request (the gateway registers it on first push — no separate endpoint).
+2. **Enable Push on the App IDs**: `ai.continuum.ios` (+ `…watchkitapp`) → Capabilities → Push Notifications, then regenerate the App Store provisioning profiles so they carry the entitlement.
+3. **Flip the path**: emit a real APNS push from the daemon's SessionEventWiring (plan-approval / done events) via `APNSGatewayClient`, keeping the D15 local path as the fallback when no device token is registered.
+4. **Re-archive build 192** (manual signing, profiles with Push) → TestFlight; verify a lock-screen push end-to-end against the **production** gateway (TestFlight = production APNS).

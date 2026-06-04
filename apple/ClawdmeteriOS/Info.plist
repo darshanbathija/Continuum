@@ -8,6 +8,8 @@
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Continuum</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -16,13 +18,6 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
-	<!-- v0.29.7: Continuum display-only rebrand. See Mac Info.plist
-	     for full rationale. CFBundleName + PRODUCT_NAME stay as
-	     Clawdmeter so the bundle id, App Group, and keychain prefix
-	     don't drift — existing iOS installs keep their pairing,
-	     iCloud Keychain entry, and on-disk state. -->
-	<key>CFBundleDisplayName</key>
-	<string>Continuum</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -31,21 +26,6 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- Audit P0 fix: scope ATS exceptions instead of disabling globally.
-	     The Mac daemon is reached over Tailscale (WireGuard-tunneled), so
-	     adding TLS on top buys nothing for the personal-use scope. ATS
-	     only takes domain exceptions (no CIDR), so plaintext HTTP/WS is
-	     allowed for these hosts:
-	       - *.ts.net                 (Tailscale MagicDNS)
-	       - localhost                (simulator + dev)
-	       - link-local + loopback    (via NSAllowsLocalNetworking)
-	     Bare-IP Tailscale CGNAT (100.64.0.0/10) is NOT covered — those
-	     URLs hit normal ATS and will fail without TLS. The pairing flow
-	     should hand out MagicDNS hostnames from the Mac side; users
-	     without MagicDNS need to enable it on the Tailscale dashboard.
-	     Every other URLSession in the app — analytics, OAuth refresh,
-	     anything a future SDK pulls in — still goes through ATS, so a
-	     misconfigured downgrade can't silently become MITM-able. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -54,16 +34,16 @@
 		<true/>
 		<key>NSExceptionDomains</key>
 		<dict>
-			<key>ts.net</key>
-			<dict>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-			</dict>
 			<key>localhost</key>
 			<dict>
 				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
 				<true/>
 			</dict>
 		</dict>
@@ -75,6 +55,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
+		<string>remote-notification</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
@@ -82,9 +63,6 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-	<!-- iPad (device family 2) requires all 4 orientations unless
-	     UIRequiresFullScreen — App Store validation 90474. iPhone stays
-	     portrait-only above; iPad advertises all 4 to satisfy multitasking. -->
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
