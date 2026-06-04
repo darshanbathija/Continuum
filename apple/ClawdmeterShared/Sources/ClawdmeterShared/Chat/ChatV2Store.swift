@@ -266,7 +266,8 @@ public final class ChatV2Store: ObservableObject {
             guard selectedVendors.count > 1 else { return }
             selectedVendors.removeAll { $0 == vendor }
         } else {
-            guard selectedVendors.count < 3 else { return }
+            // No upper cap on compare — the broadcast answer columns scroll
+            // horizontally, so allow selecting every available provider.
             selectedVendors.append(vendor)
         }
         selectedVendors = Self.normalizedVendors(selectedVendors)
