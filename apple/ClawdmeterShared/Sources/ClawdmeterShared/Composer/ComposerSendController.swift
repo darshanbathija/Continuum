@@ -147,6 +147,25 @@ public final class ComposerSendController: ObservableObject {
         }
     }
 
+    /// Like `sendCustom`, but clears the composer text IMMEDIATELY (optimistic)
+    /// before running the action, so the message leaves the box without waiting
+    /// on session creation / attachment upload / broadcast fan-out. On failure
+    /// the text is restored (only if the user hasn't started typing a new draft)
+    /// so they can edit and retry.
+    public func sendCustomOptimistic(action: @escaping (String) async -> String?) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard !sending else { return }
+        sending = true
+        defer { sending = false }
+        lastError = nil
+        text = ""   // optimistic: the message is out of the box NOW
+        if let error = await action(trimmed) {
+            lastError = error
+            if text.isEmpty { text = trimmed }   // restore for retry unless user re-typed
+        }
+    }
+
     /// Resets composer state. Used when the open session changes (we
     /// don't want a half-typed draft to flow into a different session).
     public func reset() {

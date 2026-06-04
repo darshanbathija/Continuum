@@ -30,6 +30,13 @@ public struct AcpHarnessProjection: Sendable {
     public mutating func apply(_ event: HarnessEvent) -> [AcpStoreOp] {
         switch event {
         case .agentMessageDelta(let text):
+            // Codex app-server emits a final *complete* agentMessage (mapped to
+            // a delta) after streaming deltas that already built the same text;
+            // appending it would double the bubble. Skip a chunk that exactly
+            // equals everything accumulated so far — real token deltas never do.
+            if !assistantBuffer.isEmpty, text == assistantBuffer {
+                return [.setTurnState(.streaming)]
+            }
             assistantBuffer += text
             return [.setTurnState(.streaming)]
 

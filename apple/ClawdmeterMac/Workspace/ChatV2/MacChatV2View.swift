@@ -2,6 +2,31 @@ import SwiftUI
 import AppKit
 import ClawdmeterShared
 
+/// Per-conversation title derived from the first user message (like other chat
+/// apps), persisted in UserDefaults keyed by the solo session id or broadcast
+/// group id. Falls back to the generic label when unset. File-scope so both the
+/// sidebar row builder and the composer send path can reach it.
+fileprivate enum ChatTitleStore {
+    private static func key(_ id: UUID) -> String { "clawdmeter.chat.title.\(id.uuidString)" }
+    static func set(_ id: UUID, _ title: String) {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        UserDefaults.standard.set(t, forKey: key(id))
+    }
+    static func get(_ id: UUID) -> String? {
+        let t = UserDefaults.standard.string(forKey: key(id))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (t?.isEmpty == false) ? t : nil
+    }
+    /// First ~5 words of the prompt, single-lined, with an ellipsis if longer.
+    static func firstWords(_ s: String, _ n: Int = 5) -> String {
+        let words = s.replacingOccurrences(of: "\n", with: " ")
+            .split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard !words.isEmpty else { return "" }
+        let head = words.prefix(n).joined(separator: " ")
+        return words.count > n ? head + "…" : head
+    }
+}
+
 @available(macOS 14, *)
 struct MacChatV2View: View {
     private let loopbackClient: AgentControlClient?
@@ -274,8 +299,8 @@ private struct Sidebar: View {
                 rows.append(SidebarRow(
                     id: groupId,
                     target: .frontier(groupId),
-                    title: "Broadcast comparison",
-                    subtitle: children.map { $0.agent.tahoeProvider.displayName }.joined(separator: " / "),
+                    title: ChatTitleStore.get(groupId) ?? "Broadcast comparison",
+                    subtitle: children.map { $0.agent.brandedChatName }.joined(separator: " / "),
                     providers: children.map(\.agent),
                     lastEventAt: children.map(\.lastEventAt).max() ?? session.lastEventAt
                 ))
@@ -283,7 +308,7 @@ private struct Sidebar: View {
                 rows.append(SidebarRow(
                     id: session.id,
                     target: .solo(session.id),
-                    title: session.displayLabel,
+                    title: ChatTitleStore.get(session.id) ?? session.displayLabel,
                     subtitle: session.model ?? "default",
                     providers: [session.agent],
                     lastEventAt: session.lastEventAt
@@ -444,7 +469,7 @@ private struct ProviderSummary: View {
             HStack(spacing: 9) {
                 TahoeProviderGlyph(provider: session.agent.tahoeProvider, size: 22)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.agent.tahoeProvider.displayName)
+                    Text(session.agent.brandedChatName)
                         .font(TahoeFont.body(12.5, weight: .semibold))
                         .foregroundStyle(t.fg)
                     Text(session.model ?? "default")
@@ -1563,7 +1588,7 @@ private struct ComposerBar: View {
     }
 
     private func dispatchSend() async {
-        await sendCtl.sendCustom { trimmed in
+        await sendCtl.sendCustomOptimistic { trimmed in
             switch openTarget {
             case .solo(let sessionId):
                 let prompt = await uploadAndBuildPrompt(base: trimmed, sessionId: sessionId)
@@ -1614,6 +1639,7 @@ private struct ComposerBar: View {
                         return "Broadcast compares two or more providers side by side, but only \(created.successfulSlots.count) could start.\(detail)\n\nCheck those providers in Settings → Providers, pick different ones, or send to a single provider instead."
                     }
                     openTarget = .frontier(created.groupId)
+                    ChatTitleStore.set(created.groupId, ChatTitleStore.firstWords(trimmed))
                     let sessionIds = created.successfulSlots.compactMap(\.sessionId)
                     let perChild = await uploadAndBuildPerChildPrompts(base: trimmed, sessionIds: sessionIds)
                     guard let response = await client.sendFrontierPrompt(
@@ -1639,6 +1665,7 @@ private struct ComposerBar: View {
                         return client.lastError ?? "Couldn't create chat."
                     }
                     openTarget = .solo(session.id)
+                    ChatTitleStore.set(session.id, ChatTitleStore.firstWords(trimmed))
                     let prompt = await uploadAndBuildPrompt(base: trimmed, sessionId: session.id)
                     let ok = await client.sendPrompt(sessionId: session.id, text: prompt, asFollowUp: false)
                     if ok { store.clearAttachments() }
