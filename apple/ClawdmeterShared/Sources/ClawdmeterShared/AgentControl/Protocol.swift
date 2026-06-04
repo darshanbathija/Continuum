@@ -4448,6 +4448,22 @@ public struct AckNotificationsRequest: Codable, Sendable {
     }
 }
 
+/// Body for `POST /devices/apns-token` — the iPhone reports its APNS device
+/// token so the Mac daemon can target lock-screen pushes at it. Keyed by the
+/// pairing `sessionId`; `bundleId` becomes the APNS topic. Field names must
+/// match the daemon's `RegisterAPNSDeviceTokenBody` decoder.
+public struct RegisterAPNSDeviceTokenRequest: Codable, Sendable {
+    public let deviceToken: String   // 64 lowercase hex chars (32-byte token)
+    public let bundleId: String      // iPhone bundle id → APNS topic
+    public let sessionId: String     // pairing session id
+
+    public init(deviceToken: String, bundleId: String, sessionId: String) {
+        self.deviceToken = deviceToken
+        self.bundleId = bundleId
+        self.sessionId = sessionId
+    }
+}
+
 // MARK: - Terminal frames (Phase 3)
 
 /// WS frame for `/sessions/:id/terminal` — binary payload carries the

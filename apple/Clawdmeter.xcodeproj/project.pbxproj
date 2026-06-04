@@ -109,6 +109,7 @@
 		430A5F81EEBDB5C450018559 /* SidebarProjectionCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACEC58065CF9E56EFC7561D9 /* SidebarProjectionCacheTests.swift */; };
 		43CE166F0225B3A52F99D7BA /* QuickStartRepoSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4353CCA0F5543AEB084A0406 /* QuickStartRepoSheet.swift */; };
 		44996E84FA30C403B50066AA /* OnboardingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25B0334147E01FBA4B4E6081 /* OnboardingSheet.swift */; };
+		451598EB455093AD2AF41C79 /* iOSAPNSRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70C1FF5F7DCCAE40D4D3220 /* iOSAPNSRegistration.swift */; };
 		453B70AABD9A8921BA9706FB /* PathValidatorMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98E6E75C4550204AE0288EB6 /* PathValidatorMacTests.swift */; };
 		457E68D990E7B761C11DF6CC /* AgentSpawner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60F7916F41AB5EC1B7B2D265 /* AgentSpawner.swift */; };
 		462ED418D83A3251EDBB6147 /* WorkbenchState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3DBEBE9BF592FA1BC71A42 /* WorkbenchState.swift */; };
@@ -750,6 +751,7 @@
 		C523F489FF4A0361B5DAF2CD /* OpencodeSSEAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeSSEAdapter.swift; sourceTree = "<group>"; };
 		C586E824901718671FCD8CD4 /* CheckpointRestoreSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRestoreSheet.swift; sourceTree = "<group>"; };
 		C658DA77D0AAC2C5A8C152E6 /* APNSGatewayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNSGatewayClient.swift; sourceTree = "<group>"; };
+		C70C1FF5F7DCCAE40D4D3220 /* iOSAPNSRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSAPNSRegistration.swift; sourceTree = "<group>"; };
 		C776020CFC8A0FD2449464F1 /* SessionChatStoreTurnTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChatStoreTurnTimerTests.swift; sourceTree = "<group>"; };
 		C77ADCCCF27A10F5786160F6 /* WorkspaceFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceFeedback.swift; sourceTree = "<group>"; };
 		C7E5B17BFEC181317FE13905 /* GitDiffStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitDiffStoreTests.swift; sourceTree = "<group>"; };
@@ -1395,6 +1397,7 @@
 				DE0C409B82A2CE3CC4741248 /* ContentView.swift */,
 				57ABA1D6213482514E812CB9 /* GeminiQuotaLiveActivityCoordinator.swift */,
 				5A19E721D40E87BC2B99E71F /* iOSAntigravityPlanView.swift */,
+				C70C1FF5F7DCCAE40D4D3220 /* iOSAPNSRegistration.swift */,
 				7DBB8377CD04D941834499FA /* iOSCodexPlanView.swift */,
 				0DC8BB0C1C1A62C078E0C226 /* iOSNotificationManager.swift */,
 				A27CA03750EC59D41E11FB18 /* iOSTerminalView.swift */,
@@ -1624,6 +1627,8 @@
 				607B294A61BE70FE7A3F494D /* PBXTargetDependency */,
 			);
 			name = ClawdmeterMacUITests;
+			packageProductDependencies = (
+			);
 			productName = ClawdmeterMacUITests;
 			productReference = FCEA6256CB6D114C219DA5E1 /* ClawdmeterMacUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -2189,6 +2194,7 @@
 				F4C4D33C87EA884DB52B4654 /* UsageModel.swift in Sources */,
 				C68868609D0C38964A8120CE /* WatchPlanBridgeIOS.swift in Sources */,
 				8EFEE8A6F924E4567456130D /* WorkspaceAllowListCache.swift in Sources */,
+				451598EB455093AD2AF41C79 /* iOSAPNSRegistration.swift in Sources */,
 				86E539AB47FCFFF1330CFBFB /* iOSAntigravityPlanView.swift in Sources */,
 				8E9F522706D664F13080C993 /* iOSArtifactsPane.swift in Sources */,
 				FBEAA2A8BBF8A48BC9C6EF6D /* iOSChatStore+ChatSnapshotSource.swift in Sources */,
@@ -2382,8 +2388,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "ClawdmeterMac/ClawdmeterMac-Release.entitlements";
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2396,7 +2401,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -2512,8 +2516,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2526,7 +2529,6 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac.widgets";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 			};
@@ -2537,8 +2539,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMac/ClawdmeterMac.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2551,7 +2552,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac;
 				PRODUCT_MODULE_NAME = Clawdmeter;
 				PRODUCT_NAME = Continuum;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -2598,8 +2598,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClawdmeterMacWidgets/ClawdmeterMacWidgets.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = LRL8MRH6B4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -2612,7 +2611,6 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.continuum.mac.widgets;
 				PRODUCT_NAME = ClawdmeterMacWidgets;
-				PROVISIONING_PROFILE_SPECIFIER = "Continuum DeveloperID ai.continuum.mac.widgets";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 			};

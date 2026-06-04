@@ -2769,6 +2769,26 @@ public final class AgentControlClient: ObservableObject {
         }
     }
 
+    /// Register this device's APNS token with the paired Mac daemon so the
+    /// daemon can target lock-screen pushes at this phone. Keyed by the
+    /// pairing `sessionId`; idempotent (re-registering overwrites). Mirrors
+    /// `ackNotifications` — uses the shared `makeRequest`/`sendChecked` path
+    /// so host/port/Bearer auth are handled uniformly. Returns true on 2xx.
+    @discardableResult
+    public func registerAPNSDeviceToken(deviceToken: String, bundleId: String, sessionId: String) async -> Bool {
+        let body = RegisterAPNSDeviceTokenRequest(deviceToken: deviceToken, bundleId: bundleId, sessionId: sessionId)
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(body),
+              let request = makeRequest(path: "/devices/apns-token", method: "POST", body: data) else { return false }
+        do {
+            _ = try await sendChecked(request)
+            return true
+        } catch {
+            clientLogger.debug("apns-token register failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     /// Fetch the latest live Claude + Codex usage gauges from the Mac.
     /// The daemon serves whatever its in-process pollers have — so the
     /// iPhone sees the same numbers the Mac dashboard does, no iCloud

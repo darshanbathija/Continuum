@@ -4,6 +4,10 @@ import ClawdmeterShared
 
 @main
 struct ClawdmeteriOSApp: App {
+    /// Captures the APNS device token. UIKit delivers it to a UIApplication-
+    /// Delegate (not to SwiftUI); `APNSDeviceTokenHolder` then forwards it to
+    /// the paired Mac. ContentView drives `registerForRemoteNotifications()`.
+    @UIApplicationDelegateAdaptor(iOSAppDelegate.self) private var appDelegate
     @StateObject private var model = UsageModel()
     /// v0.26.2 review: process-wide AgentControlClient so iPad multi-
     /// window doesn't open N parallel WS connections to the daemon
