@@ -112,10 +112,11 @@ SESSION_TTL_SECONDS = "900"
 [env.production]
 name = "clawdmeter-relay"
 account_id = "1bad887b43fb6dbb2e08757324d7afe1"
-
-[[env.production.routes]]
-pattern = "relay.clawdmeter.dev"
-custom_domain = true
+workers_dev = true
+# custom domain disabled (clawdmeter.dev not in this account); app hard-codes URL
+# [[env.production.routes]]
+# pattern = "relay.clawdmeter.dev"
+# custom_domain = true
 
 [env.production.durable_objects]
 bindings = [
@@ -128,12 +129,12 @@ new_sqlite_classes = ["RelaySession"]
 
 [[env.production.kv_namespaces]]
 binding = "RELAY_AUDIT_LOG"
-id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+id = "654685d6628d4c23897a162d7cc95a39"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
 [[env.production.kv_namespaces]]
 binding = "RELAY_RATE_LIMIT"
-id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+id = "5b48184e382b4fe097118895f23e7b69"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
 # [env.production.limits]

@@ -108,23 +108,28 @@ P8_MAX_AGE_SECONDS = "7776000"
 [env.production]
 name = "clawdmeter-apns-gateway"
 account_id = "1bad887b43fb6dbb2e08757324d7afe1"
-routes = [
-  { pattern = "apns-gateway.clawdmeter.dev", custom_domain = true }
-]
+workers_dev = true
+# Custom domain disabled — clawdmeter.dev isn't a zone in this account. The
+# app hard-codes the gateway URL via build-time env, so the workers.dev host
+# (clawdmeter-apns-gateway.continuumai.workers.dev) is the production endpoint.
+# Re-enable + point at a continuum-owned zone once DNS is wired.
+# routes = [
+#   { pattern = "apns-gateway.clawdmeter.dev", custom_domain = true }
+# ]
 
 [[env.production.kv_namespaces]]
 binding = "APNS_AUDIT_LOG"
-id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+id = "2b8902b33d78474bb7afdea5274ed872"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
 [[env.production.kv_namespaces]]
 binding = "APNS_RATE_LIMIT"
-id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+id = "07b34b9933fd495183b9105da244e098"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
 [[env.production.kv_namespaces]]
 binding = "APNS_DEVICE_TOKENS"
-id = "REPLACE_WITH_PROD_NAMESPACE_ID"
+id = "95381ee44cc9414ca1c3d4d3e7d7fc3e"
 preview_id = "REPLACE_WITH_PREVIEW_NAMESPACE_ID"
 
 [env.production.vars]
