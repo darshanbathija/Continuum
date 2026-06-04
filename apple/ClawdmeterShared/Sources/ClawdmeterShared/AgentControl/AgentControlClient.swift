@@ -556,6 +556,14 @@ public final class AgentControlClient: ObservableObject {
         case "/workspaces/quick-start":  return 30   // mkdir + git init
         case "/workspaces/wake-mac":     return 15   // tailscale wake + caffeinate
         case "/workspaces/allow-list":   return 5    // pure read
+        // Chat-session create spawns the agent before responding. Claude is a
+        // tmux pane whose cold start (it reads ~/.claude.json) takes ~9-10s —
+        // longer than the 8s default, which surfaced as "request timed out".
+        // The daemon's own tmux race caps at 10s; give the client margin.
+        case "/chat-sessions":           return 25
+        // Broadcast spawns 2-3 children sequentially, each capped at 25s by the
+        // daemon. The optimistic skeleton means the user isn't blocked on this.
+        case "/chat-sessions/frontier":  return 90
         default:                         return 8    // existing default
         }
     }
