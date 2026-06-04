@@ -1,1 +1,1 @@
-Continuum — live AI coding usage gauges and analytics across iPhone, Apple Watch, and Mac.
+Continuum is a unified workspace for AI chat, coding agents, and usage analytics — talk to every model, drive Claude Code and Codex from your iPhone or Watch, and track your limits live across all your devices.

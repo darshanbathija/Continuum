@@ -1,11 +1,18 @@
-Continuum puts your AI coding usage on every screen.
+Continuum is your unified workspace for AI chat, coding agents, and usage analytics — on iPhone, Apple Watch, and Mac, kept in sync.
 
-See live rate-limit gauges for Claude Code and Codex, plus historical token and cost analytics, on your iPhone, Apple Watch, and Mac — kept in sync.
+CHAT — one place for every model
+Talk to Claude, ChatGPT, Gemini, Cursor, Grok, and OpenRouter from a single chat. Broadcast one prompt to several models at once, compare their answers side by side, then continue with the one you like best.
 
-• Live rate-limit gauges — know at a glance how much of your 5-hour and weekly limits you've used, so you never stall mid-session.
-• Token & cost analytics — daily, weekly, and all-time spend, broken down by project and model.
-• Pairs with your Mac — the Continuum Mac app reads your local CLI usage and securely streams it to your iPhone and Watch over your own network. No account required.
-• Apple Watch complications — your usage, on your wrist.
+CODE — drive your coding agents from anywhere
+Start, monitor, and steer Claude Code, Codex, and other CLI coding agents running on your Mac — right from your iPhone or Apple Watch. Review diffs and pull requests, approve plans, watch live terminals, and reply by voice. Your phone becomes a remote control for your dev machine.
+
+ANALYTICS — never get surprised by a limit
+Live rate-limit gauges for Claude Code and Codex show how much of your 5-hour and weekly limits you've used. Historical token and cost analytics break spend down by project and model, with Apple Watch complications that put it all on your wrist.
+
+WHY CONTINUUM
+• Three tools in one — chat, code, and analytics, instead of juggling apps.
+• Pairs with your Mac — the free Continuum Mac app does the heavy lifting and securely streams to your iPhone and Watch over your own network. No account required.
 • Private by design — your data stays on your devices. Nothing is collected.
+• Built for people who live in Claude Code, Codex, and the terminal.
 
-Continuum is for developers who live in Claude Code and Codex and want to stay ahead of their limits.
+Pair once with the Continuum Mac app and your chats, sessions, and usage follow you to every screen.
