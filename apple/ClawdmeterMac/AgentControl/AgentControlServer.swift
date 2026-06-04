@@ -4164,14 +4164,6 @@ public final class AgentControlServer {
     static var codexAppServerEnabled: Bool {
         UserDefaults.standard.object(forKey: "clawdmeter.codex.appServer.enabled") as? Bool ?? true
     }
-    /// Gemini's DEFAULT drive path is now the headless `agy` CLI (Antigravity 2.0
-    /// decoupled the agent from the IDE — no app, no gRPC, live-verified). This
-    /// flag OPTS IN to the legacy Cascade gRPC driver as a fallback (requires
-    /// Antigravity 2 running + a project open):
-    /// `defaults write com.clawdmeter.mac clawdmeter.antigravity.grpc.enabled -bool true`.
-    static var antigravityGrpcEnabled: Bool {
-        UserDefaults.standard.object(forKey: "clawdmeter.antigravity.grpc.enabled") as? Bool ?? false
-    }
 
     /// v27 Code-tab harness migration: true when a live harness bridge is
     /// driving this session (paneless codex/cursor/gemini/grok). The Code-tab
@@ -5343,39 +5335,12 @@ public final class AgentControlServer {
                 })
             return
         }
-        // (3) Gemini via Antigravity. DEFAULT = headless `agy` CLI — Antigravity
-        // 2.0 (Google I/O 2026) decoupled the agent from the IDE, so no app, no
-        // reverse-engineered Cascade gRPC, no provisional protos (verified live
-        // 2026-06-04: `agy --print` replied with the desktop app closed). The
-        // legacy Cascade gRPC path stays behind `antigravity.grpc.enabled`
-        // (default OFF) as an opt-in fallback; it requires Antigravity 2 running.
+        // (3) Gemini via Antigravity — headless `agy` CLI (Antigravity 2.0
+        // decoupled the agent from the IDE: no app, no gRPC, no provisional protos;
+        // verified live 2026-06-04). The reverse-engineered Cascade gRPC drive was
+        // removed once agy was proven.
         if req.agent == .gemini {
             let display = providerDisplayName(req.agent)
-            if Self.antigravityGrpcEnabled {
-                let projectsDir = ClawdmeterRealHome.url()
-                    .appendingPathComponent(".gemini/config/projects", isDirectory: true)
-                let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-                guard let projectId = await resolver.allProjects().first?.id else {
-                    sendResponse(HTTPResponse(
-                        status: 503, reason: "Service Unavailable", contentType: "application/json",
-                        body: Data(#"{"error":"antigravity_no_projects","cta":"Open any repo in Antigravity 2 first."}"#.utf8)
-                    ), on: connection)
-                    return
-                }
-                let lsClient = LanguageServerClient()
-                await handleSpawnHarnessSession(
-                    req: req, displayName: display,
-                    binary: nil, arguments: [],   // the gRPC driver owns its transport
-                    cwd: cwd, worktreePath: worktreePath, provisioning: provisioning,
-                    provisionalSessionId: provisionalSessionId, connection: connection,
-                    makeBridge: { sid, store in
-                        .transportOwning(sessionId: sid, store: store, model: req.model,
-                                         agentDisplayName: display,
-                                         driver: AntigravityCascadeDriver(languageServer: lsClient, projectId: projectId))
-                    })
-                return
-            }
-            // DEFAULT: headless `agy` CLI — no app required.
             guard let agyPath = ShellRunner.locateBinary("agy") else {
                 sendResponse(HTTPResponse(
                     status: 503, reason: "Service Unavailable", contentType: "application/json",
@@ -6109,43 +6074,22 @@ public final class AgentControlServer {
                 driver: GrokHeadlessDriver(binaryPath: grokPath)
             )
         case .gemini:
-            // Antigravity 2.0: DEFAULT = headless `agy` CLI (no app, no gRPC). The
-            // Cascade gRPC path is the opt-in fallback (antigravity.grpc.enabled)
-            // and needs Antigravity 2 running + a project open. Both transport-own
+            // Antigravity 2.0: headless `agy` CLI (no app, no gRPC). The Cascade
+            // gRPC drive was removed once agy was live-verified. Transport-owning
             // (no stdio child), so binary stays nil.
-            if Self.antigravityGrpcEnabled {
-                let projectsDir = ClawdmeterRealHome.url()
-                    .appendingPathComponent(".gemini/config/projects", isDirectory: true)
-                let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-                guard let projectId = await resolver.allProjects().first?.id else {
-                    chatStoreRegistry.release(sessionId: session.id)
-                    try? await registry.delete(id: session.id)
-                    try? ChatCwdManager.remove(for: session.id)
-                    throw HarnessChatSpawnError.noAntigravityProjects
-                }
-                let lsClient = LanguageServerClient()
-                binary = nil
-                arguments = []
-                bridge = .transportOwning(
-                    sessionId: session.id, store: store,
-                    model: model, agentDisplayName: display,
-                    driver: AntigravityCascadeDriver(languageServer: lsClient, projectId: projectId)
-                )
-            } else {
-                guard let agyPath = ShellRunner.locateBinary("agy") else {
-                    chatStoreRegistry.release(sessionId: session.id)
-                    try? await registry.delete(id: session.id)
-                    try? ChatCwdManager.remove(for: session.id)
-                    throw HarnessChatSpawnError.startFailed("agy binary not found on PATH (install Antigravity 2)")
-                }
-                binary = nil
-                arguments = []
-                bridge = .transportOwning(
-                    sessionId: session.id, store: store,
-                    model: model, agentDisplayName: display,
-                    driver: AntigravityHeadlessDriver(binaryPath: agyPath)
-                )
+            guard let agyPath = ShellRunner.locateBinary("agy") else {
+                chatStoreRegistry.release(sessionId: session.id)
+                try? await registry.delete(id: session.id)
+                try? ChatCwdManager.remove(for: session.id)
+                throw HarnessChatSpawnError.startFailed("agy binary not found on PATH (install Antigravity 2)")
             }
+            binary = nil
+            arguments = []
+            bridge = .transportOwning(
+                sessionId: session.id, store: store,
+                model: model, agentDisplayName: display,
+                driver: AntigravityHeadlessDriver(binaryPath: agyPath)
+            )
         default:
             chatStoreRegistry.release(sessionId: session.id)
             try? await registry.delete(id: session.id)
