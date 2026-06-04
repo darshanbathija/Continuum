@@ -1886,6 +1886,17 @@ private struct ComposerBar: View {
                     return response.ok ? nil : response.results.compactMap(\.reason).joined(separator: "\n")
                 } else {
                     let vendor = selectedVendors.first ?? store.primaryVendor
+                    // Optimistic single-column skeleton so the loading animation
+                    // shows during the ~9-10s tmux spawn (Claude cold start) —
+                    // not a blank center. Reuses the broadcast pending overlay.
+                    pendingBroadcast = PendingBroadcast(
+                        prompt: trimmed,
+                        columns: [PendingBroadcast.Column(
+                            provider: vendor.backingProvider,
+                            model: store.model(for: vendor, catalog: client.modelCatalog)
+                        )]
+                    )
+                    failedBroadcastColumns = []
                     guard let session = await client.createChatSession(
                         provider: vendor.backingProvider,
                         model: store.model(for: vendor, catalog: client.modelCatalog),
@@ -1895,8 +1906,10 @@ private struct ComposerBar: View {
                         billingProvider: vendor.billingProvider,
                         deepResearch: store.deepResearch
                     ) else {
+                        pendingBroadcast = nil
                         return client.lastError ?? "Couldn't create chat."
                     }
+                    pendingBroadcast = nil
                     openTarget = .solo(session.id)
                     ChatTitleStore.set(session.id, ChatTitleStore.firstWords(trimmed))
                     let prompt = await uploadAndBuildPrompt(base: trimmed, sessionId: session.id)
