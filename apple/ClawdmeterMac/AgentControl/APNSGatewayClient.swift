@@ -508,6 +508,7 @@ public actor APNSGatewayPushCoordinator {
         case .planApproval:     prefix = "plan"
         case .sessionDone:      prefix = "done"
         case .permissionPrompt: prefix = "perm"
+        case .statusChanged:    prefix = "stat"
         }
         let shortSession = String(sessionId.prefix(16))
         return "\(prefix)-\(shortSession)"

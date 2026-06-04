@@ -202,6 +202,34 @@ public final class AgentEventStream: WSChannel {
         // P2-Mac-1: wake every active AgentEventStream so JSONL-driven
         // events deliver without waiting for a registry mutation.
         eventRecorded.send(())
+
+        // Status-changed APNS push (opt-in; the noisiest surface). Throttled
+        // per session by statusChangedMinIntervalSeconds so transitions don't
+        // flood the lock screen. plan/done get their own dedicated pushes.
+        if kind == .statusChanged {
+            maybeFireStatusChangedPush(sessionId: sessionId, payload: payload)
+        }
+    }
+
+    private static var lastStatusPushAt: [UUID: Date] = [:]
+
+    private static func maybeFireStatusChangedPush(sessionId: UUID, payload: [String: String]) {
+        let settings = APNSGatewaySettings.shared
+        guard settings.isEnabled(surface: .statusChanged) else { return }
+        let now = Date()
+        let minInterval = TimeInterval(settings.statusChangedMinIntervalSeconds)
+        if let last = lastStatusPushAt[sessionId], now.timeIntervalSince(last) < minInterval { return }
+        lastStatusPushAt[sessionId] = now
+        let status = payload["status"] ?? payload["to"] ?? "updated"
+        let body = APNSPushBody(
+            kind: "statusChanged",
+            sessionId: sessionId.uuidString,
+            title: "Session \(status)",
+            body: "Status changed to \(status).",
+            triggerAt: UInt64(now.timeIntervalSince1970)
+        )
+        let coordinator = APNSGatewayPushCoordinator.shared
+        Task { _ = await coordinator.notify(surface: .statusChanged, body: body) }
     }
 }
 
