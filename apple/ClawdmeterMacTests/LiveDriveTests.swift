@@ -72,10 +72,13 @@ final class LiveDriveTests: XCTestCase {
         try await bridge.start(binary: binary, arguments: arguments, cwd: cwd,
                                env: env, effort: nil, alwaysApprove: true)
         await bridge.prompt("Reply with the single word PONG and nothing else.")
+        // Require the literal PONG in an assistant row — a driver/transport error
+        // (e.g. gRPC "StartCascade: unavailable") would surface as an .error event
+        // or a non-PONG body, and must NOT be mistaken for a real reply.
         let gotReply = await waitUntil {
-            store.messages.contains { $0.kind == .assistantText && !($0.body ?? "").isEmpty }
+            store.messages.contains { $0.kind == .assistantText && ($0.body ?? "").uppercased().contains("PONG") }
         }
-        let body = store.messages.first { $0.kind == .assistantText }?.body ?? "<none>"
+        let body = store.messages.last { $0.kind == .assistantText }?.body ?? "<none>"
         let turnDone = await waitUntil(30) {
             let t = store.snapshot.currentTurnState
             return t == .completed || t == .interrupted
@@ -124,19 +127,20 @@ final class LiveDriveTests: XCTestCase {
                                  binary: (ShellRunner.locateBinary("codex") ?? "codex"), arguments: ["app-server"], provider: "Codex")
     }
 
-    // MARK: - Antigravity / Gemini (gRPC Cascade)
+    // MARK: - Antigravity / Gemini (headless `agy` CLI — Antigravity 2.0)
 
+    /// Drives the DEFAULT production Gemini path: the headless `agy` CLI. No
+    /// desktop app, no gRPC. The legacy Cascade gRPC driver is the opt-in
+    /// fallback (`antigravity.grpc.enabled`) and is intentionally NOT exercised
+    /// here — it requires Antigravity 2 running and a provisional proto handshake.
     func testAntigravityLiveDrive() async throws {
-        let projectsDir = ClawdmeterRealHome.url()
-            .appendingPathComponent(".gemini/config/projects", isDirectory: true)
-        let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-        guard let projectId = await resolver.allProjects().first?.id else {
-            throw XCTSkip("No Antigravity project — open a repo in Antigravity 2 first.")
+        guard let agy = ShellRunner.locateBinary("agy") else {
+            throw XCTSkip("agy not on PATH — install Antigravity 2 (the agy CLI) first.")
         }
         let store = makeStore()
         let bridge = AcpHarnessBridge.transportOwning(
             sessionId: UUID(), store: store, model: nil, agentDisplayName: "Gemini",
-            driver: AntigravityCascadeDriver(languageServer: LanguageServerClient(), projectId: projectId))
+            driver: AntigravityHeadlessDriver(binaryPath: agy))
         try await driveAndAssert(bridge, store: store, binary: nil, arguments: [], provider: "Gemini")
     }
 }
