@@ -6938,10 +6938,11 @@ public final class AgentControlServer {
         }
 
         // Harness is the default drive path for non-Claude broadcast children
-        // (codex app-server / gemini gRPC / grok+cursor ACP), exactly as Solo
-        // chat. Reuse the shared core; map its errors to a slot failure reason.
-        // Claude → tmux + opencode → SSE (and any kill-switched codex/gemini)
-        // fall through to the legacy per-provider switch below.
+        // (codex app-server / gemini headless agy / grok+cursor ACP), exactly as
+        // Solo chat. Reuse the shared core; map its errors to a slot failure reason.
+        // Claude → tmux + opencode → SSE (and a kill-switched codex) fall through
+        // to the legacy per-provider switch below. Gemini is always harness-eligible
+        // so it never reaches the (now-unreachable) legacy gemini case below.
         if isChatHarnessEligible(slot.provider) {
             do {
                 return try await createHarnessChatSessionCore(
@@ -7013,67 +7014,12 @@ public final class AgentControlServer {
                 throw SpawnFailure.message("tmux_spawn_failed: \(error.localizedDescription)")
             }
         case .gemini:
-            // Delegate to the agentapi spawn flow. We can't reuse
-            // handlePostGeminiChatSession directly (it owns the
-            // connection write), but we lift the same body into a
-            // shared helper-style inline call here.
-        let home = ClawdmeterRealHome.url()
-        let projectsDir = home.appendingPathComponent(".gemini/config/projects", isDirectory: true)
-            let lsClient = LanguageServerClient()
-            let resolver = AntigravityProjectResolver(projectsDir: projectsDir)
-            let projects = await resolver.allProjects()
-            guard let projectId = projects.first?.id else {
-                throw SpawnFailure.message("antigravity_no_projects")
-            }
-            let session = try await registry.createChat(
-                provider: .gemini,
-                model: slot.model,
-                chatCwd: "",
-                frontierGroupId: groupId,
-                frontierChildIndex: childIndex,
-                deepResearch: slot.deepResearch,
-                chatVendor: metadata.vendor,
-                billingProvider: metadata.billingProvider
-            )
-            let chatCwd: String
-            do {
-                let url = try ChatCwdManager.ensure(for: session.id)
-                chatCwd = url.path
-            } catch {
-                try? await registry.delete(id: session.id)
-                throw SpawnFailure.message("chat_cwd_create_failed: \(error.localizedDescription)")
-            }
-            try? await registry.updateRuntime(
-                id: session.id, worktreePath: chatCwd,
-                tmuxWindowId: nil, tmuxPaneId: nil, mode: .local
-            )
-            let modelTier = AgentapiModelTier.from(modelCatalogId: slot.model)
-            do {
-                let conversationIdString = try await lsClient.newConversation(
-                    modelTier: modelTier,
-                    prompt: "(starting Frontier child)",
-                    projectId: projectId
-                )
-                guard let conversationId = UUID(uuidString: conversationIdString) else {
-                    try? await registry.delete(id: session.id)
-                    try? ChatCwdManager.remove(for: session.id)
-                    throw SpawnFailure.message("agentapi_bad_conversation_id")
-                }
-                try? await registry.setAntigravityChatBinding(
-                    id: session.id, conversationId: conversationId, projectId: projectId
-                )
-                let updated = registry.session(id: session.id) ?? session
-                _ = chatStoreRegistry.snapshotStore(for: updated)
-                return updated
-            } catch let LanguageServerClientError.notRunning {
-                try? await registry.delete(id: session.id)
-                try? ChatCwdManager.remove(for: session.id)
-                throw SpawnFailure.message("antigravity_not_running")
-            } catch {
-                try? await registry.delete(id: session.id)
-                try? ChatCwdManager.remove(for: session.id)
-                throw SpawnFailure.message("agentapi_new_conversation_failed: \(error.localizedDescription)")
-            }
+            // Unreachable: gemini is always harness-eligible (isChatHarnessEligible),
+            // so a broadcast gemini child spawns via createHarnessChatSessionCore
+            // above — the headless `agy` driver (Antigravity 2.0), bound to this
+            // frontier group exactly like the grok/cursor/codex children. The legacy
+            // agentapi one-shot frontier path has been retired.
+            throw SpawnFailure.message("gemini_unexpected_legacy_frontier_path")
         case .opencode:
             guard let _ = await OpencodeProcessManager.shared.ensureRunning() else {
                 switch OpencodeProcessManager.shared.state {

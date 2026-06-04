@@ -513,17 +513,18 @@ public final class DaemonChatStoreRegistry {
             return store
         }
         // v27 Code-tab harness migration: paneless harness-driven Code sessions
-        // (cursor/grok always; codex via app-server + gemini via gRPC Cascade
-        // when their flags are on) are fed by the AcpHarnessBridge through
-        // `appendSDKMessages` — there is NO JSONL to tail. Use an sdkOnly store.
-        // Distinguished from a LEGACY tmux Code session (real pane + JSONL) by
-        // the absence of a tmux pane, so old tmux codex/cursor sessions keep
-        // resolving their JSONL below. (Cursor was already sdkOnly here.)
+        // (cursor/grok always; gemini always — headless `agy` by default, gRPC
+        // Cascade when its flag is on; codex via app-server when its flag is on)
+        // are fed by the AcpHarnessBridge through `appendSDKMessages` — there is
+        // NO JSONL to tail. Use an sdkOnly store. Distinguished from a LEGACY tmux
+        // Code session (real pane + JSONL) by the absence of a tmux pane, so old
+        // tmux codex/cursor sessions keep resolving their JSONL below. Gemini has
+        // no tmux spawn path at all, so paneless gemini is always harness-driven.
         if session.tmuxPaneId == nil,
            session.agent == .cursor
              || session.agent == .grok
-             || (session.agent == .codex && AgentControlServer.codexAppServerEnabled)
-             || (session.agent == .gemini && AgentControlServer.antigravityGrpcEnabled) {
+             || session.agent == .gemini
+             || (session.agent == .codex && AgentControlServer.codexAppServerEnabled) {
             let store = SessionChatStore(sessionId: session.id, sdkOnly: true)
             store.start()
             SDKChatTranscriptMirror.replay(sessionId: session.id, into: store)

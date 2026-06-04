@@ -111,6 +111,7 @@ public actor ChatProviderProbe {
             codexAvailable: Bool,
             codexSDKAvailable: Bool,
             agentapiLive: Bool,
+            agyHeadlessAvailable: Bool,
             opencodeAvailable: Bool,
             opencodeAuthProviderCount: Int,
             opencodeOpenRouterAuthAvailable: Bool,
@@ -138,6 +139,10 @@ public actor ChatProviderProbe {
                 if case .live = LanguageServerClient().discoverLive() { return true }
                 return false
             }
+            // Headless `agy` CLI (Antigravity 2.0) is the DEFAULT Gemini drive path
+            // and works with the desktop app CLOSED — binary presence is the signal,
+            // mirroring how grok/cursor/codex are probed by `locateBinary`.
+            let agyHeadlessAvailable = geminiEnabled && ShellRunner.locateBinary("agy") != nil
             let opencodeAvailable = await MainActor.run {
                 opencodeEnabled && OpencodeProcessManager.shared.locateBinary() != nil
             }
@@ -204,6 +209,7 @@ public actor ChatProviderProbe {
                 codexAvailable,
                 codexSDKAvailable,
                 lsLive,
+                agyHeadlessAvailable,
                 opencodeAvailable,
                 opencodeAuthProviderCount,
                 opencodeOpenRouterAuthAvailable,
@@ -225,7 +231,10 @@ public actor ChatProviderProbe {
         let (claudeAuth, claudeReason) = resolveAuth(key: "claude", fallback: probes.claudeAvailable)
         let (codexSDKAuth, codexSDKReason) = resolveAuth(key: "codex:sdk", fallback: probes.codexSDKAvailable)
         let (codexCLIAuth, codexCLIReason) = resolveAuth(key: "codex:cli", fallback: probes.codexAvailable)
-        let (geminiAuth, geminiReason) = resolveAuth(key: "gemini", fallback: probes.agentapiLive)
+        // Gemini drives headlessly via `agy` (DEFAULT, app closed) OR the live
+        // Antigravity language-server (legacy gRPC fallback). Either makes it usable.
+        let geminiDriveAvailable = probes.agentapiLive || probes.agyHeadlessAvailable
+        let (geminiAuth, geminiReason) = resolveAuth(key: "gemini", fallback: geminiDriveAvailable)
         let (opencodeAuth, opencodeReason) = resolveAuth(
             key: "opencode",
             fallback: probes.opencodeAvailable
@@ -275,11 +284,11 @@ public actor ChatProviderProbe {
             ),
             ChatProviderEntry(
                 provider: .gemini,
-                available: probes.agentapiLive,
+                available: geminiDriveAvailable,
                 authenticated: geminiAuth,
-                capabilityProbePassed: probes.agentapiLive && geminiAuth,
+                capabilityProbePassed: geminiDriveAvailable && geminiAuth,
                 lastProbedAt: now,
-                reason: geminiReason ?? (probes.agentapiLive ? nil : (probes.geminiEnabled ? "Open Antigravity 2 to start a Gemini chat" : "Provider disabled"))
+                reason: geminiReason ?? (geminiDriveAvailable ? nil : (probes.geminiEnabled ? "Install the agy CLI (Antigravity 2) — or open the Antigravity app" : "Provider disabled"))
             ),
             ChatProviderEntry(
                 provider: .opencode,
@@ -299,7 +308,7 @@ public actor ChatProviderProbe {
             ),
         ])
         cache = CacheEntry(response: response, computedAt: now)
-        probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codexSDK=\(probes.codexSDKAvailable, privacy: .public) codexCLI=\(probes.codexAvailable, privacy: .public) gemini=\(probes.agentapiLive, privacy: .public) opencode=\(probes.opencodeAvailable, privacy: .public) cursor=\((probes.cursorState.binaryPath != nil), privacy: .public)")
+        probeLogger.info("probe completed: claude=\(probes.claudeAvailable, privacy: .public) codexSDK=\(probes.codexSDKAvailable, privacy: .public) codexCLI=\(probes.codexAvailable, privacy: .public) geminiAgy=\(probes.agyHeadlessAvailable, privacy: .public) geminiLS=\(probes.agentapiLive, privacy: .public) opencode=\(probes.opencodeAvailable, privacy: .public) cursor=\((probes.cursorState.binaryPath != nil), privacy: .public)")
         return response
     }
 
