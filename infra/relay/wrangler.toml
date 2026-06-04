@@ -17,6 +17,7 @@
 # patterns as bare hostnames.
 
 name = "clawdmeter-relay"
+account_id = "1bad887b43fb6dbb2e08757324d7afe1"
 main = "src/index.ts"
 compatibility_date = "2026-05-26"
 compatibility_flags = ["nodejs_compat"]
@@ -76,6 +77,7 @@ SESSION_TTL_SECONDS = "900"   # 15-min idle eviction per D22
 # -------- staging --------
 [env.staging]
 name = "clawdmeter-relay-staging"
+account_id = "1bad887b43fb6dbb2e08757324d7afe1"
 workers_dev = true
 
 # Custom domain disabled for initial staging deploy (operator does not yet
@@ -109,6 +111,7 @@ SESSION_TTL_SECONDS = "900"
 # -------- production --------
 [env.production]
 name = "clawdmeter-relay"
+account_id = "1bad887b43fb6dbb2e08757324d7afe1"
 
 [[env.production.routes]]
 pattern = "relay.clawdmeter.dev"
