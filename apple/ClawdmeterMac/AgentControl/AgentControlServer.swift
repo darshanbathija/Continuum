@@ -1692,8 +1692,6 @@ public final class AgentControlServer {
             agent: session.agent,
             kind: session.kind,
             codexChatBackend: session.codexChatBackend,
-            geminiBackend: session.geminiBackend,
-            hasAntigravityConversation: session.antigravityConversationId != nil,
             runtimeIsACPDriven: session.runtimeBinding?.runtimeKind.isACPDriven == true,
             hasLiveBridge: harnessRegistry.bridge(for: uuid) != nil
         )

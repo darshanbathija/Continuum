@@ -280,13 +280,6 @@ public final class AgentSessionRegistry: ObservableObject {
         effort: ReasoningEffort? = nil,
         abPairSessionId: UUID? = nil,
         // v0.8.0 agy-migration — Gemini sessions spawned through
-        // Antigravity 2's agentapi don't have a tmux pane (tmuxWindowId
-        // + tmuxPaneId both nil); they carry the transport tag +
-        // conversation UUID instead so SessionChatStore can attach to
-        // the right SQLite DB.
-        geminiBackend: GeminiBackend? = nil,
-        antigravityConversationId: UUID? = nil,
-        antigravityProjectId: String? = nil,
         inheritedContextSourceIds: [UUID]? = nil,
         ownsWorktree: Bool = false,
         envSetId: UUID? = nil,
@@ -316,16 +309,10 @@ public final class AgentSessionRegistry: ObservableObject {
             runtimeBinding: Self.makeRuntimeBinding(
                 agent: agent,
                 model: model,
-                codexBackend: nil,
-                geminiBackend: geminiBackend,
-                antigravityConversationId: antigravityConversationId,
-                antigravityProjectId: antigravityProjectId
+                codexBackend: nil
             ),
             effort: effort,
             abPairSessionId: abPairSessionId,
-            geminiBackend: geminiBackend,
-            antigravityConversationId: antigravityConversationId,
-            antigravityProjectId: antigravityProjectId,
             inheritedContextSourceIds: inheritedContextSourceIds,
             ownsWorktree: ownsWorktree,
             envSetId: envSetId,
@@ -354,9 +341,6 @@ public final class AgentSessionRegistry: ObservableObject {
         chatCwd: String,
         codexChatBackend: CodexChatBackend? = nil,
         effort: ReasoningEffort? = nil,
-        geminiBackend: GeminiBackend? = nil,
-        antigravityConversationId: UUID? = nil,
-        antigravityProjectId: String? = nil,
         frontierGroupId: UUID? = nil,
         frontierChildIndex: Int? = nil,
         deepResearch: Bool = false,
@@ -396,9 +380,6 @@ public final class AgentSessionRegistry: ObservableObject {
                 agent: provider,
                 model: model,
                 codexBackend: codexChatBackend,
-                geminiBackend: geminiBackend,
-                antigravityConversationId: antigravityConversationId,
-                antigravityProjectId: antigravityProjectId,
                 chatVendor: chatVendor,
                 billingProvider: billingProvider
             ),
@@ -407,9 +388,6 @@ public final class AgentSessionRegistry: ObservableObject {
             frontierGroupId: frontierGroupId,
             frontierChildIndex: frontierChildIndex,
             codexChatBackend: codexChatBackend,
-            geminiBackend: geminiBackend,
-            antigravityConversationId: antigravityConversationId,
-            antigravityProjectId: antigravityProjectId,
             deepResearch: deepResearch
         )
         // Write-ahead: see comment on `create(...)`. Chat sessions take
@@ -461,10 +439,7 @@ public final class AgentSessionRegistry: ObservableObject {
         let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
             agent: s.agent,
             model: s.model,
-            codexBackend: s.codexChatBackend,
-            geminiBackend: s.geminiBackend,
-            antigravityConversationId: s.antigravityConversationId,
-            antigravityProjectId: s.antigravityProjectId
+            codexBackend: s.codexChatBackend
         )).updating(externalThreadId: .some(threadId))
         let projected = with(s, codexChatThreadId: threadId, runtimeBinding: binding)
         try await writeReceipt(kind: .sessionMetadataUpdated, sessionId: id, session: projected)
@@ -604,10 +579,7 @@ public final class AgentSessionRegistry: ObservableObject {
         let binding = (s.runtimeBinding ?? Self.makeRuntimeBinding(
             agent: s.agent,
             model: model,
-            codexBackend: s.codexChatBackend,
-            geminiBackend: s.geminiBackend,
-            antigravityConversationId: s.antigravityConversationId,
-            antigravityProjectId: s.antigravityProjectId
+            codexBackend: s.codexChatBackend
         )).updating(providerModelId: .some(model))
         let projected = with(
             s,
@@ -837,9 +809,6 @@ public final class AgentSessionRegistry: ObservableObject {
         abPairDecidedAt: Date?? = nil,
         customName: String?? = nil,
         codexChatThreadId: String?? = nil,
-        geminiBackend: GeminiBackend?? = nil,
-        antigravityConversationId: UUID?? = nil,
-        antigravityProjectId: String?? = nil,
         runtimeCwd: String?? = nil,
         chatCwd: String?? = nil,
         runtimeBinding: SessionRuntimeBinding?? = nil,
@@ -898,16 +867,6 @@ public final class AgentSessionRegistry: ObservableObject {
             frontierChildIndex: Self.resolve(frontierChildIndex, fallback: s.frontierChildIndex),
             codexChatBackend: s.codexChatBackend,
             codexChatThreadId: Self.resolve(codexChatThreadId, fallback: s.codexChatThreadId),
-            // v0.8.1 schema v6 (agy-migration): geminiBackend +
-            // antigravityConversationId usually only get set at
-            // create-time, but v0.9 adds a two-phase bind via
-            // setAntigravityChatBinding so chat-sessions can promote
-            // from a placeholder record to a real agentapi binding once
-            // the daemon's POST /chat-sessions has run new-conversation.
-            // Resolve-with-fallback so non-binding mutations preserve.
-            geminiBackend: Self.resolve(geminiBackend, fallback: s.geminiBackend),
-            antigravityConversationId: Self.resolve(antigravityConversationId, fallback: s.antigravityConversationId),
-            antigravityProjectId: Self.resolve(antigravityProjectId, fallback: s.antigravityProjectId),
             deepResearch: s.deepResearch,
             planProgress: Self.resolve(planProgress, fallback: s.planProgress),
             providerInstanceId: s.providerInstanceId,
@@ -933,16 +892,12 @@ public final class AgentSessionRegistry: ObservableObject {
         agent: AgentKind,
         model: String?,
         codexBackend: CodexChatBackend?,
-        geminiBackend: GeminiBackend?,
-        antigravityConversationId: UUID?,
-        antigravityProjectId: String?,
         chatVendor: ChatVendor? = nil,
         billingProvider: String? = nil
     ) -> SessionRuntimeBinding {
         var runtime = SessionRuntimeKind.inferred(
             agent: agent,
-            codexBackend: codexBackend,
-            geminiBackend: geminiBackend
+            codexBackend: codexBackend
         )
         // Cursor is ACP-harness-driven only for CODE sessions. A cursor CHAT
         // session (chatVendor set) runs on the chat backend and has no harness
@@ -976,8 +931,8 @@ public final class AgentSessionRegistry: ObservableObject {
         }()
         return SessionRuntimeBinding(
             runtimeKind: runtime,
-            externalSessionId: antigravityConversationId?.uuidString,
-            projectId: antigravityProjectId,
+            externalSessionId: nil,
+            projectId: nil,
             providerModelId: model,
             billingProvider: resolvedBillingProvider,
             billingConfidence: billingConfidence,

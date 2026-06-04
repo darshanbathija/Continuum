@@ -1284,7 +1284,6 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
     case claudeCLI = "claude_cli"
     case codexCLI = "codex_cli"
     case codexSDK = "codex_sdk"
-    case antigravityAgentAPI = "antigravity_agentapi"
     case opencodeServer = "opencode_server"
     case cursorCLI = "cursor_cli"
     case cursorSDK = "cursor_sdk"
@@ -1304,8 +1303,7 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
 
     public static func inferred(
         agent: AgentKind,
-        codexBackend: CodexChatBackend? = nil,
-        geminiBackend: GeminiBackend? = nil
+        codexBackend: CodexChatBackend? = nil
     ) -> SessionRuntimeKind {
         switch agent {
         case .claude:
@@ -1313,7 +1311,9 @@ public enum SessionRuntimeKind: String, Codable, Hashable, Sendable, CaseIterabl
         case .codex:
             return codexBackend == .sdk ? .codexSDK : .codexCLI
         case .gemini:
-            return geminiBackend == .agentapi ? .antigravityAgentAPI : .unknown
+            // Gemini drives via the headless `agy` harness bridge; no legacy
+            // runtime kind. Routing keys off the live bridge, not this.
+            return .unknown
         case .opencode:
             return .opencodeServer
         case .cursor:
@@ -1391,13 +1391,6 @@ public struct SessionRuntimeCapabilities: Codable, Hashable, Sendable {
                 supportsTerminal: false
             )
         case .cursorSDK:
-            return SessionRuntimeCapabilities(
-                supportsCancel: true,
-                supportsPermissionPrompts: false,
-                supportsUsage: true,
-                supportsTerminal: false
-            )
-        case .antigravityAgentAPI:
             return SessionRuntimeCapabilities(
                 supportsCancel: true,
                 supportsPermissionPrompts: false,
@@ -2645,26 +2638,10 @@ public enum AgentSessionStatus: String, Codable, Hashable, Sendable {
 }
 
 /// Snapshot of one agent session for list / detail views.
-// MARK: - Gemini backend (v10 agy-migration)
-
-/// Which transport drives a Gemini session.
-///
-/// `nil` (the default for any v0.7-era session that's been persisted) means
-/// "legacy / pre-agy-migration" — at the time those sessions were created,
-/// only the standalone `gemini` CLI v0.42 existed. v0.8.0 onwards uses
-/// `.agentapi` (Antigravity 2's HTTP-RPC mode) for all new Gemini sessions
-/// when Antigravity.app is reachable (D4 hard-stop: no spawn otherwise).
-/// v0.42 is no longer a chat fallback; it stays in the install only as a
-/// no-op for users who haven't installed Antigravity 2 yet (they get a
-/// CTA, not a session).
-///
-/// This is a transport axis, NOT an agent-kind axis — `AgentSession.kind`
-/// (per chat-tab v0.8) means `.code` vs `.chat` and stays orthogonal.
-public enum GeminiBackend: String, Codable, Hashable, Sendable, CaseIterable {
-    /// Antigravity 2's `agentapi` HTTP-RPC mode. Conversations live in
-    /// `~/.gemini/antigravity/conversations/<id>.db` (SQLite WAL).
-    case agentapi
-}
+// (GeminiBackend was removed once Gemini moved to the headless `agy` CLI —
+// there is only one Gemini drive path now, so no transport axis is needed.
+// Old persisted sessions that carried geminiBackend/antigravityConversationId
+// decode fine: those keys are simply ignored.)
 
 public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
     /// Server-assigned UUID. Used as `Identifiable.id` and as the URL
@@ -2818,36 +2795,10 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
 
     // MARK: - Schema v6 additions (v0.8.1 agy-migration, wire v10)
     //
-    // Both optional + decoder-tolerant so v3/v4/v5 sessions.json files
-    // decode cleanly. Downgrade path: older readers (which know no
-    // GeminiBackend or antigravityConversationId) silently drop these
-    // fields — same back-compat pattern as schema v3's effort fields.
-
-    /// Which transport drives this Gemini session. `nil` for any session
-    /// created before agy-migration (those were spawned via `gemini`
-    /// v0.42 CLI; the binary may still be on disk but Clawdmeter doesn't
-    /// re-spawn them in v0.8.1+). `.agentapi` means the session was
-    /// created via Antigravity 2's HTTP-RPC and lives in a SQLite WAL
-    /// DB under `~/.gemini/antigravity/conversations/`.
-    /// Only meaningful when `agent == .gemini`. For Claude/Codex it
-    /// stays nil.
-    public let geminiBackend: GeminiBackend?
-
-    /// Antigravity's conversation UUID, returned by
-    /// `language_server agentapi new-conversation` and used to:
-    ///   - resume the conversation across Clawdmeter restarts
-    ///   - target `agentapi send-message <conv-id> <prompt>` calls
-    ///   - locate the SQLite DB file
-    ///   - thread iOS send-message round-trips
-    /// `nil` for any non-agentapi session.
-    public let antigravityConversationId: UUID?
-
-    /// v0.9 — Antigravity's project UUID. Persisted on the session at
-    /// create time so chat sessions (no `repoKey`) can resolve at
-    /// send-time without going through repoKey-based project lookup.
-    /// Pre-v0.9 sessions = nil; sendAntigravityMessage falls back to
-    /// `AntigravityProjectResolver.resolve(forRepoKey:)` for those.
-    public let antigravityProjectId: String?
+    // (Removed: geminiBackend / antigravityConversationId / antigravityProjectId.
+    // Gemini drives only via the headless `agy` CLI now; these agentapi-era
+    // fields are gone. Old persisted sessions carrying them decode fine —
+    // unknown JSON keys are ignored.)
 
     // MARK: - Schema v7 additions (v0.23 Chat V2)
     //
@@ -2937,9 +2888,6 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         frontierChildIndex: Int? = nil,
         codexChatBackend: CodexChatBackend? = nil,
         codexChatThreadId: String? = nil,
-        geminiBackend: GeminiBackend? = nil,
-        antigravityConversationId: UUID? = nil,
-        antigravityProjectId: String? = nil,
         deepResearch: Bool = false,
         planProgress: PlanProgress? = nil,
         providerInstanceId: String? = nil,
@@ -2983,9 +2931,6 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.frontierChildIndex = frontierChildIndex
         self.codexChatBackend = codexChatBackend
         self.codexChatThreadId = codexChatThreadId
-        self.geminiBackend = geminiBackend
-        self.antigravityConversationId = antigravityConversationId
-        self.antigravityProjectId = antigravityProjectId
         self.deepResearch = deepResearch
         self.planProgress = planProgress
         self.providerInstanceId = providerInstanceId
@@ -3048,19 +2993,6 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
         self.frontierChildIndex = (try? c.decodeIfPresent(Int.self, forKey: .frontierChildIndex)) ?? nil
         self.codexChatBackend = (try? c.decodeIfPresent(CodexChatBackend.self, forKey: .codexChatBackend)) ?? nil
         self.codexChatThreadId = (try? c.decodeIfPresent(String.self, forKey: .codexChatThreadId)) ?? nil
-        // v0.8.1 schema v6 additions (agy-migration). Same decoder-
-        // tolerant pattern as effort/abPair fields: any earlier-schema
-        // sessions.json decodes cleanly with these as nil. v0.7-era
-        // Gemini sessions = `geminiBackend == nil` (legacy v0.42 era);
-        // v0.8.1+ Gemini sessions = `.agentapi`.
-        self.geminiBackend = (try? c.decodeIfPresent(GeminiBackend.self, forKey: .geminiBackend)) ?? nil
-        self.antigravityConversationId = (try? c.decodeIfPresent(UUID.self, forKey: .antigravityConversationId)) ?? nil
-        // v0.9 schema addition: antigravityProjectId. Persists the agentapi
-        // ANTIGRAVITY_PROJECT_ID on the session so chat sessions (no repoKey)
-        // can resolve at send-time without a forRepoKey lookup. Optional +
-        // decoder-tolerant: any v0.8.1 sessions.json decodes cleanly with
-        // this nil; sendAntigravityMessage falls back to the repoKey path.
-        self.antigravityProjectId = (try? c.decodeIfPresent(String.self, forKey: .antigravityProjectId)) ?? nil
         // v0.23 schema v7 addition: deepResearch. Persisted so respawn/
         // restore/retry preserves the flag. Older sessions.json files
         // decode this as false.
@@ -3129,10 +3061,6 @@ public struct AgentSession: Codable, Hashable, Sendable, Identifiable {
              // v0.8.0 schema v5 (Chat tab).
              kind, frontierGroupId, frontierChildIndex,
              codexChatBackend, codexChatThreadId,
-             // v0.8.1 schema v6 (agy-migration).
-             geminiBackend, antigravityConversationId,
-             // v0.9 schema addition (chat-via-agentapi).
-             antigravityProjectId,
              // v0.23 schema v7 (Chat V2 Deep Research).
              deepResearch,
              // Plan-progress schema addition (daemon-side).

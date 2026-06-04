@@ -15,9 +15,7 @@ import ClawdmeterShared
 final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
 
     private func makeSession(
-        agent: AgentKind,
-        geminiBackend: GeminiBackend? = nil,
-        antigravityConversationId: UUID? = nil
+        agent: AgentKind
     ) -> AgentSession {
         AgentSession(
             id: UUID(),
@@ -34,9 +32,7 @@ final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
             createdAt: Date(),
             lastEventAt: Date(),
             lastEventSeq: 1,
-            mode: .local,
-            geminiBackend: geminiBackend,
-            antigravityConversationId: antigravityConversationId
+            mode: .local
         )
     }
 
@@ -49,7 +45,7 @@ final class DaemonChatStoreRegistryRoutingTests: XCTestCase {
         // stop, but the data may persist on disk for old session.json
         // entries). Fallthrough returns whatever the Codex newest-JSONL
         // path picks (or nil) — same as v0.7 behavior.
-        let session = makeSession(agent: .gemini, geminiBackend: nil)
+        let session = makeSession(agent: .gemini)
         _ = DaemonChatStoreRegistry.defaultResolveURL(sessionId: session.id, session: session)
     }
 

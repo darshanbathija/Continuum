@@ -553,13 +553,11 @@ final class AgentControlServerChatRouteTests: XCTestCase {
         XCTAssertTrue(group.hasMinimumBroadcast,
                       "need ≥2 live children for a real broadcast; slots: \(group.slots)")
 
-        // 2) Migration invariant: the gemini child is HARNESS-driven (a live bridge),
-        //    NOT bound to a legacy agentapi conversation.
+        // 2) Migration invariant: the gemini child is HARNESS-driven (a live
+        //    bridge) — the agentapi conversation path is gone entirely.
         XCTAssertTrue(server.isHarnessLive(geminiId),
                       "gemini broadcast child must have a live harness bridge (agy)")
-        let geminiSession = try XCTUnwrap(registry.session(id: geminiId))
-        XCTAssertNil(geminiSession.antigravityConversationId,
-                     "gemini child must NOT use the retired agentapi conversation binding")
+        _ = try XCTUnwrap(registry.session(id: geminiId))
 
         // 3) Broadcast one prompt; assert the gemini child streams a real reply.
         //    The prompt itself contains "PONG" once (echoed as the user bubble), so

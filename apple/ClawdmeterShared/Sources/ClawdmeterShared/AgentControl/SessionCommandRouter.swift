@@ -29,10 +29,6 @@ import Foundation
 /// The backend transport that owns a given command for a session. Each case
 /// names the path the daemon dispatches a send/interrupt/permission down.
 public enum SessionCommandRoute: String, Hashable, Sendable, CaseIterable {
-    /// Antigravity 2 `agentapi` HTTP-RPC (Gemini sessions). Sends go through
-    /// `LanguageServerClient.sendMessage`; interrupt is the agentapi `/cancel`
-    /// POST (dispatched by SessionInterruptDispatcher today).
-    case antigravityAgentapi
     /// Codex SDK chat relay (`CodexSubscriptionRelay`). No tmux pane; sends go
     /// through the SDK ingestor, interrupt is `AbortController.abort()`.
     case codexSDK
@@ -52,7 +48,7 @@ public enum SessionCommandRoute: String, Hashable, Sendable, CaseIterable {
     /// cases each of these before the tmux paneId guard.
     public var isPaneless: Bool {
         switch self {
-        case .antigravityAgentapi, .codexSDK, .opencodeServe, .harnessBridge:
+        case .codexSDK, .opencodeServe, .harnessBridge:
             return true
         case .tmux:
             return false
@@ -75,11 +71,6 @@ public struct SessionCommandRouter: Sendable {
         public let agent: AgentKind
         public let kind: SessionKind
         public let codexChatBackend: CodexChatBackend?
-        public let geminiBackend: GeminiBackend?
-        /// `AgentSession.antigravityConversationId != nil`. The agentapi send
-        /// path requires a conversation id, so the daemon guards on both
-        /// `geminiBackend == .agentapi` AND a non-nil conversation id.
-        public let hasAntigravityConversation: Bool
         /// `session.runtimeBinding?.runtimeKind.isACPDriven == true`. Marks a
         /// session that *should* be ACP-driven even when no live bridge exists
         /// (e.g. after a daemon restart killed the in-memory bridge). Used only
@@ -96,16 +87,12 @@ public struct SessionCommandRouter: Sendable {
             agent: AgentKind,
             kind: SessionKind,
             codexChatBackend: CodexChatBackend? = nil,
-            geminiBackend: GeminiBackend? = nil,
-            hasAntigravityConversation: Bool = false,
             runtimeIsACPDriven: Bool = false,
             hasLiveBridge: Bool = false
         ) {
             self.agent = agent
             self.kind = kind
             self.codexChatBackend = codexChatBackend
-            self.geminiBackend = geminiBackend
-            self.hasAntigravityConversation = hasAntigravityConversation
             self.runtimeIsACPDriven = runtimeIsACPDriven
             self.hasLiveBridge = hasLiveBridge
         }
@@ -114,25 +101,14 @@ public struct SessionCommandRouter: Sendable {
     /// Resolve the owning backend for a send-style command. The branch ORDER
     /// below is identical to `handleSendPrompt`'s; do not reorder without
     /// re-checking that handler:
-    ///   1. Antigravity agentapi   (geminiBackend == .agentapi && conversation)
-    ///   2. Codex SDK chat         (kind == .chat && agent == .codex && backend == .sdk)
-    ///   3. OpenCode               (agent == .opencode)
-    ///   4. Live ACP bridge        (hasLiveBridge)
-    ///   5. tmux                    (fall-through; also where a dead-bridge ACP
+    ///   1. Codex SDK chat         (kind == .chat && agent == .codex && backend == .sdk)
+    ///   2. OpenCode               (agent == .opencode)
+    ///   3. Live ACP/headless bridge (hasLiveBridge — Grok/Cursor/Codex-app-server/Gemini-agy)
+    ///   4. tmux                    (fall-through; also where a dead-bridge ACP
     ///                               session lands today before its 503 error
     ///                               path fires — see `acpExpectedButNoBridge`)
-    ///
-    /// The agentapi branch is FIRST in the daemon "before the chat-tab SDK
-    /// dispatch + paneId guard" (AgentControlServer.swift handleSendPrompt) so
-    /// a Gemini chat never falls into the Codex-SDK or tmux branches.
     public static func resolve(_ ctx: SessionContext) -> SessionCommandRoute {
-        // 1. Antigravity 2 agentapi (Gemini). Requires both the backend axis
-        //    and a live conversation id — matches the daemon's
-        //    `geminiBackend == .agentapi, let conversationId = ...` guard.
-        if ctx.geminiBackend == .agentapi && ctx.hasAntigravityConversation {
-            return .antigravityAgentapi
-        }
-        // 2. Codex SDK chat relay. The three-way conjunction is exactly the
+        // 1. Codex SDK chat relay. The three-way conjunction is exactly the
         //    daemon's detection: SDK chat sessions have no tmux pane.
         if ctx.kind == .chat
             && ctx.agent == .codex

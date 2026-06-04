@@ -334,24 +334,12 @@ struct EmptyStateCenteredComposer: View {
             } else if bypassPicked {
                 PermissionModeStore.shared.setBypass(true, sessionId: session.id)
             }
-            // Codex P1.2: skip the post-spawn /send for agentapi
-            // sessions — `agentapi new-conversation` already consumed the
-            // first prompt via `initialMessage`. Sending it again would
-            // either fail (no tmux pane, P1.3 unfixed) or duplicate the
-            // first user turn into the SQLite conversation DB.
-            let isAgentapiSpawn = session.geminiBackend == .agentapi
-            // Wait briefly for the pane to be ready, then post the first prompt.
+            // Post the first prompt through the daemon once the session is up.
+            // Every non-Claude provider (incl. gemini via headless agy) drives
+            // through the harness bridge, so the first /send reaches the bridge —
+            // no provider-specific skip needed.
             try await Task.sleep(nanoseconds: 600_000_000)
-            if isAgentapiSpawn {
-                if (!selectedSourceIds.isEmpty || !unavailableSourceIds.isEmpty),
-                   let dir = AttachmentStaging.stagingDir(for: session) {
-                    _ = try? stageInheritedContext(
-                        into: dir,
-                        selectedSourceIds: selectedSourceIds,
-                        unavailableSourceIds: unavailableSourceIds
-                    )
-                }
-            } else if store.canSend, let port = runtime.agentControlServer.boundPort {
+            if store.canSend, let port = runtime.agentControlServer.boundPort {
                 // Local loopback: authenticate with the in-process token, not
                 // the pairing keychain (which would prompt on first send).
                 let sender = MacComposerSender(port: Int(port), token: runtime.agentControlServer.localLoopbackToken)

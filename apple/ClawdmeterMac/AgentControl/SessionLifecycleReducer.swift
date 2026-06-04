@@ -473,7 +473,7 @@ public enum SessionLifecycleReducer {
         else { return false }
 
         if session.kind == .chat { return false }
-        if session.agent == .gemini && session.geminiBackend == .agentapi { return false }
+        if session.agent == .gemini { return false }  // gemini is paneless (headless agy harness)
         if session.agent == .opencode { return false }
         return true
     }
