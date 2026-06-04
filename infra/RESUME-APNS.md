@@ -78,3 +78,41 @@ App now points at these (APNSGatewayEnvironment + RelayEnvironment defaults → 
 2. **Enable Push on the App IDs**: `ai.continuum.ios` (+ `…watchkitapp`) → Capabilities → Push Notifications, then regenerate the App Store provisioning profiles so they carry the entitlement.
 3. **Flip the path**: emit a real APNS push from the daemon's SessionEventWiring (plan-approval / done events) via `APNSGatewayClient`, keeping the D15 local path as the fallback when no device token is registered.
 4. **Re-archive build 192** (manual signing, profiles with Push) → TestFlight; verify a lock-screen push end-to-end against the **production** gateway (TestFlight = production APNS).
+
+---
+
+## 2026-06 — precise remainder (Mac pipeline is DONE; iOS + pairing-key are the gap)
+
+**Verified already built on the Mac (no work needed):**
+- `MacAPNSPusher` emits pushes (called from `AppRuntime.swift:814`).
+- `APNSGatewayClient` seals the payload (`APNSPayloadSealer`), signs the per-peer
+  bearer (`APNSGatewayBearer.issueBearer`), POSTs `<gateway>/push`.
+- `APNSPushDeviceTokenStore` + daemon endpoint **`POST /devices/apns-token`**
+  (body `{deviceToken:64hex, bundleId, sessionId}`) — receives the iPhone token.
+- `APNSGatewaySettings` toggles (pushEnabled, notifyOnPlanApproval/SessionDone/…).
+
+**Gap 1 — iOS device-token registration (only missing app code):**
+- Add `@UIApplicationDelegateAdaptor` to `ClawdmeteriOSApp`; in
+  `didRegisterForRemoteNotificationsWithDeviceToken`, hex-encode the token and
+  call a new `AgentControlClient.registerAPNSDeviceToken(hexToken:bundleId:sessionId:)`
+  that POSTs to `/devices/apns-token` (mirror `ackNotifications`, line ~2759).
+- Call `UIApplication.shared.registerForRemoteNotifications()` right after
+  `notifManager.requestAuthorizationIfNeeded()` (`ContentView.swift:46`).
+- `bundleId = "ai.continuum.ios"`, `sessionId = the pairing session id`.
+
+**Gap 2 — bearer-key coordination (CRITICAL, or the gateway 401s the Mac):**
+- The Mac's `RELAY_BEARER_SIGNING_KEY` is **learned over the relay at pairing
+  (E3)** via `APNSGatewaySigningKeyProvider` (dev override:
+  `CLAWDMETER_RELAY_BEARER_SIGNING_KEY` env). The gateway Worker's
+  `RELAY_BEARER_SIGNING_KEY` secret (currently a RANDOM value I set) must equal
+  what the relay hands the Mac. Verify the relay's pairing handshake distributes
+  the gateway's key (read `infra/relay/src` + `RelayPairingService.swift`); for a
+  quick dev test, set the SAME base64 on the Mac (`CLAWDMETER_RELAY_BEARER_SIGNING_KEY`)
+  and the gateway secret.
+
+**Gap 3 — Apple:** enable Push on `ai.continuum.ios` (+ watch) App IDs, regen
+the App Store profiles, re-archive build 192 (manual signing) → TestFlight.
+
+**Gap 4 — verify on device:** pair iPhone → background app → trigger a
+plan-approval/done event on the Mac → confirm lock-screen push (TestFlight =
+PRODUCTION gateway). Watch `wrangler tail --env production` for the send.
