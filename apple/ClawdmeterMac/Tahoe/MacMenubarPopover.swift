@@ -60,7 +60,7 @@ public struct MacMenubarPopover: View {
     /// first-class tab in the popover. The user reported "we built
     /// complete integrations with OpenCode but I don't see that
     /// anywhere in the UI". The tab itself was missing here.
-    private let enabled: [TahoeProvider] = [.claude, .codex, .gemini, .opencode, .cursor]
+    private let enabled: [TahoeProvider] = [.claude, .codex, .gemini, .opencode, .cursor, .grok]
 
     /// Preview / demo init — no live AppModels; uses the static
     /// `data` snapshot.
@@ -137,7 +137,18 @@ public struct MacMenubarPopover: View {
                     supportsAutoRevive: false,
                     hasWeekly: false,
                     stale: true
-                )
+                ),
+            grok: TahoeLiveRow(
+                sessionPercent: 0,
+                weeklyPercent: 0,
+                sessionResetIn: "—",
+                weeklyResetIn: "",
+                modelName: "grok-build",
+                autoReviveOn: false,
+                supportsAutoRevive: false,
+                hasWeekly: false,
+                stale: true
+            )
         )
     }
 
@@ -163,6 +174,7 @@ public struct MacMenubarPopover: View {
             case .gemini: return "antigravity-pro"
             case .opencode: return "via opencode"
             case .cursor: return "Cursor Auto"
+            case .grok: return "grok-build"
             }
         }()
         guard let usage = model.usage else {
@@ -241,6 +253,9 @@ public struct MacMenubarPopover: View {
                     )
                 }
                 .padding(.horizontal, 4)
+            } else if selected == .grok {
+                GrokHistorySummary(snapshot: usageHistoryStore.snapshot)
+                    .padding(.horizontal, 4)
             } else {
                 VStack(spacing: 12) {
                     TahoeMenuBarMeter(label: "5h session", percent: row.sessionPercent, hint: "resets in \(row.sessionResetIn)", provider: selected, stale: row.stale)
@@ -388,6 +403,89 @@ private struct OpencodeDollarTile: View {
 
     private static func format(_ v: Decimal) -> String {
         formatter.string(from: v as NSDecimalNumber) ?? "$0.00"
+    }
+}
+
+private struct GrokHistorySummary: View {
+    @Environment(\.tahoe) private var t
+    var snapshot: UsageHistorySnapshot?
+
+    private var providerTotals: ProviderTotals {
+        snapshot?.grok ?? .empty
+    }
+
+    private var hasUsage: Bool {
+        providerTotals.today.totals.totalTokens > 0
+            || providerTotals.past7d.totals.totalTokens > 0
+            || providerTotals.today.totals.requestCount > 0
+            || providerTotals.past7d.totals.requestCount > 0
+    }
+
+    var body: some View {
+        if hasUsage {
+            VStack(spacing: 12) {
+                tokenTile(label: "Today", totals: providerTotals.today.totals)
+                tokenTile(label: "Past 7d", totals: providerTotals.past7d.totals)
+            }
+        } else {
+            HStack(spacing: 12) {
+                TahoeProviderGlyph(provider: .grok, size: 28)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No Grok usage captured")
+                        .font(TahoeFont.body(13, weight: .bold))
+                        .foregroundStyle(t.fg)
+                    Text("grok-build")
+                        .font(TahoeFont.mono(11))
+                        .foregroundStyle(t.fg3)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 14)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(t.glassTintHi.opacity(0.6))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(t.hairline, lineWidth: 0.5)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tokenTile(label: String, totals: TokenTotals) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(TahoeFont.body(13, weight: .bold))
+                    .foregroundStyle(t.fg)
+                Text("\(totals.requestCount) request\(totals.requestCount == 1 ? "" : "s")")
+                    .font(TahoeFont.mono(11))
+                    .foregroundStyle(t.fg3)
+            }
+            Spacer(minLength: 12)
+            Text(Self.formatTokens(totals.totalTokens))
+                .font(TahoeFont.rounded(20, weight: .heavy))
+                .monospacedDigit()
+                .foregroundStyle(t.fg)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(t.glassTintHi.opacity(0.6))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(t.hairline, lineWidth: 0.5)
+        }
+    }
+
+    private static func formatTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM tok", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK tok", Double(n) / 1_000) }
+        return "\(n) tok"
     }
 }
 

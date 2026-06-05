@@ -443,6 +443,7 @@ private struct Sidebar: View {
     @AppStorage("clawdmeter.codeIDE.filter.providerGemini") private var providerGeminiEnabled: Bool = true
     @AppStorage("clawdmeter.codeIDE.filter.providerOpenCode") private var providerOpenCodeEnabled: Bool = true
     @AppStorage("clawdmeter.codeIDE.filter.providerCursor") private var providerCursorEnabled: Bool = true
+    @AppStorage("clawdmeter.codeIDE.filter.providerGrok") private var providerGrokEnabled: Bool = true
 
     /// v0.22.19: free-text query the user types in the Search field at
     /// the top of the sidebar. ⌘K from anywhere flips to the Code tab
@@ -499,6 +500,7 @@ private struct Sidebar: View {
             case .gemini: return providerGeminiEnabled
             case .opencode: return providerOpenCodeEnabled  // PR #31
             case .cursor: return providerCursorEnabled
+            case .grok: return providerGrokEnabled
             }
         }
         let statusAllowed: (TahoeCodeSession.Status) -> Bool = { s in
@@ -705,6 +707,7 @@ private struct Sidebar: View {
                 Toggle("Antigravity", isOn: $providerGeminiEnabled)
                 Toggle("OpenCode", isOn: $providerOpenCodeEnabled)  // PR #31
                 Toggle("Cursor", isOn: $providerCursorEnabled)
+                Toggle("Grok", isOn: $providerGrokEnabled)
             }
             Section("Sort") {
                 ForEach(SortKey.allCases, id: \.rawValue) { opt in

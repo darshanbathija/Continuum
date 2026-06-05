@@ -155,6 +155,36 @@ struct MenuBarGaugeView {
         return image
     }
 
+    /// Badge + short text label for providers whose menu-bar surface is
+    /// historical analytics rather than a live quota gauge.
+    static func renderHistoryLabel(assetName: String, text: String, template: Bool) -> NSImage {
+        let cacheKey = "history-\(assetName)-\(template ? "t" : "c")-\(text)"
+        cacheLock.lock()
+        if let cached = cache[cacheKey] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let composite = NSMutableAttributedString()
+        let badgeSize: CGFloat = 18
+        let attach = NSTextAttachment()
+        attach.image = providerBadgeImage(assetName: assetName, size: badgeSize, template: template)
+        attach.bounds = CGRect(x: 0, y: -4, width: badgeSize, height: badgeSize)
+        composite.append(NSAttributedString(attachment: attach))
+        composite.append(NSAttributedString(string: "  \(text)", attributes: attrs))
+        let image = imageFromAttributedString(composite, template: template)
+        cacheLock.lock()
+        cache[cacheKey] = image
+        cacheLock.unlock()
+        return image
+    }
+
     private static func imageFromAttributedString(_ attr: NSAttributedString, template: Bool = true) -> NSImage {
         let size = attr.size()
         let width = ceil(size.width) + 4
@@ -237,7 +267,7 @@ struct MenuBarGaugeView {
     ///     is Apple's standard "template" PNG (alpha mask, tints with menu bar)
     ///   - GeminiLogo: 4-pointed Gemini star (SVG, fill auto-tinted)
     static func isTemplateAsset(_ name: String) -> Bool {
-        name == "ClaudeLogo" || name == "CodexLogo" || name == "GeminiLogo"
+        name == "ClaudeLogo" || name == "CodexLogo" || name == "GeminiLogo" || name == "GrokLogo"
     }
 
     /// Backwards-compat shim until callers migrate to `providerBadgeImage`.

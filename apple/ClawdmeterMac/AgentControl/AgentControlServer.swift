@@ -5040,7 +5040,9 @@ public final class AgentControlServer {
                 makeBridge: { sid, store in
                     .transportOwning(sessionId: sid, store: store, model: req.model,
                                      agentDisplayName: display,
-                                     driver: GrokHeadlessDriver(binaryPath: grokPath))
+                                     driver: GrokHeadlessDriver(binaryPath: grokPath),
+                                     usageProvider: .grok,
+                                     usageRepo: cwd)
                 })
             return
         }
@@ -5858,7 +5860,9 @@ public final class AgentControlServer {
             bridge = .transportOwning(
                 sessionId: session.id, store: store,
                 model: model, agentDisplayName: display,
-                driver: GrokHeadlessDriver(binaryPath: grokPath)
+                driver: GrokHeadlessDriver(binaryPath: grokPath),
+                usageProvider: .grok,
+                usageRepo: chatCwd
             )
         case .gemini:
             // Antigravity 2.0: headless `agy` CLI (no app, no gRPC). The Cascade

@@ -260,7 +260,8 @@ enum AnalyticsRangeAdapter {
             c: sums[.claude] ?? 0,
             x: sums[.codex] ?? 0,
             g: sums[.gemini] ?? 0,
-            o: sums[.opencode] ?? 0
+            o: sums[.opencode] ?? 0,
+            k: sums[.grok] ?? 0
         )
     }
 
@@ -276,7 +277,8 @@ enum AnalyticsRangeAdapter {
             c: sums[.claude] ?? 0,
             x: sums[.codex] ?? 0,
             g: sums[.gemini] ?? 0,
-            o: sums[.opencode] ?? 0
+            o: sums[.opencode] ?? 0,
+            k: sums[.grok] ?? 0
         )
     }
 
@@ -294,12 +296,14 @@ enum AnalyticsRangeAdapter {
         let x = sum(.codex)
         let g = sum(.gemini)
         let o = sum(.opencode)
-        let all = c + x + g + o
+        let k = sum(.grok)
+        let all = c + x + g + o + k
         return TahoeDemo.Totals(
             c: Self.formatUSD(c),
             x: Self.formatUSD(x),
             g: Self.formatUSD(g),
             o: Self.formatUSD(o),
+            k: Self.formatUSD(k),
             all: Self.formatUSD(all),
             delta: "" // skip delta-vs-prior for v0.22.8; punt to a follow-up
         )
@@ -326,12 +330,14 @@ enum AnalyticsRangeAdapter {
         let x = sum(.codex)
         let g = sum(.gemini)
         let o = sum(.opencode)
-        let all = c + x + g + o
+        let k = sum(.grok)
+        let all = c + x + g + o + k
         return TahoeDemo.Totals(
             c: Self.formatUSD(c),
             x: Self.formatUSD(x),
             g: Self.formatUSD(g),
             o: Self.formatUSD(o),
+            k: Self.formatUSD(k),
             all: Self.formatUSD(all),
             delta: "" // matches totalsFor: delta-vs-prior is a follow-up
         )
@@ -348,7 +354,7 @@ enum AnalyticsRangeAdapter {
     /// case via the overload above, or the non-enum `past90d` window used by
     /// the 90d card for a true trailing-90d per-repo split (#2).
     private static func reposFor(_ snapshot: UsageHistorySnapshot, select: (ProviderTotals) -> WindowTotals) -> [TahoeDemo.SpendRepo] {
-        var byRepo: [RepoKey: (c: Decimal, x: Decimal, g: Decimal, o: Decimal)] = [:]
+        var byRepo: [RepoKey: (c: Decimal, x: Decimal, g: Decimal, o: Decimal, k: Decimal)] = [:]
         for (provider, providerTotals) in snapshot.byProvider {
             let window = select(providerTotals)
             // Skip the synthetic rollup row UsageHistorySnapshot stores under
@@ -356,12 +362,13 @@ enum AnalyticsRangeAdapter {
             // "__rest__" row AND double-counts those dollars against the real
             // repos. Matches AnalyticsRepoList.computeRows.
             for entry in window.byRepo where entry.repo != "__rest__" {
-                var slot = byRepo[entry.repo] ?? (0, 0, 0, 0)
+                var slot = byRepo[entry.repo] ?? (0, 0, 0, 0, 0)
                 switch provider {
                 case .claude:   slot.c += entry.totals.costUSD
                 case .codex:    slot.x += entry.totals.costUSD
                 case .gemini:   slot.g += entry.totals.costUSD
                 case .opencode: slot.o += entry.totals.costUSD
+                case .grok:     slot.k += entry.totals.costUSD
                 case .cursor:   break
                 }
                 byRepo[entry.repo] = slot
@@ -371,8 +378,8 @@ enum AnalyticsRangeAdapter {
         let sorted = byRepo
             .map { (repo: $0.key, sums: $0.value) }
             .sorted { (a, b) -> Bool in
-                let aTotal = a.sums.c + a.sums.x + a.sums.g + a.sums.o
-                let bTotal = b.sums.c + b.sums.x + b.sums.g + b.sums.o
+                let aTotal = a.sums.c + a.sums.x + a.sums.g + a.sums.o + a.sums.k
+                let bTotal = b.sums.c + b.sums.x + b.sums.g + b.sums.o + b.sums.k
                 return aTotal > bTotal
             }
         let topN = 4
@@ -384,22 +391,25 @@ enum AnalyticsRangeAdapter {
                 c: NSDecimalNumber(decimal: row.sums.c).doubleValue,
                 x: NSDecimalNumber(decimal: row.sums.x).doubleValue,
                 g: NSDecimalNumber(decimal: row.sums.g).doubleValue,
-                o: NSDecimalNumber(decimal: row.sums.o).doubleValue
+                o: NSDecimalNumber(decimal: row.sums.o).doubleValue,
+                k: NSDecimalNumber(decimal: row.sums.k).doubleValue
             )
         }
         if !rest.isEmpty {
-            let restTotal = rest.reduce(into: (c: Decimal(0), x: Decimal(0), g: Decimal(0), o: Decimal(0))) { acc, row in
+            let restTotal = rest.reduce(into: (c: Decimal(0), x: Decimal(0), g: Decimal(0), o: Decimal(0), k: Decimal(0))) { acc, row in
                 acc.c += row.sums.c
                 acc.x += row.sums.x
                 acc.g += row.sums.g
                 acc.o += row.sums.o
+                acc.k += row.sums.k
             }
             out.append(TahoeDemo.SpendRepo(
                 name: "Other",
                 c: NSDecimalNumber(decimal: restTotal.c).doubleValue,
                 x: NSDecimalNumber(decimal: restTotal.x).doubleValue,
                 g: NSDecimalNumber(decimal: restTotal.g).doubleValue,
-                o: NSDecimalNumber(decimal: restTotal.o).doubleValue
+                o: NSDecimalNumber(decimal: restTotal.o).doubleValue,
+                k: NSDecimalNumber(decimal: restTotal.k).doubleValue
             ))
         }
         return out

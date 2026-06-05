@@ -35,6 +35,9 @@ public actor UsageHistoryLoader {
     /// Optional. Non-macOS builds do not auto-discover OpenCode's host DB,
     /// but tests and explicit callers may still inject a path.
     private let opencodeDBURL: URL?
+    /// Continuum-owned Grok harness ledger. Optional so tests can inject a
+    /// fixture and machines without Grok usage skip this pass cleanly.
+    private let grokLedgerURL: URL?
     private let cacheURL: URL?
     private let pricing: Pricing
 
@@ -47,6 +50,7 @@ public actor UsageHistoryLoader {
         geminiDir: URL? = nil,
         agyDir: URL? = nil,
         opencodeDBURL: URL? = nil,
+        grokLedgerURL: URL? = nil,
         cacheURL: URL? = nil,
         pricing: Pricing = .shared
     ) {
@@ -79,6 +83,7 @@ public actor UsageHistoryLoader {
         #else
         self.opencodeDBURL = opencodeDBURL
         #endif
+        self.grokLedgerURL = grokLedgerURL ?? GrokUsageLedger.defaultURL()
         self.cacheURL = cacheURL ?? Self.defaultCacheURL()
         self.pricing = pricing
     }
@@ -168,6 +173,9 @@ public actor UsageHistoryLoader {
             observe(Self.fileMtime(walURL))
             let shmURL = URL(fileURLWithPath: opencodeDBURL.path + "-shm")
             observe(Self.fileMtime(shmURL))
+        }
+        if let grokLedgerURL {
+            observe(Self.fileMtime(grokLedgerURL))
         }
         return maxMtime
     }
@@ -438,6 +446,44 @@ public actor UsageHistoryLoader {
         }
         #endif
 
+        // Grok harness usage is stored in a Continuum-owned JSONL ledger under
+        // Application Support. It contributes to historical analytics only; it
+        // does not synthesize a live quota source.
+        var grokDayByRepo: [Date: [RepoKey: TokenTotals]]? = nil
+        if let grokLedgerURL {
+            let records = GrokUsageLedger.records(from: grokLedgerURL)
+            if !records.isEmpty {
+                var bucket: [Date: [RepoKey: TokenTotals]] = [:]
+                var localDedup = Set<String>()
+                var localUnpriced: [String: TokenTotals] = [:]
+                var localByModel: [String: TokenTotals] = [:]
+                var localByDayByModel: [Date: [String: TokenTotals]] = [:]
+                for record in records {
+                    Self.accumulate(
+                        record: record,
+                        into: &bucket,
+                        dedup: &localDedup,
+                        unpriced: &localUnpriced,
+                        byModel: &localByModel,
+                        byDayByModel: &localByDayByModel
+                    )
+                }
+                grokDayByRepo = bucket
+                for (model, totals) in localUnpriced {
+                    unpricedModelTokens[model, default: .zero] += totals
+                }
+                for (model, totals) in localByModel {
+                    tokensByModel[model, default: .zero] += totals
+                }
+                for (day, modelMap) in localByDayByModel {
+                    var existing = byDayByModel[day, default: [:]]
+                    for (model, totals) in modelMap { existing[model, default: .zero] += totals }
+                    byDayByModel[day] = existing
+                }
+                sessionCount += 1
+            }
+        }
+
         // Build per-provider windows. byProvider dict slot lands here per
         // 2026-05-19 Gemini-provider refactor; the Gemini parsing pass is
         // wired through `geminiDayByRepo` below once `GeminiUsageParser`
@@ -451,6 +497,9 @@ public actor UsageHistoryLoader {
         }
         if let opencodeDayByRepo, !opencodeDayByRepo.isEmpty {
             byProvider[.opencode] = buildProviderTotals(from: opencodeDayByRepo, now: now)
+        }
+        if let grokDayByRepo, !grokDayByRepo.isEmpty {
+            byProvider[.grok] = buildProviderTotals(from: grokDayByRepo, now: now)
         }
 
         sequenceCounter += 1

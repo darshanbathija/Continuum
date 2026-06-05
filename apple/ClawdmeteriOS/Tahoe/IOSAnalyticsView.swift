@@ -85,6 +85,8 @@ public struct IOSAnalyticsView: View {
                     let claudeUSD = providerCost(snapshot, .claude, window)
                     let codexUSD = providerCost(snapshot, .codex, window)
                     let geminiUSD = providerCost(snapshot, .gemini, window)
+                    let opencodeUSD = providerCost(snapshot, .opencode, window)
+                    let grokUSD = providerCost(snapshot, .grok, window)
 
                     // Total card
                     TahoeGlass(radius: 22, tone: .raised) {
@@ -112,6 +114,8 @@ public struct IOSAnalyticsView: View {
                                 providerStat(.claude, formatUSD(claudeUSD))
                                 providerStat(.codex,  formatUSD(codexUSD))
                                 providerStat(.gemini, formatUSD(geminiUSD))
+                                providerStat(.opencode, formatUSD(opencodeUSD))
+                                providerStat(.grok, formatUSD(grokUSD))
                             }
                             .padding(.top, 16)
                         }
@@ -156,6 +160,9 @@ public struct IOSAnalyticsView: View {
                                                     Rectangle().fill(grad(.claude)).frame(width: geo.size.width * width * (r.total == 0 ? 0 : (r.claude / r.total)))
                                                     Rectangle().fill(grad(.codex)).frame(width: geo.size.width * width * (r.total == 0 ? 0 : (r.codex / r.total)))
                                                     Rectangle().fill(grad(.gemini)).frame(width: geo.size.width * width * (r.total == 0 ? 0 : (r.gemini / r.total)))
+                                                    Rectangle().fill(grad(.opencode)).frame(width: geo.size.width * width * (r.total == 0 ? 0 : (r.opencode / r.total)))
+                                                    Rectangle().fill(grad(.cursor)).frame(width: geo.size.width * width * (r.total == 0 ? 0 : (r.cursor / r.total)))
+                                                    Rectangle().fill(grad(.grok)).frame(width: geo.size.width * width * (r.total == 0 ? 0 : (r.grok / r.total)))
                                                     Spacer()
                                                 }
                                             }
@@ -232,7 +239,9 @@ public struct IOSAnalyticsView: View {
         providerCost(s, .claude, window)
             + providerCost(s, .codex, window)
             + providerCost(s, .gemini, window)
+            + providerCost(s, .opencode, window)
             + providerCost(s, .cursor, window)
+            + providerCost(s, .grok, window)
     }
 
     private func mapProvider(_ p: TahoeProvider) -> UsageRecord.Provider {
@@ -242,6 +251,7 @@ public struct IOSAnalyticsView: View {
         case .gemini: return .gemini
         case .opencode: return .opencode  // PR #31
         case .cursor: return .cursor
+        case .grok: return .grok
         }
     }
 
@@ -250,38 +260,41 @@ public struct IOSAnalyticsView: View {
         let claude: Double
         let codex: Double
         let gemini: Double
-        var total: Double { claude + codex + gemini }
+        let opencode: Double
+        let cursor: Double
+        let grok: Double
+        var total: Double { claude + codex + gemini + opencode + cursor + grok }
     }
 
     private func mergedByRepo(_ s: UsageHistorySnapshot, window: UsageHistorySnapshot.Window) -> [MergedRepoRow] {
-        var bag: [String: (c: Double, x: Double, g: Double)] = [:]
-        for prov in [UsageRecord.Provider.claude, .codex, .gemini] {
+        var bag: [String: (c: Double, x: Double, g: Double, o: Double, u: Double, k: Double)] = [:]
+        for prov in [UsageRecord.Provider.claude, .codex, .gemini, .opencode, .cursor, .grok] {
             let rows = s.totals(for: prov).window(window).byRepo
             for row in rows {
                 let key = row.repo  // RepoKey is a typealias for String
                 let cost = doubleFrom(row.totals.costUSD)
-                var current = bag[key] ?? (0, 0, 0)
+                var current = bag[key] ?? (0, 0, 0, 0, 0, 0)
                 switch prov {
                 case .claude: current.c += cost
                 case .codex:  current.x += cost
                 case .gemini: current.g += cost
-                case .opencode:
-                    // PR #29: MergedRepoRow is a 3-column structure for
-                    // claude/codex/gemini. Surfacing OpenCode in this
-                    // chart needs the row struct extended to 4 columns
-                    // + the chart legend updated — queued for the
-                    // OpenCode analytics polish PR. For now, the outer
-                    // iteration only walks 3 providers, so this case
-                    // is unreachable; kept for switch exhaustiveness.
-                    break
-                case .cursor:
-                    break
+                case .opencode: current.o += cost
+                case .cursor: current.u += cost
+                case .grok: current.k += cost
                 }
                 bag[key] = current
             }
         }
         return bag.map { (key, v) in
-            MergedRepoRow(label: displayName(forRepo: key), claude: v.c, codex: v.x, gemini: v.g)
+            MergedRepoRow(
+                label: displayName(forRepo: key),
+                claude: v.c,
+                codex: v.x,
+                gemini: v.g,
+                opencode: v.o,
+                cursor: v.u,
+                grok: v.k
+            )
         }
         .filter { $0.total > 0 }
         .sorted { $0.total > $1.total }
@@ -344,7 +357,16 @@ private struct MiniSpendChart: View {
     var byProvider: [UsageRecord.Provider: ProviderTotals]
     var window: UsageHistorySnapshot.Window
 
-    private struct DayBar { let date: Date; let c: Double; let x: Double; let g: Double; var total: Double { c + x + g } }
+    private struct DayBar {
+        let date: Date
+        let c: Double
+        let x: Double
+        let g: Double
+        let o: Double
+        let u: Double
+        let k: Double
+        var total: Double { c + x + g + o + u + k }
+    }
 
     private var bars: [DayBar] {
         let now = Calendar.current.startOfDay(for: Date())
@@ -361,7 +383,10 @@ private struct MiniSpendChart: View {
                 date: date,
                 c: doubleFrom(byProvider[.claude]?.byDay[date]?.costUSD ?? 0),
                 x: doubleFrom(byProvider[.codex]?.byDay[date]?.costUSD ?? 0),
-                g: doubleFrom(byProvider[.gemini]?.byDay[date]?.costUSD ?? 0)
+                g: doubleFrom(byProvider[.gemini]?.byDay[date]?.costUSD ?? 0),
+                o: doubleFrom(byProvider[.opencode]?.byDay[date]?.costUSD ?? 0),
+                u: doubleFrom(byProvider[.cursor]?.byDay[date]?.costUSD ?? 0),
+                k: doubleFrom(byProvider[.grok]?.byDay[date]?.costUSD ?? 0)
             )
         }
     }
@@ -377,6 +402,9 @@ private struct MiniSpendChart: View {
                         Rectangle().fill(t.hair2).frame(height: 2)
                     } else {
                         VStack(spacing: 0) {
+                            Rectangle().fill(grad(.grok)).frame(height: max(0, d.k / d.total * h))
+                            Rectangle().fill(grad(.cursor)).frame(height: max(0, d.u / d.total * h))
+                            Rectangle().fill(grad(.opencode)).frame(height: max(0, d.o / d.total * h))
                             Rectangle().fill(grad(.gemini)).frame(height: max(0, d.g / d.total * h))
                             Rectangle().fill(grad(.codex)).frame(height: max(0, d.x / d.total * h))
                             Rectangle().fill(grad(.claude)).frame(height: max(0, d.c / d.total * h))
@@ -465,7 +493,7 @@ private struct IOSTokensByModelSection: View {
         case "Claude": return TahoeProvider.claude.glow.color
         case "OpenAI": return TahoeProvider.codex.glow.color
         case "Gemini": return TahoeProvider.gemini.glow.color
-        case "Grok":   return Color(red: 0.42, green: 0.82, blue: 0.62) // Grok has no Tahoe lane
+        case "Grok":   return TahoeProvider.grok.glow.color
         default:        return t.fg3                                      // "Other"
         }
     }

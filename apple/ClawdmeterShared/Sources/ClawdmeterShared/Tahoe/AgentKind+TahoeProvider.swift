@@ -19,17 +19,15 @@ public extension AgentKind {
         case .gemini:   return .gemini
         case .opencode: return .opencode
         case .cursor:   return .cursor
-        case .grok:     return .cursor // TODO: add TahoeProvider.grok identity; placeholder lane for now
+        case .grok:     return .grok
         case .unknown:  return .claude
         }
     }
 
     /// Branded display name for chat column headers + sidebar rows. Uses the
-    /// Tahoe branding (e.g. Gemini → "Antigravity") but corrects grok, which
-    /// shares the cursor TahoeProvider lane (placeholder) and would otherwise
-    /// render as "Cursor".
+    /// Tahoe branding (e.g. Gemini → "Antigravity").
     var brandedChatName: String {
-        self == .grok ? "Grok" : tahoeProvider.displayName
+        tahoeProvider.displayName
     }
 }
 #endif

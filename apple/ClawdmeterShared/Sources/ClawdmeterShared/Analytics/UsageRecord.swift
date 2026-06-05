@@ -31,6 +31,8 @@ public struct UsageRecord: Sendable, Equatable {
         case opencode
         /// Cursor usage attributed to Cursor Agent CLI / SDK runs.
         case cursor
+        /// xAI Grok / Grok Build usage captured by Continuum's harness.
+        case grok
     }
 
     public let provider: Provider
