@@ -53,6 +53,10 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
     /// raw model name. Powers the windowed (today/7d/30d/90d) tokens-by-model
     /// section; `tokensByModel` stays the all-time aggregate.
     public let byDayByModel: [Date: [String: TokenTotals]]
+    /// Latest Grok CLI context-window usage (`contextTokensUsed` /
+    /// `contextWindowTokens`). This is a real percentage limit surfaced by the
+    /// Grok CLI, distinct from account/monthly quota.
+    public let grokContextLimit: GrokCLIUsageParser.ContextLimit?
 
     public init(
         byProvider: [UsageRecord.Provider: ProviderTotals],
@@ -61,7 +65,8 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         sessionCount: Int,
         unpricedModelTokens: [String: TokenTotals],
         tokensByModel: [String: TokenTotals] = [:],
-        byDayByModel: [Date: [String: TokenTotals]] = [:]
+        byDayByModel: [Date: [String: TokenTotals]] = [:],
+        grokContextLimit: GrokCLIUsageParser.ContextLimit? = nil
     ) {
         self.byProvider = byProvider
         self.computedAt = computedAt
@@ -70,6 +75,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         self.unpricedModelTokens = unpricedModelTokens
         self.tokensByModel = tokensByModel
         self.byDayByModel = byDayByModel
+        self.grokContextLimit = grokContextLimit
     }
 
     /// Windowed per-model token totals for the tokens-by-model section (token
@@ -146,6 +152,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         case unpricedModelTokens
         case tokensByModel
         case byDayByModel
+        case grokContextLimit
         // Legacy v8 fields, retained for backward-compat decode.
         case claude
         case codex
@@ -159,6 +166,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         self.unpricedModelTokens = (try c.decodeIfPresent([String: TokenTotals].self, forKey: .unpricedModelTokens)) ?? [:]
         self.tokensByModel = (try c.decodeIfPresent([String: TokenTotals].self, forKey: .tokensByModel)) ?? [:]
         self.byDayByModel = (try c.decodeIfPresent([Date: [String: TokenTotals]].self, forKey: .byDayByModel)) ?? [:]
+        self.grokContextLimit = try c.decodeIfPresent(GrokCLIUsageParser.ContextLimit.self, forKey: .grokContextLimit)
 
         // Prefer the new byProvider shape. Unknown provider raw values
         // (future-client snapshots) are dropped silently.
@@ -191,6 +199,7 @@ public struct UsageHistorySnapshot: Codable, Sendable, Equatable {
         try c.encode(unpricedModelTokens, forKey: .unpricedModelTokens)
         try c.encode(tokensByModel, forKey: .tokensByModel)
         try c.encode(byDayByModel, forKey: .byDayByModel)
+        try c.encodeIfPresent(grokContextLimit, forKey: .grokContextLimit)
         // Write the new byProvider dict (canonical) AND the legacy
         // claude/codex fields (for one release of overlap, so a v5 reader
         // can still pick up totals from a v6 writer's snapshot).

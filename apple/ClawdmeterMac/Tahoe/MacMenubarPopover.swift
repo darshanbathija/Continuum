@@ -419,8 +419,13 @@ private struct GrokHistorySummary: View {
         snapshot?.grok ?? .empty
     }
 
+    private var contextLimit: GrokCLIUsageParser.ContextLimit? {
+        snapshot?.grokContextLimit
+    }
+
     private var hasUsage: Bool {
-        providerTotals.today.totals.totalTokens > 0
+        contextLimit != nil
+            || providerTotals.today.totals.totalTokens > 0
             || providerTotals.past7d.totals.totalTokens > 0
             || providerTotals.today.totals.requestCount > 0
             || providerTotals.past7d.totals.requestCount > 0
@@ -429,17 +434,25 @@ private struct GrokHistorySummary: View {
     var body: some View {
         if hasUsage {
             VStack(spacing: 12) {
+                if let contextLimit {
+                    TahoeMenuBarMeter(
+                        label: "Context window",
+                        percent: contextLimit.percent,
+                        hint: "\(Self.formatTokens(contextLimit.usedTokens)) / \(Self.formatTokens(contextLimit.limitTokens)) · \(Self.shortModel(contextLimit.model))",
+                        provider: .grok
+                    )
+                }
                 tokenTile(label: "Today", totals: providerTotals.today.totals)
-                tokenTile(label: "Past 7d", totals: providerTotals.past7d.totals)
             }
+            .padding(.horizontal, 4)
         } else {
             HStack(spacing: 12) {
                 TahoeProviderGlyph(provider: .grok, size: 28)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("No Grok usage captured")
+                    Text("No Grok limit captured")
                         .font(TahoeFont.body(13, weight: .bold))
                         .foregroundStyle(t.fg)
-                    Text("grok-build")
+                    Text("grok-build · grok-composer-2.5-fast")
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg3)
                 }
@@ -491,6 +504,14 @@ private struct GrokHistorySummary: View {
         if n >= 1_000_000 { return String(format: "%.1fM tok", Double(n) / 1_000_000) }
         if n >= 1_000 { return String(format: "%.1fK tok", Double(n) / 1_000) }
         return "\(n) tok"
+    }
+
+    private static func shortModel(_ model: String) -> String {
+        switch model {
+        case "grok-composer-2.5-fast": return "Composer 2.5"
+        case "grok-build": return "Grok Build"
+        default: return model
+        }
     }
 }
 

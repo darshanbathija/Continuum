@@ -38,6 +38,10 @@ public actor UsageHistoryLoader {
     /// Continuum-owned Grok harness ledger. Optional so tests can inject a
     /// fixture and machines without Grok usage skip this pass cleanly.
     private let grokLedgerURL: URL?
+    /// Grok CLI session root (`~/.grok/sessions`). This is distinct from the
+    /// Continuum-owned ledger: it imports the CLI's own context-token metadata
+    /// so ordinary Grok sessions show up in analytics.
+    private let grokSessionsDir: URL?
     private let cursorLedgerURL: URL?
     /// Cursor IDE hook-log root (`~/Library/Application Support/Cursor/logs`).
     /// Optional so unit tests with synthetic history dirs do not accidentally
@@ -56,6 +60,7 @@ public actor UsageHistoryLoader {
         agyDir: URL? = nil,
         opencodeDBURL: URL? = nil,
         grokLedgerURL: URL? = nil,
+        grokSessionsDir: URL? = nil,
         cursorLedgerURL: URL? = nil,
         cursorHooksLogsDir: URL? = nil,
         cacheURL: URL? = nil,
@@ -93,6 +98,7 @@ public actor UsageHistoryLoader {
         self.grokLedgerURL = grokLedgerURL ?? GrokUsageLedger.defaultURL()
         self.cursorLedgerURL = cursorLedgerURL ?? CursorACPUsageLedger.defaultURL()
         let usingDefaultHistoryDirs = claudeDir == nil && codexDir == nil && geminiDir == nil
+        self.grokSessionsDir = grokSessionsDir ?? (usingDefaultHistoryDirs ? GrokCLIUsageParser.defaultSessionsDir(home: home) : nil)
         self.cursorHooksLogsDir = cursorHooksLogsDir ?? (usingDefaultHistoryDirs ? CursorHooksUsageParser.defaultLogsDir() : nil)
         self.cacheURL = cacheURL ?? Self.defaultCacheURL()
         self.pricing = pricing
@@ -187,6 +193,7 @@ public actor UsageHistoryLoader {
         if let grokLedgerURL {
             observe(Self.fileMtime(grokLedgerURL))
         }
+        if let grokSessionsDir { observe(Self.mostRecentMtime(inDirectory: grokSessionsDir)) }
         observe(CursorACPUsageLedger.mostRecentMtime(url: cursorLedgerURL))
         if let cursorHooksLogsDir {
             observe(Self.mostRecentMtime(inDirectory: cursorHooksLogsDir))
@@ -222,6 +229,14 @@ public actor UsageHistoryLoader {
             }
         }
         return maxMtime
+    }
+
+    private static func grokCLISessionKey(_ record: UsageRecord) -> String? {
+        guard let key = record.dedupKey,
+              key.hasPrefix("grok-cli:")
+        else { return nil }
+        guard let range = key.range(of: ":signals") else { return key }
+        return String(key[..<range.upperBound])
     }
 
     // MARK: - Aggregation
@@ -492,40 +507,56 @@ public actor UsageHistoryLoader {
         }
         #endif
 
-        // Grok harness usage is stored in a Continuum-owned JSONL ledger under
-        // Application Support. It contributes to historical analytics only; it
-        // does not synthesize a live quota source.
+        // Grok usage comes from two historical sources:
+        //   1. Continuum's own harness ledger for precise per-turn ACP usage.
+        //   2. Grok CLI `signals.json` files for ordinary `grok` sessions. Those
+        //      carry the same context-token limit numbers the TUI displays.
+        // Neither source synthesizes a live account quota endpoint.
         var grokDayByRepo: [Date: [RepoKey: TokenTotals]]? = nil
+        var grokRecords: [UsageRecord] = []
+        var grokLedgerRecordCount = 0
+        var grokContextLimit: GrokCLIUsageParser.ContextLimit?
         if let grokLedgerURL {
-            let records = GrokUsageLedger.records(from: grokLedgerURL)
-            if !records.isEmpty {
-                var bucket: [Date: [RepoKey: TokenTotals]] = [:]
-                var localDedup = Set<String>()
-                var localUnpriced: [String: TokenTotals] = [:]
-                var localByModel: [String: TokenTotals] = [:]
-                var localByDayByModel: [Date: [String: TokenTotals]] = [:]
-                for record in records {
-                    Self.accumulate(
-                        record: record,
-                        into: &bucket,
-                        dedup: &localDedup,
-                        unpriced: &localUnpriced,
-                        byModel: &localByModel,
-                        byDayByModel: &localByDayByModel
-                    )
-                }
-                grokDayByRepo = bucket
-                for (model, totals) in localUnpriced {
-                    unpricedModelTokens[model, default: .zero] += totals
-                }
-                for (model, totals) in localByModel {
-                    tokensByModel[model, default: .zero] += totals
-                }
-                for (day, modelMap) in localByDayByModel {
-                    var existing = byDayByModel[day, default: [:]]
-                    for (model, totals) in modelMap { existing[model, default: .zero] += totals }
-                    byDayByModel[day] = existing
-                }
+            let ledgerRecords = GrokUsageLedger.records(from: grokLedgerURL)
+            grokLedgerRecordCount = ledgerRecords.count
+            grokRecords.append(contentsOf: ledgerRecords)
+        }
+        if let grokSessionsDir {
+            let cliRecords = GrokCLIUsageParser.parseSessions(root: grokSessionsDir)
+            grokRecords.append(contentsOf: cliRecords)
+            grokContextLimit = GrokCLIUsageParser.latestContextLimit(root: grokSessionsDir)
+            let cliSessionKeys = Set(cliRecords.compactMap(Self.grokCLISessionKey))
+            sessionCount += cliSessionKeys.isEmpty ? cliRecords.count : cliSessionKeys.count
+        }
+        if !grokRecords.isEmpty {
+            var bucket: [Date: [RepoKey: TokenTotals]] = [:]
+            var localDedup = Set<String>()
+            var localUnpriced: [String: TokenTotals] = [:]
+            var localByModel: [String: TokenTotals] = [:]
+            var localByDayByModel: [Date: [String: TokenTotals]] = [:]
+            for record in grokRecords {
+                Self.accumulate(
+                    record: record,
+                    into: &bucket,
+                    dedup: &localDedup,
+                    unpriced: &localUnpriced,
+                    byModel: &localByModel,
+                    byDayByModel: &localByDayByModel
+                )
+            }
+            grokDayByRepo = bucket
+            for (model, totals) in localUnpriced {
+                unpricedModelTokens[model, default: .zero] += totals
+            }
+            for (model, totals) in localByModel {
+                tokensByModel[model, default: .zero] += totals
+            }
+            for (day, modelMap) in localByDayByModel {
+                var existing = byDayByModel[day, default: [:]]
+                for (model, totals) in modelMap { existing[model, default: .zero] += totals }
+                byDayByModel[day] = existing
+            }
+            if grokLedgerRecordCount > 0 {
                 sessionCount += 1
             }
         }
@@ -599,7 +630,8 @@ public actor UsageHistoryLoader {
             sessionCount: sessionCount,
             unpricedModelTokens: unpricedModelTokens,
             tokensByModel: tokensByModel,
-            byDayByModel: byDayByModel
+            byDayByModel: byDayByModel,
+            grokContextLimit: grokContextLimit
         )
 
         let elapsed = Date().timeIntervalSince(startedAt)

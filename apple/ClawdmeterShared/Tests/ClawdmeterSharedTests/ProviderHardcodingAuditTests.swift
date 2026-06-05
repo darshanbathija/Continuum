@@ -163,8 +163,33 @@ final class ProviderHardcodingAuditTests: XCTestCase {
 
                 Hits:
                 \(summary)
-                """)
+            """)
         }
+    }
+
+    func test_tahoeUsageViewDoesNotRenderDuplicateGrokBreakdowns() throws {
+        let repoRoot = repoRootURL()
+        let usageViewURL = repoRoot.appendingPathComponent("apple/ClawdmeterMac/Tahoe/MacUsageView.swift")
+        guard FileManager.default.fileExists(atPath: usageViewURL.path) else {
+            throw XCTSkip("MacUsageView.swift not present at \(usageViewURL.path)")
+        }
+
+        let content = try String(contentsOf: usageViewURL, encoding: .utf8)
+        XCTAssertEqual(
+            occurrenceCount(of: "row(.grok, \"Grok\", point.k)", in: content),
+            1,
+            "HoverBreakdown must render Grok once."
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "Rectangle().fill(grad(.grok)).frame(height: d.k / total * h)", in: content),
+            1,
+            "SpendChart must stack Grok once."
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "Rectangle().fill(grad(.grok)).frame(width: geo.size.width * width * (r.k / total))", in: content),
+            1,
+            "RepoList must stack Grok once."
+        )
     }
 
     /// Helper — walk up from the test bundle URL to find the repo root
@@ -178,6 +203,10 @@ final class ProviderHardcodingAuditTests: XCTestCase {
             }
         }
         return URL(fileURLWithPath: NSHomeDirectory()) // fallback (test will XCTSkip)
+    }
+
+    private func occurrenceCount(of needle: String, in haystack: String) -> Int {
+        haystack.components(separatedBy: needle).count - 1
     }
 }
 #endif

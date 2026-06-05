@@ -731,8 +731,8 @@ private struct SpendChart: View {
             Spacer()
             VStack(spacing: 0) {
                 if total > 0 {
-                    Rectangle().fill(grad(.grok)).frame(height: d.k / total * h)
                     Rectangle().fill(grad(.cursor)).frame(height: d.r / total * h)
+                    Rectangle().fill(grad(.grok)).frame(height: d.k / total * h)
                     Rectangle().fill(grad(.opencode)).frame(height: d.o / total * h)
                     Rectangle().fill(grad(.gemini)).frame(height: d.g / total * h)
                     Rectangle().fill(grad(.codex)).frame(height: d.x / total * h)
@@ -926,28 +926,57 @@ private struct GrokUsageRow: View {
         usageHistory.snapshot?.grok ?? .empty
     }
 
+    private var contextLimit: GrokCLIUsageParser.ContextLimit? {
+        usageHistory.snapshot?.grokContextLimit
+    }
+
     var body: some View {
         let today = providerTotals.today.totals
         let week = providerTotals.past7d.totals
         TahoeGlass(radius: 8, tone: .panel) {
-            HStack(spacing: 18) {
-                TahoeProviderGlyph(provider: .grok, size: 36)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Grok")
-                        .font(TahoeFont.body(15, weight: .bold))
-                        .foregroundStyle(t.fg)
-                    Text("Harness-captured token history")
-                        .font(TahoeFont.body(11.5))
-                        .foregroundStyle(t.fg3)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 18) {
+                    TahoeProviderGlyph(provider: .grok, size: 36)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Grok")
+                            .font(TahoeFont.body(15, weight: .bold))
+                            .foregroundStyle(t.fg)
+                        Text("Grok Build + Composer 2.5 context limit")
+                            .font(TahoeFont.body(11.5))
+                            .foregroundStyle(t.fg3)
+                    }
+                    Spacer()
+                    if let contextLimit {
+                        metric(
+                            label: "Context",
+                            value: "\(contextLimit.roundedPercent)%",
+                            subvalue: "\(Self.formatTokens(contextLimit.usedTokens)) / \(Self.formatTokens(contextLimit.limitTokens))"
+                        )
+                    } else if today.totalTokens == 0 && week.totalTokens == 0 && today.requestCount == 0 && week.requestCount == 0 {
+                        Text("No captured limit")
+                            .font(TahoeFont.body(12.5, weight: .semibold))
+                            .foregroundStyle(t.fg3)
+                    }
+                    if today.totalTokens > 0 || today.requestCount > 0 {
+                        metric(label: "Today", value: Self.formatTokens(today.totalTokens), subvalue: Self.formatRequests(today.requestCount))
+                    }
+                    if week.totalTokens > 0 || week.requestCount > 0 {
+                        metric(label: "Past 7d", value: Self.formatTokens(week.totalTokens), subvalue: Self.formatRequests(week.requestCount))
+                    }
                 }
-                Spacer()
-                if today.totalTokens == 0 && week.totalTokens == 0 && today.requestCount == 0 && week.requestCount == 0 {
-                    Text("No captured usage")
-                        .font(TahoeFont.body(12.5, weight: .semibold))
-                        .foregroundStyle(t.fg3)
-                } else {
-                    metric(label: "Today", value: Self.formatTokens(today.totalTokens), subvalue: Self.formatRequests(today.requestCount))
-                    metric(label: "Past 7d", value: Self.formatTokens(week.totalTokens), subvalue: Self.formatRequests(week.requestCount))
+                if let contextLimit {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(Self.shortModel(contextLimit.model))
+                                .font(TahoeFont.mono(11.5))
+                                .foregroundStyle(t.fg3)
+                            Spacer()
+                            Text("context window")
+                                .font(TahoeFont.body(10.5, weight: .semibold))
+                                .foregroundStyle(t.fg4)
+                        }
+                        TahoePillBar(percent: contextLimit.percent, provider: .grok, height: 6)
+                    }
                 }
             }
             .padding(.horizontal, 18).padding(.vertical, 16)
@@ -981,6 +1010,14 @@ private struct GrokUsageRow: View {
 
     private static func formatRequests(_ n: Int) -> String {
         "\(n) request\(n == 1 ? "" : "s")"
+    }
+
+    private static func shortModel(_ model: String) -> String {
+        switch model {
+        case "grok-composer-2.5-fast": return "Composer 2.5"
+        case "grok-build": return "Grok Build"
+        default: return model
+        }
     }
 }
 
