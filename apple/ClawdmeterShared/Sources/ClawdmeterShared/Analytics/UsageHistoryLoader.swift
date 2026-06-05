@@ -47,6 +47,14 @@ public actor UsageHistoryLoader {
     /// Optional so unit tests with synthetic history dirs do not accidentally
     /// ingest the developer machine's live Cursor logs.
     private let cursorHooksLogsDir: URL?
+    /// Cursor Agent transcript root (`~/.cursor/projects`). Cursor Agent
+    /// writes parent and subagent JSONL transcripts here even when hook logs
+    /// are absent.
+    private let cursorAgentTranscriptRoot: URL?
+    /// Cursor global state DB (`.../User/globalStorage/state.vscdb`). This
+    /// contains `agentKv:blob:*` context rows that are richer than transcript
+    /// JSONL and are needed for realistic local Cursor token estimates.
+    private let cursorAgentKVDBURL: URL?
     private let cacheURL: URL?
     private let pricing: Pricing
 
@@ -63,6 +71,8 @@ public actor UsageHistoryLoader {
         grokSessionsDir: URL? = nil,
         cursorLedgerURL: URL? = nil,
         cursorHooksLogsDir: URL? = nil,
+        cursorAgentTranscriptRoot: URL? = nil,
+        cursorAgentKVDBURL: URL? = nil,
         cacheURL: URL? = nil,
         pricing: Pricing = .shared
     ) {
@@ -100,6 +110,12 @@ public actor UsageHistoryLoader {
         let usingDefaultHistoryDirs = claudeDir == nil && codexDir == nil && geminiDir == nil
         self.grokSessionsDir = grokSessionsDir ?? (usingDefaultHistoryDirs ? GrokCLIUsageParser.defaultSessionsDir(home: home) : nil)
         self.cursorHooksLogsDir = cursorHooksLogsDir ?? (usingDefaultHistoryDirs ? CursorHooksUsageParser.defaultLogsDir() : nil)
+        self.cursorAgentTranscriptRoot = cursorAgentTranscriptRoot ?? (usingDefaultHistoryDirs ? CursorAgentTranscriptParser.defaultProjectsDir() : nil)
+        #if os(macOS)
+        self.cursorAgentKVDBURL = cursorAgentKVDBURL ?? (usingDefaultHistoryDirs ? CursorAgentKVUsageParser.defaultStateDatabaseURL() : nil)
+        #else
+        self.cursorAgentKVDBURL = cursorAgentKVDBURL
+        #endif
         self.cacheURL = cacheURL ?? Self.defaultCacheURL()
         self.pricing = pricing
     }
@@ -198,6 +214,12 @@ public actor UsageHistoryLoader {
         if let cursorHooksLogsDir {
             observe(Self.mostRecentMtime(inDirectory: cursorHooksLogsDir))
         }
+        if let cursorAgentTranscriptRoot {
+            observe(Self.mostRecentMtime(inDirectory: cursorAgentTranscriptRoot))
+        }
+        if let cursorAgentKVDBURL {
+            observe(Self.sqliteMtime(cursorAgentKVDBURL))
+        }
         return maxMtime
     }
 
@@ -206,6 +228,12 @@ public actor UsageHistoryLoader {
             return nil
         }
         return attrs[.modificationDate] as? Date
+    }
+
+    private static func sqliteMtime(_ url: URL) -> Date? {
+        [url.path, url.path + "-wal", url.path + "-shm"]
+            .compactMap { fileMtime(URL(fileURLWithPath: $0)) }
+            .max()
     }
 
     private static func mostRecentMtime(inDirectory dir: URL) -> Date? {
@@ -267,6 +295,21 @@ public actor UsageHistoryLoader {
             return enumerate(dir: cursorHooksLogsDir, suffix: ".log")
                 .filter { $0.url.lastPathComponent.hasPrefix("cursor.hooks.workspaceId-") }
         }()
+        let cursorTranscriptFiles: [FileMeta] = {
+            guard let cursorAgentTranscriptRoot else { return [] }
+            return Self.dedupedCursorTranscriptFiles(
+                enumerate(dir: cursorAgentTranscriptRoot, suffix: ".jsonl")
+                    .filter { CursorAgentTranscriptParser.isTranscriptFile($0.url) }
+            )
+        }()
+        let cursorAgentKVFiles: [FileMeta] = {
+            guard let cursorAgentKVDBURL,
+                  FileManager.default.fileExists(atPath: cursorAgentKVDBURL.path),
+                  let meta = Self.sqliteFileMeta(cursorAgentKVDBURL) else {
+                return []
+            }
+            return [meta]
+        }()
         let antigravityDataDir = geminiDir.deletingLastPathComponent()
         let brainIndex = BrainSummaryIndexer.read(
             at: antigravityDataDir.appendingPathComponent("agyhub_summaries_proto.pb")
@@ -315,6 +358,8 @@ public actor UsageHistoryLoader {
         let codexActive = codexFiles.max(by: { $0.mtime < $1.mtime })?.url
         let geminiActive = geminiFiles.max(by: { $0.mtime < $1.mtime })?.url
         let cursorHookActive = cursorHookFiles.max(by: { $0.mtime < $1.mtime })?.url
+        let cursorTranscriptActive = cursorTranscriptFiles.max(by: { $0.mtime < $1.mtime })?.url
+        let cursorAgentKVActive = cursorAgentKVFiles.max(by: { $0.mtime < $1.mtime })?.url
 
         let claudeResults = await parseConcurrently(
             files: claudeFiles,
@@ -340,6 +385,24 @@ public actor UsageHistoryLoader {
             activeURL: cursorHookActive,
             parser: { url in
                 try Self.parseCursorHooksFile(at: url)
+            }
+        )
+
+        let cursorTranscriptResults = await parseConcurrently(
+            files: cursorTranscriptFiles,
+            cache: cache,
+            activeURL: cursorTranscriptActive,
+            parser: { url in
+                try Self.parseCursorAgentTranscriptFile(at: url)
+            }
+        )
+
+        let cursorAgentKVResults = await parseConcurrently(
+            files: cursorAgentKVFiles,
+            cache: cache,
+            activeURL: cursorAgentKVActive,
+            parser: { url in
+                try Self.parseCursorAgentKVDatabase(at: url)
             }
         )
 
@@ -425,9 +488,10 @@ public actor UsageHistoryLoader {
             sessionCount += 1
             nextCache.files[result.path] = result.cacheEntry
         }
-        if !cursorHookResults.isEmpty {
+        let combinedCursorFileResults = cursorHookResults + cursorTranscriptResults + cursorAgentKVResults
+        if !combinedCursorFileResults.isEmpty {
             var bucket = cursorDayByRepo ?? [:]
-            for result in cursorHookResults {
+            for result in combinedCursorFileResults {
                 mergePerFileResult(
                     result,
                     into: &bucket,
@@ -658,6 +722,25 @@ public actor UsageHistoryLoader {
         let cacheEntry: AnalyticsCache.FileEntry
     }
 
+    private static func sqliteFileMeta(_ url: URL) -> FileMeta? {
+        let paths = [url.path, url.path + "-wal", url.path + "-shm"]
+        var mtimes: [Date] = []
+        var totalSize = 0
+        for path in paths {
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+                continue
+            }
+            if let date = attrs[.modificationDate] as? Date {
+                mtimes.append(date)
+            }
+            if let size = attrs[.size] as? NSNumber {
+                totalSize += size.intValue
+            }
+        }
+        guard let mtime = mtimes.max() else { return nil }
+        return FileMeta(url: url, mtime: mtime, size: totalSize)
+    }
+
     /// Merges the desktop IDE's `.pb` (legacy) and `.db` (SQLite WAL,
     /// post-migration) conversation files into a single list, deduping
     /// by UUID. When a UUID appears in both formats — which can happen
@@ -678,6 +761,21 @@ public actor UsageHistoryLoader {
             }
         }
         return Array(byUUID.values)
+    }
+
+    private static func dedupedCursorTranscriptFiles(_ files: [FileMeta]) -> [FileMeta] {
+        var byTranscriptID: [String: FileMeta] = [:]
+        for file in files {
+            let id = file.url.deletingPathExtension().lastPathComponent
+            if let existing = byTranscriptID[id] {
+                if file.mtime > existing.mtime {
+                    byTranscriptID[id] = file
+                }
+            } else {
+                byTranscriptID[id] = file
+            }
+        }
+        return Array(byTranscriptID.values)
     }
 
     private func enumerate(dir: URL, suffix: String) -> [FileMeta] {
@@ -840,6 +938,91 @@ public actor UsageHistoryLoader {
         let entry = AnalyticsCache.FileEntry(
             mtime: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
             size: values.fileSize ?? 0,
+            byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
+            dedupKeys: Array(dedupKeys),
+            unpricedModelTokens: unpriced,
+            byModelTokens: byModel,
+            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
+        )
+
+        return PerFileResult(
+            path: url.path,
+            byDayByRepo: byDayByRepo,
+            byDayByModel: byDayByModel,
+            dedupKeys: dedupKeys,
+            unpricedModelTokens: unpriced,
+            byModelTokens: byModel,
+            cacheEntry: entry
+        )
+    }
+
+    private nonisolated static func parseCursorAgentTranscriptFile(at url: URL) throws -> PerFileResult {
+        let records = try CursorAgentTranscriptParser.parse(file: url)
+        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
+        var dedupKeys = Set<String>()
+        var unpriced: [String: TokenTotals] = [:]
+        var byModel: [String: TokenTotals] = [:]
+        var byDayByModel: [Date: [String: TokenTotals]] = [:]
+        for record in records {
+            accumulate(
+                record: record,
+                into: &byDayByRepo,
+                dedup: &dedupKeys,
+                unpriced: &unpriced,
+                byModel: &byModel,
+                byDayByModel: &byDayByModel
+            )
+        }
+
+        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let entry = AnalyticsCache.FileEntry(
+            mtime: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
+            size: values.fileSize ?? 0,
+            byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
+            dedupKeys: Array(dedupKeys),
+            unpricedModelTokens: unpriced,
+            byModelTokens: byModel,
+            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
+        )
+
+        return PerFileResult(
+            path: url.path,
+            byDayByRepo: byDayByRepo,
+            byDayByModel: byDayByModel,
+            dedupKeys: dedupKeys,
+            unpricedModelTokens: unpriced,
+            byModelTokens: byModel,
+            cacheEntry: entry
+        )
+    }
+
+    private nonisolated static func parseCursorAgentKVDatabase(at url: URL) throws -> PerFileResult {
+        #if os(macOS)
+        let records = CursorAgentKVUsageParser.parse(databaseURL: url)
+        #else
+        let records: [UsageRecord] = []
+        #endif
+        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
+        var dedupKeys = Set<String>()
+        var unpriced: [String: TokenTotals] = [:]
+        var byModel: [String: TokenTotals] = [:]
+        var byDayByModel: [Date: [String: TokenTotals]] = [:]
+        for record in records {
+            accumulate(
+                record: record,
+                into: &byDayByRepo,
+                dedup: &dedupKeys,
+                unpriced: &unpriced,
+                byModel: &byModel,
+                byDayByModel: &byDayByModel
+            )
+        }
+
+        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let sqliteMeta = sqliteFileMeta(url)
+        let entry = AnalyticsCache.FileEntry(
+            mtime: (sqliteMeta?.mtime ?? values.contentModificationDate ?? Date(timeIntervalSince1970: 0)).timeIntervalSince1970,
+            size: sqliteMeta?.size ?? values.fileSize ?? 0,
             byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
             dedupKeys: Array(dedupKeys),
             unpricedModelTokens: unpriced,

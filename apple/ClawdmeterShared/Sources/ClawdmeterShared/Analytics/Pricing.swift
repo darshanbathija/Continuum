@@ -367,6 +367,11 @@ public final class Pricing: @unchecked Sendable {
             // UI still shows Cursor's native model names.
             return ["moonshotai/kimi-k2.5"]
         default:
+            for suffix in ["-thinking-high", "-thinking-medium", "-thinking-low", "-thinking-max"] {
+                if bareCursorModel.lowercased().hasSuffix(suffix) {
+                    return [String(bareCursorModel.dropLast(suffix.count))]
+                }
+            }
             return []
         }
     }
