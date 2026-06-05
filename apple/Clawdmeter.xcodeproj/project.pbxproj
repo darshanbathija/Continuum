@@ -269,6 +269,7 @@
 		B165EF5AFBBB3BAE43A86815 /* CodeRunProfileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBFE9C8CEE283AE1484C157A /* CodeRunProfileService.swift */; };
 		B49079C1A819C08F8AD06F3B /* TailscaleWhois.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C46A8561985C07E6E31A13 /* TailscaleWhois.swift */; };
 		B54FED090644474BC4C3CBBF /* deep-research-prompt.txt in Resources */ = {isa = PBXBuildFile; fileRef = 26B5538D5376C29DDF7CD413 /* deep-research-prompt.txt */; };
+		B584F755412DA522F9801672 /* ClaudePtyE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA51A0428BF8248DE24EF7DD /* ClaudePtyE2ETests.swift */; };
 		B602C3EE08EDA0DB0656CC63 /* SessionChatStorePendingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9757A0C3F17F56F77A6B3C94 /* SessionChatStorePendingTests.swift */; };
 		B62E7439075E9AC5ACABDADB /* APNSGatewayIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 473D4D86A61CC572CE20AEF1 /* APNSGatewayIntegrationTests.swift */; };
 		B6476D12C0F54133B30C941B /* AgentSpawnerChatArgvTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE1F1B18737CE3024BDD5620 /* AgentSpawnerChatArgvTests.swift */; };
@@ -721,6 +722,7 @@
 		A8EC55494D4D0B26A8B3C366 /* iOSSessionActivityStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSSessionActivityStrip.swift; sourceTree = "<group>"; };
 		A965446683135119981D9C40 /* ControlModeParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlModeParser.swift; sourceTree = "<group>"; };
 		A991CBC5C7F7AC6672A43350 /* APNSPushDeviceTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNSPushDeviceTokenStore.swift; sourceTree = "<group>"; };
+		AA51A0428BF8248DE24EF7DD /* ClaudePtyE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudePtyE2ETests.swift; sourceTree = "<group>"; };
 		AAF271BA1D99E42F2DDF425E /* TahoeHairline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TahoeHairline.swift; sourceTree = "<group>"; };
 		AC3EEF8F473C745C14BBCC6A /* OpencodeSSEAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeSSEAdapterTests.swift; sourceTree = "<group>"; };
 		AC90C2ABAFB600289ACFF55D /* iOSTerminalTabsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSTerminalTabsView.swift; sourceTree = "<group>"; };
@@ -1226,6 +1228,7 @@
 				A1E4A21BAAD10FDDAA381ED9 /* ChatItemRowInvalidationTests.swift */,
 				C4B75F5B0C83A9A8DD22B8D0 /* ChatItemRowSubtitleTests.swift */,
 				89238D6504115C6F85FDA4E7 /* ChatSendPerProviderTests.swift */,
+				AA51A0428BF8248DE24EF7DD /* ClaudePtyE2ETests.swift */,
 				13323AB70617753B08B0D66D /* ClaudePtyHostTests.swift */,
 				2BC6D46113D2E229933540E3 /* CodeTabVisualSnapshotTests.swift */,
 				A5D45DC56F208EECABE85A42 /* DaemonChatStoreRegistryRoutingTests.swift */,
@@ -1922,6 +1925,7 @@
 				F31B5898F1F17A1D74B79A59 /* ChatItemRowSubtitleTests.swift in Sources */,
 				08BE5FDB4A47495B6B5C587B /* ChatSendPerProviderTests.swift in Sources */,
 				9A791C53B086D17E99DAA910 /* ChatV2StoreTests.swift in Sources */,
+				B584F755412DA522F9801672 /* ClaudePtyE2ETests.swift in Sources */,
 				EC62ACDEAF3D8503A279AAAF /* ClaudePtyHostTests.swift in Sources */,
 				257EFEEA37AAC333B7482C9F /* CodeTabVisualSnapshotTests.swift in Sources */,
 				86B9A292813B9712CED436F7 /* DaemonChatStoreRegistryRoutingTests.swift in Sources */,
