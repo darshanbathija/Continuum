@@ -265,3 +265,32 @@ Scope confirmed: **one cycle, all of B0–B5.** Five architecture forks decided 
 **UNRESOLVED:** 0 — every finding decided (AskUserQuestion) or folded as a verified correction/prerequisite.
 
 **VERDICT:** ENG CLEARED for B0–B4 implementation. **B5 cutover is GATED** on three now-explicit prerequisites — (1) long-lived paired credentials w/ rotation [CB-P0a], (2) reconnect-epoch replay fix [CB-P0b], (3) secrets-out-of-JSON migration [CB-P1g] — plus the D6 staging-DO E2E + device drill + staged rollout. Sequencing unchanged: B0 → B1 → B2 → B3+B4 (atomic) → B5.
+
+---
+
+## IMPLEMENTATION STATUS (branch `feat/relay-transport`, 2026-06-05)
+
+Built behind `clawdmeter.transport.relayDefault` (default OFF). Flag-off is
+byte-identical to the Tailscale path. ~70 new tests; Mac + iOS + shared green
+(only the pre-existing `RelayPairingHandshakeTests` ×2 fail — predate this work).
+
+### DONE (committed + tested)
+
+| Item | Commits | What |
+|------|---------|------|
+| **B0** keystone | `a4ee90fd` `0f062389` `0912719f` | mux envelope (op-id + chunk contract, 64 KiB cap), Mac loopback-WS bridge (server-built envelope, full-duplex, per-channel coalesce), iOS mux client + reconnect resubscribe |
+| **B1.1–B1.7** all transport | `c0bd0dd3` `2e26398a` `626652e3` `b23abb26` `ea714885` `d68255da` | chat + terminal + events + frontier streams AND HTTP requests all route over the relay; `relayDefault` flag + coordinator wiring |
+| **B1 review fixes** | `9a7ace44` | 2 P0 + 2 P1 from the adversarial review (Mac-side reconnect seq reset; bridge re-open; malformed-frame drop; deinit cleanup) |
+| **CB-P0b** reconnect epoch | `c0bd0dd3` + `9a7ace44` | iOS + Mac both reset the replay-seq epoch on a fresh handshake — DONE on both ends |
+| **CB-P1g** secrets-out-of-JSON | `20056dea` | bearer tokens + derived key are Keychain-only; legacy-file migration |
+| **B2** coverage gate | `a64e5b3d` | every daemon WS op classified relayed-or-exempt; CI fails on an unclassified new op |
+| **B3 crypto** LAN auth | `f781cd33` | `RelayLanAuth` — Bonjour fingerprint + challenge-response + per-request MAC (role/path/body/nonce/ts bound) + fail-closed verifier (replay/stale/tamper). The security keystone (D3 + CB-P1f). |
+
+### REMAINING — device / deploy / production-gated (NOT done; each needs verification the headless build can't provide)
+
+- **B3 networking** — `BonjourAdvertiser` (Mac `NWListener` `_clawdmeter._tcp` + TXT fingerprint) + `BonjourBrowser` (iOS `NWBrowser`) + `TransportResolver` (prefer LAN-direct, fall back to relay). **Gate:** needs 2 devices on a LAN to verify discovery + the challenge-response handshake end-to-end. The crypto it depends on (`RelayLanAuth`) is DONE.
+- **B4** — wire `RelayLanAuthVerifier` into the daemon's LAN request path (fail-closed, MAC at dispatch) + bad-auth lockout; **then delete Tailscale** (`TailscaleHost`/`TailscaleWhois`, the IP allowlist, the QR/MagicDNS host plumbing). **Gate:** Tailscale removal is the irreversible cutover — only after B5 proves the relay. The verifier is DONE; the daemon LAN listener it guards is B3-networking.
+- **CB-P0a** — relay worker (`infra/relay`, TypeScript): split the 15-min QR-bootstrap TTL from **long-lived paired-device credentials** with refresh/rotation/revocation (today `auth.ts` hard-expires at `ttlSeconds`). **Gate:** a new credential protocol across worker + DO + Swift pairing + QR; needs miniflare + device E2E, and a `wrangler deploy` to staging/prod. Must NOT ship unverified on a security-critical path.
+- **B5 cutover** — flip `relayDefault` default → ON via a **staged % rollout** (5→25→100), after the **staging-DO live E2E** (pair → all 4 streams + requests → kill/resume socket → assert resync) + a **manual device drill** (background / lock / WiFi-switch). Remove the dead Tailscale paths only after 100% green. **Gate:** an irreversible, outward-facing production migration the plan (D6) explicitly gates on device verification.
+
+**Net:** every part of Track B that can be built + unit-tested headlessly is DONE, committed, and pushed behind the OFF flag. What remains is inherently device/deploy/production-gated, and is precisely specified above for when a paired device pair + Cloudflare deploy access are available.
