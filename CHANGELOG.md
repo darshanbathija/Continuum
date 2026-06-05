@@ -4,6 +4,14 @@ All notable changes to Continuum are recorded here. Marketing version
 is `MARKETING_VERSION` in `apple/project.yml`; build number is
 `CURRENT_PROJECT_VERSION` in the same file (source of truth for the DMG).
 
+## [0.31.0 build 200] - 2026-06-06 - Sparkle appcast recovery (`darshanbathija/screenshot-error`)
+
+### Fixed
+
+- Publishes the first signed Sparkle appcast for the current Mac release line.
+- Restores the public GitHub Pages feed used by the in-app Updates screen.
+- Bumps `CURRENT_PROJECT_VERSION` 199 → 200 so installed build 199 clients can update.
+
 ## [0.31.0 build 199] - 2026-06-06 - Quiet Black Workbench redesign (every surface) (`v2-design-changes`)
 
 ### Changed
