@@ -9,9 +9,13 @@ signing, notarization, Sparkle keys, minimum OS alignment, GitHub release
 asset availability, and appcast signatures before writing this directory.
 In publish mode it must run from a clean, up-to-date `main` checkout; after
 the public GitHub release asset is verified, it commits and pushes the Pages
-appcast, copied release notes, and `history.json` together.
-The Pages workflow rejects an empty or unsigned appcast, invalid
-`history.json`, and appcasts missing the macOS minimum-version marker.
+appcast, copied release notes, and `history.json` together. GitHub Pages is
+served from the legacy `gh-pages` branch, so the Pages workflow mirrors
+`docs/updates` to `gh-pages/updates` and verifies that the live appcast URL
+advertises the released version before the release is complete.
+The Pages workflow rejects an empty or unsigned appcast, invalid or stale
+`history.json`, appcasts missing the macOS minimum-version marker, and release
+notes links that do not resolve to files in `docs/updates/release-notes`.
 
 Required release environment:
 
@@ -40,7 +44,8 @@ another team, stop and write a migration plan before shipping.
 Rollback procedure:
 
 1. Revert `docs/updates/appcast.xml` on `main`.
-2. Push the revert so the Pages workflow republishes the previous feed.
+2. Push the revert so the Pages workflow mirrors the previous feed to
+   `gh-pages/updates/appcast.xml`.
 3. If the release asset is bad, delete or replace the GitHub release asset.
 4. Rerun `tools/release-mac.sh --validate-only` before publishing a fixed feed.
 
