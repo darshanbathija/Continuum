@@ -236,3 +236,36 @@ final class SnapshotCoalescer {
         pending = nil
     }
 }
+
+/// Production `RelaySubscriptionBridge.Conn` over a `URLSessionWebSocketTask` to
+/// the daemon's own WS port. Mirrors how iOS opens a stream today: connect to
+/// `ws://127.0.0.1:<wsPort>/`, send the subscribe envelope as the first `.data`
+/// frame, then receive. `send` carries iOS→daemon input (terminal). A receive
+/// throw/closure surfaces as nil → the pump emits `subEnd`.
+@MainActor
+final class URLSessionLoopbackWSConn: RelaySubscriptionBridge.Conn {
+    private let task: URLSessionWebSocketTask
+
+    init(url: URL, subscribeEnvelope: Data) async throws {
+        let task = URLSession.shared.webSocketTask(with: URLRequest(url: url, timeoutInterval: 8))
+        self.task = task
+        task.resume()
+        try await task.send(.data(subscribeEnvelope))   // first frame = the (server-built) subscribe
+    }
+
+    func send(_ data: Data) async throws {
+        try await task.send(.data(data))
+    }
+
+    func receive() async throws -> Data? {
+        switch try await task.receive() {
+        case .data(let d): return d
+        case .string(let s): return Data(s.utf8)
+        @unknown default: return Data()
+        }
+    }
+
+    func close() {
+        task.cancel(with: .normalClosure, reason: nil)
+    }
+}

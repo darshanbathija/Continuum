@@ -87,6 +87,9 @@ final class AppRuntime: ObservableObject {
     // transport the iPhone used.
     private(set) var relayClient: MacRelayClient?
     private var relayDispatcher: RelayRequestDispatcher?
+    /// Track B (B0): forwards `op == "mux"` relay frames to loopback WS streams
+    /// so the 4 WSChannels work over the relay. Inert until iOS sends mux frames.
+    private var relaySubscriptionBridge: RelaySubscriptionBridge?
     private var relayPairingObserver: AnyCancellable?
 
     // v0.27.0: openFolderInDesign(baseDir:) removed along with the Design tab.
@@ -419,6 +422,23 @@ final class AppRuntime: ObservableObject {
             if relayEnabled, let loopback = self.loopbackClient {
                 let dispatcher = RelayRequestDispatcher(loopbackClient: loopback)
                 self.relayDispatcher = dispatcher
+                // Track B (B0): the loopback-WS bridge for subscription-over-relay.
+                // sendOutbound reaches the relay client (assigned later, before any
+                // mux frame can arrive); wsURL/token read the live daemon ports.
+                self.relaySubscriptionBridge = RelaySubscriptionBridge(
+                    wsURL: { [weak self] in
+                        guard let port = self?.agentControlServer.boundWsPort else { return nil }
+                        return URL(string: "ws://127.0.0.1:\(port)/")
+                    },
+                    loopbackToken: { [weak self] in self?.agentControlServer.localLoopbackToken },
+                    connFactory: { url, envelope in
+                        try await URLSessionLoopbackWSConn(url: url, subscribeEnvelope: envelope)
+                    },
+                    sendOutbound: { [weak self] frame in
+                        guard let payload = try? frame.encoded() else { return }
+                        try? await self?.relayClient?.send(op: RelayMux.op, payload: payload)
+                    }
+                )
                 let recorder = RelayPairingServiceHandshakeRecorder(service: self.relayPairingService)
                 self.relayPairingObserver = self.relayPairingService.$bundle
                     .receive(on: DispatchQueue.main)
@@ -531,6 +551,9 @@ final class AppRuntime: ObservableObject {
         // session).
         relayClient?.stop()
         relayClient = nil
+        // Track B (B0): drop any live loopback streams — they were bound to the
+        // old relay session's opIds; iOS re-subscribes fresh on the new socket.
+        relaySubscriptionBridge?.shutdownAll()
 
         guard let bundle else {
             runtimeLogger.info("Relay pairing cleared; client torn down")
@@ -548,8 +571,15 @@ final class AppRuntime: ObservableObject {
         let client = MacRelayClient(
             config: config,
             pairingService: recorder,
-            frameHandler: { [weak dispatcher] inbound in
-                await dispatcher?.dispatch(inbound)
+            frameHandler: { [weak dispatcher, weak self] inbound in
+                // Track B (B0): multiplex frames go to the subscription bridge;
+                // everything else stays on the legacy request/response tunnel.
+                if inbound.op == RelayMux.op {
+                    guard let frame = RelayMuxFrame.decode(inbound.data) else { return nil }
+                    await self?.relaySubscriptionBridge?.handle(frame)
+                    return nil   // mux replies arrive as their own outbound frames
+                }
+                return await dispatcher?.dispatch(inbound)
             }
         )
         relayClient = client
