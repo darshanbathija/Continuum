@@ -38,6 +38,11 @@ public actor UsageHistoryLoader {
     /// Continuum-owned Grok harness ledger. Optional so tests can inject a
     /// fixture and machines without Grok usage skip this pass cleanly.
     private let grokLedgerURL: URL?
+    private let cursorLedgerURL: URL?
+    /// Cursor IDE hook-log root (`~/Library/Application Support/Cursor/logs`).
+    /// Optional so unit tests with synthetic history dirs do not accidentally
+    /// ingest the developer machine's live Cursor logs.
+    private let cursorHooksLogsDir: URL?
     private let cacheURL: URL?
     private let pricing: Pricing
 
@@ -51,6 +56,8 @@ public actor UsageHistoryLoader {
         agyDir: URL? = nil,
         opencodeDBURL: URL? = nil,
         grokLedgerURL: URL? = nil,
+        cursorLedgerURL: URL? = nil,
+        cursorHooksLogsDir: URL? = nil,
         cacheURL: URL? = nil,
         pricing: Pricing = .shared
     ) {
@@ -84,6 +91,9 @@ public actor UsageHistoryLoader {
         self.opencodeDBURL = opencodeDBURL
         #endif
         self.grokLedgerURL = grokLedgerURL ?? GrokUsageLedger.defaultURL()
+        self.cursorLedgerURL = cursorLedgerURL ?? CursorACPUsageLedger.defaultURL()
+        let usingDefaultHistoryDirs = claudeDir == nil && codexDir == nil && geminiDir == nil
+        self.cursorHooksLogsDir = cursorHooksLogsDir ?? (usingDefaultHistoryDirs ? CursorHooksUsageParser.defaultLogsDir() : nil)
         self.cacheURL = cacheURL ?? Self.defaultCacheURL()
         self.pricing = pricing
     }
@@ -177,6 +187,10 @@ public actor UsageHistoryLoader {
         if let grokLedgerURL {
             observe(Self.fileMtime(grokLedgerURL))
         }
+        observe(CursorACPUsageLedger.mostRecentMtime(url: cursorLedgerURL))
+        if let cursorHooksLogsDir {
+            observe(Self.mostRecentMtime(inDirectory: cursorHooksLogsDir))
+        }
         return maxMtime
     }
 
@@ -233,6 +247,11 @@ public actor UsageHistoryLoader {
         let geminiPBFiles = enumerate(dir: geminiDir, suffix: ".pb")
         let geminiDBFiles = enumerate(dir: geminiDir, suffix: ".db")
         let geminiFiles = Self.dedupedDesktopFiles(pb: geminiPBFiles, db: geminiDBFiles)
+        let cursorHookFiles: [FileMeta] = {
+            guard let cursorHooksLogsDir else { return [] }
+            return enumerate(dir: cursorHooksLogsDir, suffix: ".log")
+                .filter { $0.url.lastPathComponent.hasPrefix("cursor.hooks.workspaceId-") }
+        }()
         let antigravityDataDir = geminiDir.deletingLastPathComponent()
         let brainIndex = BrainSummaryIndexer.read(
             at: antigravityDataDir.appendingPathComponent("agyhub_summaries_proto.pb")
@@ -280,6 +299,7 @@ public actor UsageHistoryLoader {
         let claudeActive = claudeFiles.max(by: { $0.mtime < $1.mtime })?.url
         let codexActive = codexFiles.max(by: { $0.mtime < $1.mtime })?.url
         let geminiActive = geminiFiles.max(by: { $0.mtime < $1.mtime })?.url
+        let cursorHookActive = cursorHookFiles.max(by: { $0.mtime < $1.mtime })?.url
 
         let claudeResults = await parseConcurrently(
             files: claudeFiles,
@@ -296,6 +316,15 @@ public actor UsageHistoryLoader {
             activeURL: codexActive,
             parser: { url in
                 try Self.parseCodexFile(at: url)
+            }
+        )
+
+        let cursorHookResults = await parseConcurrently(
+            files: cursorHookFiles,
+            cache: cache,
+            activeURL: cursorHookActive,
+            parser: { url in
+                try Self.parseCursorHooksFile(at: url)
             }
         )
 
@@ -350,6 +379,7 @@ public actor UsageHistoryLoader {
         // (the analytics schema split — see plan §Analytics schema split).
         // Optional so a missing parser pass writes an empty `.gemini` slot.
         var geminiDayByRepo: [Date: [RepoKey: TokenTotals]]? = nil
+        var cursorDayByRepo: [Date: [RepoKey: TokenTotals]]? = nil
         var seenDedupKeys = Set<String>()
         var unpricedModelTokens: [String: TokenTotals] = [:]
         var tokensByModel: [String: TokenTotals] = [:]
@@ -379,6 +409,22 @@ public actor UsageHistoryLoader {
             )
             sessionCount += 1
             nextCache.files[result.path] = result.cacheEntry
+        }
+        if !cursorHookResults.isEmpty {
+            var bucket = cursorDayByRepo ?? [:]
+            for result in cursorHookResults {
+                mergePerFileResult(
+                    result,
+                    into: &bucket,
+                    dedup: &seenDedupKeys,
+                    unpriced: &unpricedModelTokens,
+                    byModel: &tokensByModel,
+                    byDayByModel: &byDayByModel
+                )
+                sessionCount += 1
+                nextCache.files[result.path] = result.cacheEntry
+            }
+            cursorDayByRepo = bucket
         }
         // v0.23.8: fold desktop IDE and agy CLI results into the same
         // .gemini bucket. The two surfaces share pricing and share the
@@ -484,6 +530,46 @@ public actor UsageHistoryLoader {
             }
         }
 
+        let cursorRecords = CursorACPUsageLedger.parseFile(at: cursorLedgerURL)
+        if !cursorRecords.isEmpty {
+            var bucket: [Date: [RepoKey: TokenTotals]] = [:]
+            var localDedup = Set<String>()
+            var localUnpriced: [String: TokenTotals] = [:]
+            var localByModel: [String: TokenTotals] = [:]
+            var localByDayByModel: [Date: [String: TokenTotals]] = [:]
+            for record in cursorRecords {
+                Self.accumulate(
+                    record: record,
+                    into: &bucket,
+                    dedup: &localDedup,
+                    unpriced: &localUnpriced,
+                    byModel: &localByModel,
+                    byDayByModel: &localByDayByModel
+                )
+            }
+            var mergedCursorDayByRepo = cursorDayByRepo ?? [:]
+            for (day, repoMap) in bucket {
+                var existing = mergedCursorDayByRepo[day, default: [:]]
+                for (repo, totals) in repoMap {
+                    existing[repo, default: .zero] += totals
+                }
+                mergedCursorDayByRepo[day] = existing
+            }
+            cursorDayByRepo = mergedCursorDayByRepo
+            for (model, totals) in localUnpriced {
+                unpricedModelTokens[model, default: .zero] += totals
+            }
+            for (model, totals) in localByModel {
+                tokensByModel[model, default: .zero] += totals
+            }
+            for (day, modelMap) in localByDayByModel {
+                var existing = byDayByModel[day, default: [:]]
+                for (model, totals) in modelMap { existing[model, default: .zero] += totals }
+                byDayByModel[day] = existing
+            }
+            sessionCount += 1
+        }
+
         // Build per-provider windows. byProvider dict slot lands here per
         // 2026-05-19 Gemini-provider refactor; the Gemini parsing pass is
         // wired through `geminiDayByRepo` below once `GeminiUsageParser`
@@ -500,6 +586,9 @@ public actor UsageHistoryLoader {
         }
         if let grokDayByRepo, !grokDayByRepo.isEmpty {
             byProvider[.grok] = buildProviderTotals(from: grokDayByRepo, now: now)
+        }
+        if let cursorDayByRepo, !cursorDayByRepo.isEmpty {
+            byProvider[.cursor] = buildProviderTotals(from: cursorDayByRepo, now: now)
         }
 
         sequenceCounter += 1
@@ -697,6 +786,46 @@ public actor UsageHistoryLoader {
         )
     }
 
+    private nonisolated static func parseCursorHooksFile(at url: URL) throws -> PerFileResult {
+        let records = try CursorHooksUsageParser.parse(file: url)
+        var byDayByRepo: [Date: [RepoKey: TokenTotals]] = [:]
+        var dedupKeys = Set<String>()
+        var unpriced: [String: TokenTotals] = [:]
+        var byModel: [String: TokenTotals] = [:]
+        var byDayByModel: [Date: [String: TokenTotals]] = [:]
+        for record in records {
+            accumulate(
+                record: record,
+                into: &byDayByRepo,
+                dedup: &dedupKeys,
+                unpriced: &unpriced,
+                byModel: &byModel,
+                byDayByModel: &byDayByModel
+            )
+        }
+
+        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let entry = AnalyticsCache.FileEntry(
+            mtime: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
+            size: values.fileSize ?? 0,
+            byDayByRepo: AnalyticsCache.FileEntry.encode(byDayByRepo),
+            dedupKeys: Array(dedupKeys),
+            unpricedModelTokens: unpriced,
+            byModelTokens: byModel,
+            byDayByModel: AnalyticsCache.FileEntry.encodeModels(byDayByModel)
+        )
+
+        return PerFileResult(
+            path: url.path,
+            byDayByRepo: byDayByRepo,
+            byDayByModel: byDayByModel,
+            dedupKeys: dedupKeys,
+            unpricedModelTokens: unpriced,
+            byModelTokens: byModel,
+            cacheEntry: entry
+        )
+    }
+
     private nonisolated static func parseCodexFile(at url: URL) throws -> PerFileResult {
         // F1b-wire shipped in #165 and is now the default-ON path: every
         // Codex JSONL file flows through `CodexAdapter` (via the bridge)
@@ -835,10 +964,13 @@ public actor UsageHistoryLoader {
         let repo = record.repo ?? RepoKey.unknown
 
         // Compute cost.
-        let cost = Pricing.shared.cost(for: record.model, tokens: record.tokens)
+        let pricedByRateCard = Pricing.shared.isPriced(record.model)
+        let cost = record.tokens.costUSD > 0
+            ? record.tokens.costUSD
+            : Pricing.shared.cost(for: record.model, tokens: record.tokens)
         var tokensWithCost = record.tokens
         tokensWithCost.costUSD = cost
-        let isPriced = Pricing.shared.isPriced(record.model)
+        let isPriced = record.tokens.costUSD > 0 || pricedByRateCard
 
         // Track unpriced model tokens.
         if !isPriced && record.tokens.totalTokens > 0 {
@@ -848,11 +980,12 @@ public actor UsageHistoryLoader {
         // Per-model token rollup for ALL models (powers the Usage tab's
         // tokens-by-model/family section), keyed by the raw model name.
         if record.tokens.totalTokens > 0 {
-            byModel[record.model, default: .zero] += tokensWithCost
+            let modelKey = Self.modelRollupKey(for: record)
+            byModel[modelKey, default: .zero] += tokensWithCost
             // Per-day-by-model adds the time dimension so the Usage tab's
             // tokens-by-model section can be windowed (today/7d/30d/90d) the
             // same way byDayByRepo powers the dollar charts.
-            byDayByModel[day, default: [:]][record.model, default: .zero] += tokensWithCost
+            byDayByModel[day, default: [:]][modelKey, default: .zero] += tokensWithCost
         }
 
         // Bucket.
@@ -938,23 +1071,37 @@ public actor UsageHistoryLoader {
 
         let day = Calendar.current.startOfDay(for: record.timestamp)
         let repo = record.repo ?? RepoKey.unknown
-        let cost = Pricing.shared.cost(for: record.model, tokens: record.tokens)
+        let pricedByRateCard = Pricing.shared.isPriced(record.model)
+        let cost = record.tokens.costUSD > 0
+            ? record.tokens.costUSD
+            : Pricing.shared.cost(for: record.model, tokens: record.tokens)
         var tokensWithCost = record.tokens
         tokensWithCost.costUSD = cost
-        if !Pricing.shared.isPriced(record.model), record.tokens.totalTokens > 0 {
+        if !(record.tokens.costUSD > 0 || pricedByRateCard), record.tokens.totalTokens > 0 {
             unpriced[record.model, default: .zero] += tokensWithCost
         }
         if record.tokens.totalTokens > 0 {
-            byModel[record.model, default: .zero] += tokensWithCost
+            let modelKey = Self.modelRollupKey(for: record)
+            byModel[modelKey, default: .zero] += tokensWithCost
             // Per-day-by-model adds the time dimension so the Usage tab's
             // tokens-by-model section can be windowed (today/7d/30d/90d) the
             // same way byDayByRepo powers the dollar charts.
-            byDayByModel[day, default: [:]][record.model, default: .zero] += tokensWithCost
+            byDayByModel[day, default: [:]][modelKey, default: .zero] += tokensWithCost
         }
 
         var dayMap = byDayByRepo[day, default: [:]]
         dayMap[repo, default: .zero] += tokensWithCost
         byDayByRepo[day] = dayMap
+    }
+
+    private nonisolated static func modelRollupKey(for record: UsageRecord) -> String {
+        let model = record.model.isEmpty ? record.provider.rawValue : record.model
+        switch record.provider {
+        case .cursor:
+            return model.lowercased().hasPrefix("cursor/") ? model : "cursor/\(model)"
+        default:
+            return model
+        }
     }
 
     // MARK: - Window rollups
@@ -1096,7 +1243,11 @@ struct AnalyticsCache: Codable, Sendable {
     // ccusage's ~$625); without this bump those inflated costs would survive
     // the code fix for every already-cached file. The bump forces a one-time
     // reparse so the corrected dedup actually applies to historical days.
-    static let currentVersion: Int = 14
+    // v15 (2026-06-06): Cursor Composer hook records now resolve
+    // composer-2.5 / composer-2.5-fast to OpenRouter's Kimi K2.5 pricing.
+    // v14 caches could have baked the same token rows with costUSD == 0, so
+    // force one reparse to make Analytics and tokens-by-model show dollars.
+    static let currentVersion: Int = 15
 
     let version: Int
     var files: [String: FileEntry]

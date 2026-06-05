@@ -30,6 +30,37 @@ final class UsageDataTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
+    func test_cursorQuota_codableRoundTrip() throws {
+        let original = UsageData(
+            sessionPct: 48,
+            sessionResetMins: 26_400,
+            sessionEpoch: 1_782_259_911,
+            weeklyPct: 48,
+            weeklyResetMins: 26_400,
+            weeklyEpoch: 1_782_259_911,
+            status: .allowed,
+            representativeClaim: .unknown,
+            updatedAt: Date(timeIntervalSince1970: 1_779_582_000),
+            organizationID: "400 included / period",
+            cursorQuota: UsageData.CursorQuota(
+                totalPct: 48,
+                autoPct: 25,
+                apiPct: 95,
+                resetMins: 26_400,
+                resetEpoch: 1_782_259_911,
+                includedUsageLabel: "400 included / period",
+                extraUsageLabel: "Free extra usage may vary."
+            )
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(UsageData.self, from: data)
+        XCTAssertEqual(decoded.cursorQuota?.totalPct, 48)
+        XCTAssertEqual(decoded.cursorQuota?.autoPct, 25)
+        XCTAssertEqual(decoded.cursorQuota?.apiPct, 95)
+        XCTAssertEqual(decoded.cursorQuota?.extraUsageLabel, "Free extra usage may vary.")
+        XCTAssertEqual(original, decoded)
+    }
+
     func test_moodMapping() {
         XCTAssertEqual(make(session: 0).mood, .idle)
         XCTAssertEqual(make(session: 29).mood, .idle)

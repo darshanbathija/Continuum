@@ -27,7 +27,16 @@ final class CursorAdapterTests: XCTestCase {
             status: status,
             representativeClaim: .fiveHour,
             updatedAt: timestamp,
-            organizationID: organizationID
+            organizationID: organizationID,
+            cursorQuota: UsageData.CursorQuota(
+                totalPct: sessionPct,
+                autoPct: max(0, sessionPct - 5),
+                apiPct: min(100, sessionPct + 5),
+                resetMins: sessionResetMins,
+                resetEpoch: 1_715_999_999,
+                includedUsageLabel: organizationID,
+                extraUsageLabel: "Free extra usage may vary."
+            )
         )
     }
 
@@ -72,7 +81,11 @@ final class CursorAdapterTests: XCTestCase {
         }
         XCTAssertEqual(cursor["session_percent"], .int(73))
         XCTAssertEqual(cursor["session_epoch"], .int(1_715_999_999))
+        XCTAssertEqual(cursor["monthly_total_percent"], .int(73))
+        XCTAssertEqual(cursor["monthly_auto_percent"], .int(68))
+        XCTAssertEqual(cursor["monthly_api_percent"], .int(78))
         XCTAssertEqual(cursor["plan_badge"], .string("200 included / period"))
+        XCTAssertEqual(cursor["monthly_extra_usage_label"], .string("Free extra usage may vary."))
         XCTAssertNotNil(cursor["status"])
         XCTAssertNotNil(cursor["representative_claim"])
     }

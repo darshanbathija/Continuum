@@ -27,6 +27,9 @@ final class AcpHarnessBridge {
     private let usageRepo: String?
     private let usageLedgerURL: URL?
     private let agentDisplayName: String
+    private let cursorUsageSurface: CursorACPUsageLedgerRecord.Surface?
+    private let cursorUsageRepo: String?
+    private let cursorUsageLedgerURL: URL?
     private var projection: AcpHarnessProjection
     /// Maps a surfaced permission prompt id back to the driver's request id so the
     /// daemon's `/permission-respond` route can answer the agent.
@@ -49,7 +52,10 @@ final class AcpHarnessBridge {
         connection: NdjsonRpcConnection?,
         usageProvider: UsageRecord.Provider? = nil,
         usageRepo: String? = nil,
-        usageLedgerURL: URL? = nil
+        usageLedgerURL: URL? = nil,
+        cursorUsageSurface: CursorACPUsageLedgerRecord.Surface? = nil,
+        cursorUsageRepo: String? = nil,
+        cursorUsageLedgerURL: URL? = nil
     ) {
         self.sessionId = sessionId
         self.store = store
@@ -58,6 +64,9 @@ final class AcpHarnessBridge {
         self.usageRepo = usageRepo
         self.usageLedgerURL = usageLedgerURL
         self.agentDisplayName = agentDisplayName
+        self.cursorUsageSurface = cursorUsageSurface
+        self.cursorUsageRepo = cursorUsageRepo
+        self.cursorUsageLedgerURL = cursorUsageLedgerURL
         self.projection = AcpHarnessProjection(agentDisplayName: agentDisplayName)
         self.driver = driver
         self.child = child
@@ -75,7 +84,10 @@ final class AcpHarnessBridge {
         onFileAccess: (@Sendable (String, String, Bool) async -> Void)? = nil,
         usageProvider: UsageRecord.Provider? = nil,
         usageRepo: String? = nil,
-        usageLedgerURL: URL? = nil
+        usageLedgerURL: URL? = nil,
+        cursorUsageSurface: CursorACPUsageLedgerRecord.Surface? = nil,
+        cursorUsageRepo: String? = nil,
+        cursorUsageLedgerURL: URL? = nil
     ) -> AcpHarnessBridge {
         let child = AcpStdioChild()
         let connection = NdjsonRpcConnection(writer: child)
@@ -90,7 +102,10 @@ final class AcpHarnessBridge {
                                 child: child, connection: connection,
                                 usageProvider: usageProvider,
                                 usageRepo: usageRepo,
-                                usageLedgerURL: usageLedgerURL)
+                                usageLedgerURL: usageLedgerURL,
+                                cursorUsageSurface: cursorUsageSurface,
+                                cursorUsageRepo: cursorUsageRepo,
+                                cursorUsageLedgerURL: cursorUsageLedgerURL)
     }
 
     /// Codex over `codex app-server` (stdio JSON-RPC): same stdio transport as
@@ -215,6 +230,9 @@ final class AcpHarnessBridge {
         if case .permissionRequest(let req) = event {
             pendingPermissionRpcIds[AcpHarnessProjection.permissionPromptId(for: req.requestId)] = req.requestId
         }
+        if case .usage(let usage) = event {
+            recordCursorUsage(usage)
+        }
         for op in projection.apply(event) { apply(op) }
     }
 
@@ -301,6 +319,21 @@ final class AcpHarnessBridge {
         let output = max(0, usage.outputTokens ?? 0)
         let total = max(0, usage.totalTokens ?? 0)
         return max(total, input + output)
+    }
+
+    private func recordCursorUsage(_ usage: HarnessUsage) {
+        guard let cursorUsageSurface else { return }
+        CursorACPUsageLedger.append(CursorACPUsageLedgerRecord(
+            surface: cursorUsageSurface,
+            sessionId: sessionId,
+            externalSessionId: externalSessionId,
+            repo: cursorUsageRepo,
+            model: usage.model ?? model,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+            costUSD: usage.costUSD
+        ), url: cursorUsageLedgerURL)
     }
 
     private func apply(_ op: AcpStoreOp) {

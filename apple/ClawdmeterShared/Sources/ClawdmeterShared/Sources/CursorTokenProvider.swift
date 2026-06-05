@@ -2,14 +2,22 @@
 import Foundation
 import LocalAuthentication
 import Security
+import SQLite3
 #if canImport(OSLog)
 import OSLog
 #endif
 
-/// Reads the Cursor Agent CLI's OAuth bundle from the macOS Keychain.
+private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+/// Reads Cursor's local OAuth access token.
 ///
-/// `cursor-agent login` stores two generic-password items in the user's
-/// login keychain via Node's `keytar`:
+/// Preferred source: Cursor.app's local VS Code storage database:
+///
+///   `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
+///   key `cursorAuth/accessToken`
+///
+/// Fallback source: `cursor-agent login` stores two generic-password items in
+/// the user's login keychain via Node's `keytar`:
 ///
 ///   - service `cursor-access-token` → JWT (HS256, ~424B, ~7 day exp,
 ///     `sub: "google-oauth2|user_<id>"`). Bearer-attached on every
@@ -20,12 +28,16 @@ import OSLog
 ///     re-read both items, trusting that the user (or a background
 ///     cursor-agent invocation) has already refreshed the on-disk copy.
 ///
-/// **Sandbox notes**: `cursor-agent` is a CLI that has no keychain-access-
-/// group entitlement, so its items live in the user's login keychain with
-/// a permissive ACL that can ask for user approval. Clawdmeter probes this
-/// non-interactively so switching tabs or opening Settings never surfaces
-/// a macOS SecurityAgent prompt; explicit login still happens through
-/// `cursor-agent login`.
+/// **Why app DB first:** the Cursor dashboard and editor are keyed off the
+/// Cursor.app session. The CLI keychain can point at a different account, which
+/// gives the wrong monthly Total / Auto / API breakdown. Keychain remains a
+/// fallback for headless `cursor-agent`-only setups.
+///
+/// **Sandbox notes**: Cursor.app storage and `cursor-agent` keychain items are
+/// both outside this app's container in Release builds; failures are swallowed
+/// and reported as unauthenticated. Keychain reads are non-interactive so
+/// switching tabs or opening Settings never surfaces a macOS SecurityAgent
+/// prompt; explicit login still happens through Cursor or `cursor-agent login`.
 ///
 /// **iOS / watchOS**: Cursor doesn't ship on those platforms, and the
 /// keychain items are macOS-local anyway. The whole type is wrapped in
@@ -54,11 +66,11 @@ public final class CursorTokenProvider: TokenProvider, @unchecked Sendable {
            Date().timeIntervalSince(cachedAt) < Self.cacheTTL {
             return cachedAccessToken
         }
-        let fresh = Self.readKeychainPassword(service: Self.accessTokenService)
+        let fresh = Self.readCursorAppAccessToken() ?? Self.readKeychainPassword(service: Self.accessTokenService)
         cachedAccessToken = fresh
         cachedAt = Date()
         if fresh == nil {
-            logger.info("CursorTokenProvider: no cursor-access-token in keychain (user not logged in?)")
+            logger.info("CursorTokenProvider: no Cursor app access token or cursor-access-token in keychain (user not logged in?)")
         }
         return fresh
     }
@@ -72,7 +84,7 @@ public final class CursorTokenProvider: TokenProvider, @unchecked Sendable {
     }
 
     public var hasToken: Bool {
-        Self.keychainItemExists(service: Self.accessTokenService)
+        Self.readCursorAppAccessToken() != nil || Self.keychainItemExists(service: Self.accessTokenService)
     }
 
     @discardableResult
@@ -96,6 +108,49 @@ public final class CursorTokenProvider: TokenProvider, @unchecked Sendable {
     }
 
     // MARK: - Keychain read
+
+    static func defaultCursorStateDatabaseURL() -> URL {
+        ClawdmeterRealHome.url()
+            .appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+    }
+
+    /// Reads Cursor.app's signed-in access token from VS Code state storage.
+    /// Internal so tests can seed a temp SQLite DB without touching the user's
+    /// real Cursor profile.
+    static func readCursorAppAccessToken(databaseURL: URL = defaultCursorStateDatabaseURL()) -> String? {
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            return nil
+        }
+
+        var db: OpaquePointer?
+        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
+        let rc = sqlite3_open_v2(databaseURL.path, &db, flags, nil)
+        guard rc == SQLITE_OK, let db else {
+            if let db { sqlite3_close_v2(db) }
+            return nil
+        }
+        defer { sqlite3_close_v2(db) }
+        sqlite3_busy_timeout(db, 100)
+
+        var stmt: OpaquePointer?
+        let sql = "SELECT value FROM ItemTable WHERE key = ? LIMIT 1"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+            if let stmt { sqlite3_finalize(stmt) }
+            return nil
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, "cursorAuth/accessToken", -1, SQLITE_TRANSIENT)
+
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let cString = sqlite3_column_text(stmt, 0) else {
+            return nil
+        }
+        let token = String(cString: cString)
+        guard token.split(separator: ".").count >= 2 else {
+            return nil
+        }
+        return token
+    }
 
     /// Reads a generic-password item by `kSecAttrService`. Returns the
     /// password string (UTF-8 decoded), or nil for any failure path

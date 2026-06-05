@@ -14,6 +14,7 @@ struct UsageStatusInfo: Equatable {
     let sessionResetMins: Int?
     let weeklyPct: Int?
     let weeklyResetMins: Int?
+    let cursorQuota: UsageData.CursorQuota?
 }
 
 // MARK: - Model + Effort chip
@@ -372,13 +373,48 @@ struct ContextUsagePopover: View {
                 Text(costText)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
             }
-            if info.sessionPct != nil || info.weeklyPct != nil {
+            if info.cursorQuota != nil || info.sessionPct != nil || info.weeklyPct != nil {
                 Divider()
                 Text("Plan usage")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
-            if let pct = info.sessionPct {
+            if let quota = info.cursorQuota {
+                if let included = quota.includedUsageLabel, !included.isEmpty {
+                    Text(included)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let extra = quota.extraUsageLabel, !extra.isEmpty {
+                    Text("Extra usage: \(extra)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                progressRow(
+                    label: "Monthly total",
+                    value: planValueText(pct: quota.totalPct, resetMins: quota.resetMins),
+                    fraction: Double(quota.totalPct) / 100.0,
+                    tint: planTint(pct: quota.totalPct)
+                )
+                if let pct = quota.autoPct {
+                    progressRow(
+                        label: "Auto",
+                        value: planValueText(pct: pct, resetMins: quota.resetMins),
+                        fraction: Double(pct) / 100.0,
+                        tint: planTint(pct: pct)
+                    )
+                }
+                if let pct = quota.apiPct {
+                    progressRow(
+                        label: "API",
+                        value: planValueText(pct: pct, resetMins: quota.resetMins),
+                        fraction: Double(pct) / 100.0,
+                        tint: planTint(pct: pct)
+                    )
+                }
+            } else if let pct = info.sessionPct {
                 progressRow(
                     label: "5-hour limit",
                     value: planValueText(pct: pct, resetMins: info.sessionResetMins),

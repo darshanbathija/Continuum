@@ -318,9 +318,10 @@ export default async function Page({ params }: { params: { org: string }}) {
         public var g: Double  // gemini (Antigravity)
         public var o: Double  // opencode — v0.22.8 (defaults to 0 for back-compat with demo fixtures)
         public var k: Double  // grok — history-backed analytics, unpriced until rates are verified
+        public var r: Double  // cursor
 
-        public init(c: Double, x: Double, g: Double, o: Double = 0, k: Double = 0) {
-            self.c = c; self.x = x; self.g = g; self.o = o; self.k = k
+        public init(c: Double, x: Double, g: Double, o: Double = 0, k: Double = 0, r: Double = 0) {
+            self.c = c; self.x = x; self.g = g; self.o = o; self.k = k; self.r = r
         }
     }
     public struct SpendRepo: Sendable {
@@ -330,9 +331,10 @@ export default async function Page({ params }: { params: { org: string }}) {
         public var g: Double
         public var o: Double  // opencode — v0.22.8
         public var k: Double  // grok
+        public var r: Double
 
-        public init(name: String, c: Double, x: Double, g: Double, o: Double = 0, k: Double = 0) {
-            self.name = name; self.c = c; self.x = x; self.g = g; self.o = o; self.k = k
+        public init(name: String, c: Double, x: Double, g: Double, o: Double = 0, k: Double = 0, r: Double = 0) {
+            self.name = name; self.c = c; self.x = x; self.g = g; self.o = o; self.k = k; self.r = r
         }
     }
     public struct Totals: Sendable {
@@ -341,11 +343,12 @@ export default async function Page({ params }: { params: { org: string }}) {
         public var g: String
         public var o: String  // opencode — v0.22.8
         public var k: String  // grok
+        public var r: String
         public var all: String
         public var delta: String
 
-        public init(c: String, x: String, g: String, o: String = "$0.00", k: String = "$0.00", all: String, delta: String) {
-            self.c = c; self.x = x; self.g = g; self.o = o; self.k = k; self.all = all; self.delta = delta
+        public init(c: String, x: String, g: String, o: String = "$0.00", k: String = "$0.00", r: String = "$0.00", all: String, delta: String) {
+            self.c = c; self.x = x; self.g = g; self.o = o; self.k = k; self.r = r; self.all = all; self.delta = delta
         }
     }
     public struct RangeData: Sendable {

@@ -2,7 +2,7 @@
   "_meta": {
     "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
     "capturedAt": "2026-05-29T03:55:58Z",
-    "manualOverrides": "gemini-3.5-flash: Antigravity 2 default model. Official pricing announced at Google I/O 2026 (2026-05-19): $1.50/M input, $9.00/M output, $0.15/M cached input (90% discount). | gemini-3.5-flash-thinking: Gemini 3.5 Flash's Extended thinking mode. Same per-token rate card as the base model — Google bills thinking tokens at the output rate, so a session with extended thinking enabled produces a larger output-token total but the price per token is unchanged. | gemini-3.1-pro: Antigravity 2 frontier Pro model, announced alongside 3.5 Flash at Google I/O 2026 (2026-05-19). Tiered pricing: $2.00/M input + $12.00/M output for prompts up to 200K tokens; $4.00/M + $18.00/M above 200K. Cache discount mirrors 3.5 Flash's 90% (Google's stated default for the 3.x line). | claude-opus-4-8: Claude Opus 4.8 (released 2026-05-28). $5/M input, $25/M output — unchanged from Opus 4.7 per Anthropic's launch; LiteLLM may lag the release by a few days, so this override guarantees the app prices it and matches ccusage. Sources: anthropic.com/claude/opus, platform.claude.com/docs/about-claude/pricing."
+    "manualOverrides": "gemini-3.5-flash: Antigravity 2 default model. Official pricing announced at Google I/O 2026 (2026-05-19): $1.50/M input, $9.00/M output, $0.15/M cached input (90% discount). | gemini-3.5-flash-thinking: Gemini 3.5 Flash's Extended thinking mode. Same per-token rate card as the base model — Google bills thinking tokens at the output rate, so a session with extended thinking enabled produces a larger output-token total but the price per token is unchanged. | gemini-3.1-pro: Antigravity 2 frontier Pro model, announced alongside 3.5 Flash at Google I/O 2026 (2026-05-19). Tiered pricing: $2.00/M input + $12.00/M output for prompts up to 200K tokens; $4.00/M + $18.00/M above 200K. Cache discount mirrors 3.5 Flash's 90% (Google's stated default for the 3.x line). | claude-opus-4-8: Claude Opus 4.8 (released 2026-05-28). $5/M input, $25/M output — unchanged from Opus 4.7 per Anthropic's launch; LiteLLM may lag the release by a few days, so this override guarantees the app prices it and matches ccusage. Sources: anthropic.com/claude/opus, platform.claude.com/docs/about-claude/pricing. | moonshotai/kimi-k2.5: OpenRouter catalog on 2026-06-06 lists MoonshotAI Kimi K2.5 at $0.40/M input, $1.90/M output, and $0.09/M cache read. Pricing aliases Cursor's composer-2.5 and composer-2.5-fast ids to this row so Cursor Composer usage contributes dollar cost while generic cursor-auto remains unpriced."
   },
   "models": {
     "chatgpt-4o-latest": {
@@ -589,6 +589,22 @@
       "supports_function_calling": true,
       "supports_prompt_caching": true,
       "supports_reasoning": true,
+      "supports_tool_choice": true,
+      "supports_vision": true
+    },
+    "moonshotai/kimi-k2.5": {
+      "_note": "OpenRouter catalog on 2026-06-06 lists MoonshotAI Kimi K2.5 at $0.40/M input, $1.90/M output, and $0.09/M cache read. Pricing aliases Cursor's composer-2.5 and composer-2.5-fast ids to this row so Cursor Composer usage contributes dollar cost while generic cursor-auto remains unpriced.",
+      "cache_read_input_token_cost": 9E-8,
+      "input_cost_per_token": 4E-7,
+      "litellm_provider": "openrouter",
+      "max_input_tokens": 262144,
+      "max_output_tokens": 262144,
+      "max_tokens": 262144,
+      "mode": "chat",
+      "output_cost_per_token": 0.0000019,
+      "source": "https://openrouter.ai/moonshotai/kimi-k2.5",
+      "supports_function_calling": true,
+      "supports_prompt_caching": true,
       "supports_tool_choice": true,
       "supports_vision": true
     },

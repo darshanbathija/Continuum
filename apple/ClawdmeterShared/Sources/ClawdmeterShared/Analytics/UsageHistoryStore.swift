@@ -342,6 +342,16 @@ public final class UsageHistoryStore {
                 self?.scheduleGrokMirrorRefresh()
             }
         })
+
+        observers.append(center.addObserver(
+            forName: .cursorUsageRecorded,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.scheduleLiveUsageRefresh()
+            }
+        })
     }
 
     /// v0.23.3 T9 — debounced trigger that asks the analytics loader to
@@ -362,6 +372,11 @@ public final class UsageHistoryStore {
     /// cost bounded.
     @MainActor
     private func scheduleOpencodeMirrorRefresh() {
+        scheduleLiveUsageRefresh()
+    }
+
+    @MainActor
+    private func scheduleLiveUsageRefresh() {
         let now = Date()
         let cooldown: TimeInterval = 10
         if let last = lastOpencodeMirrorRefreshAt,

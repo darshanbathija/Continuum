@@ -18,6 +18,7 @@ public struct MacUsageView: View {
     var claudeModel: AppModel?
     var codexModel: AppModel?
     var geminiModel: AppModel?
+    var cursorModel: AppModel?
     /// PR #31 chunk 3 (A2): the live usage store the OpenCode dollar
     /// row reads from. Optional so Previews work without a runtime.
     var usageHistoryStore: UsageHistoryStore?
@@ -31,12 +32,14 @@ public struct MacUsageView: View {
         claudeModel: AppModel? = nil,
         codexModel: AppModel? = nil,
         geminiModel: AppModel? = nil,
+        cursorModel: AppModel? = nil,
         usageHistoryStore: UsageHistoryStore? = nil
     ) {
         self.data = data
         self.claudeModel = claudeModel
         self.codexModel = codexModel
         self.geminiModel = geminiModel
+        self.cursorModel = cursorModel
         self.usageHistoryStore = usageHistoryStore
     }
 
@@ -47,7 +50,7 @@ public struct MacUsageView: View {
                     ProviderColumn(provider: .claude, row: data.claude, model: claudeModel)
                     ProviderColumn(provider: .codex,  row: data.codex,  model: codexModel)
                     ProviderColumn(provider: .gemini, row: data.gemini, model: geminiModel)
-                    ProviderColumn(provider: .cursor, row: data.cursor, model: nil)
+                    ProviderColumn(provider: .cursor, row: data.cursor, model: cursorModel)
                 }
                 .padding(.horizontal, 6).padding(.bottom, 14)
 
@@ -142,11 +145,19 @@ private struct TokensByModelSection: View {
     /// Map a raw model name to a provider family for grouping.
     static func family(for model: String) -> String {
         let m = model.lowercased()
+        if m.hasPrefix("cursor/") || m.hasPrefix("cursor-") || m == "cursor" { return "Cursor" }
         if m.hasPrefix("claude") || m == "opus" || m == "sonnet" || m == "haiku" { return "Claude" }
         if m.hasPrefix("gpt") || m.hasPrefix("chatgpt") || m.hasPrefix("o1") || m.hasPrefix("o3") || m.hasPrefix("o4") || m.contains("codex") { return "OpenAI" }
         if m.hasPrefix("gemini") || m.hasPrefix("gemma") { return "Gemini" }
         if m.hasPrefix("grok") || m.hasPrefix("xai/") { return "Grok" }
         return "Other"
+    }
+
+    static func displayModel(_ model: String) -> String {
+        if model.lowercased().hasPrefix("cursor/") {
+            return String(model.dropFirst("cursor/".count))
+        }
+        return model
     }
 
     private func families(from byModel: [String: TokenTotals]) -> [Family] {
@@ -173,6 +184,7 @@ private struct TokensByModelSection: View {
         case "OpenAI": return TahoeProvider.codex.glow.color
         case "Gemini": return TahoeProvider.gemini.glow.color
         case "Grok":   return TahoeProvider.grok.glow.color
+        case "Cursor": return TahoeProvider.cursor.glow.color
         default:        return t.fg3                                      // "Other"
         }
     }
@@ -222,7 +234,7 @@ private struct TokensByModelSection: View {
                     .font(TahoeFont.body(10.5))
                     .foregroundStyle(t.fg4)
                 Spacer()
-                Text(Self.fmt(fam.total.totalTokens) + " tokens")
+                Text(Self.metric(fam.total))
                     .font(TahoeFont.mono(12))
                     .foregroundStyle(t.fg)
             }
@@ -231,7 +243,7 @@ private struct TokensByModelSection: View {
                           color: color, height: 5)
             ForEach(fam.models, id: \.name) { m in
                 HStack(spacing: 8) {
-                    Text(m.name)
+                    Text(Self.displayModel(m.name))
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg3)
                         .lineLimit(1)
@@ -246,10 +258,10 @@ private struct TokensByModelSection: View {
                         .font(TahoeFont.body(10))
                         .foregroundStyle(t.fg4)
                         .lineLimit(1)
-                    Text(Self.fmt(m.totals.totalTokens))
+                    Text(Self.metric(m.totals))
                         .font(TahoeFont.mono(11))
                         .foregroundStyle(t.fg)
-                        .frame(width: 64, alignment: .trailing)
+                        .frame(width: 104, alignment: .trailing)
                 }
             }
             TahoeHair()
@@ -273,6 +285,19 @@ private struct TokensByModelSection: View {
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1e6) }
         if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1e3) }
         return "\(n)"
+    }
+
+    static func metric(_ totals: TokenTotals) -> String {
+        let tokens = fmt(totals.totalTokens)
+        guard totals.costUSD > 0 else { return tokens }
+        return "\(formatUSD(totals.costUSD)) · \(tokens)"
+    }
+
+    static func formatUSD(_ value: Decimal) -> String {
+        let n = NSDecimalNumber(decimal: value).doubleValue
+        if n >= 10 { return String(format: "$%.0f", n) }
+        if n >= 0.01 { return String(format: "$%.2f", n) }
+        return String(format: "$%.4f", n)
     }
 }
 
@@ -343,24 +368,27 @@ private struct ProviderColumn: View {
                     MenuBarCheckbox(on: $menuBar)
                 }
 
-                // QuotaBar
-                TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 260,
-                              label: "session", sublabel: "resets in \(row.sessionResetIn)")
-                .padding(.vertical, 28)
+                if provider == .cursor {
+                    cursorQuotaSection
+                } else {
+                    TahoeQuotaBar(provider: provider, percent: row.sessionPercent, size: 260,
+                                  label: "session", sublabel: "resets in \(row.sessionResetIn)")
+                    .padding(.vertical, 28)
 
-                // Weekly row — hidden when provider has no weekly window.
-                if row.hasWeekly {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Weekly · all models")
-                                .font(TahoeFont.body(11.5))
-                                .foregroundStyle(t.fg2)
-                            Spacer()
-                            Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
-                                .font(TahoeFont.mono(11.5))
-                                .foregroundStyle(t.fg3)
+                    // Weekly row — hidden when provider has no weekly window.
+                    if row.hasWeekly {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Weekly · all models")
+                                    .font(TahoeFont.body(11.5))
+                                    .foregroundStyle(t.fg2)
+                                Spacer()
+                                Text("\(Int(row.weeklyPercent))% · \(row.weeklyResetIn)")
+                                    .font(TahoeFont.mono(11.5))
+                                    .foregroundStyle(t.fg3)
+                            }
+                            TahoePillBar(percent: row.weeklyPercent, provider: provider, height: 6)
                         }
-                        TahoePillBar(percent: row.weeklyPercent, provider: provider, height: 6)
                     }
                 }
 
@@ -406,6 +434,38 @@ private struct ProviderColumn: View {
             // The AppDelegate has a UserDefaults observer that picks this
             // up and calls `setVisible(_:)` on the matching status item.
             // No notification needed.
+        }
+    }
+
+    @ViewBuilder
+    private var cursorQuotaSection: some View {
+        let quota = row.cursorQuota
+        TahoeQuotaBar(provider: provider, percent: Double(quota?.totalPct ?? Int(row.sessionPercent)), size: 260,
+                      label: "monthly total", sublabel: "resets in \(row.sessionResetIn)")
+        .padding(.top, 28)
+        .padding(.bottom, 18)
+
+        VStack(alignment: .leading, spacing: 9) {
+            cursorQuotaRow(label: "Auto", pct: quota?.autoPct)
+            cursorQuotaRow(label: "API", pct: quota?.apiPct)
+        }
+    }
+
+    @ViewBuilder
+    private func cursorQuotaRow(label: String, pct: Int?) -> some View {
+        let value = pct ?? 0
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(label)
+                    .font(TahoeFont.body(11.5))
+                    .foregroundStyle(t.fg2)
+                Spacer()
+                Text(pct.map { "\($0)% · \(row.sessionResetIn)" } ?? "--")
+                    .font(TahoeFont.mono(11.5))
+                    .foregroundStyle(t.fg3)
+            }
+            TahoePillBar(percent: Double(value), provider: provider, height: 6)
+                .opacity(pct == nil ? 0.35 : 1)
         }
     }
 }
@@ -513,11 +573,7 @@ private struct Legend: View {
     @Environment(\.tahoe) private var t
     var body: some View {
         HStack(spacing: 14) {
-            // Only the four providers the SpendChart actually stacks
-            // (c/x/g/o → claude/codex/gemini/opencode). `.cursor` has no
-            // SpendPoint lane, so a Cursor chip here would key a bar
-            // segment that never renders.
-            ForEach(TahoeProvider.allCases.filter { $0 != .cursor }) { p in
+            ForEach(TahoeProvider.allCases) { p in
                 HStack(spacing: 6) {
                     // v0.29.4: match the SpendChart's bar gradient
                     // (`halo → glow`) instead of the previous
@@ -636,7 +692,7 @@ private struct SpendChart: View {
         // (which produced labels like $876 / $584 / $292). Tick stride
         // is in {1, 2, 2.5, 5} × 10^n so each gridline lands on a clean
         // dollar number (e.g. $0 / $250 / $500 / $750 with stride 250).
-        let rawMax = series.map { $0.c + $0.x + $0.g + $0.o + $0.k }.max() ?? 1
+        let rawMax = series.map { $0.c + $0.x + $0.g + $0.o + $0.k + $0.r }.max() ?? 1
         let (maxTotal, stride) = Self.niceAxisMax(rawMax: rawMax, ticks: lines)
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
@@ -727,12 +783,14 @@ private struct SpendChart: View {
     }
 
     private func stackedBar(d: TahoeDemo.SpendPoint, max: Double, w: CGFloat, isHover: Bool) -> some View {
-        let total = d.c + d.x + d.g + d.o + d.k
+        let total = d.c + d.x + d.g + d.o + d.k + d.r
         let h = total > 0 ? total / max * chartHeight : 0
         return VStack(spacing: 0) {
             Spacer()
             VStack(spacing: 0) {
                 if total > 0 {
+                    Rectangle().fill(grad(.grok)).frame(height: d.k / total * h)
+                    Rectangle().fill(grad(.cursor)).frame(height: d.r / total * h)
                     Rectangle().fill(grad(.grok)).frame(height: d.k / total * h)
                     Rectangle().fill(grad(.opencode)).frame(height: d.o / total * h)
                     Rectangle().fill(grad(.gemini)).frame(height: d.g / total * h)
@@ -813,10 +871,10 @@ private struct RepoList: View {
     var body: some View {
         // v0.22.8: include opencode in the maxTotal so the relative
         // bar widths normalize across all four providers.
-        let maxTotal = repos.map { $0.c + $0.x + $0.g + $0.o + $0.k }.max() ?? 1
+        let maxTotal = repos.map { $0.c + $0.x + $0.g + $0.o + $0.k + $0.r }.max() ?? 1
         VStack(spacing: 12) {
             ForEach(Array(repos.enumerated()), id: \.offset) { _, r in
-                let total = r.c + r.x + r.g + r.o + r.k
+                let total = r.c + r.x + r.g + r.o + r.k + r.r
                 let width = maxTotal > 0 ? total / maxTotal : 0
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
@@ -837,6 +895,8 @@ private struct RepoList: View {
                                 Rectangle().fill(grad(.codex)).frame(width: geo.size.width * width * (r.x / total))
                                 Rectangle().fill(grad(.gemini)).frame(width: geo.size.width * width * (r.g / total))
                                 Rectangle().fill(grad(.opencode)).frame(width: geo.size.width * width * (r.o / total))
+                                Rectangle().fill(grad(.grok)).frame(width: geo.size.width * width * (r.k / total))
+                                Rectangle().fill(grad(.cursor)).frame(width: geo.size.width * width * (r.r / total))
                                 Rectangle().fill(grad(.grok)).frame(width: geo.size.width * width * (r.k / total))
                             }
                             Spacer()
@@ -1028,13 +1088,15 @@ private struct HoverBreakdown: View {
             row(.gemini, "Antigravity", point.g)
             row(.opencode, "OpenCode", point.o)
             row(.grok, "Grok", point.k)
+            row(.cursor, "Cursor", point.r)
+            row(.grok, "Grok", point.k)
             TahoeHair().padding(.vertical, 2)
             HStack {
                 Text("Total")
                     .font(TahoeFont.body(10.5, weight: .semibold))
                     .foregroundStyle(t.fg)
                 Spacer(minLength: 10)
-                Text(Self.format(point.c + point.x + point.g + point.o + point.k))
+                Text(Self.format(point.c + point.x + point.g + point.o + point.k + point.r))
                     .font(TahoeFont.mono(11, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(t.fg)

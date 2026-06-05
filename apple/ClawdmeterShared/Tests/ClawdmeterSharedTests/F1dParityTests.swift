@@ -83,6 +83,8 @@ final class F1dParityTests: XCTestCase {
         )
         XCTAssertEqual(usage.organizationID, projected.organizationID,
                        "organizationID", file: file, line: line)
+        XCTAssertEqual(usage.cursorQuota, projected.cursorQuota,
+                       "cursorQuota", file: file, line: line)
     }
 
     // MARK: - Happy paths

@@ -139,6 +139,20 @@ public enum CursorAdapterUsageBridge {
         // the key when nil, so we read it as optional here too. Mirror
         // legacy: nil → nil (not empty string).
         let organizationID = extensionString(ext["plan_badge"])
+        let cursorQuota: UsageData.CursorQuota? = {
+            if let total = extensionOptionalInt(ext["monthly_total_percent"]) {
+                return UsageData.CursorQuota(
+                    totalPct: total,
+                    autoPct: extensionOptionalInt(ext["monthly_auto_percent"]),
+                    apiPct: extensionOptionalInt(ext["monthly_api_percent"]),
+                    resetMins: extensionOptionalInt(ext["monthly_reset_mins"]) ?? sessionResetMins,
+                    resetEpoch: extensionOptionalInt(ext["monthly_reset_epoch"]) ?? sessionEpoch,
+                    includedUsageLabel: extensionString(ext["monthly_included_usage_label"]) ?? organizationID,
+                    extraUsageLabel: extensionString(ext["monthly_extra_usage_label"])
+                )
+            }
+            return usage.cursorQuota
+        }()
 
         return UsageData(
             sessionPct: sessionPct,
@@ -159,7 +173,8 @@ public enum CursorAdapterUsageBridge {
             // input shape).
             antigravityModel: usage.antigravityModel,
             sdkModeActive: usage.sdkModeActive,
-            codexSDKModeActive: usage.codexSDKModeActive
+            codexSDKModeActive: usage.codexSDKModeActive,
+            cursorQuota: cursorQuota
         )
     }
 
@@ -221,6 +236,11 @@ public enum CursorAdapterUsageBridge {
 
     private static func extensionInt(_ field: ProviderRuntimeEvent.ExtensionField?) -> Int {
         guard case let .int(v) = field else { return 0 }
+        return Int(v)
+    }
+
+    private static func extensionOptionalInt(_ field: ProviderRuntimeEvent.ExtensionField?) -> Int? {
+        guard case let .int(v) = field else { return nil }
         return Int(v)
     }
 

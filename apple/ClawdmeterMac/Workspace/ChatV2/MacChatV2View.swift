@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import ClawdmeterShared
 
 /// Per-conversation title derived from the first user message (like other chat
@@ -78,6 +79,7 @@ private struct ChatRoot: View {
 
     @StateObject private var store = ChatV2Store()
     @StateObject private var sendCtl: ComposerSendController
+    @StateObject private var usageSource: ChatCursorUsageSource
     @State private var openTarget: ChatOpenTarget?
     @State private var providerMatrix: ChatProvidersResponse?
     /// Optimistic broadcast skeleton shown during the spawn gap (openTarget nil).
@@ -89,6 +91,7 @@ private struct ChatRoot: View {
         self.client = client
         self.runtime = runtime
         _sendCtl = StateObject(wrappedValue: ComposerSendController(client: client))
+        _usageSource = StateObject(wrappedValue: ChatCursorUsageSource(cursorModel: runtime?.cursorModel))
     }
 
     var body: some View {
@@ -157,6 +160,7 @@ private struct ChatRoot: View {
                     openTarget: $openTarget,
                     client: client,
                     providerMatrix: providerMatrix,
+                    cursorQuota: usageSource.cursorQuota,
                     pendingBroadcast: $pendingBroadcast,
                     failedBroadcastColumns: $failedBroadcastColumns
                 )
@@ -195,6 +199,23 @@ private struct ChatRoot: View {
         return client.frontierChildren(groupId: groupId)
     }
 
+}
+
+@MainActor
+private final class ChatCursorUsageSource: ObservableObject {
+    @Published var cursorQuota: UsageData.CursorQuota?
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(cursorModel: AppModel?) {
+        self.cursorQuota = cursorModel?.usage?.cursorQuota
+        cursorModel?.objectWillChange
+            .sink { [weak self, weak cursorModel] _ in
+                Task { @MainActor in
+                    self?.cursorQuota = cursorModel?.usage?.cursorQuota
+                }
+            }
+            .store(in: &cancellables)
+    }
 }
 
 @available(macOS 14, *)
@@ -1364,6 +1385,7 @@ private struct ComposerBar: View {
     @Binding var openTarget: ChatOpenTarget?
     @ObservedObject var client: AgentControlClient
     let providerMatrix: ChatProvidersResponse?
+    let cursorQuota: UsageData.CursorQuota?
     @Binding var pendingBroadcast: PendingBroadcast?
     @Binding var failedBroadcastColumns: [FailedBroadcastColumn]
     @FocusState private var focused: Bool
@@ -1592,6 +1614,12 @@ private struct ComposerBar: View {
                     Text(reason)
                         .font(TahoeFont.body(9.5))
                         .foregroundStyle(t.fg4).lineLimit(1).truncationMode(.tail)
+                } else if vendor == .cursor, let cursorQuota {
+                    Text(cursorQuotaSummary(cursorQuota))
+                        .font(TahoeFont.mono(9.5))
+                        .foregroundStyle(t.fg4)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1661,6 +1689,13 @@ private struct ComposerBar: View {
         let label = compactModelLabel(for: vendor) ?? "Model"
         let prefix = "\(vendor.displayName) · "
         return label.hasPrefix(prefix) ? String(label.dropFirst(prefix.count)) : label
+    }
+
+    private func cursorQuotaSummary(_ quota: UsageData.CursorQuota) -> String {
+        var parts = ["Total \(quota.totalPct)%"]
+        if let auto = quota.autoPct { parts.append("Auto \(auto)%") }
+        if let api = quota.apiPct { parts.append("API \(api)%") }
+        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder

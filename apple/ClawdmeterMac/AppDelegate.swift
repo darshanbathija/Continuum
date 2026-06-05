@@ -12,7 +12,7 @@ import ClawdmeterShared
 ///      has `isVisible` plus `NSStatusBar.system.removeStatusItem(_:)`, both of
 ///      which work as expected without any Tahoe quirks.
 ///
-/// One `ProviderStatusController` per provider — Claude and Codex. The
+/// One `ProviderStatusController` per provider. The
 /// controller owns its `NSStatusItem` and `NSPopover`, subscribes to the
 /// `AppModel`'s `objectWillChange` to refresh the button image on each poll,
 /// and hides itself when the user toggles its preference off.
@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var codexController: ProviderStatusController?
     private var geminiController: ProviderStatusController?
     private var grokController: GrokStatusController?
+    private var cursorController: ProviderStatusController?
 
     private var prefsObserver: NSObjectProtocol?
     private var windowCloseObserver: NSObjectProtocol?
@@ -37,10 +38,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Perf: `UserDefaults.didChangeNotification` (object:nil) fires on EVERY
     /// app-wide defaults write, so `applyVisibilityFromPrefs` must filter to
-    /// the 4 `menuBarShown` keys it cares about — otherwise unrelated pref
+    /// the provider `menuBarShown` keys it cares about — otherwise unrelated pref
     /// writes thrash `setVisible(_:)` across all controllers. `nil` means
     /// "not yet applied" so the first call always runs.
-    private var lastAppliedVisibility: (claude: Bool, codex: Bool, gemini: Bool, opencode: Bool, grok: Bool)?
+    private var lastAppliedVisibility: (
+        claude: Bool,
+        codex: Bool,
+        gemini: Bool,
+        opencode: Bool,
+        grok: Bool,
+        cursor: Bool
+    )?
 
     /// Notification posted by the menu bar popover's "Show dashboard" button.
     /// Handled here so the AppDelegate can flip the activation policy and
@@ -77,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if grokController == nil {
             grokController = GrokStatusController(runtime: runtime)
+        }
+        if cursorController == nil {
+            cursorController = ProviderStatusController(model: runtime.cursorModel, runtime: runtime)
         }
         installObserversIfNeeded()
         applyVisibilityFromPrefs()
@@ -298,17 +309,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             && ProviderEnablement.isEnabled("opencode")
         let grokShown = (defaults.object(forKey: ProviderStatusController.prefKey("grok")) as? Bool ?? true)
             && ProviderEnablement.isEnabled("grok")
+        let cursorShown = (defaults.object(forKey: ProviderStatusController.prefKey("cursor")) as? Bool ?? false)
+            && ProviderEnablement.isEnabled("cursor")
         // Perf: this fires on every app-wide defaults write via
-        // `didChangeNotification`; bail unless one of the 4 menu-bar keys
+        // `didChangeNotification`; bail unless one of the menu-bar keys
         // actually moved so we don't re-toggle every NSStatusItem on
         // unrelated pref changes.
-        let next = (claude: claudeShown, codex: codexShown, gemini: geminiShown, opencode: opencodeShown, grok: grokShown)
+        let next = (
+            claude: claudeShown,
+            codex: codexShown,
+            gemini: geminiShown,
+            opencode: opencodeShown,
+            grok: grokShown,
+            cursor: cursorShown
+        )
         guard lastAppliedVisibility == nil || lastAppliedVisibility! != next else { return }
         lastAppliedVisibility = next
         claudeController?.setVisible(claudeShown)
         codexController?.setVisible(codexShown)
         geminiController?.setVisible(geminiShown)
         grokController?.setVisible(grokShown)
+        cursorController?.setVisible(cursorShown)
     }
 }
 
@@ -665,6 +686,7 @@ final class ProviderStatusController: NSObject {
                 runtime.claudeModel.forcePoll()
                 runtime.codexModel.forcePoll()
                 runtime.geminiModel.forcePoll()
+                runtime.cursorModel.forcePoll()
             }
             // #38: re-target the cached popover to this provider's tab so
             // re-opening always lands on the clicked provider, not the last

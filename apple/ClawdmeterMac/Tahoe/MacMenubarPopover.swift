@@ -136,6 +136,7 @@ public struct MacMenubarPopover: View {
                     autoReviveOn: false,
                     supportsAutoRevive: false,
                     hasWeekly: false,
+                    cursorQuota: nil,
                     stale: true
                 ),
             grok: TahoeLiveRow(
@@ -189,7 +190,8 @@ public struct MacMenubarPopover: View {
                 autoReviveOn: model.config.supportsAutoRevive ? model.autoReviver.isEnabled : false,
                 autoReviveAgo: "—",
                 supportsAutoRevive: model.config.supportsAutoRevive,
-                hasWeekly: model.config.hasWeeklyWindow
+                hasWeekly: model.config.hasWeeklyWindow,
+                cursorQuota: nil
             )
         }
         let sessionResetIn = TahoeFmt.resetIn(minutes: usage.sessionResetMins)
@@ -204,6 +206,7 @@ public struct MacMenubarPopover: View {
             autoReviveAgo:  "—",
             supportsAutoRevive: model.config.supportsAutoRevive,
             hasWeekly:      model.config.hasWeeklyWindow,
+            cursorQuota:    usage.cursorQuota,
             // v0.22.18: surface the source's fallback/cached state.
             // CodexSource sets status = .unknown when it had to read
             // the JSONL rate_limits block instead of hitting the wham
@@ -255,6 +258,8 @@ public struct MacMenubarPopover: View {
                 .padding(.horizontal, 4)
             } else if selected == .grok {
                 GrokHistorySummary(snapshot: usageHistoryStore.snapshot)
+            } else if selected == .cursor {
+                CursorMonthlyMenuBarMeters(row: row)
                     .padding(.horizontal, 4)
             } else {
                 VStack(spacing: 12) {
@@ -486,6 +491,56 @@ private struct GrokHistorySummary: View {
         if n >= 1_000_000 { return String(format: "%.1fM tok", Double(n) / 1_000_000) }
         if n >= 1_000 { return String(format: "%.1fK tok", Double(n) / 1_000) }
         return "\(n) tok"
+    }
+}
+
+private struct CursorMonthlyMenuBarMeters: View {
+    @Environment(\.tahoe) private var t
+    var row: TahoeLiveRow
+
+    var body: some View {
+        VStack(spacing: 12) {
+            cursorMeter(label: "Monthly total", pct: row.cursorQuota?.totalPct ?? Int(row.sessionPercent))
+            cursorMeter(label: "Auto", pct: row.cursorQuota?.autoPct)
+            cursorMeter(label: "API", pct: row.cursorQuota?.apiPct)
+        }
+    }
+
+    private func cursorMeter(label: String, pct: Int?) -> some View {
+        let value = pct ?? 0
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(label)
+                    .font(TahoeFont.body(11, weight: .semibold))
+                    .foregroundStyle(t.fg2)
+                if row.stale {
+                    Text("STALE")
+                        .font(TahoeFont.body(8.5, weight: .bold))
+                        .tracking(0.6)
+                        .foregroundStyle(Color(.sRGB, red: 0xF4 / 255.0, green: 0xB4 / 255.0, blue: 0x00 / 255.0))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background {
+                            Capsule(style: .continuous)
+                                .fill(Color(.sRGB, red: 0xF4 / 255.0, green: 0xB4 / 255.0, blue: 0x00 / 255.0, opacity: 0.14))
+                        }
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .stroke(Color(.sRGB, red: 0xF4 / 255.0, green: 0xB4 / 255.0, blue: 0x00 / 255.0, opacity: 0.40), lineWidth: 0.5)
+                        }
+                }
+                Spacer()
+                Text(pct.map { "\($0)%" } ?? "--")
+                    .font(TahoeFont.mono(11))
+                    .monospacedDigit()
+                    .foregroundStyle(t.fg2)
+            }
+            TahoePillBar(percent: Double(value), provider: .cursor, height: 6)
+                .opacity(pct == nil ? 0.35 : 1)
+            Text("resets in \(row.sessionResetIn)")
+                .font(TahoeFont.mono(10))
+                .foregroundStyle(t.fg3)
+                .padding(.top, 2)
+        }
     }
 }
 

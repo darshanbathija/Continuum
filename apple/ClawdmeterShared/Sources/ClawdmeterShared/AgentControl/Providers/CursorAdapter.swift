@@ -98,6 +98,23 @@ public enum CursorAdapter {
         if let org = usage.organizationID {
             out["plan_badge"] = .string(org)
         }
+        if let quota = usage.cursorQuota {
+            out["monthly_total_percent"] = .int(Int64(quota.totalPct))
+            if let auto = quota.autoPct {
+                out["monthly_auto_percent"] = .int(Int64(auto))
+            }
+            if let api = quota.apiPct {
+                out["monthly_api_percent"] = .int(Int64(api))
+            }
+            out["monthly_reset_mins"] = .int(Int64(quota.resetMins))
+            out["monthly_reset_epoch"] = .int(Int64(quota.resetEpoch))
+            if let included = quota.includedUsageLabel {
+                out["monthly_included_usage_label"] = .string(included)
+            }
+            if let extra = quota.extraUsageLabel {
+                out["monthly_extra_usage_label"] = .string(extra)
+            }
+        }
         return out
     }
 }

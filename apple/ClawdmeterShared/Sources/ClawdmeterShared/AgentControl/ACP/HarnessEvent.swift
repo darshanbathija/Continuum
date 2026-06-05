@@ -68,7 +68,11 @@ public struct HarnessUsage: Sendable, Equatable {
     public var inputTokens: Int?
     public var outputTokens: Int?
     public var totalTokens: Int?
-    public init(inputTokens: Int? = nil, outputTokens: Int? = nil, totalTokens: Int? = nil) {
+    public var model: String?
+    public var costUSD: Decimal?
+    public init(inputTokens: Int? = nil, outputTokens: Int? = nil, totalTokens: Int? = nil, model: String? = nil, costUSD: Decimal? = nil) {
         self.inputTokens = inputTokens; self.outputTokens = outputTokens; self.totalTokens = totalTokens
+        self.model = model
+        self.costUSD = costUSD
     }
 }

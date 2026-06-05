@@ -59,9 +59,15 @@ public enum ACPEventMapper {
         case .usage:
             let usageObj = raw["usage"] ?? raw
             let usage = HarnessUsage(
-                inputTokens: usageObj["inputTokens"]?.intValue,
-                outputTokens: usageObj["outputTokens"]?.intValue,
-                totalTokens: usageObj["totalTokens"]?.intValue
+                inputTokens: intField(usageObj, ["inputTokens", "input_tokens", "promptTokens", "prompt_tokens"]),
+                outputTokens: intField(usageObj, ["outputTokens", "output_tokens", "completionTokens", "completion_tokens"]),
+                totalTokens: intField(usageObj, ["totalTokens", "total_tokens"]),
+                model: usageObj["model"]?.stringValue
+                    ?? usageObj["modelId"]?.stringValue
+                    ?? usageObj["modelName"]?.stringValue
+                    ?? usageObj["model_id"]?.stringValue
+                    ?? usageObj["model_name"]?.stringValue,
+                costUSD: costUSD(from: usageObj)
             )
             return [.usage(usage)]
 
@@ -104,5 +110,80 @@ public enum ACPEventMapper {
             oldText: block["oldText"]?.stringValue,
             newText: block["newText"]?.stringValue
         )
+    }
+
+    private static func intField(_ object: ACPJSONValue, _ keys: [String]) -> Int? {
+        for key in keys {
+            if let value = object[key]?.intValue { return value }
+        }
+        return nil
+    }
+
+    private static func costUSD(from usage: ACPJSONValue) -> Decimal? {
+        let usdKeys = [
+            "costUSD", "costUsd", "cost_usd",
+            "totalCostUSD", "totalCostUsd", "total_cost_usd",
+            "usageCostUSD", "usageCostUsd", "usage_cost_usd",
+            "dollars", "usd"
+        ]
+        for key in usdKeys {
+            if let value = decimal(usage[key]), value > 0 { return value }
+        }
+
+        if let cost = usage["cost"] {
+            if let value = decimal(cost), value > 0 { return value }
+            if let value = costUSD(from: cost) { return value }
+        }
+        if let price = usage["price"] {
+            if let value = decimal(price), value > 0 { return value }
+            if let value = costUSD(from: price) { return value }
+        }
+        if let amount = usage["amount"], let currency = usage["currency"]?.stringValue?.lowercased(),
+           currency == "usd", let value = decimal(amount), value > 0 {
+            return value
+        }
+
+        let centKeys = [
+            "costCents", "cost_cents",
+            "totalCostCents", "total_cost_cents",
+            "usageCostCents", "usage_cost_cents",
+            "cents"
+        ]
+        for key in centKeys {
+            if let cents = decimal(usage[key]), cents > 0 { return cents / 100 }
+        }
+
+        let microKeys = [
+            "costMicros", "cost_micros",
+            "totalCostMicros", "total_cost_micros",
+            "usageCostMicros", "usage_cost_micros",
+            "microdollars"
+        ]
+        for key in microKeys {
+            if let micros = decimal(usage[key]), micros > 0 { return micros / 1_000_000 }
+        }
+        return nil
+    }
+
+    private static func decimal(_ value: ACPJSONValue?) -> Decimal? {
+        guard let value else { return nil }
+        switch value {
+        case .int(let v):
+            return Decimal(v)
+        case .double(let v):
+            guard v.isFinite else { return nil }
+            return Decimal(v)
+        case .string(let s):
+            return Decimal(string: s)
+        case .object(let object):
+            if let value = object["usd"].flatMap(decimal) { return value }
+            if let value = object["amount"].flatMap(decimal),
+               (object["currency"]?.stringValue?.lowercased() ?? "usd") == "usd" {
+                return value
+            }
+            return nil
+        default:
+            return nil
+        }
     }
 }

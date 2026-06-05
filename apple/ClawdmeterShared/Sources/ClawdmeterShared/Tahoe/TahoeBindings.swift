@@ -23,6 +23,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
     public var autoReviveAgo: String       // "4h ago" / "" if never fired
     public var supportsAutoRevive: Bool
     public var hasWeekly: Bool
+    public var cursorQuota: UsageData.CursorQuota?
     /// v0.22.18: true when this row's numbers came from a fallback /
     /// cached source rather than a live API poll. Today the only path
     /// that sets this is CodexSource's JSONL fallback (when the wham
@@ -42,6 +43,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         autoReviveAgo: String = "",
         supportsAutoRevive: Bool = true,
         hasWeekly: Bool = true,
+        cursorQuota: UsageData.CursorQuota? = nil,
         stale: Bool = false
     ) {
         self.sessionPercent = sessionPercent
@@ -53,6 +55,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
         self.autoReviveAgo = autoReviveAgo
         self.supportsAutoRevive = supportsAutoRevive
         self.hasWeekly = hasWeekly
+        self.cursorQuota = cursorQuota
         self.stale = stale
     }
 
@@ -92,7 +95,7 @@ public struct TahoeLiveRow: Equatable, Sendable {
             }(),
             autoReviveOn: d.reviveOn, autoReviveAgo: d.reviveAgo,
             supportsAutoRevive: true,
-            hasWeekly: true
+            hasWeekly: provider != .cursor
         )
     }
 }
