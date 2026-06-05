@@ -90,6 +90,10 @@ final class AppRuntime: ObservableObject {
     /// Track B (B0): forwards `op == "mux"` relay frames to loopback WS streams
     /// so the 4 WSChannels work over the relay. Inert until iOS sends mux frames.
     private var relaySubscriptionBridge: RelaySubscriptionBridge?
+    /// Track B (B1.7): reassembles chunked inbound `.request` payloads. One
+    /// instance is safe for concurrent requests — it keys partials by the
+    /// per-request messageId.
+    private let relayMuxRequestReassembler = RelayChunkReassembler()
     private var relayPairingObserver: AnyCancellable?
 
     // v0.27.0: openFolderInDesign(baseDir:) removed along with the Design tab.
@@ -576,7 +580,12 @@ final class AppRuntime: ObservableObject {
                 // everything else stays on the legacy request/response tunnel.
                 if inbound.op == RelayMux.op {
                     guard let frame = RelayMuxFrame.decode(inbound.data) else { return nil }
-                    await self?.relaySubscriptionBridge?.handle(frame)
+                    if frame.kind == .request {
+                        // B1.7: multiplexed request → loopback HTTP → .response.
+                        await self?.handleMuxRequest(frame, dispatcher: dispatcher)
+                    } else {
+                        await self?.relaySubscriptionBridge?.handle(frame)
+                    }
                     return nil   // mux replies arrive as their own outbound frames
                 }
                 return await dispatcher?.dispatch(inbound)
@@ -590,6 +599,54 @@ final class AppRuntime: ObservableObject {
         runtimeLogger.info(
             "Relay client started (sid=\(bundle.sid.prefix(8), privacy: .public)…, host=\(bundle.relayUrl, privacy: .public))"
         )
+    }
+
+    /// Track B (B1.7): service a multiplexed request frame from iOS — reassemble
+    /// its (possibly chunked) payload, run it through the SAME loopback HTTP
+    /// dispatcher the legacy tunnel uses, and ship the result back as a (chunked)
+    /// `.response` frame correlated by opId.
+    private func handleMuxRequest(_ frame: RelayMuxFrame, dispatcher: RelayRequestDispatcher?) async {
+        guard let dispatcher else { return }
+        let assembled: Data
+        do {
+            guard let full = try relayMuxRequestReassembler.accept(frame) else { return }  // more chunks pending
+            assembled = full
+        } catch {
+            await sendMuxResponseError(opId: frame.opId, "malformed request chunks")
+            return
+        }
+        guard let req = RelayMuxRequest.decode(assembled) else {
+            await sendMuxResponseError(opId: frame.opId, "malformed request")
+            return
+        }
+        // Reuse the tested HTTP dispatcher (op = "<METHOD>.<path>").
+        let inbound = MacRelayInboundMessage(
+            seq: 0, op: "\(req.method).\(req.path)", data: req.body ?? Data(), receivedAt: Date()
+        )
+        let envelope = await dispatcher.dispatch(inbound)   // {status, body, error?}
+        var status = 502
+        var body = Data()
+        if let envelope,
+           let dict = try? JSONSerialization.jsonObject(with: envelope) as? [String: Any] {
+            status = dict["status"] as? Int ?? 502
+            if let s = dict["body"] as? String { body = Data(s.utf8) }
+        }
+        await sendMuxResponse(opId: frame.opId, status: status, body: body)
+    }
+
+    private func sendMuxResponse(opId: String, status: Int, body: Data) async {
+        guard let payload = try? RelayMuxResponse(status: status, body: body).encoded() else { return }
+        let frames = RelayChunker.split(opId: opId, kind: .response, payload: payload, messageId: UUID().uuidString)
+        for f in frames {
+            guard let enc = try? f.encoded() else { continue }
+            try? await relayClient?.send(op: RelayMux.op, payload: enc)
+        }
+    }
+
+    private func sendMuxResponseError(opId: String, _ message: String) async {
+        let payload = try? JSONSerialization.data(withJSONObject: ["error": message])
+        guard let enc = try? RelayMuxFrame(opId: opId, kind: .error, payload: payload).encoded() else { return }
+        try? await relayClient?.send(op: RelayMux.op, payload: enc)
     }
 
     private func bootstrapProviderRuntimes() {

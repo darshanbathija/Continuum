@@ -285,6 +285,11 @@ public final class IOSRelayClient: ObservableObject {
     /// means the legacy request/response-only behavior is byte-identical.
     var muxClient: RelayMuxClient?
 
+    /// Track B (B1.7): the request/response correlator. Inbound mux frames are
+    /// passed to BOTH it and `muxClient`; each ignores opIds/kinds it doesn't
+    /// own (subscriptions vs requests), so the dual-dispatch is safe.
+    var requestClient: RelayMuxRequestClient?
+
     private var runTask: Task<Void, Never>?
     private var consecutiveFailures: Int = 0
     /// Highest `seq` we've seen from the Mac peer. Inbound frames
@@ -614,7 +619,8 @@ public final class IOSRelayClient: ObservableObject {
                 iosRelayLogger.warning("dropping malformed mux frame (seq=\(parsed.seq))")
                 return
             }
-            muxClient?.handleInbound(frame)
+            muxClient?.handleInbound(frame)        // subscriptions (subFrame/subEnd)
+            requestClient?.handleInbound(frame)    // request/response correlator
             return
         }
 

@@ -55,6 +55,10 @@ public final class IOSRelayClientCoordinator: ObservableObject {
     /// off never regresses the existing relay socket.
     @Published public private(set) var muxClient: RelayMuxClient?
 
+    /// Track B (B1.7): the shared request/response correlator, built + cleared
+    /// alongside muxClient and bound into AgentControlClient.relayRequestClient.
+    @Published public private(set) var requestClient: RelayMuxRequestClient?
+
     private let pairingService: IOSRelayPairingService
     private let store: RelayPairingStore
     private var cancellables: Set<AnyCancellable> = []
@@ -70,6 +74,7 @@ public final class IOSRelayClientCoordinator: ObservableObject {
     public func bindAgentClient(_ client: AgentControlClient) {
         boundAgentClient = client
         client.relayMux = muxClient
+        client.relayRequestClient = requestClient
     }
 
     public init(
@@ -109,7 +114,10 @@ public final class IOSRelayClientCoordinator: ObservableObject {
         client = nil
         muxClient?.reset()
         muxClient = nil
+        requestClient?.failAll()
+        requestClient = nil
         boundAgentClient?.relayMux = nil
+        boundAgentClient?.relayRequestClient = nil
     }
 
     // MARK: - Internal
@@ -123,7 +131,10 @@ public final class IOSRelayClientCoordinator: ObservableObject {
             client = nil
             muxClient?.reset()
             muxClient = nil
+            requestClient?.failAll()
+            requestClient = nil
             boundAgentClient?.relayMux = nil
+            boundAgentClient?.relayRequestClient = nil
         case .scanning, .generatingBundle:
             // Mid-flight; don't act yet.
             break
@@ -161,13 +172,21 @@ public final class IOSRelayClientCoordinator: ObservableObject {
         // mux frames back into it. The send closure holds the client weakly to
         // avoid a retain cycle. Off ⇒ muxClient stays nil ⇒ stores stay direct.
         if RelayTransportFlag.relayDefaultEnabled {
-            let mux = RelayMuxClient(send: { [weak newClient] frame in
+            let muxSend: RelayMuxClient.SendMux = { [weak newClient] frame in
+                guard let payload = try? frame.encoded() else { return }
+                try? await newClient?.send(op: RelayMux.op, payload: payload)
+            }
+            let mux = RelayMuxClient(send: muxSend)
+            let reqClient = RelayMuxRequestClient(send: { [weak newClient] frame in
                 guard let payload = try? frame.encoded() else { return }
                 try? await newClient?.send(op: RelayMux.op, payload: payload)
             })
             newClient.muxClient = mux
+            newClient.requestClient = reqClient
             self.muxClient = mux
+            self.requestClient = reqClient
             boundAgentClient?.relayMux = mux
+            boundAgentClient?.relayRequestClient = reqClient
         }
         self.client = newClient
         newClient.start()
